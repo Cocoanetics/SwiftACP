@@ -31,6 +31,11 @@ let package = Package(
                 "ACP",
                 .product(name: "JSONValue", package: "SwiftMCP")
             ]
+        ),
+        .testTarget(
+            name: "SwiftACPTests",
+            dependencies: ["ACP", "ACPServer"],
+            exclude: ["Fixtures/mock-agent.py"]
         )
     ]
 )
