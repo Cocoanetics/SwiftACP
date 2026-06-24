@@ -31,10 +31,13 @@ struct AuthEnvTests {
     }
 
     @Test func forAgentDoesNotOverrideExistingProcessVar() {
-        // PATH is always set; injection must not clobber it.
-        let existingPath = ProcessInfo.processInfo.environment["PATH"]
-        let env = AgentEnvironment.forAgent(authCredentials: ["PATH": "/injected"])
-        #expect(env["PATH"] == existingPath)
+        // Injecting a credential whose name collides with an existing process var
+        // must not clobber it. Use whatever var is actually present under its exact
+        // key — PATH's casing differs by platform ("PATH" on POSIX, "Path" on
+        // Windows), so don't hard-code it.
+        guard let (key, value) = ProcessInfo.processInfo.environment.first else { return }
+        let env = AgentEnvironment.forAgent(authCredentials: [key: "/injected"])
+        #expect(env[key] == value)
     }
 
     @Test func forAgentStripsNothing() {
