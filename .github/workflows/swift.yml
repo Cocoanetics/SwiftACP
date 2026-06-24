@@ -1,0 +1,57 @@
+---
+name: Swift
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Swift version
+        run: swift --version
+      - name: Build (macOS)
+        run: swift build --build-tests -v
+      - name: Test (macOS)
+        run: swift test -v --skip-build
+
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Swift version
+        run: swift --version
+      - name: Build (Linux)
+        run: swift build --build-tests -v
+      - name: Test (Linux)
+        run: swift test -v --skip-build
+
+  # SwiftACP is nio-free (it requests only SwiftMCP's `Client` trait), so the
+  # whole package builds on Windows. The subprocess-spawning integration tests
+  # are gated on `python3` being present (the bundled mock-agent fixture), so on
+  # Windows they auto-skip and only the pure-logic + loopback suites run.
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.3.1"
+      - name: Verify Swift version
+        run: swift --version
+      - name: Build (Windows)
+        run: swift build --build-tests -v
+      - name: Test (Windows)
+        run: swift test -v --skip-build

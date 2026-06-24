@@ -14,9 +14,10 @@ let package = Package(
     ],
     dependencies: [
         // Only JSONValue (zero-dep). Request SwiftMCP's `Client` trait so the
-        // `Server` HTTP transport (swift-nio) stays out — nio-free consumers like
-        // SwiftAgents can depend on SwiftACP and keep building on Windows.
-        .package(path: "../SwiftMCP", traits: ["Client"])
+        // `Server` HTTP transport (swift-nio) stays out — SwiftACP stays nio-free
+        // (and keeps building on Windows). Consumers developing against a local
+        // SwiftMCP checkout can override this with a sibling path dependency.
+        .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.5.1", traits: ["Client"])
     ],
     targets: [
         .target(
