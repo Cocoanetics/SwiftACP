@@ -1,6 +1,5 @@
-import ACP
-import ACPServer
 import Foundation
+import SwiftACP
 import Testing
 
 /// Validates the ACP **agent/server** half end-to-end by wiring the real ACP

@@ -7,9 +7,11 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        // The ACP protocol + client (nio-free; only JSONValue).
+        // Umbrella: `import SwiftACP` re-exports both halves below.
+        .library(name: "SwiftACP", targets: ["SwiftACP"]),
+        // The ACP protocol + client (only JSONValue).
         .library(name: "ACP", targets: ["ACP"]),
-        // The agent/server half: expose an app/CLI as an ACP agent (nio-free).
+        // The agent/server half: expose an app/CLI as an ACP agent.
         .library(name: "ACPServer", targets: ["ACPServer"])
     ],
     dependencies: [
@@ -32,9 +34,13 @@ let package = Package(
                 .product(name: "JSONValue", package: "SwiftMCP")
             ]
         ),
+        .target(
+            name: "SwiftACP",
+            dependencies: ["ACP", "ACPServer"]
+        ),
         .testTarget(
             name: "SwiftACPTests",
-            dependencies: ["ACP", "ACPServer"],
+            dependencies: ["SwiftACP", "ACP", "ACPServer"],
             exclude: ["Fixtures/mock-agent.py"]
         )
     ]
