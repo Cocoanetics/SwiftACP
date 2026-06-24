@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// The ACP major protocol version. A single integer; this library speaks v1.
 /// See https://agentclientprotocol.com/protocol/v1/initialization

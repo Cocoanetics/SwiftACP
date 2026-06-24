@@ -13,16 +13,16 @@ let package = Package(
         .library(name: "SwiftACP", targets: ["SwiftACP"])
     ],
     dependencies: [
-        // SwiftACP's only dependency: the standalone, dependency-free JSONValue
-        // package (split out of SwiftMCP). Consumers developing against a local
-        // JSONValue checkout can override with a sibling path dependency.
-        .package(url: "https://github.com/Cocoanetics/JSONValue.git", from: "1.0.0")
+        // SwiftACP's only dependency: the standalone, dependency-free
+        // JSONFoundation package (JSON value type + JSON Schema + JSON-RPC 2.0
+        // types), split out of SwiftMCP.
+        .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "1.1.0")
     ],
     targets: [
         .target(
             name: "SwiftACP",
             dependencies: [
-                .product(name: "JSONValue", package: "JSONValue")
+                .product(name: "JSONFoundation", package: "JSONFoundation")
             ]
         ),
         .testTarget(

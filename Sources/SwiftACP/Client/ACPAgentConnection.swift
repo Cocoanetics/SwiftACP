@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// The protocol-level ACP client connection over a transport.
 ///

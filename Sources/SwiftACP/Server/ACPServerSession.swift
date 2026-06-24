@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// The agent-side handle for one ACP session.
 ///

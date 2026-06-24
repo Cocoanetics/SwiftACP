@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// A piece of content exchanged between client and agent.
 ///

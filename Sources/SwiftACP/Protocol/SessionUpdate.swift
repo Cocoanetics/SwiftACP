@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// A `session/update` notification: the channel the agent uses to stream
 /// everything that happens during a turn — message chunks, tool calls, plans.

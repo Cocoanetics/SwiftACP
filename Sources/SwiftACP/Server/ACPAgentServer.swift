@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// Serves an ``ACPAgentHandler`` over a `MessageTransport`.
 ///

@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// A name/value environment variable passed to a spawned MCP server or terminal.
 public struct EnvVariable: Codable, Hashable, Sendable {

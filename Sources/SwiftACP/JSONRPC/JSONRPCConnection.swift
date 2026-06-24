@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// A JSON-RPC 2.0 peer over a `MessageTransport`.
 ///
@@ -66,7 +66,7 @@ public actor JSONRPCConnection {
     /// Send a request and await its result as raw JSON.
     public func sendRequest(method: String, params: JSONValue?) async throws -> JSONValue {
         let id = allocateId()
-        let message = OutgoingMessage.request(id: .number(id), method: method, params: params)
+        let message = OutgoingMessage.request(id: .integer(id), method: method, params: params)
         let line = encodeLine(message)
         return try await withCheckedThrowingContinuation { continuation in
             if isClosed {
@@ -114,7 +114,7 @@ public actor JSONRPCConnection {
     }
 
     private func resolveResponse(id: JSONRPCID, result: JSONValue?, error: JSONRPCErrorBody?) {
-        guard case .number(let key) = id, let continuation = pending.removeValue(forKey: key) else {
+        guard case .integer(let key) = id, let continuation = pending.removeValue(forKey: key) else {
             return
         }
         if let error {

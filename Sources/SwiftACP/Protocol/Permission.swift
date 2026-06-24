@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// The agent asks the client to approve a tool call.
 /// https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission

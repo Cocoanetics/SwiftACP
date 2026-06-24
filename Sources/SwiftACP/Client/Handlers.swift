@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 /// Callbacks the agent may invoke on the client during a turn.
 ///

@@ -1,5 +1,5 @@
 import Foundation
-import JSONValue
+import JSONFoundation
 
 extension Implementation {
     /// The default identity this library presents to agents.
