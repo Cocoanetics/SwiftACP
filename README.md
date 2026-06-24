@@ -1,16 +1,17 @@
 # SwiftACP
 
 A Swift implementation of the [Agent Client Protocol](https://agentclientprotocol.com)
-(ACP) — both halves, in two nio-free libraries that depend only on `JSONValue`:
+(ACP) — both halves, as two libraries that depend only on `JSONValue`:
 
 - **`ACP`** — the protocol types + a JSON-RPC client (`ACPAgent` / `ACPAgentConnection`)
   for *driving* an ACP agent (the editor/host side).
 - **`ACPServer`** — the agent/server harness for *exposing* an app or CLI **as** an ACP
   agent (`ACPAgentHandler`, `ACPServerSession`, `ACPAgentServer`).
 
-Because both are nio-free (only `JSONValue` from
-[SwiftMCP](https://github.com/Cocoanetics/SwiftMCP)'s `Client` trait), they embed
-anywhere — a Mac app, an agent CLI, a test — without pulling swift-nio.
+That `JSONValue` comes from [SwiftMCP](https://github.com/Cocoanetics/SwiftMCP)'s
+`Client` trait, so both libraries embed anywhere — a Mac app, an agent CLI, a test.
+They're the foundation of **`acpx`**, a headless CLI for driving ACP agents, modelled
+after the original [`openclaw/acpx`](https://github.com/openclaw/acpx).
 
 ## Expose an agent (server)
 
@@ -60,8 +61,9 @@ await agent.close()
 
 ## Status
 
-Extracted from [ACPX](https://github.com/) — a byte-faithful Swift clone of
-`openclaw/acpx` whose CLI/daemon consume these libraries, and which validates them
+Extracted from ACPX — a byte-faithful Swift clone of
+[`openclaw/acpx`](https://github.com/openclaw/acpx) whose CLI/daemon consume these
+libraries, and which validates them
 (loopback + a mock agent driven by the real ACP client). SwiftAgents' Coder example
 exposes itself over ACP via `ACPServer`.
 
