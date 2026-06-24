@@ -55,6 +55,10 @@ struct ACPServerTests {
                 stopReason: .endTurn,
                 usage: PromptUsage(inputTokens: 12, outputTokens: 34, totalTokens: 46))
         }
+
+        func availableCommands(for _: SessionId) async -> [AvailableCommand] {
+            [AvailableCommand(name: "new", description: "Start fresh")]
+        }
     }
 
     /// Spin up a connected client↔server pair over a loopback transport. The
@@ -73,9 +77,11 @@ struct ACPServerTests {
         var text = ""
         var sawPlan = false
         var toolCalls = 0
+        var commands: [AvailableCommand]?
         func append(_ string: String) { text += string }
         func plan() { sawPlan = true }
         func tool() { toolCalls += 1 }
+        func setCommands(_ commands: [AvailableCommand]) { self.commands = commands }
     }
 
     @Test func fullPromptRoundTripWithUsage() async throws {
@@ -158,6 +164,37 @@ struct ACPServerTests {
         #expect(response.stopReason == .endTurn)
         // The client's `.approveAll` policy selected an allow option.
         #expect(await collected.text == "approved")
+
+        await client.close()
+        serverTask.cancel()
+    }
+
+    @Test func advertisesAvailableCommandsOnNewSession() async throws {
+        let (client, serverTask) = await makePair()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+
+        let collected = Collected()
+        let (subscriptionId, stream) = await client.makeSubscription()
+        let consumer = Task {
+            for await note in stream {
+                if case .availableCommandsUpdate(let commands) = note.update {
+                    await collected.setCommands(commands)
+                }
+            }
+        }
+
+        _ = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
+        // The server publishes commands as a notification after the new-session reply.
+        var received: [AvailableCommand]?
+        for _ in 0 ..< 200 {
+            received = await collected.commands
+            if received != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await client.endSubscription(subscriptionId)
+        await consumer.value
+
+        #expect(received?.map(\.name) == ["new"])
 
         await client.close()
         serverTask.cancel()

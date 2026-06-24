@@ -91,7 +91,10 @@ public actor ACPAgentServer {
     private func onNewSession(_ params: JSONValue?) async throws -> JSONValue {
         let request: NewSessionRequest = try decode(params)
         let response = try await handler.newSession(request)
-        sessions[response.sessionId] = ACPServerSession(id: response.sessionId, connection: connection)
+        let session = ACPServerSession(id: response.sessionId, connection: connection)
+        sessions[response.sessionId] = session
+        // Publish slash commands after the session/new reply (fire-and-forget).
+        Task { await self.publishCommands(for: session) }
         return try encode(response)
     }
 
@@ -100,7 +103,15 @@ public actor ACPAgentServer {
         let session = sessions[request.sessionId]
             ?? ACPServerSession(id: request.sessionId, connection: connection)
         sessions[request.sessionId] = session
-        return try await encode(try handler.loadSession(request, session: session))
+        let encoded = try await encode(handler.loadSession(request, session: session))
+        Task { await self.publishCommands(for: session) }
+        return encoded
+    }
+
+    /// Publish the handler's advertised slash commands for a session, if any.
+    private func publishCommands(for session: ACPServerSession) async {
+        let commands = await handler.availableCommands(for: session.id)
+        if !commands.isEmpty { await session.sendAvailableCommands(commands) }
     }
 
     private func onPrompt(_ params: JSONValue?) async throws -> JSONValue {

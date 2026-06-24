@@ -39,6 +39,11 @@ public final class ACPServerSession: @unchecked Sendable {
     }
     /// Publish/replace the agent's plan for the turn.
     public func sendPlan(_ entries: [PlanEntry]) async { await update(.plan(entries)) }
+    /// Advertise the session's available slash commands (the client renders these
+    /// as its slash menu). Send again to update the set.
+    public func sendAvailableCommands(_ commands: [AvailableCommand]) async {
+        await update(.availableCommandsUpdate(commands))
+    }
 
     // MARK: Client requests (agent → client → agent)
 

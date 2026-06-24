@@ -36,6 +36,12 @@ public protocol ACPAgentHandler: Sendable {
 
     /// Set a session config option. Default: throws "not supported".
     func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
+
+    /// Slash commands to advertise for a session — the server publishes them as an
+    /// `available_commands_update` right after the session is created or loaded.
+    /// Invoking a command is a normal `session/prompt` whose text starts with `/`,
+    /// which the handler parses in ``prompt(_:session:)``. Default: none.
+    func availableCommands(for sessionId: SessionId) async -> [AvailableCommand]
 }
 
 public extension ACPAgentHandler {
@@ -51,6 +57,8 @@ public extension ACPAgentHandler {
     func setMode(_ request: SetSessionModeRequest) async throws {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_mode is not supported")
     }
+
+    func availableCommands(for sessionId: SessionId) async -> [AvailableCommand] { [] }
 
     func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_config_option is not supported")
