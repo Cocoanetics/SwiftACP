@@ -220,6 +220,15 @@ public struct SetSessionConfigOptionRequest: Codable, Sendable {
     }
 }
 
+/// `session/set_config_option` response — the agent's full set of config options
+/// after the change (each opaque, since the schema is agent-specific).
+public struct SetSessionConfigOptionResponse: Codable, Sendable {
+    public var configOptions: [JSONValue]?
+    public init(configOptions: [JSONValue]? = nil) {
+        self.configOptions = configOptions
+    }
+}
+
 // MARK: - session models
 
 /// The agent's advertised model menu — returned on `session/new` / `session/load`

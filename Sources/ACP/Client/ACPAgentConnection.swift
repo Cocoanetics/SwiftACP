@@ -123,8 +123,10 @@ public actor ACPAgentConnection {
         let _: EmptyResponse = try await send("session/set_mode", request)
     }
 
-    public func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws {
-        let _: EmptyResponse = try await send("session/set_config_option", request)
+    @discardableResult
+    public func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
+        -> SetSessionConfigOptionResponse {
+        try await send("session/set_config_option", request)
     }
 
     public func setModel(_ request: SetSessionModelRequest) async throws {
