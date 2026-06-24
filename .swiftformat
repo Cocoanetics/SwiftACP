@@ -26,4 +26,4 @@
 #     explicit Sendable, regular vs. doc comments) and are left as-is.
 --disable trailingCommas,wrapMultilineStatementBraces,redundantReturn,wrapArguments,wrapFunctionBodies,wrapPropertyBodies,wrapLoopBodies,indent,hoistPatternLet,hoistTry,docComments,conditionalAssignment,redundantSelf,redundantSendable,blankLinesBetweenScopes,extensionAccessControl,opaqueGenericParameters,unusedArguments,andOperator
 
---exclude .build,.swiftpm,Tests/SwiftACPTests/Fixtures
+--exclude .build,.swiftpm,Tests/SwiftACPTests/Fixtures,Tests/ACPTests/Fixtures

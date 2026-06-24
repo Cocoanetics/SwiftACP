@@ -9,6 +9,7 @@ excluded:
   - "**/.swiftpm"
   # Test fixtures (the bundled mock ACP agent is a Python script, not Swift).
   - Tests/SwiftACPTests/Fixtures
+  - Tests/ACPTests/Fixtures
 
 disabled_rules:
   # The Data -> String conversions here decode JSONEncoder output, which is
@@ -27,9 +28,30 @@ identifier_name:
   min_length:
     warning: 0
     error: 0
-  # Mirrors the ACP protocol version constant name verbatim.
+  # `ACP_PROTOCOL_VERSION` mirrors the ACP protocol version constant name; the
+  # SCREAMING_SNAKE constants below mirror acpx 0.11.0's TypeScript constant
+  # names verbatim (used by the CLI/daemon), for easy cross-referencing against
+  # the upstream source.
   excluded:
     - ACP_PROTOCOL_VERSION
+    - DEFAULT_AUTH_POLICY
+    - DEFAULT_EVENT_MAX_SEGMENTS
+    - DEFAULT_EVENT_SEGMENT_MAX_BYTES
+    - DEFAULT_HISTORY_LIMIT
+    - DEFAULT_NON_INTERACTIVE_PERMISSION_POLICY
+    - DEFAULT_OUTPUT_FORMAT
+    - DEFAULT_PERMISSION_MODE
+    - DEFAULT_QUEUE_MAX_DEPTH
+    - DEFAULT_TTL_MS
+    - MAX_INLINE_CHARS
+    - MAX_LOCATION_ITEMS
+    - MAX_OUTPUT_CHARS
+    - MAX_OUTPUT_LINES
+    - MAX_THOUGHT_CHARS
+    - OUTPUT_PRIORITY_KEYS
+    - SESSION_INDEX_SCHEMA
+    - SESSION_RECORD_SCHEMA
+    - SUPPRESSED_READ_OUTPUT
 
 # Doc comments and URLs (links to the ACP reference) shouldn't count against the
 # code line limit.
@@ -46,7 +68,8 @@ nesting:
 # Structural thresholds. The JSON-RPC dispatch, the session-update state machine,
 # and the hand-written Codable `init(from:)` / `encode(to:)` are inherently
 # branchy; the ACP launch / session-creation entry points carry wide parameter
-# surfaces. A notch above the app-code defaults — still strict enough to catch
+# surfaces; and the daemon actor gathers every MCP tool (with full doc comments)
+# in one file. A notch above the app-code defaults — still strict enough to catch
 # new bloat.
 file_length:
   warning: 500

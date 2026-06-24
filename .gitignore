@@ -1,5 +1,19 @@
+# SwiftPM
 .build/
 .swiftpm/
-*.xcodeproj
 Package.resolved
+
+# Build output lives on the external SSD, never under the repo
+# (see CLAUDE.md). Keep these ignored just in case.
+build/
+DerivedData/
+
+# macOS
 .DS_Store
+
+# Editor
+*.xcodeproj
+*.xcworkspace
+
+# Claude Code local (per-user) settings
+.claude/settings.local.json
