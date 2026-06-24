@@ -153,19 +153,31 @@ public final class SubprocessTransport: MessageTransport, @unchecked Sendable {
         }
     }
 
-    /// Send SIGKILL to the child (used after a graceful terminate times out).
+    /// Forcefully kill the child (used after a graceful terminate times out).
     public func kill() {
-        if process.isRunning {
-            Foundation.kill(process.processIdentifier, SIGKILL)
-        }
+        guard process.isRunning else { return }
+        #if os(Windows)
+        // Windows has no POSIX signals; `Process.terminate()` maps to
+        // TerminateProcess, which is itself a forceful kill.
+        process.terminate()
+        #else
+        Foundation.kill(process.processIdentifier, SIGKILL)
+        #endif
     }
 
     private static func resolveExecutable(_ command: String) -> URL {
-        if command.contains("/") {
+        if command.contains("/") || command.contains("\\") {
             return URL(fileURLWithPath: command)
         }
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
-        for directory in path.split(separator: ":") {
+        #if os(Windows)
+        let separator: Character = ";"
+        let defaultPath = ""
+        #else
+        let separator: Character = ":"
+        let defaultPath = "/usr/bin:/bin"
+        #endif
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? defaultPath
+        for directory in path.split(separator: separator) where !directory.isEmpty {
             let candidate = URL(fileURLWithPath: String(directory))
                 .appendingPathComponent(command)
             if FileManager.default.isExecutableFile(atPath: candidate.path) {
