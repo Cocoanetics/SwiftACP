@@ -69,6 +69,25 @@ enum DaemonClient {
         return await stopReason.value ?? .endTurn
     }
 
+    /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
+    /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
+    /// is reachable (or the session isn't live) there is nothing to cancel.
+    static func cancelSession(sessionId: String) async -> Bool {
+        let proxy = MCPServerProxy(config: .tcp(config: MCPServerTcpConfig(serviceName: serviceName)))
+        do {
+            try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
+        } catch {
+            return false
+        }
+        defer { Task { await proxy.disconnect() } }
+        guard let result = try? await proxy.callTool(
+            "cancelSession", arguments: ["sessionId": .string(sessionId)]) else {
+            return false
+        }
+        // The tool returns a Bool, rendered into the result's text payload.
+        return result.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().contains("true")
+    }
+
     private static func connectOrSpawn(_ proxy: MCPServerProxy) async throws {
         do {
             try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
@@ -100,8 +119,33 @@ enum DaemonClient {
     }
 
     private static func daemonExecutablePath() -> String {
-        let acpxPath = CommandLine.arguments.first ?? "acpx"
-        let resolved = URL(fileURLWithPath: acpxPath).resolvingSymlinksInPath()
-        return resolved.deletingLastPathComponent().appendingPathComponent("acpxd").path
+        // Prefer `acpxd` sitting next to the *actually running* `acpx` binary.
+        // `Bundle.main.executableURL` resolves the real install location even when
+        // acpx was invoked as a bare name via PATH — where `CommandLine.arguments.first`
+        // is just "acpx", which `URL(fileURLWithPath:)` would wrongly resolve against
+        // the caller's cwd (so the daemon would never be found and silently not spawn).
+        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+            let sibling = exe.deletingLastPathComponent().appendingPathComponent("acpxd")
+            if FileManager.default.isExecutableFile(atPath: sibling.path) {
+                return sibling.path
+            }
+        }
+        // Otherwise fall back to the first `acpxd` found on PATH.
+        if let onPath = executableOnPath("acpxd") {
+            return onPath
+        }
+        // Last resort: the bare name (let the OS resolve it; may still fail).
+        return "acpxd"
+    }
+
+    /// Search `PATH` for an executable file named `name`.
+    private static func executableOnPath(_ name: String) -> String? {
+        guard let path = ProcessInfo.processInfo.environment["PATH"] else { return nil }
+        let fileManager = FileManager.default
+        for directory in path.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
+            if fileManager.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
     }
 }

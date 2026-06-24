@@ -16,7 +16,8 @@ struct AcpxdCommand: AsyncParsableCommand {
             Always serves a Bonjour + local TCP transport (how the `acpx` CLI discovers it).
             Pass --http-port to additionally expose the MCP server over HTTP+SSE for outward
             clients. Authentication is not implemented yet, so an HTTP port is unauthenticated;
-            keep it on loopback (--http-host 127.0.0.1) unless you intend it to be reachable.
+            it binds to loopback (127.0.0.1) by default — pass --http-host 0.0.0.0 only if you
+            intend it to be reachable from other machines.
             """)
 
     @Option(
@@ -24,8 +25,10 @@ struct AcpxdCommand: AsyncParsableCommand {
         help: "Also serve MCP over HTTP+SSE on this port (outward, unauthenticated).")
     var httpPort: Int?
 
-    @Option(name: .customLong("http-host"), help: "Bind address for the HTTP+SSE transport.")
-    var httpHost: String = "0.0.0.0"
+    @Option(
+        name: .customLong("http-host"),
+        help: "Bind address for the HTTP+SSE transport (loopback by default; pass 0.0.0.0 to expose).")
+    var httpHost: String = "127.0.0.1"
 
     @Flag(
         name: .shortAndLong,
