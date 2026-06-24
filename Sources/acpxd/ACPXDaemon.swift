@@ -35,6 +35,10 @@ actor ACPXDaemon {
     /// Live sessions held open between prompts, keyed by ACP session id.
     private var live: [String: Live] = [:]
 
+    /// Serializes prompt turns per session so concurrent CLI/MCP callers can't drive
+    /// one agent — or persist one record — at the same time (see ``SessionTurnQueue``).
+    private let turnQueue = SessionTurnQueue()
+
     /// When true, spawned agents inherit the daemon's stderr — surfacing agent
     /// diagnostics (e.g. rate-limit messages) that otherwise stay hidden.
     private let inheritAgentStderr: Bool
@@ -262,17 +266,34 @@ actor ACPXDaemon {
     ///     Reconnects to it, recreating the underlying session only if its rollout
     ///     is gone. Must not be empty.
     ///   - text: the prompt text.
+    ///   - wait: when another turn is already running for this session, `true` (the
+    ///     default) queues this one behind it; `false` rejects it immediately with a
+    ///     "session busy" error instead of waiting.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     @MCPTool(openWorldHint: true)
-    func runPrompt(sessionId rawSessionId: String, text: String) async throws -> String {
+    func runPrompt(sessionId rawSessionId: String, text: String, wait: Bool = true) async throws
+        -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
+        guard let initial = findRecord(sessionId) else {
+            throw DaemonError.sessionNotFound(sessionId)
+        }
+        let acpSessionId = initial.acpSessionId
+
+        // One turn per session at a time: queue behind any in-flight turn (or, when
+        // wait == false, reject), so concurrent CLI/MCP callers never drive one
+        // agent — or persist one record — concurrently. Keyed by ACP session id.
+        try await turnQueue.acquire(acpSessionId, wait: wait)
+        defer { Task { await turnQueue.release(acpSessionId) } }
+
+        // Reload the record *after* acquiring the slot: a turn we queued behind has
+        // just persisted new history, and the persister must build on that, not on a
+        // stale pre-wait snapshot (whose final flush would otherwise clobber it).
         guard let record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        let acpSessionId = record.acpSessionId
         let agentCommand = record.agentCommand
         let cwd = record.cwd
         // Record the user's prompt once, up front; the persister checkpoints the
@@ -437,6 +458,7 @@ enum DaemonError: LocalizedError {
     case invalidCwd(String)
     case emptySessionId
     case sessionNotFound(String)
+    case sessionBusy(String)
 
     var errorDescription: String? {
         switch self {
@@ -446,6 +468,8 @@ enum DaemonError: LocalizedError {
             return "sessionId must not be empty — create one with the newSession tool first"
         case .sessionNotFound(let id):
             return "no session found for id: \(id)"
+        case .sessionBusy(let id):
+            return "session is busy running another turn (use --wait to queue): \(id)"
         }
     }
 }
