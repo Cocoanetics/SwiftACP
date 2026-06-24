@@ -1,5 +1,5 @@
-import ACP
 import Foundation
+import SwiftACP
 import Testing
 
 /// Whether `python3` is available for the bundled mock-agent fixture.

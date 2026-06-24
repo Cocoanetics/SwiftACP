@@ -1,23 +1,22 @@
 # SwiftACP
 
 A Swift implementation of the [Agent Client Protocol](https://agentclientprotocol.com)
-(ACP) — both halves, as two libraries that depend only on `JSONValue`:
+(ACP) in a single module — `import SwiftACP` — covering both halves:
 
-- **`ACP`** — the protocol types + a JSON-RPC client (`ACPAgent` / `ACPAgentConnection`)
-  for *driving* an ACP agent (the editor/host side).
-- **`ACPServer`** — the agent/server harness for *exposing* an app or CLI **as** an ACP
+- **the client** — the protocol types + a JSON-RPC client (`ACPAgent` /
+  `ACPAgentConnection`) for *driving* an ACP agent (the editor/host side).
+- **the server** — the agent/server harness for *exposing* an app or CLI **as** an ACP
   agent (`ACPAgentHandler`, `ACPServerSession`, `ACPAgentServer`).
 
-That `JSONValue` comes from [SwiftMCP](https://github.com/Cocoanetics/SwiftMCP)'s
-`Client` trait, so both libraries embed anywhere — a Mac app, an agent CLI, a test.
-They're the foundation of **`acpx`**, a headless CLI for driving ACP agents, modelled
-after the original [`openclaw/acpx`](https://github.com/openclaw/acpx).
+It depends only on `JSONValue` (from [SwiftMCP](https://github.com/Cocoanetics/SwiftMCP)'s
+`Client` trait), so it embeds anywhere — a Mac app, an agent CLI, a test. It's the
+foundation of **`acpx`**, a headless CLI for driving ACP agents, modelled after the
+original [`openclaw/acpx`](https://github.com/openclaw/acpx).
 
 ## Expose an agent (server)
 
 ```swift
-import ACP
-import ACPServer
+import SwiftACP
 
 struct MyHandler: ACPAgentHandler {
     func initialize(_ request: InitializeRequest) async -> InitializeResponse {
@@ -50,7 +49,7 @@ process for embedding or hermetic tests.
 ## Drive an agent (client)
 
 ```swift
-import ACP
+import SwiftACP
 
 let agent = try await ACPAgent.launch(agent: "claude", cwd: repoPath, permission: .approveReads)
 let session = try await agent.newSession()

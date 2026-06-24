@@ -7,12 +7,10 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        // Umbrella: `import SwiftACP` re-exports both halves below.
-        .library(name: "SwiftACP", targets: ["SwiftACP"]),
-        // The ACP protocol + client (only JSONValue).
-        .library(name: "ACP", targets: ["ACP"]),
-        // The agent/server half: expose an app/CLI as an ACP agent.
-        .library(name: "ACPServer", targets: ["ACPServer"])
+        // One module — `import SwiftACP` — covering both halves: the ACP protocol
+        // + client (driving an agent) and the agent/server harness (exposing an
+        // app/CLI as an ACP agent).
+        .library(name: "SwiftACP", targets: ["SwiftACP"])
     ],
     dependencies: [
         // Only JSONValue (zero-dep). Request SwiftMCP's `Client` trait so the
@@ -22,25 +20,14 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "ACP",
-            dependencies: [
-                .product(name: "JSONValue", package: "SwiftMCP")
-            ]
-        ),
-        .target(
-            name: "ACPServer",
-            dependencies: [
-                "ACP",
-                .product(name: "JSONValue", package: "SwiftMCP")
-            ]
-        ),
-        .target(
             name: "SwiftACP",
-            dependencies: ["ACP", "ACPServer"]
+            dependencies: [
+                .product(name: "JSONValue", package: "SwiftMCP")
+            ]
         ),
         .testTarget(
             name: "SwiftACPTests",
-            dependencies: ["SwiftACP", "ACP", "ACPServer"],
+            dependencies: ["SwiftACP"],
             exclude: ["Fixtures/mock-agent.py"]
         )
     ]

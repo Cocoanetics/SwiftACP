@@ -1,4 +1,3 @@
-import ACP
 import Foundation
 
 /// Two `MessageTransport`s wired back-to-back in memory: what one end writes,

@@ -1,5 +1,5 @@
-import ACP
 import Foundation
+import SwiftACP
 import Testing
 
 /// Locks down the auth-credential env injection ported from acpx `acp/auth-env.ts`:

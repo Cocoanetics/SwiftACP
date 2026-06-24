@@ -1,5 +1,3 @@
-import ACP
-
 /// What an app implements to expose itself as an ACP agent.
 ///
 /// ``ACPAgentServer`` decodes inbound ACP requests and dispatches them here.
