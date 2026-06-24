@@ -8,10 +8,12 @@ A Swift implementation of the [Agent Client Protocol](https://agentclientprotoco
 - **the server** — the agent/server harness for *exposing* an app or CLI **as** an ACP
   agent (`ACPAgentHandler`, `ACPServerSession`, `ACPAgentServer`).
 
-It depends only on `JSONValue` (from [SwiftMCP](https://github.com/Cocoanetics/SwiftMCP)'s
-`Client` trait), so it embeds anywhere — a Mac app, an agent CLI, a test. It's the
-foundation of **`acpx`**, a headless CLI for driving ACP agents, modelled after the
-original [`openclaw/acpx`](https://github.com/openclaw/acpx).
+The library depends only on the zero-dependency
+[`JSONFoundation`](https://github.com/Cocoanetics/JSONFoundation) package, so it embeds
+anywhere — a Mac app, an agent CLI, a test. The same package also ships the **`acpx`**
+CLI and **`acpxd`** daemon (macOS-only — [see below](#the-acpx-cli-and-acpxd-daemon-macos)),
+a headless toolkit for driving ACP agents modelled after the original
+[`openclaw/acpx`](https://github.com/openclaw/acpx).
 
 ## Expose an agent (server)
 
@@ -58,13 +60,40 @@ print(outcome.text, outcome.stopReason)
 await agent.close()
 ```
 
+## The `acpx` CLI and `acpxd` daemon (macOS)
+
+The same package ships a headless CLI and a session daemon built on the library — a
+byte-faithful Swift clone of [`openclaw/acpx`](https://github.com/openclaw/acpx) 0.11.0.
+They're **macOS-only** (Bonjour service advertisement, POSIX signals) and are gated
+behind `#if os(macOS)` in `Package.swift`, so the `SwiftACP` library itself stays
+nio-free and keeps building on Linux and Windows.
+
+```sh
+swift run acpx claude "explain what this project does"
+swift run acpx codex --approve-reads "find and fix the flaky test"
+git diff | swift run acpx claude -q "review this diff"
+swift run acpx chat codex          # interactive multi-turn session
+swift run acpx agents              # list known agents + resolved launch commands
+```
+
+`acpxd` is the session daemon: an MCP server (Bonjour + local TCP) holding live ACP
+sessions, with an optional outward HTTP+SSE transport.
+
+```sh
+swift run acpxd                       # Bonjour + local TCP (how the acpx CLI discovers it)
+swift run acpxd --http-port 9090 -v   # also expose MCP over HTTP+SSE (unauthenticated — keep on loopback)
+```
+
+The CLI/daemon pull in `SwiftMCP` (+ swift-nio, service-lifecycle, argument-parser),
+so depending only on the `SwiftACP` library on macOS will resolve those into your
+graph; off-Apple platforms get just `SwiftACP` + `JSONFoundation`.
+
 ## Status
 
-Extracted from ACPX — a byte-faithful Swift clone of
-[`openclaw/acpx`](https://github.com/openclaw/acpx) whose CLI/daemon consume these
-libraries, and which validates them
-(loopback + a mock agent driven by the real ACP client). SwiftAgents' Coder example
-exposes itself over ACP via `ACPServer`.
+A byte-faithful Swift clone of
+[`openclaw/acpx`](https://github.com/openclaw/acpx), validated by loopback + a mock
+agent driven by the real ACP client (`Tests/ACPTests/Fixtures/mock-agent.py`).
+SwiftAgents' Coder example exposes itself over ACP via the server half.
 
 ## License
 

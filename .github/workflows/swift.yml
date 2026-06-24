@@ -36,10 +36,13 @@ jobs:
       - name: Test (Linux)
         run: swift test -v --skip-build
 
-  # SwiftACP is nio-free (it requests only SwiftMCP's `Client` trait), so the
-  # whole package builds on Windows. The subprocess-spawning integration tests
-  # are gated on `python3` being present (the bundled mock-agent fixture), so on
-  # Windows they auto-skip and only the pure-logic + loopback suites run.
+  # On Linux and Windows the package is just the SwiftACP library + JSONFoundation:
+  # the acpx CLI / acpxd daemon and their SwiftMCP + swift-nio + service-lifecycle
+  # stack are gated to macOS in Package.swift (`#if os(macOS)`), so the resolved
+  # graph stays nio-free and the whole package builds on Windows. The
+  # subprocess-spawning integration tests are gated on `python3` being present (the
+  # bundled mock-agent fixture), so on Windows they auto-skip and only the
+  # pure-logic + loopback suites run.
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 45
