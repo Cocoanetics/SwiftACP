@@ -1,0 +1,29 @@
+# swiftformat configuration for SwiftACP. Run locally before committing.
+# 
+#
+#   swiftformat .
+#
+# The sources are hand-written to mirror acpx 0.11.0 closely, so SwiftFormat's
+# opinionated wrapping / hoisting / self / doc-comment rules are disabled to
+# preserve that structure. What stays enabled is the safe, mechanical layer:
+# import order, operator spacing, redundant-whitespace and blank-line cleanup —
+# the same things `.editorconfig` describes for other editors.
+
+--swiftversion 6.0
+--indent 4
+--tabwidth unspecified
+
+# Block-indent continuations of multi-line conditions (matches the hand style).
+--wrapconditions after-first
+
+# Disabled rules:
+#   trailingCommas / wrapMultilineStatementBraces — conflict with SwiftLint's
+#     `trailing_comma` / `opening_brace`.
+#   redundantReturn — can break generic inference for
+#     `withCheckedThrowingContinuation<T>` in async Void contexts.
+#   The remainder reformat the deliberately hand-written structure (one-line
+#     bodies, argument wrapping, `case .x(let y)` placement, explicit `self`,
+#     explicit Sendable, regular vs. doc comments) and are left as-is.
+--disable trailingCommas,wrapMultilineStatementBraces,redundantReturn,wrapArguments,wrapFunctionBodies,wrapPropertyBodies,wrapLoopBodies,indent,hoistPatternLet,hoistTry,docComments,conditionalAssignment,redundantSelf,redundantSendable,blankLinesBetweenScopes,extensionAccessControl,opaqueGenericParameters,unusedArguments,andOperator
+
+--exclude .build,.swiftpm,Tests/SwiftACPTests/Fixtures

@@ -1,0 +1,65 @@
+included:
+  - Sources
+  - Tests
+
+excluded:
+  - .build
+  - .swiftpm
+  - "**/.build"
+  - "**/.swiftpm"
+  # Test fixtures (the bundled mock ACP agent is a Python script, not Swift).
+  - Tests/SwiftACPTests/Fixtures
+
+disabled_rules:
+  # The Data -> String conversions here decode JSONEncoder output, which is
+  # always valid UTF-8 — `String(decoding:as:)` is the correct non-optional
+  # idiom, not the failable `String(bytes:encoding:)`.
+  - optional_data_string_conversion
+
+# 4-space indentation is enforced by SwiftFormat (`--indent 4`). SwiftLint's
+# `indentation_width` rule is not enabled — it rejects the standard multi-line
+# condition continuation style used throughout the sources.
+
+identifier_name:
+  # The ACP / Zed Codable conformances use single-letter locals idiomatically
+  # (`c` = container, `v` = value, `s` = string) plus short loop/operator names;
+  # allow them rather than rename hundreds of decode/encode sites.
+  min_length:
+    warning: 0
+    error: 0
+  # Mirrors the ACP protocol version constant name verbatim.
+  excluded:
+    - ACP_PROTOCOL_VERSION
+
+# Doc comments and URLs (links to the ACP reference) shouldn't count against the
+# code line limit.
+line_length:
+  ignores_comments: true
+  ignores_urls: true
+
+# Codable models for the ACP / Zed schemas nest types and their `CodingKeys` /
+# payload structs — a standard Swift idiom the default `type_level: 1` is too
+# strict to express.
+nesting:
+  type_level: 3
+
+# Structural thresholds. The JSON-RPC dispatch, the session-update state machine,
+# and the hand-written Codable `init(from:)` / `encode(to:)` are inherently
+# branchy; the ACP launch / session-creation entry points carry wide parameter
+# surfaces. A notch above the app-code defaults — still strict enough to catch
+# new bloat.
+file_length:
+  warning: 500
+  error: 800
+type_body_length:
+  warning: 450
+  error: 600
+cyclomatic_complexity:
+  warning: 20
+  error: 35
+function_body_length:
+  warning: 80
+  error: 150
+function_parameter_count:
+  warning: 12
+  error: 20
