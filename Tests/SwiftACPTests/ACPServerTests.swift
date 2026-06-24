@@ -20,7 +20,21 @@ struct ACPServerTests {
         }
 
         func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
-            NewSessionResponse(sessionId: "session-1")
+            NewSessionResponse(
+                sessionId: "session-1",
+                modelState: SessionModelState(
+                    currentModelId: "test-model",
+                    availableModels: [
+                        ModelInfo(modelId: "test-model", name: "Test"),
+                        ModelInfo(modelId: "alt-model", name: "Alt")
+                    ]))
+        }
+
+        func setModel(_ request: SetSessionModelRequest) async throws {
+            // Accept only advertised ids; anything else is rejected like a bad switch.
+            guard ["test-model", "alt-model"].contains(request.modelId) else {
+                throw JSONRPCErrorBody(code: -32602, message: "unknown model: \(request.modelId)")
+            }
         }
 
         func prompt(_ request: PromptRequest, session: ACPServerSession) async throws -> PromptResponse {
@@ -195,6 +209,29 @@ struct ACPServerTests {
         await consumer.value
 
         #expect(received?.map(\.name) == ["new"])
+
+        await client.close()
+        serverTask.cancel()
+    }
+
+    @Test func newSessionAdvertisesModelsAndSetModelRoundTrips() async throws {
+        let (client, serverTask) = await makePair()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+
+        let session = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
+        // The typed model menu round-trips through the passthrough `models` field.
+        let state = try session.models?.decoded(SessionModelState.self)
+        #expect(state?.currentModelId == "test-model")
+        #expect(state?.availableModels.map(\.modelId) == ["test-model", "alt-model"])
+
+        // A switch to an advertised id succeeds.
+        try await client.setModel(SetSessionModelRequest(sessionId: session.sessionId, modelId: "alt-model"))
+
+        // A switch to an unknown id surfaces the handler's rejection as an error.
+        await #expect(throws: (any Error).self) {
+            try await client.setModel(
+                SetSessionModelRequest(sessionId: session.sessionId, modelId: "nope"))
+        }
 
         await client.close()
         serverTask.cancel()

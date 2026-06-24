@@ -67,6 +67,7 @@ public actor ACPAgentServer {
             case "session/prompt": return await .success(try onPrompt(params))
             case "session/set_mode": return await .success(try onSetMode(params))
             case "session/set_config_option": return await .success(try onSetConfigOption(params))
+            case "session/set_model": return await .success(try onSetModel(params))
             default: return .failure(.methodNotFound(method))
             }
         } catch let error as JSONRPCErrorBody {
@@ -140,6 +141,12 @@ public actor ACPAgentServer {
     private func onSetConfigOption(_ params: JSONValue?) async throws -> JSONValue {
         let request: SetSessionConfigOptionRequest = try decode(params)
         try await handler.setConfigOption(request)
+        return .object([:])
+    }
+
+    private func onSetModel(_ params: JSONValue?) async throws -> JSONValue {
+        let request: SetSessionModelRequest = try decode(params)
+        try await handler.setModel(request)
         return .object([:])
     }
 

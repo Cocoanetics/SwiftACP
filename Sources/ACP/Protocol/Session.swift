@@ -219,3 +219,60 @@ public struct SetSessionConfigOptionRequest: Codable, Sendable {
         self.value = value
     }
 }
+
+// MARK: - session models
+
+/// The agent's advertised model menu — returned on `session/new` / `session/load`
+/// (carried in the passthrough `models` field) and surfaced by clients as a model
+/// picker. Mirrors ACP's `SessionModelState`. Switching is driven by
+/// ``SetSessionModelRequest`` (`session/set_model`).
+public struct SessionModelState: Codable, Hashable, Sendable {
+    /// The model the session is currently using, if known.
+    public var currentModelId: String?
+    /// The models the agent offers for this session.
+    public var availableModels: [ModelInfo]
+    public init(currentModelId: String? = nil, availableModels: [ModelInfo]) {
+        self.currentModelId = currentModelId
+        self.availableModels = availableModels
+    }
+}
+
+/// One entry in a ``SessionModelState`` model menu.
+public struct ModelInfo: Codable, Hashable, Sendable {
+    public var modelId: String
+    public var name: String
+    public var description: String?
+    public init(modelId: String, name: String, description: String? = nil) {
+        self.modelId = modelId
+        self.name = name
+        self.description = description
+    }
+}
+
+/// `session/set_model` — switch the session's active model. The available ids
+/// come from the ``SessionModelState`` advertised at session creation.
+public struct SetSessionModelRequest: Codable, Sendable {
+    public var sessionId: SessionId
+    public var modelId: String
+    public init(sessionId: SessionId, modelId: String) {
+        self.sessionId = sessionId
+        self.modelId = modelId
+    }
+}
+
+public extension NewSessionResponse {
+    /// Build a response that advertises a typed model menu, encoding it into the
+    /// passthrough `models` field (kept opaque so unknown agent shapes round-trip).
+    init(
+        sessionId: SessionId,
+        modelState: SessionModelState,
+        modes: SessionModeState? = nil,
+        configOptions: [JSONValue]? = nil,
+        meta: JSONValue? = nil
+    ) {
+        self.init(
+            sessionId: sessionId, modes: modes, configOptions: configOptions,
+            models: try? JSONValue(encoding: modelState), meta: meta
+        )
+    }
+}

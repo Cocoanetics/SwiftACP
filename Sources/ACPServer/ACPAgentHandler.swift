@@ -42,6 +42,12 @@ public protocol ACPAgentHandler: Sendable {
     /// Invoking a command is a normal `session/prompt` whose text starts with `/`,
     /// which the handler parses in ``prompt(_:session:)``. Default: none.
     func availableCommands(for sessionId: SessionId) async -> [AvailableCommand]
+
+    /// Switch the session's active model (`session/set_model`). The selectable ids
+    /// are those advertised via ``newSession(_:)``'s `models` menu, though an agent
+    /// may accept others. Throw to reject (e.g. unknown id / missing credentials).
+    /// Default: throws "not supported".
+    func setModel(_ request: SetSessionModelRequest) async throws
 }
 
 public extension ACPAgentHandler {
@@ -62,5 +68,9 @@ public extension ACPAgentHandler {
 
     func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_config_option is not supported")
+    }
+
+    func setModel(_ request: SetSessionModelRequest) async throws {
+        throw JSONRPCErrorBody(code: -32601, message: "session/set_model is not supported")
     }
 }

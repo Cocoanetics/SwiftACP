@@ -127,6 +127,10 @@ public actor ACPAgentConnection {
         let _: EmptyResponse = try await send("session/set_config_option", request)
     }
 
+    public func setModel(_ request: SetSessionModelRequest) async throws {
+        let _: EmptyResponse = try await send("session/set_model", request)
+    }
+
     /// `session/cancel` is a notification — fire and forget.
     public func cancel(sessionId: SessionId) async throws {
         let params = try JSONValue(encoding: CancelNotification(sessionId: sessionId))
