@@ -239,16 +239,17 @@ import Testing
             seed.closed = false
             try SessionStore.writeRecord(seed)
 
-            // 20ms checkpoint interval so the debounced save lands quickly.
             let persister = TurnPersister(record: seed, intervalNanos: 20_000_000)
             await persister.recordPrompt("hello")
-
-            // The user message is checkpointed to disk before finish() — the whole
-            // point of acpx's live checkpoint (mid-run reads see partial history).
-            try await Task.sleep(nanoseconds: 90_000_000)
-            let midRun = try #require(SessionStore.loadRecord("cp-1"))
-            #expect(midRun.messages.count == 1)
-            #expect(midRun.lastPromptAt == nil)
+            // Poll for the 20ms debounced checkpoint (a flat sleep flakes on a stalled runner):
+            // the user message lands on disk before finish(), so mid-run reads see partial history.
+            var midRun: SessionRecord?
+            for _ in 0 ..< 200 where midRun == nil {
+                midRun = SessionStore.loadRecord("cp-1").flatMap { $0.messages.count == 1 ? $0 : nil }
+                if midRun == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+            }
+            // Checkpointed mid-run: message written, but not finish()'s timestamps yet.
+            #expect(try #require(midRun, "live checkpoint did not land").lastPromptAt == nil)
 
             await persister.finish()
             let final = try #require(SessionStore.loadRecord("cp-1"))
