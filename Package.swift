@@ -13,18 +13,16 @@ let package = Package(
         .library(name: "SwiftACP", targets: ["SwiftACP"])
     ],
     dependencies: [
-        // SwiftACP uses only SwiftMCP's standalone, zero-dependency `JSONValue`
-        // product — none of the MCP client/server. Enable no traits so the
-        // `Server` trait's swift-nio/crypto/certs never enter resolution; SwiftACP
-        // stays dependency-light and builds on Windows. Consumers developing
-        // against a local SwiftMCP checkout can override with a sibling path dep.
-        .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.5.1", traits: [])
+        // SwiftACP's only dependency: the standalone, dependency-free JSONValue
+        // package (split out of SwiftMCP). Consumers developing against a local
+        // JSONValue checkout can override with a sibling path dependency.
+        .package(url: "https://github.com/Cocoanetics/JSONValue.git", from: "1.0.0")
     ],
     targets: [
         .target(
             name: "SwiftACP",
             dependencies: [
-                .product(name: "JSONValue", package: "SwiftMCP")
+                .product(name: "JSONValue", package: "JSONValue")
             ]
         ),
         .testTarget(
