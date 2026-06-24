@@ -35,22 +35,46 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
     }
 }
 
-/// Drives the `acpxd` MCP daemon: discover it via Bonjour (spawning it if
-/// needed), call the `runPrompt` tool, and render the streamed updates.
-/// Thrown when the daemon can't be reached (caller falls back to direct spawn).
-struct DaemonUnavailable: Error {}
+/// Thrown when the daemon can't be reached and a freshly spawned one didn't come
+/// up in time. There is no direct fallback — `acpxd` is the single manager that
+/// owns the live agent session and its persisted history — so the CLI surfaces
+/// ``cliMessage`` and aborts the turn.
+struct DaemonUnavailable: Error {
+    /// Why the daemon couldn't be reached (a spawn-launch failure, or a timeout),
+    /// woven into the user-facing CLI error.
+    let detail: String?
+    init(_ detail: String? = nil) { self.detail = detail }
 
+    /// Actionable, user-facing message for the CLI's error output.
+    var cliMessage: String {
+        var message = "could not reach the acpxd daemon"
+        if let detail { message += " (\(detail))" }
+        return message
+            + "; the prompt was not run. acpxd holds the live agent session and"
+            + " records its history, so acpx cannot run a turn without it. Make sure"
+            + " the 'acpxd' binary is installed next to 'acpx' (or on PATH) and that"
+            + " local network access is allowed, then retry."
+    }
+}
+
+/// Drives the `acpxd` MCP daemon: discover it via Bonjour (spawning it if needed),
+/// call its tools, and render the streamed updates.
 enum DaemonClient {
     static let serviceName = "acpx"
 
-    /// Run a prompt through the daemon. Returns the stop reason, or throws if the
-    /// daemon can't be reached (the caller falls back to a direct spawn).
+    /// Run a prompt through the daemon. Returns the stop reason, or throws
+    /// ``DaemonUnavailable`` if the daemon can't be reached or started (there is no
+    /// fallback — the daemon is the single manager that owns the session).
+    ///
+    /// - Parameter wait: when `false` (`--no-wait`), the daemon rejects the turn
+    ///   immediately if another turn is already running for the session, instead of
+    ///   queueing behind it.
     ///
     /// The tool result is the agent's aggregate response text, which the CLI
     /// ignores (it streams the same output live via `renderer`). The stop reason
     /// arrives as a terminal ``TurnEndedEvent`` log notification, captured here.
     static func runPrompt(
-        sessionId: String, text: String, renderer: OutputRenderer
+        sessionId: String, text: String, wait: Bool = true, renderer: OutputRenderer
     ) async throws -> StopReason {
         let proxy = MCPServerProxy(config: .tcp(config: MCPServerTcpConfig(serviceName: serviceName)))
         let stopReason = StopReasonBox()
@@ -62,7 +86,8 @@ enum DaemonClient {
         // The daemon reads the agent command + cwd from the session's record.
         _ = try await proxy.callTool("runPrompt", arguments: [
             "sessionId": .string(sessionId),
-            "text": .string(text)
+            "text": .string(text),
+            "wait": .bool(wait)
         ])
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
@@ -93,9 +118,14 @@ enum DaemonClient {
             try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
             return
         } catch {
-            spawnDaemon()
+            if let spawnError = spawnDaemon() {
+                // Couldn't even launch acpxd — retrying the connect is pointless.
+                throw DaemonUnavailable("launching acpxd failed: \(spawnError.localizedDescription)")
+            }
         }
-        // Retry while the freshly-spawned daemon comes up + advertises.
+        // Retry while the freshly-spawned daemon comes up + advertises. A second
+        // acpxd that loses the singleton race exits on its own, so this still
+        // resolves to the one running manager.
         for _ in 0 ..< 40 {
             try? await Task.sleep(nanoseconds: 150_000_000)
             do {
@@ -103,10 +133,14 @@ enum DaemonClient {
                 return
             } catch {}
         }
-        throw DaemonUnavailable()
+        throw DaemonUnavailable("it did not become reachable within ~6s of being started")
     }
 
-    static func spawnDaemon() {
+    /// Launch a detached `acpxd`. Returns the launch error if the process couldn't
+    /// be started (e.g. the binary isn't found), or `nil` on success. A spawned
+    /// daemon that finds another already running exits via its singleton guard.
+    @discardableResult
+    static func spawnDaemon() -> Error? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: daemonExecutablePath())
         process.standardInput = FileHandle.nullDevice
@@ -114,8 +148,13 @@ enum DaemonClient {
         process.standardError = FileHandle.nullDevice
         // Detach into its own session so it survives this CLI process exiting.
         process.environment = ProcessInfo.processInfo.environment
-        try? process.run()
         process.qualityOfService = .utility
+        do {
+            try process.run()
+            return nil
+        } catch {
+            return error
+        }
     }
 
     private static func daemonExecutablePath() -> String {

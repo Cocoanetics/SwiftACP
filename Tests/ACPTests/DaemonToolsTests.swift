@@ -12,33 +12,6 @@ import Testing
 ///
 /// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
 @Suite(.serialized) struct DaemonToolsTests {
-    /// `agentCommand` for the mock: an unknown name with no override is treated as
-    /// a literal command line by `AgentRegistry`, so a bare `python3 <script>`
-    /// launches the fixture.
-    private func mockCommand() -> String? {
-        guard let python = AgentRegistry.which("python3") else { return nil }
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/mock-agent.py")
-        guard FileManager.default.fileExists(atPath: fixture.path) else { return nil }
-        return "'\(python)' '\(fixture.path)'"
-    }
-
-    /// Run `body` with ``ACPXPaths/baseDir`` pointed at a fresh temp directory, so
-    /// persistence never touches the real `~/.acpx`. Restores it afterwards.
-    private func withIsolatedStore<T>(_ body: () async throws -> T) async rethrows -> T {
-        let original = ACPXPaths.baseDir
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("acpx-test-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        ACPXPaths.baseDir = dir
-        defer {
-            ACPXPaths.baseDir = original
-            try? FileManager.default.removeItem(at: dir)
-        }
-        return try await body()
-    }
-
     @Test(.enabled(if: mockPythonAvailable))
     func newSessionThenRunPromptReturnsAggregateText() async throws {
         let command = try #require(mockCommand())

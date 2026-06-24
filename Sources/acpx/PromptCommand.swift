@@ -1,14 +1,16 @@
 import ACPXCore
 import Foundation
-import JSONFoundation
 import SwiftACP
 
 /// `acpx [<agent>] [prompt...]` / `acpx [<agent>] prompt [prompt...]` — prompt a
 /// persistent session (routed by cwd, walking up to the git root).
 ///
-/// Note: this currently spawns the agent per invocation and reconnects via
-/// `session/load`. Session reuse across invocations is provided by the `acpxd`
-/// MCP daemon (added separately); output is identical either way.
+/// The turn always runs through the `acpxd` daemon — the single manager that holds
+/// the live agent session and owns its persisted history. The CLI is a pure client:
+/// it streams the daemon's `session/update`s to the renderer and never writes the
+/// session record itself. There is no direct (no-daemon) fallback: routing every
+/// turn through one manager is what stops concurrent `acpx`/MCP accesses from
+/// colliding on a session or clobbering its history.
 enum PromptCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
@@ -21,79 +23,34 @@ enum PromptCommand {
         let name = try scan.string("session").map(parseSessionName)
         let promptText = try PromptInputResolver.resolve(
             words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
+        // Absent `--no-wait`, a turn for a session that's already running one queues
+        // behind it (the daemon serializes turns per session); `--no-wait` makes the
+        // daemon reject the turn immediately instead of waiting.
+        let wait = scan.boolean("wait") ?? true
 
         let record = try findRoutedSessionOrThrow(agent: agent, name: name)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
 
-        let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
-        let meta = SessionLifecycle.claudeMeta(agent: agent, flags: flags)
         let renderer = OutputRenderer(options: renderOptions(flags))
         let sessionId = record.acpSessionId
-        let cwd = agent.cwd
-        let agentCommand = agent.agentCommand
 
-        let result: (stopReason: StopReason, loadError: String?) = try runBlocking {
-            // Prefer the daemon (session reuse via MCP); fall back to a direct
-            // spawn if it can't be reached. Output is identical either way.
+        // The acpxd daemon owns turn persistence: by the time `runPrompt` returns it
+        // has written the prompt, streamed updates, token usage, and event log to the
+        // session record (via TurnPersister, which also stamps the activity
+        // timestamps). So the CLI streams output and exits — it must not write the
+        // record here, or its stale pre-turn snapshot would clobber the turn the
+        // daemon just persisted. There is no direct fallback: if the daemon can't be
+        // reached the turn fails loudly rather than running outside the manager.
+        let stopReason: StopReason = try runBlocking {
             do {
-                let stop = try await DaemonClient.runPrompt(
-                    sessionId: sessionId, text: promptText, renderer: renderer)
-                return (stop, nil)
-            } catch is DaemonUnavailable {
-                return try await directPrompt(
-                    agentCommand: agentCommand, cwd: cwd, sessionId: sessionId, meta: meta,
-                    permission: permission, authCredentials: context.config.auth,
-                    authPolicy: flags.authPolicy, verbose: flags.verbose, promptText: promptText,
-                    renderer: renderer)
+                return try await DaemonClient.runPrompt(
+                    sessionId: sessionId, text: promptText, wait: wait, renderer: renderer)
+            } catch let unavailable as DaemonUnavailable {
+                throw CLIError(unavailable.cliMessage)
             }
         }
-        renderer.finish(stopReason: result.stopReason)
-        if flags.verbose, let loadError = result.loadError {
-            Console.errLine("[acpx] session reconnect failed, started fresh session: \(loadError)")
-        }
-        let stopReason = result.stopReason
-
-        // Touch the session's activity timestamps.
-        var updated = record
-        updated.lastUsedAt = nowISO()
-        updated.lastPromptAt = nowISO()
-        try? SessionStore.writeRecord(updated)
-
+        renderer.finish(stopReason: stopReason)
         return stopReason == .refusal ? ExitCodes.error : ExitCodes.success
-    }
-
-    /// Direct (no-daemon) prompt: spawn the adapter, reconnect (or fresh), stream.
-    static func directPrompt(
-        agentCommand: String, cwd: String, sessionId: String, meta: JSONValue?,
-        permission: PermissionPolicy, authCredentials: [String: String], authPolicy: String,
-        verbose: Bool, promptText: String, renderer: OutputRenderer
-    ) async throws -> (StopReason, String?) {
-        let handle = try await ACPAgent.launch(
-            agent: agentCommand, cwd: cwd, permission: permission,
-            authCredentials: authCredentials, authPolicy: authPolicy, inheritStderr: verbose,
-            onClientRequest: clientOperationObserver(renderer))
-        do {
-            var loadError: String?
-            let session: ACPSession
-            do {
-                session = try await handle.reconnectSession(id: sessionId, cwd: cwd, meta: meta)
-            } catch {
-                let response = try await handle.connection.newSession(
-                    NewSessionRequest(cwd: cwd, mcpServers: [], meta: meta))
-                session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
-                loadError = error.localizedDescription
-            }
-            let outcome = try await session.run(promptText) { renderer.render($0) }
-            await handle.close()
-            return (outcome.stopReason, loadError)
-        } catch let error as JSONRPCErrorBody {
-            let cliError = turnFailure(error, renderer: renderer)
-            await handle.close()
-            throw cliError
-        } catch {
-            await handle.close()
-            throw CLIError(error.localizedDescription)
-        }
     }
 
     // MARK: - Routing + banner

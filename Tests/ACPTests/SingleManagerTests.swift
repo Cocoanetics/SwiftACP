@@ -1,0 +1,134 @@
+@testable import ACPXCore
+@testable import acpxd
+import Foundation
+import SwiftACP
+import Testing
+
+/// The single-manager guarantees: the `acpxd` boot lock keeps exactly one daemon
+/// alive, and the daemon serializes turns per session so concurrent CLI/MCP callers
+/// can't collide on one session or clobber its persisted history.
+///
+/// Serialized because the store/lock tests redirect the process-wide
+/// ``ACPXPaths/baseDir``.
+@Suite(.serialized) struct SingleManagerTests {
+    // MARK: - DaemonLock (singleton boot lock)
+
+    @Test func acquireSucceedsAndBlocksASecondLiveHolder() async throws {
+        try await withIsolatedStore {
+            let lock = DaemonLock()
+            let acquired = try lock.acquire()
+            #expect(acquired)
+            // The lock now names a live pid (this process), so a second acquire fails.
+            let blocked = try DaemonLock().acquire()
+            #expect(!blocked)
+            lock.release()
+            // Released → free to acquire again.
+            let again = DaemonLock()
+            let reacquired = try again.acquire()
+            #expect(reacquired)
+            again.release()
+        }
+    }
+
+    @Test func staleLockFromDeadProcessIsReclaimed() async throws {
+        try await withIsolatedStore {
+            let dead = reapedChildPid()
+            #expect(DaemonLock.isProcessAlive(dead) == false)
+            try writeDaemonHolder(pid: dead)
+            // The holder is gone, so the lock is stale and gets taken over.
+            let lock = DaemonLock()
+            #expect(try lock.acquire())
+            #expect(lock.currentHolder()?.pid == lock.pid)
+            lock.release()
+        }
+    }
+
+    @Test func liveForeignLockIsNotStolen() async throws {
+        try await withIsolatedStore {
+            // pid 1 (launchd) is always alive but not ours — kill(1, 0) → EPERM.
+            #expect(DaemonLock.isProcessAlive(1))
+            try writeDaemonHolder(pid: 1)
+            #expect(try DaemonLock().acquire() == false)
+            // The foreign lock is left intact.
+            #expect(DaemonLock().currentHolder()?.pid == 1)
+        }
+    }
+
+    @Test func releaseOnlyRemovesOwnLock() async throws {
+        try await withIsolatedStore {
+            try writeDaemonHolder(pid: 1) // "another" daemon owns it
+            DaemonLock().release() // our pid ≠ holder → no-op
+            #expect(DaemonLock().currentHolder()?.pid == 1)
+        }
+    }
+
+    // MARK: - Per-session turn serialization
+
+    @Test func turnSlotIsExclusivePerSessionAndHonorsNoWait() async throws {
+        let queue = SessionTurnQueue()
+        try await queue.acquire("s1", wait: true)
+        // Busy + --no-wait → rejected immediately rather than queueing.
+        await #expect(throws: DaemonError.self) {
+            try await queue.acquire("s1", wait: false)
+        }
+        // A different session is independent.
+        try await queue.acquire("s2", wait: false)
+        // Releasing s1 frees it for the next caller.
+        await queue.release("s1")
+        try await queue.acquire("s1", wait: false)
+        await queue.release("s1")
+        await queue.release("s2")
+    }
+
+    @Test func queuedWaiterProceedsAfterRelease() async throws {
+        let queue = SessionTurnQueue()
+        try await queue.acquire("s", wait: true)
+        // A waiter queues behind the held slot; it must proceed once released
+        // (never deadlock), whether it enqueued before or after the release.
+        let waiter = Task { try await queue.acquire("s", wait: true) }
+        await queue.release("s")
+        try await waiter.value
+        await queue.release("s")
+    }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func concurrentTurnsSerializeAndPreserveHistory() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            // Two turns fired at once must be serialized per session, and each must
+            // build on the other's persisted history rather than clobbering it.
+            async let first = daemon.runPrompt(sessionId: id, text: "first")
+            async let second = daemon.runPrompt(sessionId: id, text: "second")
+            _ = try await (first, second)
+
+            let record = try #require(SessionStore.loadRecord(id))
+            let history = SessionStore.conversationHistoryEntries(record)
+            #expect(history.count == 4)
+            #expect(history.map(\.role) == ["user", "assistant", "user", "assistant"])
+            let prompts = Set(history.filter { $0.role == "user" }.map(\.textPreview))
+            #expect(prompts == ["first", "second"])
+        }
+    }
+}
+
+// MARK: - helpers
+
+/// Write a daemon lock file owned by `pid` (for the stale / foreign-holder tests).
+private func writeDaemonHolder(pid: Int32) throws {
+    let url = ACPXPaths.daemonLockPath
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let data = try JSONEncoder().encode(DaemonLock.Holder(pid: pid, startedAt: nowISO()))
+    try data.write(to: url)
+}
+
+/// A pid guaranteed to be dead: launch `/usr/bin/true` and reap it.
+private func reapedChildPid() -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+    try? process.run()
+    process.waitUntilExit()
+    return process.processIdentifier
+}

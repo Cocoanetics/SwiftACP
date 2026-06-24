@@ -38,6 +38,17 @@ struct AcpxdCommand: AsyncParsableCommand {
     func run() async throws {
         bootstrapACPXLogging()
         let log = Logger(label: "com.cocoanetics.acpx.acpxd")
+
+        // Singleton guard: only one acpxd may own the live sessions + records at a
+        // time. If another live daemon already holds the lock, exit cleanly — the
+        // CLI will connect to that one. A stale lock (crashed daemon) is reclaimed.
+        let lock = DaemonLock()
+        guard try lock.acquire() else {
+            log.notice("acpxd: another daemon is already running; exiting.")
+            return
+        }
+        defer { lock.release() }
+
         let daemon = ACPXDaemon(inheritAgentStderr: verbose)
 
         // The Bonjour + local TCP transport is always on — the CLI finds the daemon this way.

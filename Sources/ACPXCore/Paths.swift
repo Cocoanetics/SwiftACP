@@ -72,6 +72,11 @@ public enum ACPXPaths {
         queuesDir.appendingPathComponent("\(queueKey(sessionId)).lock")
     }
 
+    /// `~/.acpx/acpxd.lock` — the single-daemon boot lock (see ``DaemonLock``).
+    public static var daemonLockPath: URL {
+        baseDir.appendingPathComponent("acpxd.lock")
+    }
+
     /// Node `path.resolve` semantics: make absolute against `base`, normalize
     /// `.`/`..`, but do NOT resolve symlinks or remap `/private` (unlike
     /// `URL.standardizedFileURL`, which rewrites `/private/tmp`→`/tmp`).
