@@ -2,6 +2,8 @@
 @testable import ACPXCore
 @testable import acpxd
 import Foundation
+import Logging
+import ServiceLifecycle
 import SwiftACP
 import SwiftMCP
 import Testing
@@ -102,6 +104,29 @@ import Testing
             #expect(host == "127.0.0.1")
             #expect(port == 49152)
             lock.release()
+        }
+    }
+
+    @Test func daemonServiceReleasesLockOnGracefulShutdown() async throws {
+        try await withIsolatedStore {
+            let lock = DaemonLock()
+            let acquired = try lock.acquire()
+            #expect(acquired)
+            // Run the daemon as a service, then ask the group to shut down gracefully:
+            // it's torn down last and releases the lock once its run() returns.
+            let daemon = ACPXDaemon(inheritAgentStderr: false, lock: lock)
+            let group = ServiceGroup(configuration: .init(
+                services: [.init(
+                    service: daemon, successTerminationBehavior: .gracefullyShutdownGroup,
+                    failureTerminationBehavior: .gracefullyShutdownGroup)],
+                logger: Logger(label: "test.acpxd")))
+            let running = Task { try await group.run() }
+            // Let group.run() reach its running state first; triggering while it's
+            // still .initial would finish the group and make run() throw.
+            try await Task.sleep(nanoseconds: 200_000_000)
+            await group.triggerGracefulShutdown()
+            try await running.value
+            #expect(lock.currentHolder() == nil)
         }
     }
 

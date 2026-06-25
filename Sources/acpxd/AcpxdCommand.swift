@@ -47,15 +47,27 @@ struct AcpxdCommand: AsyncParsableCommand {
             log.notice("acpxd: another daemon is already running; exiting.")
             return
         }
-        defer { lock.release() }
 
-        let daemon = ACPXDaemon(inheritAgentStderr: verbose)
+        // The daemon owns the live agent sessions and the singleton lock; it's run as
+        // a service below so it closes those agents and releases the lock on shutdown.
+        let daemon = ACPXDaemon(inheritAgentStderr: verbose, lock: lock)
 
         // The local TCP transport (also advertised via Bonjour) is always on. The CLI
         // connects to it directly by the port recorded in the lock file below.
+        //
+        // The daemon is registered first so — because ServiceGroup tears services down
+        // in reverse — it shuts down LAST, after the transports stop serving. Both
+        // termination behaviors are graceful so even a transport *failure* unwinds in
+        // that order, rather than cancelling every task concurrently (which could drop
+        // the lock while a transport is still draining).
         let bonjour = TCPBonjourTransport(server: daemon, serviceName: "acpx")
         var services: [ServiceGroupConfiguration.ServiceConfiguration] = [
-            .init(service: bonjour, successTerminationBehavior: .gracefullyShutdownGroup)
+            .init(
+                service: daemon, successTerminationBehavior: .gracefullyShutdownGroup,
+                failureTerminationBehavior: .gracefullyShutdownGroup),
+            .init(
+                service: bonjour, successTerminationBehavior: .gracefullyShutdownGroup,
+                failureTerminationBehavior: .gracefullyShutdownGroup)
         ]
         var summary = "Bonjour + local TCP"
 
@@ -63,8 +75,9 @@ struct AcpxdCommand: AsyncParsableCommand {
         if let httpPort {
             let http = HTTPSSETransport(server: daemon, host: httpHost, port: httpPort)
             http.authorizationHandler = { _ in .authorized }
-            services.append(
-                .init(service: http, successTerminationBehavior: .gracefullyShutdownGroup))
+            services.append(.init(
+                service: http, successTerminationBehavior: .gracefullyShutdownGroup,
+                failureTerminationBehavior: .gracefullyShutdownGroup))
             summary += " + HTTP+SSE http://\(httpHost):\(httpPort)/sse (UNAUTHENTICATED)"
         }
 
@@ -93,5 +106,20 @@ struct AcpxdCommand: AsyncParsableCommand {
                 gracefulShutdownSignals: [.sigterm, .sigint],
                 logger: log))
         try await group.run()
+    }
+}
+
+extension ACPXDaemon: Service {
+    /// The daemon's lifecycle in the ``ServiceGroup``. Registered first, it's torn
+    /// down LAST — after the transports stop accepting requests — so on graceful
+    /// shutdown it closes every live agent (no orphaned subprocesses) and then
+    /// releases the singleton lock. A forced cancellation isn't ordered, so we skip
+    /// the lock release and let the next daemon reclaim the stale lock.
+    func run() async throws {
+        let graceful = await (try? gracefulShutdown()) != nil
+        for sessionId in Array(live.keys) {
+            await evict(sessionId)
+        }
+        if graceful { lock?.release() }
     }
 }

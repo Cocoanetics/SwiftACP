@@ -27,13 +27,15 @@ import SwiftMCP
 @MCPServer(name: "acpx")
 actor ACPXDaemon {
     /// A live agent handle + its session, keyed by ACP session id in ``live``.
-    private struct Live {
+    /// Internal (not private) so the ``Service`` conformance in `AcpxdCommand` can
+    /// close them on shutdown.
+    struct Live {
         let agent: ACPAgent
         let session: ACPSession
     }
 
     /// Live sessions held open between prompts, keyed by ACP session id.
-    private var live: [String: Live] = [:]
+    var live: [String: Live] = [:]
 
     /// Serializes prompt turns per session so concurrent CLI/MCP callers can't drive
     /// one agent — or persist one record — at the same time (see ``SessionTurnQueue``).
@@ -43,8 +45,14 @@ actor ACPXDaemon {
     /// diagnostics (e.g. rate-limit messages) that otherwise stay hidden.
     private let inheritAgentStderr: Bool
 
-    init(inheritAgentStderr: Bool = false) {
+    /// The singleton lock the daemon holds for its lifetime and releases on a graceful
+    /// shutdown (nil in tests that don't exercise the lifecycle). Released by the
+    /// ``Service`` conformance in `AcpxdCommand`.
+    let lock: DaemonLock?
+
+    init(inheritAgentStderr: Bool = false, lock: DaemonLock? = nil) {
         self.inheritAgentStderr = inheritAgentStderr
+        self.lock = lock
     }
 
     /// Create a new session for an agent, persist its `~/.acpx/sessions` record
@@ -157,7 +165,7 @@ actor ACPXDaemon {
     /// against prompts and other control ops; reloading *after* acquiring means it
     /// builds on (and persists on top of) whatever turn it queued behind, rather than
     /// clobbering it.
-    private func withSessionTurn<T>(
+    private func withSessionTurn<T: Sendable>(
         _ sessionId: String, _ body: (Live, inout SessionRecord) async throws -> T
     ) async throws -> T {
         guard let initial = findRecord(sessionId) else {
@@ -418,7 +426,7 @@ actor ACPXDaemon {
     }
 
     /// Drop a live session and terminate its agent (so the next call relaunches).
-    private func evict(_ sessionId: String) async {
+    func evict(_ sessionId: String) async {
         guard let entry = live.removeValue(forKey: sessionId) else { return }
         await entry.agent.close()
     }
