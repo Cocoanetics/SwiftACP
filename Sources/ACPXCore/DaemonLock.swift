@@ -14,10 +14,14 @@ public struct DaemonLock: Sendable {
     /// The persisted lock contents.
     public struct Holder: Codable, Sendable {
         public var pid: Int32
+        /// The daemon's bound TCP port, recorded once it's listening so clients can
+        /// connect directly. Nil until then, or for an older lock without it.
+        public var port: Int?
         public var startedAt: String
 
-        public init(pid: Int32, startedAt: String) {
+        public init(pid: Int32, port: Int? = nil, startedAt: String) {
             self.pid = pid
+            self.port = port
             self.startedAt = startedAt
         }
     }
@@ -61,6 +65,15 @@ public struct DaemonLock: Sendable {
         return try? JSONDecoder().decode(Holder.self, from: data)
     }
 
+    /// Record the daemon's bound TCP port in the lock once the transport is
+    /// listening, so clients connect directly (`127.0.0.1:port`) instead of via
+    /// Bonjour discovery. No-op unless this process still owns the lock.
+    public func update(port: Int) {
+        guard var holder = currentHolder(), holder.pid == pid else { return }
+        holder.port = port
+        try? write(holder)
+    }
+
     /// Create the lock file atomically, writing this process's holder record.
     /// Returns `false` if it already exists.
     private func create() throws -> Bool {
@@ -71,6 +84,11 @@ public struct DaemonLock: Sendable {
         } catch let error as CocoaError where error.code == .fileWriteFileExists {
             return false
         }
+    }
+
+    /// Overwrite the lock file with `holder` (the caller must own the lock).
+    private func write(_ holder: Holder) throws {
+        try JSONEncoder().encode(holder).write(to: url)
     }
 
     /// Whether `pid` names a live process. `kill(pid, 0)` succeeds for a signalable

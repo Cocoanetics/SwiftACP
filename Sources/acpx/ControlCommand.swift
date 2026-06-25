@@ -48,36 +48,22 @@ enum ControlCommand {
         guard let modeId = try context.positionals.first.map({ try parseNonEmptyValue("Mode", $0) }) else {
             throw UsageError("missing required argument 'mode'")
         }
-        var record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
-        let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
-        let meta = SessionLifecycle.claudeMeta(agent: agent, flags: flags)
+        let record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
         let sessionId = record.acpSessionId
-        let cwd = agent.cwd
-        let agentCommand = agent.agentCommand
 
+        // Route through acpxd — the single manager that holds the live agent and owns
+        // its record — rather than launching a throwaway agent and writing the record
+        // here (which would miss the live session and could clobber a concurrent turn).
         try runBlocking {
-            let handle = try await ACPAgent.launch(
-                agent: agentCommand, cwd: cwd, permission: permission,
-                authCredentials: context.config.auth, authPolicy: flags.authPolicy,
-                inheritStderr: flags.verbose)
             do {
-                let session = try await reconnectOrFresh(handle, sessionId: sessionId, cwd: cwd, meta: meta)
-                try await session.setMode(modeId)
-                await handle.close()
-            } catch {
-                await handle.close()
-                throw CLIError(error.localizedDescription)
+                try await DaemonClient.setMode(sessionId: sessionId, modeId: modeId)
+            } catch let unavailable as DaemonUnavailable {
+                throw CLIError(unavailable.cliMessage)
             }
         }
-        // Persist desired mode.
-        var acpx = record.acpx ?? SessionAcpxState()
-        acpx.desiredModeId = modeId
-        acpx.currentModeId = modeId
-        record.acpx = acpx
-        record.lastUsedAt = nowISO()
-        try? SessionStore.writeRecord(record)
-
-        printSetMode(modeId: modeId, record: record, format: flags.format)
+        // The daemon persisted the change; reload the record for output.
+        let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
+        printSetMode(modeId: modeId, record: updated, format: flags.format)
         return ExitCodes.success
     }
 
@@ -118,54 +104,29 @@ enum ControlCommand {
         // (config_option control); other keys get the config-id compatibility
         // aliases applied + validated against the session's advertised options.
         let operation = resolveSetOperation(key: key, agentCommand: agent.agentCommand, record: record)
-        let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
-        let meta = SessionLifecycle.claudeMeta(agent: agent, flags: flags)
         let sessionId = record.acpSessionId
-        let cwd = agent.cwd
-        let agentCommand = agent.agentCommand
 
-        // The set_config_option response carries the agent's updated config options;
-        // acpx reports their count and echoes them in the JSON envelope.
+        // Route through acpxd — the single manager that holds the live agent and owns
+        // its record — rather than launching a throwaway agent and writing the record
+        // here. The set_config_option response carries the agent's updated config
+        // options, which acpx reports + echoes in the JSON envelope.
         let resultOptions: [JSONValue] = try runBlocking {
-            let handle = try await ACPAgent.launch(
-                agent: agentCommand, cwd: cwd, permission: permission,
-                authCredentials: context.config.auth, authPolicy: flags.authPolicy,
-                inheritStderr: flags.verbose)
             do {
-                let session = try await reconnectOrFresh(handle, sessionId: sessionId, cwd: cwd, meta: meta)
-                let options: [JSONValue]
                 switch operation {
                 case .model:
-                    try await handle.connection.setModel(
-                        SetSessionModelRequest(sessionId: session.id, modelId: value))
-                    options = []
+                    try await DaemonClient.setModel(sessionId: sessionId, modelId: value)
+                    return []
                 case .configOption(let configId):
-                    let response = try await handle.connection.setConfigOption(
-                        SetSessionConfigOptionRequest(sessionId: session.id, configId: configId, value: value))
-                    options = response.configOptions ?? []
+                    return try await DaemonClient.setConfigOption(
+                        sessionId: sessionId, configId: configId, value: value)
                 }
-                await handle.close()
-                return options
-            } catch {
-                await handle.close()
-                throw CLIError(error.localizedDescription)
+            } catch let unavailable as DaemonUnavailable {
+                throw CLIError(unavailable.cliMessage)
             }
         }
 
-        var updated = record
-        var acpx = updated.acpx ?? SessionAcpxState()
-        switch operation {
-        case .model:
-            acpx.currentModelId = value
-        case .configOption(let configId):
-            var desired = acpx.desiredConfigOptions ?? [:]
-            desired[configId] = value
-            acpx.desiredConfigOptions = desired
-        }
-        updated.acpx = acpx
-        updated.lastUsedAt = nowISO()
-        try? SessionStore.writeRecord(updated)
-
+        // The daemon persisted the change; reload the record for output.
+        let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
         switch operation {
         case .model:
             printSetModel(modelId: value, record: updated, format: flags.format)
@@ -242,9 +203,9 @@ enum ControlCommand {
     ///
     /// acpx's *other* alias (`thinking` → `effort`, `resolveSupportedConfigOptionId`)
     /// is intentionally not replicated: it only fires against a live session's
-    /// advertised options, which the CLI's ephemeral reconnect-then-fresh path
-    /// doesn't carry. acpx itself sends the key verbatim there, so `set thinking`
-    /// fails identically in both (the agent rejects the unknown option).
+    /// advertised options, which acpx doesn't have when it maps the key before
+    /// issuing the daemon call. acpx itself sends the key verbatim there, so
+    /// `set thinking` fails identically in both (the agent rejects the unknown option).
     private static func resolveCompatibleConfigId(agentCommand: String, configId: String) -> String {
         if isLegacyZedCodexAcpInvocation(agentCommand), configId == "thought_level" {
             return "reasoning_effort"
@@ -254,20 +215,5 @@ enum ControlCommand {
 
     private static func isLegacyZedCodexAcpInvocation(_ agentCommand: String) -> Bool {
         agentCommand.range(of: #"@zed-industries/codex-acp\b"#, options: .regularExpression) != nil
-    }
-
-    // MARK: shared
-
-    /// Reconnect to a session (resume/load), falling back to a fresh session.
-    static func reconnectOrFresh(
-        _ handle: ACPAgent, sessionId: String, cwd: String, meta: JSONValue?
-    ) async throws -> ACPSession {
-        do {
-            return try await handle.reconnectSession(id: sessionId, cwd: cwd, meta: meta)
-        } catch {
-            let response = try await handle.connection.newSession(
-                NewSessionRequest(cwd: cwd, mcpServers: [], meta: meta))
-            return ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
-        }
     }
 }

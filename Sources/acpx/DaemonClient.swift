@@ -37,8 +37,8 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
 
 /// Thrown when the daemon can't be reached and a freshly spawned one didn't come
 /// up in time. There is no direct fallback — `acpxd` is the single manager that
-/// owns the live agent session and its persisted history — so the CLI surfaces
-/// ``cliMessage`` and aborts the turn.
+/// owns the live agent sessions and their persisted history — so the CLI surfaces
+/// ``cliMessage`` and aborts the request.
 struct DaemonUnavailable: Error {
     /// Why the daemon couldn't be reached (a spawn-launch failure, or a timeout),
     /// woven into the user-facing CLI error.
@@ -50,17 +50,70 @@ struct DaemonUnavailable: Error {
         var message = "could not reach the acpxd daemon"
         if let detail { message += " (\(detail))" }
         return message
-            + "; the prompt was not run. acpxd holds the live agent session and"
-            + " records its history, so acpx cannot run a turn without it. Make sure"
-            + " the 'acpxd' binary is installed next to 'acpx' (or on PATH) and that"
+            + "; the request was not run. acpxd owns the live agent sessions and their"
+            + " history, so acpx routes every prompt and control command through it. Make"
+            + " sure the 'acpxd' binary is installed next to 'acpx' (or on PATH) and that"
             + " local network access is allowed, then retry."
     }
 }
 
-/// Drives the `acpxd` MCP daemon: discover it via Bonjour (spawning it if needed),
-/// call its tools, and render the streamed updates.
+/// Drives the `acpxd` MCP daemon: connect to it by the `127.0.0.1` port it records
+/// in its lock file (spawning it if needed), call its tools, render streamed updates.
 enum DaemonClient {
-    static let serviceName = "acpx"
+    /// A direct TCP endpoint for the running daemon, read from its lock file, or nil
+    /// if no live daemon has recorded a port yet.
+    static func liveEndpoint() -> MCPServerTcpConfig? {
+        guard let holder = DaemonLock().currentHolder(),
+            DaemonLock.isProcessAlive(holder.pid),
+            let port = holder.port, let tcpPort = UInt16(exactly: port)
+        else { return nil }
+        return MCPServerTcpConfig(host: "127.0.0.1", port: tcpPort)
+    }
+
+    /// Connect to the daemon and return a connected proxy. Finds it by the
+    /// `127.0.0.1:port` recorded in its lock file — no Bonjour discovery. When
+    /// `spawnIfNeeded` is true, launches `acpxd` and waits for it to record its port;
+    /// otherwise throws if none is running. `configure` runs on the proxy before
+    /// connecting (e.g. to install a log handler). Throws ``DaemonUnavailable``.
+    static func connect(
+        spawnIfNeeded: Bool,
+        configure: @Sendable (MCPServerProxy) async -> Void = { _ in }
+    ) async throws -> MCPServerProxy {
+        if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
+            return proxy
+        }
+        guard spawnIfNeeded else { throw DaemonUnavailable("no daemon is running") }
+        if let spawnError = spawnDaemon() {
+            // Couldn't even launch acpxd — retrying is pointless.
+            throw DaemonUnavailable("launching acpxd failed: \(spawnError.localizedDescription)")
+        }
+        // Wait for the freshly-spawned daemon to come up and record its port. A second
+        // acpxd that loses the singleton race exits on its own, so we still resolve to
+        // the one running manager.
+        for _ in 0 ..< 60 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
+                return proxy
+            }
+        }
+        throw DaemonUnavailable("it did not become reachable within ~9s of being started")
+    }
+
+    /// Try to connect to `endpoint`; returns a connected proxy, or nil on any failure.
+    private static func tryConnect(
+        _ endpoint: MCPServerTcpConfig?, configure: @Sendable (MCPServerProxy) async -> Void
+    ) async -> MCPServerProxy? {
+        guard let endpoint else { return nil }
+        let proxy = MCPServerProxy(config: .tcp(config: endpoint))
+        await configure(proxy)
+        do {
+            try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
+            return proxy
+        } catch {
+            await proxy.disconnect()
+            return nil
+        }
+    }
 
     /// Run a prompt through the daemon. Returns the stop reason, or throws
     /// ``DaemonUnavailable`` if the daemon can't be reached or started (there is no
@@ -76,11 +129,10 @@ enum DaemonClient {
     static func runPrompt(
         sessionId: String, text: String, wait: Bool = true, renderer: OutputRenderer
     ) async throws -> StopReason {
-        let proxy = MCPServerProxy(config: .tcp(config: MCPServerTcpConfig(serviceName: serviceName)))
         let stopReason = StopReasonBox()
-        await proxy.setLogNotificationHandler(PromptLogRenderer(renderer, stopReason: stopReason))
-
-        try await connectOrSpawn(proxy)
+        let proxy = try await connect(spawnIfNeeded: true) { proxy in
+            await proxy.setLogNotificationHandler(PromptLogRenderer(renderer, stopReason: stopReason))
+        }
         defer { Task { await proxy.disconnect() } }
 
         // The daemon reads the agent command + cwd from the session's record.
@@ -94,16 +146,41 @@ enum DaemonClient {
         return await stopReason.value ?? .endTurn
     }
 
+    /// Set a session's mode on the live agent via the daemon (which persists it).
+    static func setMode(sessionId: String, modeId: String) async throws {
+        try await callMutation("setMode", [
+            "sessionId": .string(sessionId), "modeId": .string(modeId)
+        ])
+    }
+
+    /// Set a session's model on the live agent via the daemon (legacy set_model).
+    static func setModel(sessionId: String, modelId: String) async throws {
+        try await callMutation("setModel", [
+            "sessionId": .string(sessionId), "modelId": .string(modelId)
+        ])
+    }
+
+    /// Set a session config option on the live agent via the daemon. Returns the
+    /// agent's advertised config options after the change (empty if it reports none,
+    /// or if the result can't be parsed — in which case the option is still set).
+    static func setConfigOption(sessionId: String, configId: String, value: String) async throws
+        -> [JSONValue] {
+        let proxy = try await connect(spawnIfNeeded: true)
+        defer { Task { await proxy.disconnect() } }
+        let result = try await proxy.callTool("setConfigOption", arguments: [
+            "sessionId": .string(sessionId), "configId": .string(configId), "value": .string(value)
+        ])
+        guard let data = result.data(using: .utf8),
+            let options = try? JSONDecoder().decode([JSONValue].self, from: data)
+        else { return [] }
+        return options
+    }
+
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel.
     static func cancelSession(sessionId: String) async -> Bool {
-        let proxy = MCPServerProxy(config: .tcp(config: MCPServerTcpConfig(serviceName: serviceName)))
-        do {
-            try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
-        } catch {
-            return false
-        }
+        guard let proxy = try? await connect(spawnIfNeeded: false) else { return false }
         defer { Task { await proxy.disconnect() } }
         guard let result = try? await proxy.callTool(
             "cancelSession", arguments: ["sessionId": .string(sessionId)]) else {
@@ -113,27 +190,11 @@ enum DaemonClient {
         return result.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().contains("true")
     }
 
-    private static func connectOrSpawn(_ proxy: MCPServerProxy) async throws {
-        do {
-            try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
-            return
-        } catch {
-            if let spawnError = spawnDaemon() {
-                // Couldn't even launch acpxd — retrying the connect is pointless.
-                throw DaemonUnavailable("launching acpxd failed: \(spawnError.localizedDescription)")
-            }
-        }
-        // Retry while the freshly-spawned daemon comes up + advertises. A second
-        // acpxd that loses the singleton race exits on its own, so this still
-        // resolves to the one running manager.
-        for _ in 0 ..< 40 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            do {
-                try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
-                return
-            } catch {}
-        }
-        throw DaemonUnavailable("it did not become reachable within ~6s of being started")
+    /// Connect (spawning if needed) and invoke a mutation tool, ignoring its result.
+    private static func callMutation(_ tool: String, _ arguments: [String: JSONValue]) async throws {
+        let proxy = try await connect(spawnIfNeeded: true)
+        defer { Task { await proxy.disconnect() } }
+        _ = try await proxy.callTool(tool, arguments: arguments)
     }
 
     /// Launch a detached `acpxd`. Returns the launch error if the process couldn't

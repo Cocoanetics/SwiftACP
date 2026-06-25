@@ -1,7 +1,9 @@
+@testable import acpx
 @testable import ACPXCore
 @testable import acpxd
 import Foundation
 import SwiftACP
+import SwiftMCP
 import Testing
 
 /// The single-manager guarantees: the `acpxd` boot lock keeps exactly one daemon
@@ -59,6 +61,47 @@ import Testing
             try writeDaemonHolder(pid: 1) // "another" daemon owns it
             DaemonLock().release() // our pid ≠ holder → no-op
             #expect(DaemonLock().currentHolder()?.pid == 1)
+        }
+    }
+
+    @Test func recordsBoundPortAndReadsItBack() async throws {
+        try await withIsolatedStore {
+            let lock = DaemonLock()
+            let acquired = try lock.acquire()
+            #expect(acquired)
+            #expect(lock.currentHolder()?.port == nil) // none until the listener binds
+            lock.update(port: 54321)
+            #expect(lock.currentHolder()?.port == 54321)
+            lock.release()
+        }
+    }
+
+    @Test func holderWithoutPortDecodesAsNilPort() throws {
+        // An older lock (written before the port field existed) still decodes.
+        let json = #"{"pid":1,"startedAt":"2026-01-01T00:00:00.000Z"}"#
+        let holder = try JSONDecoder().decode(DaemonLock.Holder.self, from: Data(json.utf8))
+        #expect(holder.pid == 1)
+        #expect(holder.port == nil)
+    }
+
+    @Test func liveEndpointReflectsLockPort() async throws {
+        try await withIsolatedStore {
+            // No lock yet → the CLI has no endpoint to connect to.
+            #expect(DaemonClient.liveEndpoint() == nil)
+            let lock = DaemonLock()
+            let acquired = try lock.acquire()
+            #expect(acquired)
+            // A live holder without a recorded port still yields no endpoint.
+            #expect(DaemonClient.liveEndpoint() == nil)
+            lock.update(port: 49152)
+            guard case .direct(let host, let port)? = DaemonClient.liveEndpoint()?.endpoint else {
+                Issue.record("expected a direct 127.0.0.1 endpoint")
+                lock.release()
+                return
+            }
+            #expect(host == "127.0.0.1")
+            #expect(port == 49152)
+            lock.release()
         }
     }
 

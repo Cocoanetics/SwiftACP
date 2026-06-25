@@ -120,6 +120,8 @@ def main():
             respond(req_id, {})
         elif method == "session/set_config_option":
             respond(req_id, {})
+        elif method == "session/set_model":
+            respond(req_id, {})
         elif method == "session/cancel":
             pass  # notification, nothing to do
         elif req_id is not None:
