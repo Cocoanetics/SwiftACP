@@ -154,6 +154,27 @@ import Testing
             #expect(prompts == ["first", "second"])
         }
     }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func concurrentPromptAndControlOpSerializeWithoutClobber() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            // A prompt and a set-mode fired at once must serialize on the session. The
+            // control op reloads after acquiring its slot, so it persists on top of the
+            // turn's history instead of clobbering it — either order leaves both effects.
+            async let prompt = daemon.runPrompt(sessionId: id, text: "ping")
+            async let mode = daemon.setMode(sessionId: id, modeId: "auto")
+            _ = try await (prompt, mode)
+
+            let record = try #require(SessionStore.loadRecord(id))
+            let history = SessionStore.conversationHistoryEntries(record)
+            #expect(history.contains { $0.role == "user" && $0.textPreview == "ping" })
+            #expect(history.contains { $0.role == "assistant" })
+            #expect(record.acpx?.currentModeId == "auto")
+        }
+    }
 }
 
 // MARK: - helpers

@@ -152,6 +152,31 @@ actor ACPXDaemon {
 
     // MARK: - Mutation tools
 
+    /// Run `body` holding the session's single turn slot, with a freshly-reloaded
+    /// record, then stamp `last_used_at` and persist it. Serializes the control op
+    /// against prompts and other control ops; reloading *after* acquiring means it
+    /// builds on (and persists on top of) whatever turn it queued behind, rather than
+    /// clobbering it.
+    private func withSessionTurn<T>(
+        _ sessionId: String, _ body: (Live, inout SessionRecord) async throws -> T
+    ) async throws -> T {
+        guard let initial = findRecord(sessionId) else {
+            throw DaemonError.sessionNotFound(sessionId)
+        }
+        let acpSessionId = initial.acpSessionId
+        try await turnQueue.acquire(acpSessionId, wait: true)
+        defer { Task { await turnQueue.release(acpSessionId) } }
+        guard var record = findRecord(sessionId) else {
+            throw DaemonError.sessionNotFound(sessionId)
+        }
+        let entry = try await ensure(
+            sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
+        let result = try await body(entry, &record)
+        record.lastUsedAt = nowISO()
+        try? SessionStore.writeRecord(record)
+        return result
+    }
+
     /// Set a session's mode on the live agent (reconnecting if needed) and persist
     /// it as the desired mode — mirrors the CLI's `set-mode`.
     ///
@@ -160,18 +185,13 @@ actor ACPXDaemon {
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(sessionId: String, modeId: String) async throws -> Bool {
-        guard var record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
+        try await withSessionTurn(sessionId) { entry, record in
+            try await entry.session.setMode(modeId)
+            var acpx = record.acpx ?? SessionAcpxState()
+            acpx.desiredModeId = modeId
+            acpx.currentModeId = modeId
+            record.acpx = acpx
         }
-        let entry = try await ensure(
-            sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
-        try await entry.session.setMode(modeId)
-        var acpx = record.acpx ?? SessionAcpxState()
-        acpx.desiredModeId = modeId
-        acpx.currentModeId = modeId
-        record.acpx = acpx
-        record.lastUsedAt = nowISO()
-        try? SessionStore.writeRecord(record)
         return true
     }
 
@@ -187,22 +207,17 @@ actor ACPXDaemon {
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setConfigOption(sessionId: String, configId: String, value: String) async throws
         -> [JSONValue] {
-        guard var record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
+        try await withSessionTurn(sessionId) { entry, record in
+            let response = try await entry.agent.connection.setConfigOption(
+                SetSessionConfigOptionRequest(
+                    sessionId: entry.session.id, configId: configId, value: value))
+            var acpx = record.acpx ?? SessionAcpxState()
+            var desired = acpx.desiredConfigOptions ?? [:]
+            desired[configId] = value
+            acpx.desiredConfigOptions = desired
+            record.acpx = acpx
+            return response.configOptions ?? []
         }
-        let entry = try await ensure(
-            sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
-        let response = try await entry.agent.connection.setConfigOption(
-            SetSessionConfigOptionRequest(
-                sessionId: entry.session.id, configId: configId, value: value))
-        var acpx = record.acpx ?? SessionAcpxState()
-        var desired = acpx.desiredConfigOptions ?? [:]
-        desired[configId] = value
-        acpx.desiredConfigOptions = desired
-        record.acpx = acpx
-        record.lastUsedAt = nowISO()
-        try? SessionStore.writeRecord(record)
-        return response.configOptions ?? []
     }
 
     /// Set a session's model on the live agent via the legacy `session/set_model`
@@ -214,18 +229,13 @@ actor ACPXDaemon {
     ///   - modelId: the model id to switch to.
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(sessionId: String, modelId: String) async throws -> Bool {
-        guard var record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
+        try await withSessionTurn(sessionId) { entry, record in
+            try await entry.agent.connection.setModel(
+                SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
+            var acpx = record.acpx ?? SessionAcpxState()
+            acpx.currentModelId = modelId
+            record.acpx = acpx
         }
-        let entry = try await ensure(
-            sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
-        try await entry.agent.connection.setModel(
-            SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
-        var acpx = record.acpx ?? SessionAcpxState()
-        acpx.currentModelId = modelId
-        record.acpx = acpx
-        record.lastUsedAt = nowISO()
-        try? SessionStore.writeRecord(record)
         return true
     }
 
