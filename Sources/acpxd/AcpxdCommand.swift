@@ -51,7 +51,8 @@ struct AcpxdCommand: AsyncParsableCommand {
 
         let daemon = ACPXDaemon(inheritAgentStderr: verbose)
 
-        // The Bonjour + local TCP transport is always on — the CLI finds the daemon this way.
+        // The local TCP transport (also advertised via Bonjour) is always on. The CLI
+        // connects to it directly by the port recorded in the lock file below.
         let bonjour = TCPBonjourTransport(server: daemon, serviceName: "acpx")
         var services: [ServiceGroupConfiguration.ServiceConfiguration] = [
             .init(service: bonjour, successTerminationBehavior: .gracefullyShutdownGroup)
@@ -68,6 +69,21 @@ struct AcpxdCommand: AsyncParsableCommand {
         }
 
         log.info("acpxd: MCP server 'acpx' listening (\(summary))")
+
+        // Once the listener has a bound port, record it in the lock so the CLI can
+        // connect directly (127.0.0.1:port) instead of via Bonjour discovery.
+        let portRecorder = Task { [bonjour, lock, log] in
+            for _ in 0 ..< 200 {
+                if Task.isCancelled { return }
+                if let port = bonjour.port {
+                    lock.update(port: Int(port))
+                    log.info("acpxd: listening on 127.0.0.1:\(port)")
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        defer { portRecorder.cancel() }
 
         // A ServiceGroup owns the run loop for all transports and traps SIGINT/SIGTERM
         // for an ordered graceful shutdown.

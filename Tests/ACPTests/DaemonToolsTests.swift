@@ -316,10 +316,24 @@ import Testing
         try await withIsolatedStore {
             let daemon = ACPXDaemon(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            let ok = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "opus")
-            #expect(ok)
+            // Returns the agent's advertised options (none from the mock) and persists.
+            let options = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "opus")
+            #expect(options.isEmpty)
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpx?.desiredConfigOptions?["model"] == "opus")
+        }
+    }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func setModelPersistsCurrentModel() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let ok = try await daemon.setModel(sessionId: id, modelId: "opus")
+            #expect(ok)
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.acpx?.currentModelId == "opus")
         }
     }
 

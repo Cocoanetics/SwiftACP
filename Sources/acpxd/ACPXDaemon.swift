@@ -182,20 +182,47 @@ actor ACPXDaemon {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
+    /// - Returns: the agent's advertised config options after the change (the data
+    ///   the CLI echoes; may be empty if the agent reports none).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setConfigOption(sessionId: String, configId: String, value: String) async throws -> Bool {
+    func setConfigOption(sessionId: String, configId: String, value: String) async throws
+        -> [JSONValue] {
         guard var record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let entry = try await ensure(
             sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
-        try await entry.agent.connection.setConfigOption(
+        let response = try await entry.agent.connection.setConfigOption(
             SetSessionConfigOptionRequest(
                 sessionId: entry.session.id, configId: configId, value: value))
         var acpx = record.acpx ?? SessionAcpxState()
         var desired = acpx.desiredConfigOptions ?? [:]
         desired[configId] = value
         acpx.desiredConfigOptions = desired
+        record.acpx = acpx
+        record.lastUsedAt = nowISO()
+        try? SessionStore.writeRecord(record)
+        return response.configOptions ?? []
+    }
+
+    /// Set a session's model on the live agent via the legacy `session/set_model`
+    /// control (reconnecting if needed) and persist it as the current model —
+    /// mirrors the CLI's `set model <value>` for legacy-control agents.
+    ///
+    /// - Parameters:
+    ///   - sessionId: the acpx record id or the ACP session id.
+    ///   - modelId: the model id to switch to.
+    @MCPTool(idempotentHint: true, openWorldHint: true)
+    func setModel(sessionId: String, modelId: String) async throws -> Bool {
+        guard var record = findRecord(sessionId) else {
+            throw DaemonError.sessionNotFound(sessionId)
+        }
+        let entry = try await ensure(
+            sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
+        try await entry.agent.connection.setModel(
+            SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
+        var acpx = record.acpx ?? SessionAcpxState()
+        acpx.currentModelId = modelId
         record.acpx = acpx
         record.lastUsedAt = nowISO()
         try? SessionStore.writeRecord(record)
@@ -443,33 +470,5 @@ actor ACPXDaemon {
             throw DaemonError.invalidCwd(rawCwd)
         }
         return cwd
-    }
-}
-
-/// Encodes any `Encodable` to a `JSONValue` (for MCP log-notification payloads).
-func toJSONValue<T: Encodable>(_ value: T) -> JSONValue {
-    (try? JSONEncoder().encode(value)).flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) }
-        ?? .null
-}
-
-/// Errors surfaced to MCP clients as the tool result's error text
-/// (`error.localizedDescription`), so they're actionable rather than opaque.
-enum DaemonError: LocalizedError {
-    case invalidCwd(String)
-    case emptySessionId
-    case sessionNotFound(String)
-    case sessionBusy(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidCwd(let path):
-            return "cwd does not exist or is not a directory: \(path)"
-        case .emptySessionId:
-            return "sessionId must not be empty — create one with the newSession tool first"
-        case .sessionNotFound(let id):
-            return "no session found for id: \(id)"
-        case .sessionBusy(let id):
-            return "session is busy running another turn (use --wait to queue): \(id)"
-        }
     }
 }
