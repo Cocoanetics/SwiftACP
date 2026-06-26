@@ -1,11 +1,12 @@
 # SwiftPM
 .build/
 .swiftpm/
-# Package.resolved IS committed (intentionally): the spawn-client's swift-subprocess
-# dependency transitively pulls swift-docc-plugin → swift-syntax, a version space large
-# enough that Swift 6.2's resolver exhausts its backtracking attempts (6.3 resolves it
-# unaided). The lock pins it so 6.2 — what the CI runners ship — resolves. Regenerate
-# with `swift package update` when bumping dependencies.
+# Package.resolved is intentionally NOT committed. The spawn-client's swift-subprocess
+# dependency transitively pulls swift-docc-plugin → swift-syntax, a version space that
+# Swift 6.2's resolver couldn't navigate (it exhausted its backtracking attempts). That
+# forced a committed lock while CI ran 6.2 — but every CI toolchain is Swift 6.3+ now
+# (which resolves it unaided), so the lock is gone and resolution stays fresh.
+Package.resolved
 
 # Build output lives on the external SSD, never under the repo
 # (see CLAUDE.md). Keep these ignored just in case.
