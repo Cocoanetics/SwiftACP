@@ -24,6 +24,27 @@ jobs:
       - name: Test (macOS)
         run: swift test -v --skip-build
 
+  # The SwiftACP library and the ACPXDaemonKit client library build for iOS: an iOS
+  # app can't spawn agents, but it drives a remote acpxd over MCP via the generated
+  # `ACPXDaemon.Client`. The last step proves the client-only graph stays nio-free —
+  # SwiftMCP's swift-nio `Server` transports drop out when this package's `Server`
+  # trait is disabled (which an iOS-only consumer does).
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select Xcode 26.0
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.0"
+      - name: Build SwiftACP (iOS)
+        run: xcodebuild -scheme SwiftACP -destination 'generic/platform=iOS' build
+      - name: Build ACPXDaemonKit (iOS)
+        run: xcodebuild -scheme ACPXDaemonKit -destination 'generic/platform=iOS' build
+      - name: Build ACPXDaemonKit client-only — no swift-nio (Server trait off)
+        run: swift build --target ACPXDaemonKit --disable-default-traits
+
   build-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 25
