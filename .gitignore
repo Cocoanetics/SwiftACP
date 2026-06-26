@@ -1,12 +1,12 @@
 # SwiftPM
 .build/
 .swiftpm/
-# Package.resolved IS committed. The iOS CI job must build via xcodebuild on the runner's
-# Xcode, whose Swift tops out at 6.2.4 (no 6.3 Xcode exists on the macos image), and 6.2's
-# resolver exhausts on the spawn-client's swift-subprocess → swift-docc-plugin → swift-syntax
-# graph. Resolution is graph-wide (traits gate building, not resolving), so iOS must resolve
-# swift-subprocess even though it never links it — the committed lock is what lets it. Every
-# other job runs Swift 6.3, which resolves unaided. Regenerate with `swift package update`.
+# Package.resolved is intentionally NOT committed. The spawn-client's swift-subprocess
+# dependency pulls swift-docc-plugin → swift-syntax, a graph Swift 6.2's resolver can't
+# navigate (it exhausts) — but every CI job now runs Swift 6.3, which resolves it unaided.
+# The macOS and iOS jobs install the swift.org 6.3 toolchain for this (the runner's Xcodes
+# are only 6.2.4); the iOS job points xcodebuild at it with -toolchain. So no lock is needed.
+Package.resolved
 
 # Build output lives on the external SSD, never under the repo
 # (see CLAUDE.md). Keep these ignored just in case.
