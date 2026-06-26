@@ -23,7 +23,8 @@ var products: [Product] = [
 var dependencies: [Package.Dependency] = [
     // JSONFoundation: JSON value type, JSON Schema, JSON-RPC 2.0 envelope, and the
     // JSON-RPC runtime (peer, framing, stdio transport) the ACP transports build on.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.1"),
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.2",
+             traits: ["Subprocess"]),
     // SwiftMCP: the MCP client (`MCPServerProxy`, swift-nio-free `Client` trait) that
     // SwiftACP's generated `ACPXDaemon.Client` uses, and — behind this package's
     // default-on `Server` trait — the swift-nio TCP/Bonjour/HTTP-SSE server transports
@@ -42,7 +43,11 @@ var targets: [Target] = [
             .product(name: "JSONFoundation", package: "JSONFoundation"),
             .product(name: "JSONRPCPeer", package: "JSONFoundation"),
             .product(name: "JSONRPCWire", package: "JSONFoundation"),
-            .product(name: "JSONRPCStdio", package: "JSONFoundation"),
+            // The swift-subprocess child stdio transport for the desktop spawn-client.
+            // swift-subprocess sets an iOS "99.0" floor, so it's pulled in only where
+            // agents actually spawn — iOS/Android get the client-only graph without it.
+            .product(name: "JSONRPCSubprocess", package: "JSONFoundation",
+                     condition: .when(platforms: [.macOS, .linux, .windows])),
             .product(name: "SwiftMCP", package: "SwiftMCP")
         ]
     ),

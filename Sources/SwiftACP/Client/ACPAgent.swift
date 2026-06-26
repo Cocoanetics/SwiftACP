@@ -1,6 +1,5 @@
 import Foundation
 import JSONFoundation
-import JSONRPCStdio
 import JSONRPCWire
 
 extension Implementation {
@@ -16,12 +15,14 @@ extension ClientCapabilities {
 }
 
 // `ACPAgent`/`ACPSession` spawn an agent adapter and speak to it over the
-// `Foundation.Process` stdio transport (`JSONRPCStdio.ProcessTransport`), which —
-// like `Foundation.Process` itself — exists only on macOS/Linux/Windows. iOS apps
-// can't spawn child processes; they reach a remote `acpxd` over MCP instead. So the
-// whole spawn-client section below is gated off iOS. The transport-agnostic
-// `ACPAgentConnection` and every protocol value type stay available on all platforms.
+// swift-subprocess child stdio transport (`JSONRPCSubprocess.StdioMessageTransport`),
+// which exists only on macOS/Linux/Windows. iOS/Android apps can't spawn child
+// processes; they reach a remote `acpxd` over MCP instead. So the whole spawn-client
+// section below — and its `JSONRPCSubprocess` import — is gated off iOS/Android. The
+// transport-agnostic `ACPAgentConnection` and every protocol value type stay available
+// on all platforms.
 #if os(macOS) || os(Linux) || os(Windows)
+import JSONRPCSubprocess
 
 /// A launched, initialized ACP agent — ready to create sessions.
 ///
@@ -38,10 +39,9 @@ public final class ACPAgent: Sendable {
     public let name: String
     public let cwd: String
     public let connection: ACPAgentConnection
-    /// The agent subprocess transport: JSONFoundation's zero-dep
-    /// `Foundation.Process` stdio transport, framed as one newline-terminated JSON
-    /// line per message (ACP framing).
-    public let transport: ProcessTransport<LineFraming>
+    /// The agent subprocess transport: JSONFoundation's swift-subprocess child stdio
+    /// transport, framed as one newline-terminated JSON line per message (ACP framing).
+    public let transport: StdioMessageTransport<LineFraming>
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
 
@@ -50,7 +50,7 @@ public final class ACPAgent: Sendable {
 
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
-        transport: ProcessTransport<LineFraming>, initializeResult: InitializeResponse
+        transport: StdioMessageTransport<LineFraming>, initializeResult: InitializeResponse
     ) {
         self.name = name
         self.cwd = cwd
@@ -82,7 +82,7 @@ public final class ACPAgent: Sendable {
         let spec = AgentRegistry.launch(
             for: name, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
-        let transport = try ProcessTransport(launch: spec, framing: LineFraming())
+        let transport = StdioMessageTransport(endpoint: .childProcess(spec), framing: LineFraming())
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.
@@ -210,11 +210,6 @@ public final class ACPAgent: Sendable {
         return try await loadSession(
             id: id, cwd: cwd, mcpServers: mcpServers,
             additionalDirectories: additionalDirectories, meta: meta)
-    }
-
-    /// Suspends until the agent subprocess exits.
-    public func waitForExit() async -> ProcessExit {
-        await transport.waitForExit()
     }
 
     /// Gracefully shut down the connection and terminate the subprocess.
