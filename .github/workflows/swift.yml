@@ -17,6 +17,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
+      # JSONFoundation 2.1.x pulls swift-subprocess (a Swift 6.2 tools-version
+      # package) into dependency *resolution* — even with its `Subprocess` trait
+      # off — so the toolchain must be >= 6.2. `macos-latest` ships several Xcodes
+      # and the default `swift` flapped between 6.1 (resolution fails) and 6.2
+      # (passes) across runs; pin the latest stable Xcode for a deterministic
+      # >= 6.2 toolchain.
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
       - name: Verify Swift version
         run: swift --version
       - name: Build (macOS)
