@@ -66,7 +66,7 @@ public actor JSONRPCConnection {
     /// Send a request and await its result as raw JSON.
     public func sendRequest(method: String, params: JSONValue?) async throws -> JSONValue {
         let id = allocateId()
-        let message = OutgoingMessage.request(id: .integer(id), method: method, params: params)
+        let message = JSONRPCMessage.request(id: .integer(id), method: method, params: params)
         let line = encodeLine(message)
         return try await withCheckedThrowingContinuation { continuation in
             if isClosed {
@@ -85,7 +85,7 @@ public actor JSONRPCConnection {
     }
 
     public func sendNotification(method: String, params: JSONValue?) throws {
-        let line = encodeLine(OutgoingMessage.notification(method: method, params: params))
+        let line = encodeLine(JSONRPCMessage.notification(method: method, params: params))
         wireObserver?(line)
         try transport.write(line)
     }
@@ -98,29 +98,34 @@ public actor JSONRPCConnection {
     // MARK: Receiving
 
     private func receive(_ line: String) async {
-        guard let message = try? IncomingMessage(line: line) else {
+        guard let data = line.data(using: .utf8),
+              let message = try? JSONRPCMessage.decodeMessages(from: data).first else {
             // Adapters occasionally print non-JSON noise to stdout; ignore it.
             return
         }
         wireObserver?(line)
 
-        if message.isResponse, let id = message.id {
-            resolveResponse(id: id, result: message.result, error: message.error)
-        } else if message.isRequest, let method = message.method, let id = message.id {
-            dispatchRequest(id: id, method: method, params: message.params)
-        } else if message.isNotification, let method = message.method {
-            await notificationHandler?(method, message.params)
+        switch message {
+        case .request(let request):
+            dispatchRequest(id: request.id, method: request.method, params: request.params)
+        case .notification(let notification):
+            await notificationHandler?(notification.method, notification.params)
+        case .response, .errorResponse:
+            if let id = message.id, let outcome = message.replyOutcome {
+                resolveResponse(id: id, outcome: outcome)
+            }
         }
     }
 
-    private func resolveResponse(id: JSONRPCID, result: JSONValue?, error: JSONRPCErrorBody?) {
+    private func resolveResponse(id: JSONRPCID, outcome: Result<JSONValue?, JSONRPCErrorBody>) {
         guard case .integer(let key) = id, let continuation = pending.removeValue(forKey: key) else {
             return
         }
-        if let error {
-            continuation.resume(throwing: error)
-        } else {
+        switch outcome {
+        case .success(let result):
             continuation.resume(returning: result ?? .null)
+        case .failure(let error):
+            continuation.resume(throwing: error)
         }
     }
 
@@ -138,12 +143,12 @@ public actor JSONRPCConnection {
     }
 
     private func sendReply(id: JSONRPCID, outcome: Result<JSONValue, JSONRPCErrorBody>) {
-        let message: JSONValue
+        let message: JSONRPCMessage
         switch outcome {
         case .success(let result):
-            message = OutgoingMessage.response(id: id, result: result)
+            message = .response(id: id, result: result)
         case .failure(let error):
-            message = OutgoingMessage.errorResponse(id: id, error: error)
+            message = .errorResponse(id: id, error: error)
         }
         let line = encodeLine(message)
         wireObserver?(line)
@@ -171,18 +176,7 @@ public actor JSONRPCConnection {
     }
 }
 
-/// Encode a JSON value as a single compact line (no embedded newlines).
-private let lineEncoder: JSONEncoder = {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.withoutEscapingSlashes]
-    return encoder
-}()
-
-func encodeLine(_ value: JSONValue) -> String {
-    guard let data = try? lineEncoder.encode(value),
-        let string = String(data: data, encoding: .utf8)
-    else {
-        return "{}"
-    }
-    return string
+/// Encode a JSON-RPC message as a single compact wire line (no embedded newlines).
+private func encodeLine(_ message: JSONRPCMessage) -> String {
+    (try? message.encodedString()) ?? "{}"
 }

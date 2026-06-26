@@ -20,7 +20,7 @@ var dependencies: [Package.Dependency] = [
     // SwiftACP's only library dependency: the standalone, dependency-free
     // JSONFoundation package (JSON value type + JSON Schema + JSON-RPC 2.0
     // types), split out of SwiftMCP.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "1.1.0")
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.0.0")
 ]
 
 var targets: [Target] = [
@@ -50,7 +50,7 @@ products += [
 dependencies += [
     // SwiftMCP provides the MCP server/client + the TCP+Bonjour transport used
     // for the daemon IPC (à la Cocoanetics/Post).
-    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.6.0"),
+    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.7.0"),
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
     // ServiceGroup runs the daemon's transports (Bonjour + optional HTTP+SSE)
