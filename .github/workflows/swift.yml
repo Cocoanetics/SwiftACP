@@ -17,13 +17,17 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      # macos-latest's default Xcode ships a Swift older than swift-subprocess 0.5.0's
-      # `swift-tools-version: 6.2` manifest (pulled in via JSONFoundation's `Subprocess`
-      # trait for the spawn-client); pin a newer Xcode so resolution succeeds.
-      - name: Select Xcode 26.0
-        uses: maxim-lobanov/setup-xcode@v1
+      # macOS Swift is normally welded to Xcode (Xcode 26.0 → Swift 6.2, 26.4 → 6.3),
+      # so the old CI pinned an Xcode version purely to choose a Swift version. Instead,
+      # install the swift.org 6.3 toolchain directly — the same explicit-version path the
+      # Linux job uses. It layers on the runner's Xcode for the SDK/linker; only the
+      # compiler + stdlib are swapped to 6.3. Swift 6.3 is what the swift-subprocess
+      # spawn-client needs: on 6.2 its dependency graph exhausts the resolver and its
+      # `Span` usage fails to load under swift-testing — both problems vanish on 6.3.
+      - name: Install Swift 6.3
+        uses: swift-actions/setup-swift@v2
         with:
-          xcode-version: "26.0"
+          swift-version: "6.3"
       - name: Verify Swift version
         run: swift --version
       - name: Build (macOS)
@@ -41,10 +45,13 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      - name: Select Xcode 26.0
+      # Building for iOS genuinely needs Xcode (xcodebuild + the iOS SDK), so unlike the
+      # macOS job this one keeps an Xcode pin — moved to 26.4, the first Xcode on Swift
+      # 6.3, to match the toolchain every other job now uses.
+      - name: Select Xcode 26.4
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26.0"
+          xcode-version: "26.4"
       # This Xcode image ships without the iOS SDK preinstalled; fetch it.
       - name: Install the iOS platform
         run: xcodebuild -downloadPlatform iOS
