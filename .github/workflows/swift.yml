@@ -38,6 +38,9 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.0"
+      # This Xcode image ships without the iOS SDK preinstalled; fetch it.
+      - name: Install the iOS platform
+        run: xcodebuild -downloadPlatform iOS
       # -skipMacroValidation: SwiftACP uses SwiftMCP's `@MCPServer` macro, and
       # xcodebuild otherwise requires interactive trust of package macros.
       - name: Build SwiftACP (iOS, default traits)
