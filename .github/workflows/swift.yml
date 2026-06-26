@@ -58,13 +58,27 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.0"
-      # This Xcode image ships without the iOS SDK preinstalled; fetch it.
+      # This Xcode image ships without the iOS SDK preinstalled; fetch it. The download
+      # intermittently flakes on the hosted runner ("Unable to connect to simulator",
+      # exit 70) and succeeds on a retry, so loop before giving up.
       - name: Install the iOS platform
-        run: xcodebuild -downloadPlatform iOS
-      # -skipMacroValidation: SwiftACP uses SwiftMCP's `@MCPServer` macro, and
-      # xcodebuild otherwise requires interactive trust of package macros.
+        run: |
+          set -o pipefail
+          for i in 1 2 3; do
+            echo "::group::xcodebuild -downloadPlatform iOS (attempt $i)"
+            if xcodebuild -downloadPlatform iOS; then echo "::endgroup::"; exit 0; fi
+            echo "::endgroup::"
+            echo "attempt $i failed; retrying in 20s…"; sleep 20
+          done
+          echo "::error::Could not download the iOS platform after 3 attempts"; exit 1
+      # -skipMacroValidation: SwiftACP uses SwiftMCP's `@MCPServer` macro, and xcodebuild
+      # otherwise requires interactive trust of package macros. CODE_SIGNING_ALLOWED=NO:
+      # the runner has no provisioning profiles, and a generic-device library build
+      # doesn't need signing. (Generic device destination, so no simulator is involved.)
       - name: Build SwiftACP (iOS, default traits)
-        run: xcodebuild -scheme SwiftACP -destination 'generic/platform=iOS' -skipMacroValidation build
+        run: |
+          xcodebuild -scheme SwiftACP -destination 'generic/platform=iOS' \
+            -skipMacroValidation CODE_SIGNING_ALLOWED=NO build
       - name: Build SwiftACP client-only — no swift-nio (Server trait off)
         run: swift build --target SwiftACP --disable-default-traits
 
