@@ -1,5 +1,7 @@
 import Foundation
 import JSONFoundation
+import JSONRPCStdio
+import JSONRPCWire
 
 extension Implementation {
     /// The default identity this library presents to agents.
@@ -28,7 +30,10 @@ public final class ACPAgent: Sendable {
     public let name: String
     public let cwd: String
     public let connection: ACPAgentConnection
-    public let transport: SubprocessTransport
+    /// The agent subprocess transport: JSONFoundation's zero-dep
+    /// `Foundation.Process` stdio transport, framed as one newline-terminated JSON
+    /// line per message (ACP framing).
+    public let transport: ProcessTransport<LineFraming>
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
 
@@ -37,7 +42,7 @@ public final class ACPAgent: Sendable {
 
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
-        transport: SubprocessTransport, initializeResult: InitializeResponse
+        transport: ProcessTransport<LineFraming>, initializeResult: InitializeResponse
     ) {
         self.name = name
         self.cwd = cwd
@@ -69,7 +74,7 @@ public final class ACPAgent: Sendable {
         let spec = AgentRegistry.launch(
             for: name, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
-        let transport = try SubprocessTransport(launch: spec)
+        let transport = try ProcessTransport(launch: spec, framing: LineFraming())
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.

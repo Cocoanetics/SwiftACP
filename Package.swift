@@ -18,16 +18,24 @@ var products: [Product] = [
 
 var dependencies: [Package.Dependency] = [
     // SwiftACP's only library dependency: the standalone, dependency-free
-    // JSONFoundation package (JSON value type + JSON Schema + JSON-RPC 2.0
-    // types), split out of SwiftMCP.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.0.0")
+    // JSONFoundation package. As of 2.1.0 it carries not just the JSON value type,
+    // JSON Schema and JSON-RPC 2.0 envelope, but the JSON-RPC *runtime* SwiftACP
+    // used to hand-roll: a transport-agnostic peer (`JSONRPCPeer`), framing codecs
+    // + the shared `ProcessLaunch` descriptor (`JSONRPCWire`), and a zero-dep
+    // `Foundation.Process` stdio transport (`JSONRPCStdio`). We depend on those
+    // three pure/zero-dep products only — not the `JSONRPC` umbrella, which would
+    // pull in the SSE transport (and SwiftCross) we don't use.
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.0")
 ]
 
 var targets: [Target] = [
     .target(
         name: "SwiftACP",
         dependencies: [
-            .product(name: "JSONFoundation", package: "JSONFoundation")
+            .product(name: "JSONFoundation", package: "JSONFoundation"),
+            .product(name: "JSONRPCPeer", package: "JSONFoundation"),
+            .product(name: "JSONRPCWire", package: "JSONFoundation"),
+            .product(name: "JSONRPCStdio", package: "JSONFoundation")
         ]
     ),
     .testTarget(
