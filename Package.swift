@@ -120,7 +120,12 @@ targets += [
 let package = Package(
     name: "SwiftACP",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v14),
+        // The SwiftACP *library* builds for iOS too: an iOS app can't spawn agents
+        // (no `Foundation.Process`), but it can drive a remote `acpxd` over MCP and
+        // render its ACP value types. The spawn-client (`ACPAgent`) and the
+        // macOS-only CLI/daemon targets are gated out off-Apple-desktop.
+        .iOS(.v15)
     ],
     products: products,
     dependencies: dependencies,

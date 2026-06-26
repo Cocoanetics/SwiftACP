@@ -15,6 +15,14 @@ extension ClientCapabilities {
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: false)
 }
 
+// `ACPAgent`/`ACPSession` spawn an agent adapter and speak to it over the
+// `Foundation.Process` stdio transport (`JSONRPCStdio.ProcessTransport`), which —
+// like `Foundation.Process` itself — exists only on macOS/Linux/Windows. iOS apps
+// can't spawn child processes; they reach a remote `acpxd` over MCP instead. So the
+// whole spawn-client section below is gated off iOS. The transport-agnostic
+// `ACPAgentConnection` and every protocol value type stay available on all platforms.
+#if os(macOS) || os(Linux) || os(Windows)
+
 /// A launched, initialized ACP agent — ready to create sessions.
 ///
 /// ```swift
@@ -320,3 +328,5 @@ actor TextCollector {
     private(set) var text = ""
     func append(_ chunk: String) { text += chunk }
 }
+
+#endif
