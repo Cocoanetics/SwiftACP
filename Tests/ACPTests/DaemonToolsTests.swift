@@ -16,7 +16,7 @@ import Testing
     func newSessionThenRunPromptReturnsAggregateText() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
 
             let sessionId = try await daemon.newSession(
                 agentCommand: command, cwd: NSTemporaryDirectory())
@@ -38,7 +38,7 @@ import Testing
     func runPromptPersistsTurnToHistory() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
 
             // Before any prompt, history is empty and the record has no lastPrompt.
@@ -116,7 +116,7 @@ import Testing
     func runPromptWritesEventLogStream() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             _ = try await daemon.runPrompt(sessionId: id, text: "ping")
 
@@ -150,7 +150,7 @@ import Testing
             let config = #"{"agents":{"mockalias":{"command":"\#(python)","args":["\#(mockPath)"]}}}"#
             try config.write(to: ACPXPaths.globalConfigPath, atomically: true, encoding: .utf8)
 
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             // The alias resolves + launches the mock, exactly like the CLI.
             let id = try await daemon.newSession(
                 agentCommand: "mockalias", cwd: NSTemporaryDirectory())
@@ -234,7 +234,7 @@ import Testing
     func newSessionPersistsRecordReadableByReadTools() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
                 agentCommand: command, cwd: NSTemporaryDirectory(), name: "demo")
 
@@ -270,7 +270,7 @@ import Testing
             ]
             try SessionStore.writeRecord(record)
 
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
 
             let all = try await daemon.sessionHistory(sessionId: "hist-1")
             #expect(all.count == 3)
@@ -289,7 +289,7 @@ import Testing
     @Test
     func showSessionThrowsForUnknownId() async {
         await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             await #expect(throws: DaemonError.self) {
                 _ = try await daemon.showSession(sessionId: "does-not-exist")
             }
@@ -300,7 +300,7 @@ import Testing
     func setModePersistsDesiredMode() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             let ok = try await daemon.setMode(sessionId: id, modeId: "auto")
             #expect(ok)
@@ -314,7 +314,7 @@ import Testing
     func setConfigOptionPersistsDesiredOption() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             // Returns the agent's advertised options (none from the mock) and persists.
             let options = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "opus")
@@ -328,7 +328,7 @@ import Testing
     func setModelPersistsCurrentModel() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             let ok = try await daemon.setModel(sessionId: id, modelId: "opus")
             #expect(ok)
@@ -347,7 +347,7 @@ import Testing
             record.closed = false
             try SessionStore.writeRecord(record)
 
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let ok = try await daemon.closeSession(sessionId: "c1")
             #expect(ok)
             let updated = try #require(SessionStore.loadRecord("c1"))
@@ -376,7 +376,7 @@ import Testing
             try SessionStore.writeRecord(open)
             try SessionStore.writeRecord(closed)
 
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
 
             // Dry run reports the closed one but deletes nothing.
             let dry = await daemon.pruneSessions(dryRun: true)
@@ -403,7 +403,7 @@ import Testing
             closed.closedAt = now
             try SessionStore.writeRecord(closed)
 
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             // Closed just now → not older than a day → kept.
             let result = await daemon.pruneSessions(olderThanDays: 1)
             #expect(result.count == 0)
@@ -427,7 +427,7 @@ import Testing
             try seed("by-command", agent: claudeCommand)
             try seed("a-codex", agent: "codex")
 
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
 
             // "claude" matches both the short-name and expanded-command sessions.
             let byName = await daemon.listSessions(agentCommand: "claude")
@@ -445,7 +445,8 @@ import Testing
 
     @Test
     func toolMetadataCarriesAnnotationsAndParameterDescriptions() async {
-        let tools = await ACPXDaemon(inheritAgentStderr: false).mcpToolMetadata
+        let tools = await ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
+            .mcpToolMetadata
         func tool(_ name: String) -> MCPToolMetadata? { tools.first { $0.name == name } }
 
         // Read tools advertise read-only + idempotent. (SwiftMCP hints are
@@ -469,7 +470,7 @@ import Testing
 
     @Test
     func runPromptRejectsEmptySessionId() async throws {
-        let daemon = ACPXDaemon(inheritAgentStderr: false)
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
         await #expect(throws: DaemonError.self) {
             _ = try await daemon.runPrompt(sessionId: "   ", text: "hi")
         }
@@ -478,7 +479,7 @@ import Testing
     @Test
     func runPromptThrowsForUnknownSession() async {
         await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             await #expect(throws: DaemonError.self) {
                 _ = try await daemon.runPrompt(sessionId: "does-not-exist", text: "hi")
             }

@@ -1,5 +1,6 @@
 import Foundation
 import JSONFoundation
+import JSONRPCPeer
 
 /// The protocol-level ACP client connection over a transport.
 ///
@@ -8,12 +9,12 @@ import JSONFoundation
 /// notifications out to any number of subscribers. Most callers use the
 /// higher-level ``ACPAgent``/``ACPSession`` wrappers instead.
 public actor ACPAgentConnection {
-    private let rpc: JSONRPCConnection
+    private let rpc: JSONRPCPeer
     private var handlers: ACPClientHandlers
     private var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
 
-    public init(transport: MessageTransport, handlers: ACPClientHandlers = ACPClientHandlers()) {
-        self.rpc = JSONRPCConnection(transport: transport)
+    public init(transport: JSONRPCMessageTransport, handlers: ACPClientHandlers = ACPClientHandlers()) {
+        self.rpc = JSONRPCPeer(transport: transport)
         self.handlers = handlers
     }
 
@@ -24,8 +25,18 @@ public actor ACPAgentConnection {
     /// Tee every JSON-RPC line on the wire (both directions) to `observer`, in
     /// chronological order — used to persist the session event log. Pass `nil` to
     /// stop. The closure runs synchronously, so it must be fast.
+    ///
+    /// Bridges JSONFoundation's `JSONRPCPeer.setWireLog`, which reports decoded
+    /// ``JSONRPCMessage`` values, back to the line-oriented observer this layer
+    /// exposes: each message is re-encoded to its canonical wire string.
     public func setWireObserver(_ observer: (@Sendable (String) -> Void)?) async {
-        await rpc.setWireObserver(observer)
+        guard let observer else {
+            await rpc.setWireLog(nil)
+            return
+        }
+        await rpc.setWireLog { _, message in
+            if let line = try? message.encodedString() { observer(line) }
+        }
     }
 
     private var onClientRequest: (@Sendable (String) -> Void)?

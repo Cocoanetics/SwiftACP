@@ -1,6 +1,11 @@
 # SwiftPM
 .build/
 .swiftpm/
+# Package.resolved is intentionally NOT committed. The spawn-client's swift-subprocess
+# dependency pulls swift-docc-plugin → swift-syntax, a graph Swift 6.2's resolver can't
+# navigate (it exhausts) — but every CI job now runs Swift 6.3, which resolves it unaided.
+# The macOS and iOS jobs install the swift.org 6.3 toolchain for this (the runner's Xcodes
+# are only 6.2.4); the iOS job points xcodebuild at it with -toolchain. So no lock is needed.
 Package.resolved
 
 # Build output lives on the external SSD, never under the repo

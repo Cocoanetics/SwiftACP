@@ -1,16 +1,6 @@
 import Foundation
 import JSONFoundation
 
-/// Dynamic key for the single-key tagged unions in the Zed conversation schema
-/// (`{"User": …}`, `{"Text": …}`, etc.).
-struct AnyKey: CodingKey {
-    var stringValue: String
-    var intValue: Int? { nil }
-    init(_ string: String) { stringValue = string }
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { nil }
-}
-
 // MARK: - Messages
 
 /// One element of a session's `messages` array.
@@ -26,10 +16,10 @@ public enum SessionMessage: Codable, Sendable {
                 return
             }
         }
-        let c = try decoder.container(keyedBy: AnyKey.self)
-        if let user = try c.decodeIfPresent(SessionUserMessage.self, forKey: AnyKey("User")) {
+        let c = try decoder.container(keyedBy: AnyCodingKey.self)
+        if let user = try c.decodeIfPresent(SessionUserMessage.self, forKey: AnyCodingKey("User")) {
             self = .user(user)
-        } else if let agent = try c.decodeIfPresent(SessionAgentMessage.self, forKey: AnyKey("Agent")) {
+        } else if let agent = try c.decodeIfPresent(SessionAgentMessage.self, forKey: AnyCodingKey("Agent")) {
             self = .agent(agent)
         } else {
             throw DecodingError.dataCorrupted(
@@ -43,11 +33,11 @@ public enum SessionMessage: Codable, Sendable {
             var c = encoder.singleValueContainer()
             try c.encode("Resume")
         case .user(let value):
-            var c = encoder.container(keyedBy: AnyKey.self)
-            try c.encode(value, forKey: AnyKey("User"))
+            var c = encoder.container(keyedBy: AnyCodingKey.self)
+            try c.encode(value, forKey: AnyCodingKey("User"))
         case .agent(let value):
-            var c = encoder.container(keyedBy: AnyKey.self)
-            try c.encode(value, forKey: AnyKey("Agent"))
+            var c = encoder.container(keyedBy: AnyCodingKey.self)
+            try c.encode(value, forKey: AnyCodingKey("Agent"))
         }
     }
 }
@@ -92,14 +82,14 @@ public enum SessionUserContent: Codable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: AnyKey.self)
-        if let text = try c.decodeIfPresent(String.self, forKey: AnyKey("Text")) {
+        let c = try decoder.container(keyedBy: AnyCodingKey.self)
+        if let text = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("Text")) {
             self = .text(text)
-        } else if let mention = try c.decodeIfPresent(Mention.self, forKey: AnyKey("Mention")) {
+        } else if let mention = try c.decodeIfPresent(Mention.self, forKey: AnyCodingKey("Mention")) {
             self = .mention(uri: mention.uri, content: mention.content)
-        } else if let image = try c.decodeIfPresent(SessionMessageImage.self, forKey: AnyKey("Image")) {
+        } else if let image = try c.decodeIfPresent(SessionMessageImage.self, forKey: AnyCodingKey("Image")) {
             self = .image(image)
-        } else if let audio = try c.decodeIfPresent(SessionMessageAudio.self, forKey: AnyKey("Audio")) {
+        } else if let audio = try c.decodeIfPresent(SessionMessageAudio.self, forKey: AnyCodingKey("Audio")) {
             self = .audio(audio)
         } else {
             self = .other(try JSONValue(from: decoder))
@@ -107,13 +97,13 @@ public enum SessionUserContent: Codable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: AnyKey.self)
+        var c = encoder.container(keyedBy: AnyCodingKey.self)
         switch self {
-        case .text(let value): try c.encode(value, forKey: AnyKey("Text"))
+        case .text(let value): try c.encode(value, forKey: AnyCodingKey("Text"))
         case .mention(let uri, let content):
-            try c.encode(Mention(uri: uri, content: content), forKey: AnyKey("Mention"))
-        case .image(let value): try c.encode(value, forKey: AnyKey("Image"))
-        case .audio(let value): try c.encode(value, forKey: AnyKey("Audio"))
+            try c.encode(Mention(uri: uri, content: content), forKey: AnyCodingKey("Mention"))
+        case .image(let value): try c.encode(value, forKey: AnyCodingKey("Image"))
+        case .audio(let value): try c.encode(value, forKey: AnyCodingKey("Audio"))
         case .other(let value): try value.encode(to: encoder)
         }
     }
@@ -145,14 +135,14 @@ public enum SessionAgentContent: Codable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: AnyKey.self)
-        if let text = try c.decodeIfPresent(String.self, forKey: AnyKey("Text")) {
+        let c = try decoder.container(keyedBy: AnyCodingKey.self)
+        if let text = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("Text")) {
             self = .text(text)
-        } else if let thinking = try c.decodeIfPresent(Thinking.self, forKey: AnyKey("Thinking")) {
+        } else if let thinking = try c.decodeIfPresent(Thinking.self, forKey: AnyCodingKey("Thinking")) {
             self = .thinking(text: thinking.text, signature: thinking.signature)
-        } else if let redacted = try c.decodeIfPresent(String.self, forKey: AnyKey("RedactedThinking")) {
+        } else if let redacted = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("RedactedThinking")) {
             self = .redactedThinking(redacted)
-        } else if let tool = try c.decodeIfPresent(SessionToolUse.self, forKey: AnyKey("ToolUse")) {
+        } else if let tool = try c.decodeIfPresent(SessionToolUse.self, forKey: AnyCodingKey("ToolUse")) {
             self = .toolUse(tool)
         } else {
             self = .other(try JSONValue(from: decoder))
@@ -160,13 +150,13 @@ public enum SessionAgentContent: Codable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: AnyKey.self)
+        var c = encoder.container(keyedBy: AnyCodingKey.self)
         switch self {
-        case .text(let value): try c.encode(value, forKey: AnyKey("Text"))
+        case .text(let value): try c.encode(value, forKey: AnyCodingKey("Text"))
         case .thinking(let text, let signature):
-            try c.encode(Thinking(text: text, signature: signature), forKey: AnyKey("Thinking"))
-        case .redactedThinking(let value): try c.encode(value, forKey: AnyKey("RedactedThinking"))
-        case .toolUse(let value): try c.encode(value, forKey: AnyKey("ToolUse"))
+            try c.encode(Thinking(text: text, signature: signature), forKey: AnyCodingKey("Thinking"))
+        case .redactedThinking(let value): try c.encode(value, forKey: AnyCodingKey("RedactedThinking"))
+        case .toolUse(let value): try c.encode(value, forKey: AnyCodingKey("ToolUse"))
         case .other(let value): try value.encode(to: encoder)
         }
     }

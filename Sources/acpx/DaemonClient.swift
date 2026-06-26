@@ -135,12 +135,10 @@ enum DaemonClient {
         }
         defer { Task { await proxy.disconnect() } }
 
-        // The daemon reads the agent command + cwd from the session's record.
-        _ = try await proxy.callTool("runPrompt", arguments: [
-            "sessionId": .string(sessionId),
-            "text": .string(text),
-            "wait": .bool(wait)
-        ])
+        // The daemon reads the agent command + cwd from the session's record. The tool
+        // result (the agent's aggregate text) is ignored — the CLI streams it live.
+        _ = try await ACPXDaemon.Client(proxy: proxy)
+            .runPrompt(sessionId: sessionId, text: text, wait: wait)
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
         return await stopReason.value ?? .endTurn
@@ -148,53 +146,42 @@ enum DaemonClient {
 
     /// Set a session's mode on the live agent via the daemon (which persists it).
     static func setMode(sessionId: String, modeId: String) async throws {
-        try await callMutation("setMode", [
-            "sessionId": .string(sessionId), "modeId": .string(modeId)
-        ])
+        try await withClient { _ = try await $0.setMode(sessionId: sessionId, modeId: modeId) }
     }
 
     /// Set a session's model on the live agent via the daemon (legacy set_model).
     static func setModel(sessionId: String, modelId: String) async throws {
-        try await callMutation("setModel", [
-            "sessionId": .string(sessionId), "modelId": .string(modelId)
-        ])
+        try await withClient { _ = try await $0.setModel(sessionId: sessionId, modelId: modelId) }
     }
 
     /// Set a session config option on the live agent via the daemon. Returns the
     /// agent's advertised config options after the change (empty if it reports none,
-    /// or if the result can't be parsed — in which case the option is still set).
+    /// or if the result can't be decoded — in which case the option is still set).
     static func setConfigOption(sessionId: String, configId: String, value: String) async throws
         -> [JSONValue] {
         let proxy = try await connect(spawnIfNeeded: true)
         defer { Task { await proxy.disconnect() } }
-        let result = try await proxy.callTool("setConfigOption", arguments: [
-            "sessionId": .string(sessionId), "configId": .string(configId), "value": .string(value)
-        ])
-        guard let data = result.data(using: .utf8),
-            let options = try? JSONDecoder().decode([JSONValue].self, from: data)
-        else { return [] }
-        return options
+        return (try? await ACPXDaemon.Client(proxy: proxy)
+            .setConfigOption(sessionId: sessionId, configId: configId, value: value)) ?? []
     }
 
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel.
     static func cancelSession(sessionId: String) async -> Bool {
-        guard let proxy = try? await connect(spawnIfNeeded: false) else { return false }
-        defer { Task { await proxy.disconnect() } }
-        guard let result = try? await proxy.callTool(
-            "cancelSession", arguments: ["sessionId": .string(sessionId)]) else {
-            return false
-        }
-        // The tool returns a Bool, rendered into the result's text payload.
-        return result.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().contains("true")
+        (try? await withClient(spawnIfNeeded: false) {
+            try await $0.cancelSession(sessionId: sessionId)
+        }) ?? false
     }
 
-    /// Connect (spawning if needed) and invoke a mutation tool, ignoring its result.
-    private static func callMutation(_ tool: String, _ arguments: [String: JSONValue]) async throws {
-        let proxy = try await connect(spawnIfNeeded: true)
+    /// Connect to the daemon (spawning if needed) and run `body` with the generated,
+    /// typed ``ACPXDaemon/Client`` proxy, disconnecting afterward.
+    private static func withClient<T>(
+        spawnIfNeeded: Bool = true, _ body: (ACPXDaemon.Client) async throws -> T
+    ) async throws -> T {
+        let proxy = try await connect(spawnIfNeeded: spawnIfNeeded)
         defer { Task { await proxy.disconnect() } }
-        _ = try await proxy.callTool(tool, arguments: arguments)
+        return try await body(ACPXDaemon.Client(proxy: proxy))
     }
 
     /// Launch a detached `acpxd`. Returns the launch error if the process couldn't

@@ -1,5 +1,6 @@
 import Foundation
 import JSONFoundation
+import JSONRPCPeer
 
 /// The agent-side handle for one ACP session.
 ///
@@ -8,11 +9,11 @@ import JSONFoundation
 /// (permission prompts, file I/O), and observe cooperative cancellation.
 public final class ACPServerSession: @unchecked Sendable {
     public let id: SessionId
-    private let connection: JSONRPCConnection
+    private let connection: JSONRPCPeer
     private let cancelLock = NSLock()
     private var cancelled = false
 
-    init(id: SessionId, connection: JSONRPCConnection) {
+    init(id: SessionId, connection: JSONRPCPeer) {
         self.id = id
         self.connection = connection
     }

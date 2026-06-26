@@ -1,4 +1,5 @@
 import Foundation
+import JSONFoundation
 
 /// JSON coders for acpx's on-disk files. Models use camelCase property names; the
 /// coders translate to/from the on-disk casing:
@@ -34,7 +35,7 @@ extension JSONEncoder.KeyEncodingStrategy {
                     out.append(character)
                 }
             }
-            return AnyKey(out)
+            return AnyCodingKey(out)
         }
     }
 }

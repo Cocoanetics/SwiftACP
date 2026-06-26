@@ -1,4 +1,5 @@
 import Foundation
+import JSONRPCWire
 
 /// Known ACP agents and how to launch them.
 ///

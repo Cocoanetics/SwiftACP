@@ -25,7 +25,7 @@ struct LiveAgentTests {
         let cwd = store.appendingPathComponent("cwd", isDirectory: true)
         try? FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
 
-        let daemon = ACPXDaemon(inheritAgentStderr: true)
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: true)
         let id = try await daemon.newSession(agentCommand: agent, cwd: cwd.path)
         let reply = try await daemon.runPrompt(
             sessionId: id, text: "What is 2+2? Reply with only the number, nothing else.")

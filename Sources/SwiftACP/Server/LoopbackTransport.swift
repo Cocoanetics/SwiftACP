@@ -1,14 +1,19 @@
 import Foundation
+import JSONFoundation
+import JSONRPCPeer
 
-/// Two `MessageTransport`s wired back-to-back in memory: what one end writes,
-/// the other reads. Lets an ACP client and an ``ACPAgentServer`` run in the same
-/// process — for embedding an agent inside an app, or for hermetic protocol
+/// Two `JSONRPCMessageTransport`s wired back-to-back in memory: what one end
+/// writes, the other reads. Lets an ACP client and an ``ACPAgentServer`` run in the
+/// same process — for embedding an agent inside an app, or for hermetic protocol
 /// tests with no subprocess.
-public final class LoopbackTransport: MessageTransport, @unchecked Sendable {
+///
+/// As an in-memory transport it does no framing: it hands whole ``JSONRPCMessage``
+/// values straight across, exactly the seam ``JSONRPCMessageTransport`` defines.
+public final class LoopbackTransport: JSONRPCMessageTransport, @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: AsyncThrowingStream<String, Error>.Continuation?
-    private var pending: [String] = []
-    private var deliver: (@Sendable (String) -> Void)?
+    private var continuation: AsyncThrowingStream<JSONRPCMessage, Error>.Continuation?
+    private var pending: [JSONRPCMessage] = []
+    private var deliver: (@Sendable (JSONRPCMessage) -> Void)?
     private var closePeer: (@Sendable () -> Void)?
     private var isClosed = false
 
@@ -17,25 +22,25 @@ public final class LoopbackTransport: MessageTransport, @unchecked Sendable {
     public static func pair() -> (client: LoopbackTransport, server: LoopbackTransport) {
         let a = LoopbackTransport()
         let b = LoopbackTransport()
-        a.deliver = { [weak b] line in b?.receive(line) }
-        b.deliver = { [weak a] line in a?.receive(line) }
+        a.deliver = { [weak b] message in b?.receive(message) }
+        b.deliver = { [weak a] message in a?.receive(message) }
         a.closePeer = { [weak b] in b?.close() }
         b.closePeer = { [weak a] in a?.close() }
         return (a, b)
     }
 
-    private func receive(_ line: String) {
+    private func receive(_ message: JSONRPCMessage) {
         lock.lock()
         if let continuation {
             lock.unlock()
-            continuation.yield(line)
+            continuation.yield(message)
         } else {
-            pending.append(line)
+            pending.append(message)
             lock.unlock()
         }
     }
 
-    public func makeInboundStream() -> AsyncThrowingStream<String, Error> {
+    public func makeInboundStream() -> AsyncThrowingStream<JSONRPCMessage, Error> {
         AsyncThrowingStream { continuation in
             lock.lock()
             self.continuation = continuation
@@ -43,18 +48,18 @@ public final class LoopbackTransport: MessageTransport, @unchecked Sendable {
             pending = []
             let closed = isClosed
             lock.unlock()
-            for line in buffered { continuation.yield(line) }
+            for message in buffered { continuation.yield(message) }
             if closed { continuation.finish() }
         }
     }
 
-    public func write(_ line: String) throws {
+    public func send(_ message: JSONRPCMessage) throws {
         lock.lock()
         let closed = isClosed
         let send = deliver
         lock.unlock()
-        guard !closed else { throw TransportError.closed }
-        send?(line)
+        guard !closed else { throw JSONRPCPeerError.closed }
+        send?(message)
     }
 
     public func close() {

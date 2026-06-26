@@ -4,28 +4,17 @@ import JSONFoundation
 import SwiftACP
 import SwiftMCP
 
-/// The acpx session daemon, exposed as an MCP server named `acpx`.
+/// The macOS implementation of the acpx daemon's MCP tools — the ``ACPXBackend`` the
+/// ``ACPXDaemon`` `@MCPServer` shell delegates to.
 ///
 /// It holds live ACP agent sessions so prompts across CLI invocations (and remote
-/// MCP clients) reuse one adapter process instead of respawning. It is served over
-/// a Bonjour + local TCP transport (used by the `acpx` CLI) and, optionally, over
-/// HTTP+SSE for outward MCP clients — see ``AcpxdCommand``.
-///
-/// ## MCP tools
-/// - ``newSession(agentCommand:cwd:name:)`` — create + persist a session, return its id.
-/// - ``runPrompt(sessionId:text:)`` — run one prompt turn (agent + cwd come from
-///   the session record), streaming each ACP `session/update` back to the caller
-///   as an MCP log notification, and returning the agent's aggregate response
-///   text. The turn's stop reason arrives as a final ``TurnEndedEvent`` log
-///   notification.
-/// - ``cancelSession(sessionId:)`` — cancel an in-flight prompt.
-/// - ``listSessions(agentCommand:)`` / ``showSession(sessionId:)`` /
-///   ``sessionHistory(sessionId:limit:)`` — read the persisted session store.
-/// - ``setMode(sessionId:modeId:)`` / ``setConfigOption(sessionId:configId:value:)`` /
-///   ``closeSession(sessionId:)`` / ``pruneSessions(agentCommand:olderThanDays:includeHistory:dryRun:)``
-///   — mutate live sessions and the store.
-@MCPServer(name: "acpx")
-actor ACPXDaemon {
+/// MCP clients) reuse one adapter process instead of respawning, owns the singleton
+/// lock, and drives the persisted session store. `runPrompt` streams each ACP
+/// `session/update` to the calling MCP client as a log notification — reaching the
+/// serving session (`Session.current`) directly, since the backend runs inside the
+/// tool-dispatch task. Run as a `Service` (see ``AcpxdCommand``) so it closes its
+/// agents and releases the lock on shutdown.
+actor ACPXDaemonBackend: ACPXBackend {
     /// A live agent handle + its session, keyed by ACP session id in ``live``.
     /// Internal (not private) so the ``Service`` conformance in `AcpxdCommand` can
     /// close them on shutdown.
@@ -68,7 +57,6 @@ actor ACPXDaemon {
     ///   - cwd: the working directory the agent runs in (`~` is expanded).
     ///   - name: an optional session label (like `sessions new --name`); blank = none.
     /// - Returns: the new session's acpx record id.
-    @MCPTool(openWorldHint: true)
     func newSession(agentCommand: String, cwd rawCwd: String, name: String? = nil) async throws
         -> String {
         let cwd = try resolveCwd(rawCwd)
@@ -94,7 +82,6 @@ actor ACPXDaemon {
     /// - Parameter agentCommand: keep only sessions for this agent. A short name
     ///   (e.g. `claude`) matches sessions created with either that name or its
     ///   expanded launch command. Blank / omitted = every session.
-    @MCPTool(readOnlyHint: true, idempotentHint: true)
     func listSessions(agentCommand: String? = nil) -> [SessionSummary] {
         sessions(matchingAgent: agentCommand).map(SessionSummary.init)
     }
@@ -102,7 +89,6 @@ actor ACPXDaemon {
     /// Show one persisted session's details — mirrors the CLI's `sessions show`.
     ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
-    @MCPTool(readOnlyHint: true, idempotentHint: true)
     func showSession(sessionId: String) throws -> SessionDetail {
         guard let record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
@@ -116,7 +102,6 @@ actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - limit: keep only the last N entries; 0 / omitted = all.
-    @MCPTool(readOnlyHint: true, idempotentHint: true)
     func sessionHistory(sessionId: String, limit: Int? = nil) throws -> [SessionStore.HistoryEntry] {
         guard let record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
@@ -191,7 +176,6 @@ actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
-    @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(sessionId: String, modeId: String) async throws -> Bool {
         try await withSessionTurn(sessionId) { entry, record in
             try await entry.session.setMode(modeId)
@@ -212,7 +196,6 @@ actor ACPXDaemon {
     ///   - value: the value to set for that option.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none).
-    @MCPTool(idempotentHint: true, openWorldHint: true)
     func setConfigOption(sessionId: String, configId: String, value: String) async throws
         -> [JSONValue] {
         try await withSessionTurn(sessionId) { entry, record in
@@ -235,7 +218,6 @@ actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
-    @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(sessionId: String, modelId: String) async throws -> Bool {
         try await withSessionTurn(sessionId) { entry, record in
             try await entry.agent.connection.setModel(
@@ -252,7 +234,6 @@ actor ACPXDaemon {
     ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
-    @MCPTool(idempotentHint: true)
     func closeSession(sessionId: String) async throws -> Bool {
         guard var record = findRecord(sessionId) else { return false }
         await evict(record.acpSessionId)
@@ -273,7 +254,6 @@ actor ACPXDaemon {
     ///   - olderThanDays: only prune sessions closed at least this many days ago.
     ///   - includeHistory: also delete each session's event-log / history files.
     ///   - dryRun: report what would be removed without deleting anything.
-    @MCPTool(destructiveHint: true, idempotentHint: true)
     func pruneSessions(
         agentCommand: String? = nil, olderThanDays: Int? = nil,
         includeHistory: Bool = false, dryRun: Bool = false
@@ -317,7 +297,6 @@ actor ACPXDaemon {
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
-    @MCPTool(openWorldHint: true)
     func runPrompt(sessionId rawSessionId: String, text: String, wait: Bool = true) async throws
         -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -444,7 +423,6 @@ actor ACPXDaemon {
     ///
     /// - Parameter sessionId: the ACP session id of the live session.
     /// - Returns: `false` if the session isn't currently live.
-    @MCPTool(idempotentHint: true, openWorldHint: true)
     func cancelSession(sessionId: String) async throws -> Bool {
         guard let entry = live[sessionId] else { return false }
         try await entry.session.cancel()

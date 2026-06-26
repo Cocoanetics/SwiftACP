@@ -1,12 +1,13 @@
 import Foundation
 import JSONFoundation
+import JSONRPCPeer
 
-/// Serves an ``ACPAgentHandler`` over a `MessageTransport`.
+/// Serves an ``ACPAgentHandler`` over a `JSONRPCMessageTransport`.
 ///
 /// It decodes inbound ACP requests/notifications, manages per-session state and
 /// cooperative cancellation, and lets the handler stream `session/update`s back
 /// through an ``ACPServerSession``. The peer plumbing (request↔response
-/// correlation, concurrent dispatch, the wire) is the same `JSONRPCConnection`
+/// correlation, concurrent dispatch, the wire) is the same `JSONRPCPeer`
 /// the ACP *client* uses — just driven from the server seam.
 ///
 /// Typical CLI entry point:
@@ -19,16 +20,16 @@ import JSONFoundation
 /// ```
 public actor ACPAgentServer {
     private let handler: ACPAgentHandler
-    private let transport: MessageTransport
-    private let connection: JSONRPCConnection
+    private let transport: JSONRPCMessageTransport
+    private let connection: JSONRPCPeer
     private var sessions: [SessionId: ACPServerSession] = [:]
     private var inflight: [SessionId: Task<PromptResponse, Error>] = [:]
     private var clientCapabilities: ClientCapabilities?
 
-    public init(handler: ACPAgentHandler, transport: MessageTransport) {
+    public init(handler: ACPAgentHandler, transport: JSONRPCMessageTransport) {
         self.handler = handler
         self.transport = transport
-        connection = JSONRPCConnection(transport: transport)
+        connection = JSONRPCPeer(transport: transport)
     }
 
     /// Serve over the process's own stdio until the client disconnects (stdin EOF).
