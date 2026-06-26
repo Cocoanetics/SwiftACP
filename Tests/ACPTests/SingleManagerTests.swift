@@ -114,7 +114,7 @@ import Testing
             #expect(acquired)
             // Run the daemon as a service, then ask the group to shut down gracefully:
             // it's torn down last and releases the lock once its run() returns.
-            let daemon = ACPXDaemon(inheritAgentStderr: false, lock: lock)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false, lock: lock)
             let group = ServiceGroup(configuration: .init(
                 services: [.init(
                     service: daemon, successTerminationBehavior: .gracefullyShutdownGroup,
@@ -163,7 +163,7 @@ import Testing
     func concurrentTurnsSerializeAndPreserveHistory() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             // Two turns fired at once must be serialized per session, and each must
             // build on the other's persisted history rather than clobbering it.
@@ -184,7 +184,7 @@ import Testing
     func concurrentPromptAndControlOpSerializeWithoutClobber() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemon(inheritAgentStderr: false)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             // A prompt and a set-mode fired at once must serialize on the session. The
             // control op reloads after acquiring its slot, so it persists on top of the

@@ -48,9 +48,11 @@ struct AcpxdCommand: AsyncParsableCommand {
             return
         }
 
-        // The daemon owns the live agent sessions and the singleton lock; it's run as
+        // The backend owns the live agent sessions and the singleton lock; it's run as
         // a service below so it closes those agents and releases the lock on shutdown.
-        let daemon = ACPXDaemon(inheritAgentStderr: verbose, lock: lock)
+        // The `@MCPServer` shell — served over the transports — delegates every tool to it.
+        let backend = ACPXDaemonBackend(inheritAgentStderr: verbose, lock: lock)
+        let daemon = ACPXDaemon(backend: backend)
 
         // The local TCP transport (also advertised via Bonjour) is always on. The CLI
         // connects to it directly by the port recorded in the lock file below.
@@ -63,7 +65,7 @@ struct AcpxdCommand: AsyncParsableCommand {
         let bonjour = TCPBonjourTransport(server: daemon, serviceName: "acpx")
         var services: [ServiceGroupConfiguration.ServiceConfiguration] = [
             .init(
-                service: daemon, successTerminationBehavior: .gracefullyShutdownGroup,
+                service: backend, successTerminationBehavior: .gracefullyShutdownGroup,
                 failureTerminationBehavior: .gracefullyShutdownGroup),
             .init(
                 service: bonjour, successTerminationBehavior: .gracefullyShutdownGroup,
@@ -109,7 +111,7 @@ struct AcpxdCommand: AsyncParsableCommand {
     }
 }
 
-extension ACPXDaemon: Service {
+extension ACPXDaemonBackend: Service {
     /// The daemon's lifecycle in the ``ServiceGroup``. Registered first, it's torn
     /// down LAST — after the transports stop accepting requests — so on graceful
     /// shutdown it closes every live agent (no orphaned subprocesses) and then
