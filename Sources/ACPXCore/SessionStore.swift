@@ -1,6 +1,6 @@
 import Foundation
 import JSONFoundation
-import ACPXDaemonKit
+import SwiftACP
 
 public let DEFAULT_HISTORY_LIMIT = 20
 
@@ -242,7 +242,7 @@ public enum SessionStore {
     /// The `sessionHistory` row type now lives in the shared `ACPXDaemonKit` (so the
     /// generated daemon `Client` and iOS clients can decode it); aliased here so
     /// `SessionStore.HistoryEntry` call sites keep resolving.
-    public typealias HistoryEntry = ACPXDaemonKit.HistoryEntry
+    public typealias HistoryEntry = SwiftACP.HistoryEntry
 
     public static func conversationHistoryEntries(_ record: SessionRecord) -> [HistoryEntry] {
         var entries: [HistoryEntry] = []

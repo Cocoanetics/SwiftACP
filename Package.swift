@@ -1,31 +1,38 @@
 // swift-tools-version: 6.1
 import PackageDescription
 
-// The `SwiftACP` library is the cross-platform core — it depends only on the
-// zero-dep JSONFoundation package, so it resolves and builds on macOS, Linux and
-// Windows alike. The acpx CLI, the acpxd session daemon, their shared `ACPXCore`
-// support library, and the protocol-validation tests are macOS-oriented (Bonjour
-// service advertisement, POSIX signal handling, CryptoKit) and pull in SwiftMCP +
-// swift-nio + service-lifecycle. They — and their heavier dependencies — are gated
-// behind `#if os(macOS)` so the library stays dependency-light off-Apple platforms.
+// `SwiftACP` is the single library you import — the ACP protocol + value types, the
+// agent/server harness, AND the generated `ACPXDaemon.Client` for driving a remote
+// `acpxd` over MCP. It depends on JSONFoundation (zero-dep) and SwiftMCP's swift-nio-
+// free `Client` trait. The swift-nio `Server` transports (used only by the acpxd
+// daemon) sit behind this package's default-on `Server` trait, so a client-only
+// consumer — an iOS or Android app — disables `Server` for a swift-nio-free graph.
+//
+// The acpx CLI, the acpxd session daemon, their shared `ACPXCore` support library,
+// and the protocol-validation tests are macOS-oriented (Bonjour, POSIX signals,
+// CryptoKit) and are gated behind `#if os(macOS)`. The spawn-client (`ACPAgent`) is
+// gated to desktop platforms — there is no `Foundation.Process` on iOS/Android.
 
 var products: [Product] = [
-    // One module — `import SwiftACP` — covering both halves: the ACP protocol
-    // + client (driving an agent) and the agent/server harness (exposing an
-    // app/CLI as an ACP agent).
+    // One module — `import SwiftACP`: the ACP protocol + the desktop spawn-client
+    // (driving a local agent), the agent/server harness, and the MCP `ACPXDaemon.Client`
+    // for driving a remote `acpxd` (every platform, including iOS and Android).
     .library(name: "SwiftACP", targets: ["SwiftACP"])
 ]
 
 var dependencies: [Package.Dependency] = [
-    // SwiftACP's only library dependency: the standalone, dependency-free
-    // JSONFoundation package. As of 2.1.0 it carries not just the JSON value type,
-    // JSON Schema and JSON-RPC 2.0 envelope, but the JSON-RPC *runtime* SwiftACP
-    // used to hand-roll: a transport-agnostic peer (`JSONRPCPeer`), framing codecs
-    // + the shared `ProcessLaunch` descriptor (`JSONRPCWire`), and a zero-dep
-    // `Foundation.Process` stdio transport (`JSONRPCStdio`). We depend on those
-    // three pure/zero-dep products only — not the `JSONRPC` umbrella, which would
-    // pull in the SSE transport (and SwiftCross) we don't use.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.1")
+    // JSONFoundation: JSON value type, JSON Schema, JSON-RPC 2.0 envelope, and the
+    // JSON-RPC runtime (peer, framing, stdio transport) the ACP transports build on.
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.1"),
+    // SwiftMCP: the MCP client (`MCPServerProxy`, swift-nio-free `Client` trait) that
+    // SwiftACP's generated `ACPXDaemon.Client` uses, and — behind this package's
+    // default-on `Server` trait — the swift-nio TCP/Bonjour/HTTP-SSE server transports
+    // acpxd serves over. A client-only consumer (an iOS/Android app) disables `Server`.
+    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.7.0", traits: [
+        "Client",
+        .trait(name: "Server", condition: .when(traits: ["Server"])),
+        .trait(name: "OpenAPI", condition: .when(traits: ["Server"]))
+    ])
 ]
 
 var targets: [Target] = [
@@ -35,7 +42,8 @@ var targets: [Target] = [
             .product(name: "JSONFoundation", package: "JSONFoundation"),
             .product(name: "JSONRPCPeer", package: "JSONFoundation"),
             .product(name: "JSONRPCWire", package: "JSONFoundation"),
-            .product(name: "JSONRPCStdio", package: "JSONFoundation")
+            .product(name: "JSONRPCStdio", package: "JSONFoundation"),
+            .product(name: "SwiftMCP", package: "SwiftMCP")
         ]
     ),
     .testTarget(
@@ -47,11 +55,6 @@ var targets: [Target] = [
 
 #if os(macOS)
 products += [
-    // The shared, iOS-capable client library: the daemon's MCP tool DTOs + the
-    // `@MCPServer` shell whose generated `Client` an iOS app uses to drive a remote
-    // `acpxd` over MCP. Host-gated to Apple platforms (it pulls SwiftMCP), but it
-    // *builds for iOS*; off-Apple hosts keep just the light `SwiftACP` core.
-    .library(name: "ACPXDaemonKit", targets: ["ACPXDaemonKit"]),
     // The headless CLI — a faithful clone of openclaw/acpx 0.11.0.
     .executable(name: "acpx", targets: ["acpx"]),
     // The session daemon: an MCP server (Bonjour + local TCP) holding live ACP sessions.
@@ -61,17 +64,6 @@ products += [
 ]
 
 dependencies += [
-    // SwiftMCP provides the MCP server/client + the TCP+Bonjour transport used
-    // for the daemon IPC (à la Cocoanetics/Post). `Client` (the swift-nio-free
-    // `MCPServerProxy` that `ACPXDaemonKit`'s generated `ACPXDaemon.Client` needs) is
-    // always on; the swift-nio/crypto/certificates `Server` transports — used only by
-    // acpxd — are gated behind this package's `Server` trait, so a client-only
-    // consumer (e.g. an iOS app on just `ACPXDaemonKit`) drops the whole NIO stack.
-    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.7.0", traits: [
-        "Client",
-        .trait(name: "Server", condition: .when(traits: ["Server"])),
-        .trait(name: "OpenAPI", condition: .when(traits: ["Server"]))
-    ]),
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
     // ServiceGroup runs the daemon's transports (Bonjour + optional HTTP+SSE)
@@ -80,22 +72,10 @@ dependencies += [
 ]
 
 targets += [
-    // The shared, iOS-capable library: daemon MCP tool DTOs + the `@MCPServer`
-    // `ACPXDaemon` shell (pure backend delegation) whose generated `Client` an iOS
-    // app uses to talk to a remote `acpxd`. SwiftMCP + JSONFoundation only, so it
-    // builds for iOS (with SwiftMCP's `Client` trait, no swift-nio).
-    .target(
-        name: "ACPXDaemonKit",
-        dependencies: [
-            .product(name: "SwiftMCP", package: "SwiftMCP"),
-            .product(name: "JSONFoundation", package: "JSONFoundation")
-        ]
-    ),
     // Shared CLI/daemon core: config, session persistence, paths, records.
     .target(
         name: "ACPXCore",
         dependencies: [
-            "ACPXDaemonKit",
             "SwiftACP",
             .product(name: "JSONFoundation", package: "JSONFoundation"),
             .product(name: "Logging", package: "swift-log")
@@ -146,18 +126,18 @@ let package = Package(
     name: "SwiftACP",
     platforms: [
         .macOS(.v14),
-        // The SwiftACP *library* builds for iOS too: an iOS app can't spawn agents
-        // (no `Foundation.Process`), but it can drive a remote `acpxd` over MCP and
-        // render its ACP value types. The spawn-client (`ACPAgent`) and the
-        // macOS-only CLI/daemon targets are gated out off-Apple-desktop.
+        // The library builds for iOS (and cross-compiles for Android): no agent
+        // spawning there, but it drives a remote `acpxd` over MCP via the generated
+        // `ACPXDaemon.Client` and renders ACP value types. The spawn-client and the
+        // macOS-only CLI/daemon targets are gated out.
         .iOS(.v15)
     ],
     products: products,
     traits: [
-        // `Server` (default-on) enables SwiftMCP's swift-nio-backed `Server`
-        // transports that acpxd serves over. A client-only consumer — e.g. an iOS app
-        // that uses only `ACPXDaemonKit`'s generated `ACPXDaemon.Client` — disables it
-        // (`.package(url: "…/SwiftACP…", traits: [])`) to resolve a swift-nio-free graph.
+        // `Server` (default-on) pulls SwiftMCP's swift-nio TCP/Bonjour/HTTP-SSE server
+        // transports that acpxd serves over. A client-only consumer — an iOS or Android
+        // app on `SwiftACP` — disables it (`.package(url: "…/SwiftACP…", traits: [])`)
+        // to resolve a swift-nio-free graph.
         .default(enabledTraits: ["Server"]),
         .trait(name: "Server")
     ],

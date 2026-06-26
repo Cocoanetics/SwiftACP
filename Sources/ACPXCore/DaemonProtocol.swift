@@ -1,11 +1,10 @@
 import Foundation
-@_exported import ACPXDaemonKit
+@_exported import SwiftACP
 
 // The daemon's MCP tool DTOs — `TurnEndedEvent`, `SessionSummary`, `SessionDetail`,
-// `PruneResult`, `HistoryEntry` — now live in the iOS-capable `ACPXDaemonKit` so the
-// generated `ACPXDaemon.Client` and an iOS MCP client can decode them. They're
-// re-exported here so existing `import ACPXCore` call sites keep seeing them
-// unchanged. What stays in `ACPXCore` are the `init(record:)` convenience
+// `PruneResult`, `HistoryEntry` — live in `SwiftACP` (alongside the `@MCPServer`
+// `ACPXDaemon` shell), so the generated `ACPXDaemon.Client` decodes them on every
+// platform. What stays in `ACPXCore` are the `init(record:)` convenience
 // initializers, which project a persisted `SessionRecord` (a macOS-only type) into
 // those portable DTOs.
 
