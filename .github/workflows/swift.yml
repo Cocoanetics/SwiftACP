@@ -77,3 +77,24 @@ jobs:
         run: swift build --build-tests -v --disable-default-traits
       - name: Test (Windows)
         run: swift test -v --skip-build --disable-default-traits
+
+  # SwiftACP cross-compiles for Android as a client-only library — `import SwiftACP`
+  # gives the generated `ACPXDaemon.Client` to drive a remote acpxd over MCP. The
+  # spawn-client and acpx/acpxd are gated off Android, and the `Server` trait is
+  # disabled so SwiftMCP's swift-nio transports stay out. Build the library sources
+  # only: the tests reference the desktop-gated spawn-client, so they don't build off
+  # desktop.
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build (Android, client-only library)
+        timeout-minutes: 25
+        uses: skiptools/swift-android-action@v2
+        with:
+          swift-version: "6.3.1"
+          free-disk-space: true
+          swift-build-flags: --disable-default-traits
+          build-tests: false
+          run-tests: false
