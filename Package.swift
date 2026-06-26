@@ -47,6 +47,11 @@ var targets: [Target] = [
 
 #if os(macOS)
 products += [
+    // The shared, iOS-capable client library: the daemon's MCP tool DTOs + the
+    // `@MCPServer` shell whose generated `Client` an iOS app uses to drive a remote
+    // `acpxd` over MCP. Host-gated to Apple platforms (it pulls SwiftMCP), but it
+    // *builds for iOS*; off-Apple hosts keep just the light `SwiftACP` core.
+    .library(name: "ACPXDaemonKit", targets: ["ACPXDaemonKit"]),
     // The headless CLI — a faithful clone of openclaw/acpx 0.11.0.
     .executable(name: "acpx", targets: ["acpx"]),
     // The session daemon: an MCP server (Bonjour + local TCP) holding live ACP sessions.
@@ -67,10 +72,22 @@ dependencies += [
 ]
 
 targets += [
+    // The shared, iOS-capable library: daemon MCP tool DTOs + the `@MCPServer`
+    // `ACPXDaemon` shell (pure backend delegation) whose generated `Client` an iOS
+    // app uses to talk to a remote `acpxd`. SwiftMCP + JSONFoundation only, so it
+    // builds for iOS (with SwiftMCP's `Client` trait, no swift-nio).
+    .target(
+        name: "ACPXDaemonKit",
+        dependencies: [
+            .product(name: "SwiftMCP", package: "SwiftMCP"),
+            .product(name: "JSONFoundation", package: "JSONFoundation")
+        ]
+    ),
     // Shared CLI/daemon core: config, session persistence, paths, records.
     .target(
         name: "ACPXCore",
         dependencies: [
+            "ACPXDaemonKit",
             "SwiftACP",
             .product(name: "JSONFoundation", package: "JSONFoundation"),
             .product(name: "Logging", package: "swift-log")
