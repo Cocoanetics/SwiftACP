@@ -50,24 +50,17 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      # iOS needs Xcode for the iOS SDK + xcodebuild, but the runner's Xcodes are all
-      # Swift 6.2.4 — too old to resolve the swift-subprocess graph (6.2's resolver
-      # exhausts on swift-subprocess → swift-docc-plugin → swift-syntax). So select Xcode
-      # 26.0 for the iOS SDK, then install the swift.org 6.3.1 toolchain (as every other
-      # job does) and point xcodebuild at it with -toolchain below — resolution then runs
-      # on 6.3, which needs no committed lock.
-      - name: Select Xcode 26.0
+      # iOS needs Xcode (xcodebuild + the iOS SDK). Driving xcodebuild with a swift.org
+      # toolchain (-toolchain) can't link the package manifest against Xcode's SDK, so
+      # instead select the runner's newest Xcode: its Swift (6.2.4) is newer than the old
+      # 26.0 pin's 6.2.0 and resolves the swift-subprocess graph 6.2.0 exhausted on — no
+      # committed lock needed.
+      - name: Select newest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26.0"
-      - name: Install Swift 6.3
-        uses: SwiftyLab/setup-swift@latest
-        with:
-          swift-version: "6.3.1"
+          xcode-version: latest-stable
       - name: Verify Swift version
-        run: |
-          swift --version
-          swift --version | grep -qE "Swift version 6\.3" || { echo "::error::Expected Swift 6.3 (TOOLCHAINS=$TOOLCHAINS)"; exit 1; }
+        run: swift --version
       # This Xcode image ships without the iOS SDK preinstalled; fetch it. The download
       # intermittently flakes on the hosted runner ("Unable to connect to simulator",
       # exit 70) and succeeds on a retry, so loop before giving up.
@@ -81,8 +74,6 @@ jobs:
             echo "attempt $i failed; retrying in 20s…"; sleep 20
           done
           echo "::error::Could not download the iOS platform after 3 attempts"; exit 1
-      # -toolchain "$TOOLCHAINS": resolve and build with the swift.org 6.3 toolchain
-      # installed above (against Xcode 26.0's iOS SDK), so resolution doesn't need a lock.
       # -skipMacroValidation: SwiftACP uses SwiftMCP's `@MCPServer` macro, and xcodebuild
       # otherwise requires interactive trust of package macros. CODE_SIGNING_ALLOWED=NO:
       # the runner has no provisioning profiles, and a generic-device library build
@@ -90,7 +81,6 @@ jobs:
       - name: Build SwiftACP (iOS, default traits)
         run: |
           xcodebuild -scheme SwiftACP -destination 'generic/platform=iOS' \
-            -toolchain "$TOOLCHAINS" \
             -skipMacroValidation CODE_SIGNING_ALLOWED=NO build
       - name: Build SwiftACP client-only — no swift-nio (Server trait off)
         run: swift build --target SwiftACP --disable-default-traits
