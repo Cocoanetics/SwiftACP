@@ -62,8 +62,16 @@ products += [
 
 dependencies += [
     // SwiftMCP provides the MCP server/client + the TCP+Bonjour transport used
-    // for the daemon IPC (à la Cocoanetics/Post).
-    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.7.0"),
+    // for the daemon IPC (à la Cocoanetics/Post). `Client` (the swift-nio-free
+    // `MCPServerProxy` that `ACPXDaemonKit`'s generated `ACPXDaemon.Client` needs) is
+    // always on; the swift-nio/crypto/certificates `Server` transports — used only by
+    // acpxd — are gated behind this package's `Server` trait, so a client-only
+    // consumer (e.g. an iOS app on just `ACPXDaemonKit`) drops the whole NIO stack.
+    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.7.0", traits: [
+        "Client",
+        .trait(name: "Server", condition: .when(traits: ["Server"])),
+        .trait(name: "OpenAPI", condition: .when(traits: ["Server"]))
+    ]),
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
     // ServiceGroup runs the daemon's transports (Bonjour + optional HTTP+SSE)
@@ -145,6 +153,14 @@ let package = Package(
         .iOS(.v15)
     ],
     products: products,
+    traits: [
+        // `Server` (default-on) enables SwiftMCP's swift-nio-backed `Server`
+        // transports that acpxd serves over. A client-only consumer — e.g. an iOS app
+        // that uses only `ACPXDaemonKit`'s generated `ACPXDaemon.Client` — disables it
+        // (`.package(url: "…/SwiftACP…", traits: [])`) to resolve a swift-nio-free graph.
+        .default(enabledTraits: ["Server"]),
+        .trait(name: "Server")
+    ],
     dependencies: dependencies,
     targets: targets
 )
