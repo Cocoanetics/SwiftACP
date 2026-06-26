@@ -25,7 +25,7 @@ var dependencies: [Package.Dependency] = [
     // `Foundation.Process` stdio transport (`JSONRPCStdio`). We depend on those
     // three pure/zero-dep products only — not the `JSONRPC` umbrella, which would
     // pull in the SSE transport (and SwiftCross) we don't use.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.0")
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.1.1")
 ]
 
 var targets: [Target] = [
