@@ -41,6 +41,8 @@ public enum MCPServerSpec: Codable, Hashable, Sendable {
     }
 }
 
+/// The stdio transport spec: the agent spawns `command` and speaks MCP over
+/// its stdin/stdout.
 public struct StdioMCPServer: Codable, Hashable, Sendable {
     public var type = "stdio"
     public var name: String

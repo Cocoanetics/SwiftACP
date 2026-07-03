@@ -272,8 +272,8 @@ public enum SessionStore {
 // MARK: - JSON + atomic write helpers
 
 /// Encodes a value with the given encoder and appends acpx's trailing newline.
-func encodeForDisk<T: Encodable>(_ value: T, using encoder: JSONEncoder) -> Data {
-    ((try? encoder.encode(value)) ?? Data()) + Data("\n".utf8)
+func encodeForDisk<T: Encodable>(_ value: T, using encoder: JSONEncoder) throws -> Data {
+    try encoder.encode(value) + Data("\n".utf8)
 }
 
 func atomicWrite(_ data: Data, to url: URL) throws {

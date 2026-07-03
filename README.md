@@ -1,19 +1,39 @@
 # SwiftACP
 
 A Swift implementation of the [Agent Client Protocol](https://agentclientprotocol.com)
-(ACP) in a single module — `import SwiftACP` — covering both halves:
+(ACP) in a single module — `import SwiftACP` — covering all three roles:
 
 - **the client** — the protocol types + a JSON-RPC client (`ACPAgent` /
-  `ACPAgentConnection`) for *driving* an ACP agent (the editor/host side).
+  `ACPAgentConnection`) for *driving* an ACP agent (the editor/host side;
+  spawning is desktop-only).
 - **the server** — the agent/server harness for *exposing* an app or CLI **as** an ACP
   agent (`ACPAgentHandler`, `ACPServerSession`, `ACPAgentServer`).
+- **the daemon client** — the generated `ACPXDaemon.Client` for driving a remote
+  `acpxd` session daemon over MCP, on every platform including iOS and Android.
 
-The library depends only on the zero-dependency
-[`JSONFoundation`](https://github.com/Cocoanetics/JSONFoundation) package, so it embeds
-anywhere — a Mac app, an agent CLI, a test. The same package also ships the **`acpx`**
-CLI and **`acpxd`** daemon (macOS-only — [see below](#the-acpx-cli-and-acpxd-daemon-macos)),
-a headless toolkit for driving ACP agents modelled after the original
-[`openclaw/acpx`](https://github.com/openclaw/acpx).
+The library builds on
+[`JSONFoundation`](https://github.com/Cocoanetics/JSONFoundation) (zero-dependency:
+JSON value/schema types and the JSON-RPC runtime) and
+[`SwiftMCP`](https://github.com/Cocoanetics/SwiftMCP)'s swift-nio-free MCP client, so
+it embeds anywhere — a Mac app, an iOS app, an agent CLI, a test. The same package
+also ships the **`acpx`** CLI and **`acpxd`** daemon (macOS-only —
+[see below](#the-acpx-cli-and-acpxd-daemon-macos)), a headless toolkit for driving
+ACP agents modelled after the original [`openclaw/acpx`](https://github.com/openclaw/acpx).
+
+## Adding the dependency
+
+```swift
+.package(url: "https://github.com/Cocoanetics/SwiftACP.git", from: "0.1.0"),
+```
+
+with `"SwiftACP"` in your target's dependencies. The default-on `Server` package
+trait pulls SwiftMCP's swift-nio server transports (what `acpxd` serves over). A
+client-only consumer — an iOS or Android app driving a remote `acpxd` — should
+disable it for a swift-nio-free graph:
+
+```swift
+.package(url: "https://github.com/Cocoanetics/SwiftACP.git", from: "0.1.0", traits: []),
+```
 
 ## Expose an agent (server)
 
@@ -42,11 +62,13 @@ struct MyHandler: ACPAgentHandler {
 ```
 
 Only `initialize`, `newSession`, and `prompt` are required; `authenticate`,
-`loadSession`, `cancel`, `setMode`, and `setConfigOption` have defaults.
-`ACPServerSession` streams `session/update`s (text, reasoning, tool calls, plans),
-calls back to the client (permission prompts, file I/O), and exposes cooperative
-cancellation. `LoopbackTransport.pair()` runs a client and server in the same
-process for embedding or hermetic tests.
+`loadSession`, `cancel`, `setMode`, `setConfigOption`, `setModel`, and
+`availableCommands` have defaults. `ACPServerSession` streams `session/update`s
+(text, reasoning, tool calls, plans), calls back to the client — permission prompts
+(`requestPermission`) and file I/O (`readTextFile` / `writeTextFile`) — and exposes
+cooperative cancellation. `LoopbackTransport.pair()` (JSONFoundation's in-memory
+transport, re-exported by SwiftACP) runs a client and server in the same process
+for embedding an agent inside an app or for hermetic tests.
 
 ## Drive an agent (client)
 
@@ -84,9 +106,11 @@ swift run acpxd                       # Bonjour + local TCP (how the acpx CLI di
 swift run acpxd --http-port 9090 -v   # also expose MCP over HTTP+SSE (unauthenticated — keep on loopback)
 ```
 
-The CLI/daemon pull in `SwiftMCP` (+ swift-nio, service-lifecycle, argument-parser),
-so depending only on the `SwiftACP` library on macOS will resolve those into your
-graph; off-Apple platforms get just `SwiftACP` + `JSONFoundation`.
+The CLI and daemon are built on the library plus SwiftMCP's server side: `acpxd` is
+an `@MCPServer` whose tools the CLI calls over MCP — the same generated
+`ACPXDaemon.Client` an iOS app uses to drive a remote daemon. The extra
+executable-only dependencies (service-lifecycle, argument-parser) never reach
+consumers of the `SwiftACP` library product.
 
 ## Status
 

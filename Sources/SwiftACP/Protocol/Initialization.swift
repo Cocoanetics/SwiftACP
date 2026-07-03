@@ -31,6 +31,7 @@ public struct ClientCapabilities: Codable, Hashable, Sendable {
     }
 }
 
+/// Which `fs/*` methods the client answers.
 public struct FileSystemCapability: Codable, Hashable, Sendable {
     public var readTextFile: Bool
     public var writeTextFile: Bool
@@ -73,6 +74,7 @@ public struct SessionCapabilities: Codable, Hashable, Sendable {
     public var supportsList: Bool { list != nil }
 }
 
+/// Which content types the agent accepts in prompts beyond plain text.
 public struct PromptCapabilities: Codable, Hashable, Sendable {
     public var image: Bool?
     public var audio: Bool?
@@ -85,6 +87,7 @@ public struct PromptCapabilities: Codable, Hashable, Sendable {
     }
 }
 
+/// An authentication scheme the agent offers, selected by id via `authenticate`.
 public struct AuthMethod: Codable, Hashable, Sendable {
     public var id: String
     public var name: String?
@@ -99,6 +102,8 @@ public struct AuthMethod: Codable, Hashable, Sendable {
 
 // MARK: - initialize
 
+/// Opens the connection: the client announces its protocol version and
+/// capabilities before anything else happens.
 public struct InitializeRequest: Codable, Sendable {
     public var protocolVersion: Int
     public var clientCapabilities: ClientCapabilities
@@ -115,6 +120,8 @@ public struct InitializeRequest: Codable, Sendable {
     }
 }
 
+/// The agent's half of the handshake: negotiated version, capabilities, and
+/// any authentication methods it supports.
 public struct InitializeResponse: Codable, Sendable {
     public var protocolVersion: Int
     public var agentCapabilities: AgentCapabilities?
@@ -136,6 +143,7 @@ public struct InitializeResponse: Codable, Sendable {
 
 // MARK: - authenticate
 
+/// Selects one of the agent's advertised ``AuthMethod``s by id.
 public struct AuthenticateRequest: Codable, Sendable {
     public var methodId: String
     public init(methodId: String) { self.methodId = methodId }

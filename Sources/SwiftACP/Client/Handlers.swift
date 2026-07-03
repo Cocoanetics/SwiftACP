@@ -7,10 +7,14 @@ import JSONFoundation
 /// corresponding capability is unavailable (and, for the request/response ones,
 /// the agent receives a "method not found" error).
 public struct ACPClientHandlers: Sendable {
-    /// Decide the outcome of a tool-call permission request.
+    /// Decide the outcome of a tool-call permission request. Called when the
+    /// agent wants approval for a tool call; return the selected option, or
+    /// `.cancelled` if the turn ended without a choice.
     public var requestPermission:
         (@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)?
+    /// Serve `fs/read_text_file`: return file content, honouring `line`/`limit`.
     public var readTextFile: (@Sendable (ReadTextFileRequest) async throws -> ReadTextFileResponse)?
+    /// Serve `fs/write_text_file`: write the given content to the given path.
     public var writeTextFile:
         (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)?
 

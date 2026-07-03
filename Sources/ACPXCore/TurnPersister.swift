@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import SwiftACP
 
 /// Persists a session's conversation to disk *as a turn streams*, faithfully
@@ -94,7 +95,15 @@ public actor TurnPersister {
             }
         }
         guard changed else { return }
-        dirty = false
-        try? SessionStore.writeRecord(record)
+        do {
+            try SessionStore.writeRecord(record)
+            dirty = false
+        } catch {
+            // Keep the record dirty so the next checkpoint retries the write
+            // instead of silently dropping this slice of the conversation.
+            log.warning("session checkpoint write failed: \(error)")
+        }
     }
 }
+
+private let log = Logger(label: "com.cocoanetics.acpx.turn-persister")

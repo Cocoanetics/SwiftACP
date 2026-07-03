@@ -25,6 +25,7 @@ public struct ACPXConfigFile: Codable, Sendable {
     public var disableExec: Bool?
     public var mcpServers: [McpServerConfig]?
 
+    /// A custom agent definition: launch command plus optional arguments.
     public struct AgentEntry: Codable, Sendable {
         public var command: String
         public var args: [String]?
@@ -42,6 +43,7 @@ public struct McpServerConfig: Codable, Sendable {
     public var headers: [EnvEntry]?
     public var meta: JSONValue?
 
+    /// A name/value pair, used for both `env` (stdio) and `headers` (http/sse).
     public struct EnvEntry: Codable, Sendable {
         public var name: String
         public var value: String
@@ -72,12 +74,15 @@ public struct ResolvedAcpxConfig: Sendable {
     public var hasProjectConfig: Bool
 }
 
+/// An unreadable/invalid config file, with a user-facing message.
 public struct ConfigError: Error, CustomStringConvertible {
     public let message: String
     public init(_ message: String) { self.message = message }
     public var description: String { message }
 }
 
+/// Reads `~/.acpx/config.json` and `<cwd>/.acpxrc.json` and merges them into a
+/// ``ResolvedAcpxConfig``.
 public enum ConfigLoader {
     /// Load + resolve config for `cwd` (defaults applied, project over global).
     public static func load(cwd: String) throws -> ResolvedAcpxConfig {

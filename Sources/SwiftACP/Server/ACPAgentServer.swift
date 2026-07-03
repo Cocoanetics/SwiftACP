@@ -1,6 +1,10 @@
 import Foundation
 import JSONFoundation
 import JSONRPCPeer
+#if os(macOS) || os(Linux) || os(Windows)
+import JSONRPCWire
+import JSONRPCSubprocess
+#endif
 
 /// Serves an ``ACPAgentHandler`` over a `JSONRPCMessageTransport`.
 ///
@@ -32,10 +36,20 @@ public actor ACPAgentServer {
         connection = JSONRPCPeer(transport: transport)
     }
 
+    #if os(macOS) || os(Linux) || os(Windows)
     /// Serve over the process's own stdio until the client disconnects (stdin EOF).
+    ///
+    /// Desktop-only, like everything stdio: an ACP agent is a child process the
+    /// client spawned, which doesn't exist on iOS/Android — embed the server over a
+    /// `LoopbackTransport` there instead.
+    ///
+    /// - Important: stdout must carry JSON-RPC *only*. Route the agent's own logs to
+    ///   stderr, or the client will see them as protocol noise.
     public static func serveStdio(handler: ACPAgentHandler) async throws {
-        try await ACPAgentServer(handler: handler, transport: StdioTransport()).run()
+        let transport = StdioTransport(endpoint: .currentProcess, framing: LineFraming())
+        try await ACPAgentServer(handler: handler, transport: transport).run()
     }
+    #endif
 
     /// Wire handlers, start reading, and block until the client disconnects.
     public func run() async throws {

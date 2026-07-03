@@ -1,6 +1,7 @@
 import ACPXCore
 import Foundation
 import JSONFoundation
+import Logging
 import SwiftACP
 import SwiftMCP
 
@@ -29,6 +30,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Serializes prompt turns per session so concurrent CLI/MCP callers can't drive
     /// one agent — or persist one record — at the same time (see ``SessionTurnQueue``).
     private let turnQueue = SessionTurnQueue()
+
+    private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
     /// When true, spawned agents inherit the daemon's stderr — surfacing agent
     /// diagnostics (e.g. rate-limit messages) that otherwise stay hidden.
@@ -158,6 +161,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         }
         let acpSessionId = initial.acpSessionId
         try await turnQueue.acquire(acpSessionId, wait: true)
+        // `defer` can't await; the hop to the queue actor is safe because release
+        // hands the slot to the next FIFO waiter regardless of when it lands.
         defer { Task { await turnQueue.release(acpSessionId) } }
         guard var record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
@@ -166,7 +171,13 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd)
         let result = try await body(entry, &record)
         record.lastUsedAt = nowISO()
-        try? SessionStore.writeRecord(record)
+        do {
+            // The control op already took effect on the live agent, so don't fail
+            // the call over a bookkeeping write — but don't hide it either.
+            try SessionStore.writeRecord(record)
+        } catch {
+            log.warning("session record write failed after control op: \(error)")
+        }
         return result
     }
 
@@ -310,6 +321,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         // wait == false, reject), so concurrent CLI/MCP callers never drive one
         // agent — or persist one record — concurrently. Keyed by ACP session id.
         try await turnQueue.acquire(acpSessionId, wait: wait)
+        // `defer` can't await; the hop to the queue actor is safe because release
+        // hands the slot to the next FIFO waiter regardless of when it lands.
         defer { Task { await turnQueue.release(acpSessionId) } }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
@@ -429,7 +442,10 @@ actor ACPXDaemonBackend: ACPXBackend {
         return true
     }
 
-    /// Return the live entry for `sessionId`, launching/reconnecting if needed.
+    /// Return the live entry for `sessionId` — launching the agent and reconnecting
+    /// the session if it isn't held. When the agent refuses the reconnect (it no
+    /// longer knows the session), fall back to a fresh `session/new` on the same
+    /// launch, still keyed under the caller's session id.
     private func ensure(sessionId: String, agentCommand: String, cwd rawCwd: String) async throws
         -> Live {
         if let existing = live[sessionId] { return existing }

@@ -40,7 +40,10 @@ struct ACPServerTests {
             let text = request.prompt.compactMap(\.text).joined()
 
             if text.contains("wait") {
-                // Long sleep that the test cancels; cancellation surfaces as .cancelled.
+                // Announce that the turn is running (the test awaits this update
+                // before cancelling), then sleep long enough that only cancellation
+                // can end the turn; cancellation surfaces as .cancelled.
+                await session.sendText("waiting")
                 try await Task.sleep(nanoseconds: 10_000_000_000)
                 return PromptResponse(stopReason: .endTurn)
             }
@@ -90,11 +93,9 @@ struct ACPServerTests {
         var text = ""
         var sawPlan = false
         var toolCalls = 0
-        var commands: [AvailableCommand]?
         func append(_ string: String) { text += string }
         func plan() { sawPlan = true }
         func tool() { toolCalls += 1 }
-        func setCommands(_ commands: [AvailableCommand]) { self.commands = commands }
     }
 
     @Test func fullPromptRoundTripWithUsage() async throws {
@@ -140,14 +141,23 @@ struct ACPServerTests {
         _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
         let session = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
 
+        // Subscribe before prompting: the handler announces the running turn with a
+        // "waiting" update, so awaiting it (instead of sleeping) guarantees the
+        // prompt has reached the server before we cancel.
+        let (subscriptionId, stream) = await client.makeSubscription()
+        let turnStarted = Task {
+            for await note in stream where note.sessionId == session.sessionId {
+                if case .agentMessageChunk = note.update { return }
+            }
+        }
         let promptTask = Task {
             try await client.prompt(PromptRequest(sessionId: session.sessionId, prompt: [.text("please wait")]))
         }
-        // Let the prompt reach the server and start, then cancel it.
-        try await Task.sleep(nanoseconds: 80_000_000)
+        await turnStarted.value
         try await client.cancel(sessionId: session.sessionId)
 
         let response = try await promptTask.value
+        await client.endSubscription(subscriptionId)
         #expect(response.stopReason == .cancelled)
 
         await client.close()
@@ -186,26 +196,19 @@ struct ACPServerTests {
         let (client, serverTask) = await makePair()
         _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
 
-        let collected = Collected()
+        // Subscribe before session/new, then await the first commands update — the
+        // server publishes it as a notification after the new-session reply.
         let (subscriptionId, stream) = await client.makeSubscription()
-        let consumer = Task {
+        let firstCommands = Task { () -> [AvailableCommand]? in
             for await note in stream {
-                if case .availableCommandsUpdate(let commands) = note.update {
-                    await collected.setCommands(commands)
-                }
+                if case .availableCommandsUpdate(let commands) = note.update { return commands }
             }
+            return nil
         }
 
         _ = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
-        // The server publishes commands as a notification after the new-session reply.
-        var received: [AvailableCommand]?
-        for _ in 0 ..< 200 {
-            received = await collected.commands
-            if received != nil { break }
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        let received = await firstCommands.value
         await client.endSubscription(subscriptionId)
-        await consumer.value
 
         #expect(received?.map(\.name) == ["new"])
 

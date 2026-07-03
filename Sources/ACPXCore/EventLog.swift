@@ -4,6 +4,8 @@ import JSONFoundation
 /// A thread-safe FIFO buffer the JSON-RPC wire observer pushes lines into
 /// (synchronously, from the connection), and the ``TurnPersister`` drains on each
 /// checkpoint — mirroring acpx's `pendingMessages` array.
+///
+/// `@unchecked Sendable`: `lock` guards every access to `lines`, the only mutable state.
 public final class WireBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var lines: [String] = []

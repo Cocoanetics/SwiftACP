@@ -72,6 +72,7 @@ public struct PlanEntryStatus: OpenStringEnum {
     public static let completed: PlanEntryStatus = "completed"
 }
 
+/// Relative priority of a plan entry.
 public struct PlanEntryPriority: OpenStringEnum {
     public let rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }
