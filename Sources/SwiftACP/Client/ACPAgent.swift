@@ -15,7 +15,7 @@ extension ClientCapabilities {
 }
 
 // `ACPAgent`/`ACPSession` spawn an agent adapter and speak to it over the
-// swift-subprocess child stdio transport (`JSONRPCSubprocess.StdioMessageTransport`),
+// swift-subprocess child stdio transport (`JSONRPCSubprocess.StdioTransport`),
 // which exists only on macOS/Linux/Windows. iOS/Android apps can't spawn child
 // processes; they reach a remote `acpxd` over MCP instead. So the whole spawn-client
 // section below — and its `JSONRPCSubprocess` import — is gated off iOS/Android. The
@@ -41,7 +41,7 @@ public final class ACPAgent: Sendable {
     public let connection: ACPAgentConnection
     /// The agent subprocess transport: JSONFoundation's swift-subprocess child stdio
     /// transport, framed as one newline-terminated JSON line per message (ACP framing).
-    public let transport: StdioMessageTransport<LineFraming>
+    public let transport: StdioTransport<LineFraming>
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
 
@@ -50,7 +50,7 @@ public final class ACPAgent: Sendable {
 
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
-        transport: StdioMessageTransport<LineFraming>, initializeResult: InitializeResponse
+        transport: StdioTransport<LineFraming>, initializeResult: InitializeResponse
     ) {
         self.name = name
         self.cwd = cwd
@@ -82,7 +82,7 @@ public final class ACPAgent: Sendable {
         let spec = AgentRegistry.launch(
             for: name, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
-        let transport = StdioMessageTransport(endpoint: .childProcess(spec), framing: LineFraming())
+        let transport = StdioTransport(endpoint: .childProcess(spec), framing: LineFraming())
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.

@@ -73,7 +73,11 @@ enum PromptCommand {
         if flags.format == "quiet" || (flags.jsonStrict && flags.format == "json") { return }
         let label = record.name ?? "cwd"
         let sessionCwd = ACPXPaths.resolve(record.cwd, base: "/")
-        // (No live daemon yet, so the agent always reports "needs reconnect".)
+        // The banner prints before the daemon is contacted, so it doesn't know
+        // whether acpxd still holds this agent live — report the conservative
+        // "needs reconnect" (matching upstream acpx, whose CLI process never has
+        // a live agent at this point either) rather than paying a daemon
+        // round-trip just for the banner.
         let status = "needs reconnect"
         if sessionCwd == cwd {
             Console.errLine(

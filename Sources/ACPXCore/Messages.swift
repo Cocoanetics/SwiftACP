@@ -42,6 +42,7 @@ public enum SessionMessage: Codable, Sendable {
     }
 }
 
+/// A persisted user turn (the `User` payload): prompt id plus its content blocks.
 public struct SessionUserMessage: Codable, Sendable {
     public var id: String
     public var content: [SessionUserContent]
@@ -51,6 +52,8 @@ public struct SessionUserMessage: Codable, Sendable {
     }
 }
 
+/// A persisted agent turn (the `Agent` payload): content blocks plus the turn's
+/// tool results keyed by tool-use id.
 public struct SessionAgentMessage: Codable, Sendable {
     public var content: [SessionAgentContent]
     public var toolResults: [String: SessionToolResult]
@@ -69,6 +72,8 @@ public struct SessionAgentMessage: Codable, Sendable {
 
 // MARK: - User content
 
+/// One content block of a persisted user message (`Text`/`Mention`/`Image`/`Audio`);
+/// unrecognized shapes round-trip via `.other`.
 public enum SessionUserContent: Codable, Sendable {
     case text(String)
     case mention(uri: String, content: String)
@@ -122,6 +127,8 @@ public enum SessionUserContent: Codable, Sendable {
 
 // MARK: - Agent content
 
+/// One content block of a persisted agent message (`Text`/`Thinking`/
+/// `RedactedThinking`/`ToolUse`); unrecognized shapes round-trip via `.other`.
 public enum SessionAgentContent: Codable, Sendable {
     case text(String)
     case thinking(text: String, signature: String?)
@@ -175,6 +182,7 @@ public enum SessionAgentContent: Codable, Sendable {
 
 // MARK: - Leaf content types
 
+/// A persisted image block: its `source` string plus optional pixel dimensions.
 public struct SessionMessageImage: Codable, Sendable {
     public var source: String
     public var size: Size?
@@ -184,11 +192,14 @@ public struct SessionMessageImage: Codable, Sendable {
     }
 }
 
+/// A persisted audio block: its `source` string plus optional MIME type.
 public struct SessionMessageAudio: Codable, Sendable {
     public var source: String
     public var mimeType: String?
 }
 
+/// A tool call recorded in an agent message: id, name, raw + parsed input, and
+/// whether input streaming completed.
 public struct SessionToolUse: Codable, Sendable {
     public var id: String
     public var name: String
@@ -238,6 +249,8 @@ public struct SessionToolUse: Codable, Sendable {
     }
 }
 
+/// The persisted outcome of a tool call, stored in
+/// ``SessionAgentMessage/toolResults`` under its `toolUseId`.
 public struct SessionToolResult: Codable, Sendable {
     public var toolUseId: String
     public var toolName: String
@@ -248,6 +261,8 @@ public struct SessionToolResult: Codable, Sendable {
 
 // MARK: - Token usage / cost / acpx state
 
+/// A session record's token counters. All optional doubles, matching the
+/// JS numbers acpx persists.
 public struct SessionTokenUsage: Codable, Sendable {
     public var inputTokens: Double?
     public var outputTokens: Double?
@@ -258,6 +273,7 @@ public struct SessionTokenUsage: Codable, Sendable {
     public init() {}
 }
 
+/// A session record's cost figure: amount plus currency code.
 public struct SessionUsageCost: Codable, Sendable {
     public var amount: Double?
     public var currency: String?
@@ -283,6 +299,8 @@ public struct SessionAcpxState: Codable, Sendable {
         case bare(String)
         case detailed(Detail)
 
+        /// The object form's fields: name, optional description, and whether
+        /// the command takes input.
         public struct Detail: Codable, Sendable {
             public var name: String
             public var description: String?

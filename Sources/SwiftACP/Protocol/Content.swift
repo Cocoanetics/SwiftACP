@@ -58,6 +58,7 @@ public enum ContentBlock: Codable, Hashable, Sendable {
     }
 }
 
+/// Plain text, with optional MCP-style annotations.
 public struct TextContent: Codable, Hashable, Sendable {
     public var type = "text"
     public var text: String
@@ -69,6 +70,7 @@ public struct TextContent: Codable, Hashable, Sendable {
     }
 }
 
+/// An image carried inline as base64 data with its MIME type.
 public struct ImageContent: Codable, Hashable, Sendable {
     public var type = "image"
     /// Base64-encoded image data.
@@ -85,6 +87,7 @@ public struct ImageContent: Codable, Hashable, Sendable {
     }
 }
 
+/// Audio carried inline as base64 data with its MIME type.
 public struct AudioContent: Codable, Hashable, Sendable {
     public var type = "audio"
     /// Base64-encoded audio data.
@@ -99,6 +102,8 @@ public struct AudioContent: Codable, Hashable, Sendable {
     }
 }
 
+/// A resource included in full (e.g. attached file context) so the receiver
+/// can use it without a follow-up read.
 public struct EmbeddedResource: Codable, Hashable, Sendable {
     public var type = "resource"
     public var resource: ResourceContents
@@ -125,6 +130,7 @@ public struct ResourceContents: Codable, Hashable, Sendable {
     }
 }
 
+/// A reference to a resource by URI, without embedding its contents.
 public struct ResourceLink: Codable, Hashable, Sendable {
     public var type = "resource_link"
     public var uri: String

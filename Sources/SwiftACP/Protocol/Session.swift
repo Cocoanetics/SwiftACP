@@ -90,11 +90,18 @@ public struct LoadSessionRequest: Codable, Sendable {
 public struct LoadSessionResponse: Codable, Sendable {
     public var modes: SessionModeState?
     public var configOptions: [JSONValue]?
+    /// Legacy model advertisement (`{ currentModelId, availableModels }`), used
+    /// by agents like Codex that don't expose models as config options.
     public var models: JSONValue?
 
-    public init(modes: SessionModeState? = nil, configOptions: [JSONValue]? = nil) {
+    public init(
+        modes: SessionModeState? = nil,
+        configOptions: [JSONValue]? = nil,
+        models: JSONValue? = nil
+    ) {
         self.modes = modes
         self.configOptions = configOptions
+        self.models = models
     }
 }
 
@@ -189,11 +196,15 @@ public struct CancelNotification: Codable, Sendable {
 
 // MARK: - session modes
 
+/// The agent's mode menu for a session: which mode is active and which are
+/// available. Advertised on `session/new` / `session/load`.
 public struct SessionModeState: Codable, Hashable, Sendable {
     public var currentModeId: String
     public var availableModes: [SessionMode]
 }
 
+/// One operating mode the agent offers (e.g. "ask", "code"); switched with
+/// `session/set_mode` and reported back via `current_mode_update`.
 public struct SessionMode: Codable, Hashable, Sendable {
     public var id: String
     public var name: String

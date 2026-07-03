@@ -30,6 +30,9 @@ actor SessionTurnQueue {
                 waiters[sessionId, default: []].append((token, continuation))
             }
         } onCancel: {
+            // onCancel is synchronous — a Task is the only way onto the actor. If
+            // release() hands us the slot before drop() lands, drop() finds no
+            // matching token and is a no-op; the caller keeps the slot.
             Task { await self.drop(sessionId, token: token) }
         }
         // `release` hands ownership over directly (the session stays marked running);

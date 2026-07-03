@@ -17,11 +17,6 @@ enum HelpCatalog {
     private static let promptArg = HelpArgument("prompt", "[prompt...]", "Prompt text")
     private static let nameArg = HelpArgument("name", "[name]", "Session name")
 
-    /// The agent subcommands carried both at top level and under each agent.
-    static let agentSubcommandNames: Set<String> = [
-        "prompt", "exec", "cancel", "set-mode", "set", "status", "sessions"
-    ]
-
     // MARK: Root
 
     static func root(cwd: String) -> HelpScreen {

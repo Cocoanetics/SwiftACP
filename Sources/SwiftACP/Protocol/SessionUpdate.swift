@@ -114,6 +114,7 @@ public struct UsageUpdate: Codable, Sendable {
     /// `_meta`, which may carry a `usage` token breakdown.
     public var meta: JSONValue?
 
+    /// A cost amount plus its currency code.
     public struct UsageCost: Codable, Sendable {
         public var amount: Double?
         public var currency: String?
@@ -198,6 +199,7 @@ public struct ToolCallUpdate: Codable, Sendable {
     }
 }
 
+/// A file (and optional line) a tool call touches, letting clients follow along.
 public struct ToolCallLocation: Codable, Sendable, Hashable {
     public var path: String
     public var line: Int?
@@ -270,6 +272,8 @@ public enum ToolCallContent: Codable, Sendable {
 
 // MARK: - Plan
 
+/// One step in the agent's execution plan for the turn.
+/// https://agentclientprotocol.com/protocol/v1/agent-plan
 public struct PlanEntry: Codable, Sendable, Hashable {
     public var content: String
     public var priority: PlanEntryPriority?
@@ -284,6 +288,8 @@ public struct PlanEntry: Codable, Sendable, Hashable {
 
 // MARK: - Slash commands
 
+/// A slash command the agent accepts — invoked by sending a prompt whose text
+/// starts with `/name`.
 public struct AvailableCommand: Codable, Sendable {
     public var name: String
     public var description: String?

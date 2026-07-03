@@ -12,6 +12,10 @@ public enum ACPXPaths {
     /// `ACPX_HOME` environment variable (so the daemon can run against an isolated
     /// store) and settable directly in tests. The on-disk layout below is
     /// unchanged — only its root moves.
+    ///
+    /// `nonisolated(unsafe)`: production code never mutates this — it is initialized
+    /// once (from `ACPX_HOME` / `~/.acpx`) before any concurrent use and is read-only
+    /// after. Only tests reassign it, serialized process-wide via `withIsolatedStore`.
     public nonisolated(unsafe) static var baseDir: URL = defaultBaseDir()
 
     private static func defaultBaseDir() -> URL {

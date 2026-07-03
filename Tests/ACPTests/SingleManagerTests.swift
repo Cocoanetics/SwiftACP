@@ -107,6 +107,16 @@ import Testing
         }
     }
 
+    /// Yields once as soon as the group runs its services, then parks until
+    /// graceful shutdown — a deterministic "the group left `.initial`" signal.
+    private struct StartedSignal: Service {
+        let continuation: AsyncStream<Void>.Continuation
+        func run() async throws {
+            continuation.yield()
+            try await gracefulShutdown()
+        }
+    }
+
     @Test func daemonServiceReleasesLockOnGracefulShutdown() async throws {
         try await withIsolatedStore {
             let lock = DaemonLock()
@@ -115,15 +125,19 @@ import Testing
             // Run the daemon as a service, then ask the group to shut down gracefully:
             // it's torn down last and releases the lock once its run() returns.
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false, lock: lock)
+            let (started, startedContinuation) = AsyncStream<Void>.makeStream()
             let group = ServiceGroup(configuration: .init(
-                services: [.init(
-                    service: daemon, successTerminationBehavior: .gracefullyShutdownGroup,
-                    failureTerminationBehavior: .gracefullyShutdownGroup)],
+                services: [
+                    .init(
+                        service: daemon, successTerminationBehavior: .gracefullyShutdownGroup,
+                        failureTerminationBehavior: .gracefullyShutdownGroup),
+                    .init(service: StartedSignal(continuation: startedContinuation))
+                ],
                 logger: Logger(label: "test.acpxd")))
             let running = Task { try await group.run() }
-            // Let group.run() reach its running state first; triggering while it's
-            // still .initial would finish the group and make run() throw.
-            try await Task.sleep(nanoseconds: 200_000_000)
+            // Wait for a child service to actually run: triggering the shutdown
+            // while the group is still .initial would finish it and make run() throw.
+            for await _ in started { break }
             await group.triggerGracefulShutdown()
             try await running.value
             #expect(lock.currentHolder() == nil)

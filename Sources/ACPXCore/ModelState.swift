@@ -28,6 +28,9 @@ public enum ModelSupport {
         return ModelState(configId: id, currentModelId: currentValue, availableModels: available)
     }
 
+    /// Picks out the agent's model picker among generic config options: a `select`
+    /// whose `category` is `model`, or — for agents without categories — whose `id`
+    /// itself is `model`.
     private static func isModelSelectOption(_ option: [String: JSONValue]) -> Bool {
         guard case .string("select")? = option["type"] else { return false }
         if case .string("model")? = option["category"] { return true }

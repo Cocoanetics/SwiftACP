@@ -15,6 +15,7 @@ public struct RequestPermissionRequest: Codable, Sendable {
     }
 }
 
+/// One answer the agent offers for a permission request (e.g. "Allow once").
 public struct PermissionOption: Codable, Sendable, Hashable {
     public var optionId: String
     public var name: String
@@ -27,6 +28,7 @@ public struct PermissionOption: Codable, Sendable, Hashable {
     }
 }
 
+/// The client's decision on a permission request.
 public struct RequestPermissionResponse: Codable, Sendable {
     public var outcome: RequestPermissionOutcome
     public init(outcome: RequestPermissionOutcome) { self.outcome = outcome }
@@ -41,6 +43,8 @@ public struct RequestPermissionResponse: Codable, Sendable {
     }
 }
 
+/// How a permission request resolved: an option was selected, or the turn was
+/// cancelled before a choice was made.
 public enum RequestPermissionOutcome: Codable, Sendable {
     case cancelled
     case selected(optionId: String)
