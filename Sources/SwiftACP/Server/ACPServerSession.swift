@@ -39,6 +39,10 @@ public final class ACPServerSession: @unchecked Sendable {
     }
     /// Publish/replace the agent's plan for the turn.
     public func sendPlan(_ entries: [PlanEntry]) async { await update(.plan(entries)) }
+    /// Confirm the session's active mode (a `current_mode_update`). Send this from
+    /// ``ACPAgentHandler/setMode(_:session:)`` after a successful switch, or any
+    /// time the agent changes mode on its own.
+    public func sendModeUpdate(_ modeId: String) async { await update(.currentModeUpdate(modeId: modeId)) }
     /// Advertise the session's available slash commands (the client renders these
     /// as its slash menu). Send again to update the set.
     public func sendAvailableCommands(_ commands: [AvailableCommand]) async {

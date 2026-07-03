@@ -201,6 +201,11 @@ public struct CancelNotification: Codable, Sendable {
 public struct SessionModeState: Codable, Hashable, Sendable {
     public var currentModeId: String
     public var availableModes: [SessionMode]
+
+    public init(currentModeId: String, availableModes: [SessionMode]) {
+        self.currentModeId = currentModeId
+        self.availableModes = availableModes
+    }
 }
 
 /// One operating mode the agent offers (e.g. "ask", "code"); switched with
@@ -209,6 +214,12 @@ public struct SessionMode: Codable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var description: String?
+
+    public init(id: String, name: String, description: String? = nil) {
+        self.id = id
+        self.name = name
+        self.description = description
+    }
 }
 
 public struct SetSessionModeRequest: Codable, Sendable {
@@ -293,6 +304,23 @@ public extension NewSessionResponse {
         self.init(
             sessionId: sessionId, modes: modes, configOptions: configOptions,
             models: try? JSONValue(encoding: modelState), meta: meta
+        )
+    }
+}
+
+public extension LoadSessionResponse {
+    /// Re-advertise a typed model menu on `session/load`, encoding it into the
+    /// passthrough `models` field — the resume counterpart of
+    /// ``NewSessionResponse/init(sessionId:modelState:modes:configOptions:meta:)``
+    /// so a reconnecting client re-renders the same model/mode pickers.
+    init(
+        modelState: SessionModelState,
+        modes: SessionModeState? = nil,
+        configOptions: [JSONValue]? = nil
+    ) {
+        self.init(
+            modes: modes, configOptions: configOptions,
+            models: try? JSONValue(encoding: modelState)
         )
     }
 }

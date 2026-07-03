@@ -29,11 +29,19 @@ public protocol ACPAgentHandler: Sendable {
     /// to add side effects. Default: no-op.
     func cancel(sessionId: SessionId) async
 
-    /// Switch the session mode. Default: throws "not supported".
-    func setMode(_ request: SetSessionModeRequest) async throws
+    /// Switch the session mode (`session/set_mode`). The `session` handle lets the
+    /// handler confirm the change by streaming a `current_mode_update` (see
+    /// ``ACPServerSession/sendModeUpdate(_:)``). Throw to reject an unknown mode.
+    /// Default: throws "not supported".
+    func setMode(_ request: SetSessionModeRequest, session: ACPServerSession) async throws
 
-    /// Set a session config option. Default: throws "not supported".
-    func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
+    /// Set a session config option (`session/set_config_option`). Return the
+    /// agent's full set of config options after the change so the client can
+    /// re-render — an empty ``SetSessionConfigOptionResponse`` is fine when the
+    /// agent doesn't echo them back. Default: throws "not supported".
+    func setConfigOption(
+        _ request: SetSessionConfigOptionRequest, session: ACPServerSession
+    ) async throws -> SetSessionConfigOptionResponse
 
     /// Slash commands to advertise for a session — the server publishes them as an
     /// `available_commands_update` right after the session is created or loaded.
@@ -58,13 +66,15 @@ public extension ACPAgentHandler {
 
     func cancel(sessionId: SessionId) async {}
 
-    func setMode(_ request: SetSessionModeRequest) async throws {
+    func setMode(_ request: SetSessionModeRequest, session: ACPServerSession) async throws {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_mode is not supported")
     }
 
     func availableCommands(for sessionId: SessionId) async -> [AvailableCommand] { [] }
 
-    func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws {
+    func setConfigOption(
+        _ request: SetSessionConfigOptionRequest, session: ACPServerSession
+    ) async throws -> SetSessionConfigOptionResponse {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_config_option is not supported")
     }
 

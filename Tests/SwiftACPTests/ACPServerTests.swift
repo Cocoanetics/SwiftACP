@@ -1,4 +1,5 @@
 import Foundation
+import JSONFoundation
 import SwiftACP
 import Testing
 
@@ -26,7 +27,14 @@ struct ACPServerTests {
                     availableModels: [
                         ModelInfo(modelId: "test-model", name: "Test"),
                         ModelInfo(modelId: "alt-model", name: "Alt")
-                    ]))
+                    ]),
+                modes: SessionModeState(
+                    currentModeId: "code",
+                    availableModes: [
+                        SessionMode(id: "code", name: "Code"),
+                        SessionMode(id: "plan", name: "Plan", description: "Read-only")
+                    ]),
+                configOptions: [Self.verboseConfigOption(current: "off")])
         }
 
         func setModel(_ request: SetSessionModelRequest) async throws {
@@ -34,6 +42,39 @@ struct ACPServerTests {
             guard ["test-model", "alt-model"].contains(request.modelId) else {
                 throw JSONRPCErrorBody(code: -32602, message: "unknown model: \(request.modelId)")
             }
+        }
+
+        func setMode(_ request: SetSessionModeRequest, session: ACPServerSession) async throws {
+            guard ["code", "plan"].contains(request.modeId) else {
+                throw JSONRPCErrorBody(code: -32602, message: "unknown mode: \(request.modeId)")
+            }
+            // Confirm the switch by streaming a current_mode_update.
+            await session.sendModeUpdate(request.modeId)
+        }
+
+        func setConfigOption(
+            _ request: SetSessionConfigOptionRequest, session: ACPServerSession
+        ) async throws -> SetSessionConfigOptionResponse {
+            guard request.configId == "verbose", ["on", "off"].contains(request.value) else {
+                throw JSONRPCErrorBody(code: -32602, message: "bad config: \(request.configId)")
+            }
+            // Echo back the full option set reflecting the new value.
+            return SetSessionConfigOptionResponse(
+                configOptions: [Self.verboseConfigOption(current: request.value)])
+        }
+
+        /// A "select" config option acpx recognises (`type`/`id`/`currentValue`/`options`).
+        static func verboseConfigOption(current: String) -> JSONValue {
+            .object([
+                "id": .string("verbose"),
+                "type": .string("select"),
+                "name": .string("Verbose"),
+                "currentValue": .string(current),
+                "options": .array([
+                    .object(["id": .string("on"), "name": .string("On")]),
+                    .object(["id": .string("off"), "name": .string("Off")])
+                ])
+            ])
         }
 
         func prompt(_ request: PromptRequest, session: ACPServerSession) async throws -> PromptResponse {
@@ -233,6 +274,82 @@ struct ACPServerTests {
         await #expect(throws: (any Error).self) {
             try await client.setModel(
                 SetSessionModelRequest(sessionId: session.sessionId, modelId: "nope"))
+        }
+
+        await client.close()
+        serverTask.cancel()
+    }
+
+    @Test func newSessionAdvertisesModesAndSetModeEmitsUpdate() async throws {
+        let (client, serverTask) = await makePair()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+
+        let session = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
+        // The mode menu rides on the typed `modes` field.
+        #expect(session.modes?.currentModeId == "code")
+        #expect(session.modes?.availableModes.map(\.id) == ["code", "plan"])
+
+        // Subscribe so we catch the current_mode_update the handler streams back.
+        let (subscriptionId, stream) = await client.makeSubscription()
+        let modeUpdate = Task { () -> String? in
+            for await note in stream where note.sessionId == session.sessionId {
+                if case .currentModeUpdate(let modeId) = note.update { return modeId }
+            }
+            return nil
+        }
+
+        try await client.setMode(SetSessionModeRequest(sessionId: session.sessionId, modeId: "plan"))
+        let received = await modeUpdate.value
+        await client.endSubscription(subscriptionId)
+        #expect(received == "plan")
+
+        // An unknown mode surfaces the handler's rejection.
+        await #expect(throws: (any Error).self) {
+            try await client.setMode(
+                SetSessionModeRequest(sessionId: session.sessionId, modeId: "nope"))
+        }
+
+        await client.close()
+        serverTask.cancel()
+    }
+
+    @Test func setConfigOptionReturnsUpdatedOptions() async throws {
+        let (client, serverTask) = await makePair()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+        let session = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
+
+        // The advertised option starts at "off".
+        let advertised = session.configOptions?.first
+        #expect(advertised?["id"]?.stringValue == "verbose")
+        #expect(advertised?["currentValue"]?.stringValue == "off")
+
+        // Setting it round-trips the full updated option set (not an empty response).
+        let response = try await client.setConfigOption(
+            SetSessionConfigOptionRequest(sessionId: session.sessionId, configId: "verbose", value: "on"))
+        #expect(response.configOptions?.first?["currentValue"]?.stringValue == "on")
+
+        // A bad option is rejected.
+        await #expect(throws: (any Error).self) {
+            _ = try await client.setConfigOption(
+                SetSessionConfigOptionRequest(sessionId: session.sessionId, configId: "verbose", value: "maybe"))
+        }
+
+        await client.close()
+        serverTask.cancel()
+    }
+
+    @Test func sessionControlsOnUnknownSessionError() async throws {
+        let (client, serverTask) = await makePair()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+
+        // set_mode / set_config_option before any session/new must not crash the
+        // server — they surface an "unknown session" JSON-RPC error.
+        await #expect(throws: (any Error).self) {
+            try await client.setMode(SetSessionModeRequest(sessionId: "ghost", modeId: "plan"))
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await client.setConfigOption(
+                SetSessionConfigOptionRequest(sessionId: "ghost", configId: "verbose", value: "on"))
         }
 
         await client.close()
