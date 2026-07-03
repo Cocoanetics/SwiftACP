@@ -2,8 +2,8 @@ import Foundation
 import JSONFoundation
 import JSONRPCPeer
 #if os(macOS) || os(Linux) || os(Windows)
-import JSONRPCWire
 import JSONRPCSubprocess
+import JSONRPCWire
 #endif
 
 /// Serves an ``ACPAgentHandler`` over a `JSONRPCMessageTransport`.
@@ -131,9 +131,7 @@ public actor ACPAgentServer {
 
     private func onPrompt(_ params: JSONValue?) async throws -> JSONValue {
         let request: PromptRequest = try decode(params)
-        guard let session = sessions[request.sessionId] else {
-            throw JSONRPCErrorBody(code: -32602, message: "Unknown session: \(request.sessionId)")
-        }
+        let session = try session(for: request.sessionId)
         // Run the turn as a cancellable task so `session/cancel` can interrupt it
         // (actor reentrancy lets the cancel notification land while we await).
         let task = Task { try await handler.prompt(request, session: session) }
@@ -148,14 +146,24 @@ public actor ACPAgentServer {
 
     private func onSetMode(_ params: JSONValue?) async throws -> JSONValue {
         let request: SetSessionModeRequest = try decode(params)
-        try await handler.setMode(request)
+        try await handler.setMode(request, session: session(for: request.sessionId))
         return .object([:])
     }
 
     private func onSetConfigOption(_ params: JSONValue?) async throws -> JSONValue {
         let request: SetSessionConfigOptionRequest = try decode(params)
-        try await handler.setConfigOption(request)
-        return .object([:])
+        let response = try await handler.setConfigOption(
+            request, session: session(for: request.sessionId))
+        return try encode(response)
+    }
+
+    /// The live ``ACPServerSession`` for `id`, or a JSON-RPC error if the client
+    /// addressed a session it never opened (or that a fresh process doesn't know).
+    private func session(for id: SessionId) throws -> ACPServerSession {
+        guard let session = sessions[id] else {
+            throw JSONRPCErrorBody(code: -32602, message: "Unknown session: \(id)")
+        }
+        return session
     }
 
     private func onSetModel(_ params: JSONValue?) async throws -> JSONValue {
