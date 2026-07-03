@@ -32,16 +32,33 @@ public protocol ACPAgentHandler: Sendable {
     /// Switch the session mode (`session/set_mode`). The `session` handle lets the
     /// handler confirm the change by streaming a `current_mode_update` (see
     /// ``ACPServerSession/sendModeUpdate(_:)``). Throw to reject an unknown mode.
-    /// Default: throws "not supported".
+    /// Default: forwards to the legacy ``setMode(_:)-hook`` (which itself defaults
+    /// to "not supported"), so an agent that only overrode the legacy hook keeps
+    /// working after upgrading.
     func setMode(_ request: SetSessionModeRequest, session: ACPServerSession) async throws
+
+    /// Legacy `session/set_mode` hook without the session handle. Prefer
+    /// ``setMode(_:session:)``; this stays so an agent that implemented the older
+    /// signature is still invoked (the session-aware default forwards here).
+    /// Default: throws "not supported".
+    func setMode(_ request: SetSessionModeRequest) async throws
 
     /// Set a session config option (`session/set_config_option`). Return the
     /// agent's full set of config options after the change so the client can
     /// re-render — an empty ``SetSessionConfigOptionResponse`` is fine when the
-    /// agent doesn't echo them back. Default: throws "not supported".
+    /// agent doesn't echo them back. Default: forwards to the legacy
+    /// ``setConfigOption(_:)-hook`` (which defaults to "not supported"), so an
+    /// agent that only overrode the legacy hook keeps working after upgrading.
     func setConfigOption(
         _ request: SetSessionConfigOptionRequest, session: ACPServerSession
     ) async throws -> SetSessionConfigOptionResponse
+
+    /// Legacy `session/set_config_option` hook without the session handle and with
+    /// no return value. Prefer ``setConfigOption(_:session:)``; this stays so an
+    /// agent that implemented the older signature is still invoked (the
+    /// session-aware default forwards here, then replies with an empty option set).
+    /// Default: throws "not supported".
+    func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
 
     /// Slash commands to advertise for a session — the server publishes them as an
     /// `available_commands_update` right after the session is created or loaded.
@@ -66,7 +83,15 @@ public extension ACPAgentHandler {
 
     func cancel(sessionId: SessionId) async {}
 
+    // The session-aware variants forward to the legacy hooks by default, so an
+    // agent that overrode only `setMode(_:)` / `setConfigOption(_:)` before this
+    // release is still invoked. An agent adopting the session-aware signature
+    // overrides these directly and the forward never runs.
     func setMode(_ request: SetSessionModeRequest, session: ACPServerSession) async throws {
+        try await setMode(request)
+    }
+
+    func setMode(_ request: SetSessionModeRequest) async throws {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_mode is not supported")
     }
 
@@ -75,6 +100,11 @@ public extension ACPAgentHandler {
     func setConfigOption(
         _ request: SetSessionConfigOptionRequest, session: ACPServerSession
     ) async throws -> SetSessionConfigOptionResponse {
+        try await setConfigOption(request)
+        return SetSessionConfigOptionResponse()
+    }
+
+    func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws {
         throw JSONRPCErrorBody(code: -32601, message: "session/set_config_option is not supported")
     }
 

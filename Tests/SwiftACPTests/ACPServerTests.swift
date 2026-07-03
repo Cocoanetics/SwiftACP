@@ -118,11 +118,44 @@ struct ACPServerTests {
         }
     }
 
+    /// A handler that overrides only the *legacy* `setMode(_:)` / `setConfigOption(_:)`
+    /// hooks (no session handle) — as an agent written against the pre-session-aware
+    /// API would. The server dispatches to the session-aware variants, whose defaults
+    /// must forward here, so these overrides still run after upgrading.
+    struct LegacyHandler: ACPAgentHandler {
+        func initialize(_ request: InitializeRequest) async -> InitializeResponse {
+            InitializeResponse(agentInfo: Implementation(name: "legacy", version: "0.1.0"))
+        }
+
+        func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
+            NewSessionResponse(sessionId: "legacy-1")
+        }
+
+        func prompt(_ request: PromptRequest, session: ACPServerSession) async throws -> PromptResponse {
+            PromptResponse(stopReason: .endTurn)
+        }
+
+        func setMode(_ request: SetSessionModeRequest) async throws {
+            // Accept only "plan"; the default (unoverridden) would reject everything.
+            guard request.modeId == "plan" else {
+                throw JSONRPCErrorBody(code: -32602, message: "legacy rejects \(request.modeId)")
+            }
+        }
+
+        func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws {
+            guard request.configId == "verbose" else {
+                throw JSONRPCErrorBody(code: -32602, message: "legacy rejects \(request.configId)")
+            }
+        }
+    }
+
     /// Spin up a connected client↔server pair over a loopback transport. The
     /// returned task retains the server for the test's lifetime.
-    private func makePair() async -> (client: ACPAgentConnection, serverTask: Task<Void, Error>) {
+    private func makePair(
+        _ handler: some ACPAgentHandler = EchoHandler()
+    ) async -> (client: ACPAgentConnection, serverTask: Task<Void, Error>) {
         let (clientTransport, serverTransport) = LoopbackTransport.pair()
-        let server = ACPAgentServer(handler: EchoHandler(), transport: serverTransport)
+        let server = ACPAgentServer(handler: handler, transport: serverTransport)
         let serverTask = Task { try await server.run() }
         let client = ACPAgentConnection(
             transport: clientTransport, handlers: .standard(permission: .approveAll))
@@ -332,6 +365,31 @@ struct ACPServerTests {
         await #expect(throws: (any Error).self) {
             _ = try await client.setConfigOption(
                 SetSessionConfigOptionRequest(sessionId: session.sessionId, configId: "verbose", value: "maybe"))
+        }
+
+        await client.close()
+        serverTask.cancel()
+    }
+
+    @Test func legacySessionControlHooksStillDispatch() async throws {
+        // An agent that overrode only the pre-session-aware hooks must keep working:
+        // the server's session-aware call forwards to the legacy override.
+        let (client, serverTask) = await makePair(LegacyHandler())
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+        let session = try await client.newSession(NewSessionRequest(cwd: "/tmp"))
+
+        // Reaches the legacy setMode override (default would reject every mode).
+        try await client.setMode(SetSessionModeRequest(sessionId: session.sessionId, modeId: "plan"))
+        // Reaches the legacy setConfigOption override; the session-aware default
+        // wraps its Void result in an empty response.
+        let response = try await client.setConfigOption(
+            SetSessionConfigOptionRequest(sessionId: session.sessionId, configId: "verbose", value: "on"))
+        #expect(response.configOptions == nil)
+
+        // The legacy override's own rejection still surfaces (proving it ran, not
+        // the "not supported" default).
+        await #expect(throws: (any Error).self) {
+            try await client.setMode(SetSessionModeRequest(sessionId: session.sessionId, modeId: "code"))
         }
 
         await client.close()
