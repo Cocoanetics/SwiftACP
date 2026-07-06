@@ -100,13 +100,12 @@ public enum AgentRegistry {
     ) -> ProcessLaunch {
         let key = normalize(name)
         // codex-acp only reaches a system codex through `CODEX_PATH`; when the
-        // caller hasn't set one, point it at a `codex` on `PATH` (see
-        // ``injectingCodexPath(codexBinary:environment:)``). Gated on the codex key
-        // so other agents don't pay for the `PATH` scan.
+        // caller hasn't set one, point it at a `codex` on the child's `PATH` (see
+        // ``injectingCodexPath(environment:resolveCodex:)``). Gated on the codex
+        // key, and the helper only scans when `CODEX_PATH` is absent, so no other
+        // launch pays for the `PATH` scan.
         let environment =
-            key == "codex"
-            ? injectingCodexPath(codexBinary: which("codex"), environment: environment)
-            : environment
+            key == "codex" ? injectingCodexPath(environment: environment) : environment
 
         if let binary = preferredBinaries[key], let path = which(binary) {
             return ProcessLaunch(
@@ -130,22 +129,29 @@ public enum AgentRegistry {
     /// `login` subcommand does). The bundled build can lag the installed codex
     /// and — under macOS XProtect def 5347 — has been quarantined as a false
     /// positive, so `initialize` dies with an opaque "Codex process has exited
-    /// with code 1". When `CODEX_PATH` isn't already set and `codexBinary` names a
-    /// `codex` found on `PATH`, point the adapter at it; an explicit `CODEX_PATH`
-    /// (including one deliberately pointing at the bundled build) always wins.
+    /// with code 1". When `CODEX_PATH` isn't already set and a `codex` is found,
+    /// point the adapter at it; an explicit `CODEX_PATH` (including one
+    /// deliberately pointing at the bundled build) always wins and short-circuits
+    /// the lookup entirely — so a configured launch never pays for a `PATH` scan.
     ///
-    /// A non-`nil` environment is a *full replacement* for the child (see
-    /// `ProcessLaunch`), so a `nil` environment is materialized from the parent
-    /// before adding the key — preserving inherit semantics. Pure so it can be
-    /// tested without touching `PATH`. See issue #11 / openclaw/acpx#434.
+    /// `resolveCodex` locates a `codex` given the `PATH` the child will run with
+    /// (not the parent's, which can differ for a caller-supplied environment); it
+    /// defaults to a `PATH` scan and is injectable so the wiring can be tested
+    /// without touching the filesystem. A non-`nil` environment is a *full
+    /// replacement* for the child (see `ProcessLaunch`), so a `nil` (inherit)
+    /// environment is only materialized when a key is actually added — the
+    /// unchanged cases return the original, preserving inherit semantics. See
+    /// issue #11 / openclaw/acpx#434.
     public static func injectingCodexPath(
-        codexBinary: String?, environment: [String: String]?
+        environment: [String: String]?,
+        resolveCodex: (_ searchPath: String?) -> String? = { which("codex", in: $0) }
     ) -> [String: String]? {
-        guard let codexBinary else { return environment }
-        var environment = environment ?? ProcessInfo.processInfo.environment
-        guard environment["CODEX_PATH"] == nil else { return environment }
-        environment["CODEX_PATH"] = codexBinary
-        return environment
+        let resolved = environment ?? ProcessInfo.processInfo.environment
+        guard resolved["CODEX_PATH"] == nil else { return environment }
+        guard let codex = resolveCodex(resolved["PATH"]) else { return environment }
+        var augmented = resolved
+        augmented["CODEX_PATH"] = codex
+        return augmented
     }
 
     /// Split a command line on whitespace, honouring simple single/double quotes.
@@ -179,9 +185,13 @@ public enum AgentRegistry {
         return tokens
     }
 
-    /// Locate an executable by name on `PATH`.
-    public static func which(_ command: String) -> String? {
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+    /// Locate an executable by name on a `PATH`.
+    ///
+    /// `searchPath` defaults to this process's `PATH`; pass the `PATH` of the
+    /// environment a child will actually run with when they can differ (e.g. the
+    /// codex lookup searches the spawned agent's `PATH`, not the parent's).
+    public static func which(_ command: String, in searchPath: String? = nil) -> String? {
+        let path = searchPath ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         for directory in path.split(separator: ":") {
             let candidate = "\(directory)/\(command)"
             if FileManager.default.isExecutableFile(atPath: candidate) {
