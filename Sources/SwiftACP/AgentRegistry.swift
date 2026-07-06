@@ -8,10 +8,17 @@ import JSONRPCWire
 /// `npx`; if their adapter binary is already on `PATH` we prefer it to avoid the
 /// npx resolution step. Ported from acpx's `agent-registry.ts`.
 public enum AgentRegistry {
-    /// Pinned adapter package ranges (kept in sync with upstream acpx).
+    /// Pinned adapter package ranges. Mirrors upstream acpx, except `codex` is
+    /// intentionally bumped ahead: acpx still pins `^0.0.44`, whose bundled
+    /// `@openai/codex` (0.128.0) fails `initialize` with an opaque "Codex process
+    /// has exited with code 1" because macOS XProtect (def 5347) quarantines that
+    /// build as a false positive. `^1.1.0` bundles codex 0.142.x, which is not
+    /// flagged. The ``launch(for:cwd:environment:inheritStderr:overrides:)``
+    /// `CODEX_PATH` fallback covers this independently whenever a system `codex`
+    /// is installed. See issue #11 / openclaw/acpx#434.
     public enum PackageRange {
         public static let claude = "^0.37.0"
-        public static let codex = "^0.0.44"
+        public static let codex = "^1.1.0"
         public static let mux = "^0.27.0"
         public static let pi = "^0.0.26"
     }
@@ -19,7 +26,8 @@ public enum AgentRegistry {
     /// agent name → launch command line, in registry declaration order — the
     /// same order acpx lists them under `Commands:` in `--help`. Swift's
     /// `Dictionary` is unordered, so the ordered array is the source of truth and
-    /// ``builtIn`` is derived from it. Mirrors acpx's `AGENT_REGISTRY` verbatim.
+    /// ``builtIn`` is derived from it. Mirrors acpx's `AGENT_REGISTRY` (the
+    /// `codex` adapter range is bumped ahead of acpx — see ``PackageRange``).
     public static let ordered: [(name: String, command: String)] = [
         ("pi", "npx pi-acp@\(PackageRange.pi)"),
         ("openclaw", "openclaw acp"),
@@ -91,6 +99,13 @@ public enum AgentRegistry {
         overrides: [String: String] = [:]
     ) -> ProcessLaunch {
         let key = normalize(name)
+        // codex-acp only reaches a system codex through `CODEX_PATH`; when the
+        // caller hasn't set one, point it at a `codex` on the child's `PATH` (see
+        // ``injectingCodexPath(environment:resolveCodex:)``). Gated on the codex
+        // key, and the helper only scans when `CODEX_PATH` is absent, so no other
+        // launch pays for the `PATH` scan.
+        let environment =
+            key == "codex" ? injectingCodexPath(environment: environment) : environment
 
         if let binary = preferredBinaries[key], let path = which(binary) {
             return ProcessLaunch(
@@ -105,6 +120,38 @@ public enum AgentRegistry {
         return ProcessLaunch(
             executable: executable, arguments: arguments, environment: environment,
             workingDirectory: cwd, inheritStderr: inheritStderr)
+    }
+
+    /// Point the codex adapter at a system `codex` when the caller hasn't.
+    ///
+    /// `codex-acp` spawns its *bundled* `@openai/codex` unless `CODEX_PATH` is
+    /// set, and its ACP-server path never searches `PATH` itself (only its
+    /// `login` subcommand does). The bundled build can lag the installed codex
+    /// and — under macOS XProtect def 5347 — has been quarantined as a false
+    /// positive, so `initialize` dies with an opaque "Codex process has exited
+    /// with code 1". When `CODEX_PATH` isn't already set and a `codex` is found,
+    /// point the adapter at it; an explicit `CODEX_PATH` (including one
+    /// deliberately pointing at the bundled build) always wins and short-circuits
+    /// the lookup entirely — so a configured launch never pays for a `PATH` scan.
+    ///
+    /// `resolveCodex` locates a `codex` given the `PATH` the child will run with
+    /// (not the parent's, which can differ for a caller-supplied environment); it
+    /// defaults to a `PATH` scan and is injectable so the wiring can be tested
+    /// without touching the filesystem. A non-`nil` environment is a *full
+    /// replacement* for the child (see `ProcessLaunch`), so a `nil` (inherit)
+    /// environment is only materialized when a key is actually added — the
+    /// unchanged cases return the original, preserving inherit semantics. See
+    /// issue #11 / openclaw/acpx#434.
+    public static func injectingCodexPath(
+        environment: [String: String]?,
+        resolveCodex: (_ searchPath: String?) -> String? = { which("codex", in: $0) }
+    ) -> [String: String]? {
+        let resolved = environment ?? ProcessInfo.processInfo.environment
+        guard resolved["CODEX_PATH"] == nil else { return environment }
+        guard let codex = resolveCodex(resolved["PATH"]) else { return environment }
+        var augmented = resolved
+        augmented["CODEX_PATH"] = codex
+        return augmented
     }
 
     /// Split a command line on whitespace, honouring simple single/double quotes.
@@ -138,9 +185,13 @@ public enum AgentRegistry {
         return tokens
     }
 
-    /// Locate an executable by name on `PATH`.
-    public static func which(_ command: String) -> String? {
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+    /// Locate an executable by name on a `PATH`.
+    ///
+    /// `searchPath` defaults to this process's `PATH`; pass the `PATH` of the
+    /// environment a child will actually run with when they can differ (e.g. the
+    /// codex lookup searches the spawned agent's `PATH`, not the parent's).
+    public static func which(_ command: String, in searchPath: String? = nil) -> String? {
+        let path = searchPath ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         for directory in path.split(separator: ":") {
             let candidate = "\(directory)/\(command)"
             if FileManager.default.isExecutableFile(atPath: candidate) {
