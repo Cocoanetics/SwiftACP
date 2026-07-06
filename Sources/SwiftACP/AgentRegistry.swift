@@ -8,10 +8,17 @@ import JSONRPCWire
 /// `npx`; if their adapter binary is already on `PATH` we prefer it to avoid the
 /// npx resolution step. Ported from acpx's `agent-registry.ts`.
 public enum AgentRegistry {
-    /// Pinned adapter package ranges (kept in sync with upstream acpx).
+    /// Pinned adapter package ranges. Mirrors upstream acpx, except `codex` is
+    /// intentionally bumped ahead: acpx still pins `^0.0.44`, whose bundled
+    /// `@openai/codex` (0.128.0) fails `initialize` with an opaque "Codex process
+    /// has exited with code 1" because macOS XProtect (def 5347) quarantines that
+    /// build as a false positive. `^1.1.0` bundles codex 0.142.x, which is not
+    /// flagged. The ``launch(for:cwd:environment:inheritStderr:overrides:)``
+    /// `CODEX_PATH` fallback covers this independently whenever a system `codex`
+    /// is installed. See issue #11 / openclaw/acpx#434.
     public enum PackageRange {
         public static let claude = "^0.37.0"
-        public static let codex = "^0.0.44"
+        public static let codex = "^1.1.0"
         public static let mux = "^0.27.0"
         public static let pi = "^0.0.26"
     }
@@ -19,7 +26,8 @@ public enum AgentRegistry {
     /// agent name → launch command line, in registry declaration order — the
     /// same order acpx lists them under `Commands:` in `--help`. Swift's
     /// `Dictionary` is unordered, so the ordered array is the source of truth and
-    /// ``builtIn`` is derived from it. Mirrors acpx's `AGENT_REGISTRY` verbatim.
+    /// ``builtIn`` is derived from it. Mirrors acpx's `AGENT_REGISTRY` (the
+    /// `codex` adapter range is bumped ahead of acpx — see ``PackageRange``).
     public static let ordered: [(name: String, command: String)] = [
         ("pi", "npx pi-acp@\(PackageRange.pi)"),
         ("openclaw", "openclaw acp"),
@@ -91,6 +99,14 @@ public enum AgentRegistry {
         overrides: [String: String] = [:]
     ) -> ProcessLaunch {
         let key = normalize(name)
+        // codex-acp only reaches a system codex through `CODEX_PATH`; when the
+        // caller hasn't set one, point it at a `codex` on `PATH` (see
+        // ``injectingCodexPath(codexBinary:environment:)``). Gated on the codex key
+        // so other agents don't pay for the `PATH` scan.
+        let environment =
+            key == "codex"
+            ? injectingCodexPath(codexBinary: which("codex"), environment: environment)
+            : environment
 
         if let binary = preferredBinaries[key], let path = which(binary) {
             return ProcessLaunch(
@@ -105,6 +121,31 @@ public enum AgentRegistry {
         return ProcessLaunch(
             executable: executable, arguments: arguments, environment: environment,
             workingDirectory: cwd, inheritStderr: inheritStderr)
+    }
+
+    /// Point the codex adapter at a system `codex` when the caller hasn't.
+    ///
+    /// `codex-acp` spawns its *bundled* `@openai/codex` unless `CODEX_PATH` is
+    /// set, and its ACP-server path never searches `PATH` itself (only its
+    /// `login` subcommand does). The bundled build can lag the installed codex
+    /// and — under macOS XProtect def 5347 — has been quarantined as a false
+    /// positive, so `initialize` dies with an opaque "Codex process has exited
+    /// with code 1". When `CODEX_PATH` isn't already set and `codexBinary` names a
+    /// `codex` found on `PATH`, point the adapter at it; an explicit `CODEX_PATH`
+    /// (including one deliberately pointing at the bundled build) always wins.
+    ///
+    /// A non-`nil` environment is a *full replacement* for the child (see
+    /// `ProcessLaunch`), so a `nil` environment is materialized from the parent
+    /// before adding the key — preserving inherit semantics. Pure so it can be
+    /// tested without touching `PATH`. See issue #11 / openclaw/acpx#434.
+    public static func injectingCodexPath(
+        codexBinary: String?, environment: [String: String]?
+    ) -> [String: String]? {
+        guard let codexBinary else { return environment }
+        var environment = environment ?? ProcessInfo.processInfo.environment
+        guard environment["CODEX_PATH"] == nil else { return environment }
+        environment["CODEX_PATH"] = codexBinary
+        return environment
     }
 
     /// Split a command line on whitespace, honouring simple single/double quotes.
