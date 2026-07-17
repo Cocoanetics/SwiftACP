@@ -17,6 +17,11 @@ public struct SessionNotification: Codable, Sendable {
 /// https://agentclientprotocol.com/protocol/v1/prompt-turn
 public enum SessionUpdate: Codable, Sendable {
     case agentMessageChunk(ContentBlock)
+    /// The agent's thinking stream, forwarded verbatim — no normalization, matching
+    /// codex-acp and the original acpx. Codex ends every reasoning summary with a
+    /// bare `<!-- -->` (present in its own rollout files, upstream of any ACP layer).
+    /// That marker is invisible when rendered as Markdown; clients that display
+    /// thoughts as plain text should strip standalone empty HTML comments themselves.
     case agentThoughtChunk(ContentBlock)
     case userMessageChunk(ContentBlock)
     case toolCall(ToolCall)
