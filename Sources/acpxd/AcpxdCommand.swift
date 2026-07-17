@@ -35,7 +35,13 @@ struct AcpxdCommand: AsyncParsableCommand {
         help: "Inherit spawned agents' stderr (surfaces agent diagnostics like rate-limit messages).")
     var verbose = false
 
+    // The transports acpxd serves over (TCPBonjourTransport, HTTPSSETransport) are
+    // compiled out of SwiftMCP when SwiftACP's `Server` trait is disabled, but SwiftPM
+    // can't conditionally declare the executable target itself — so a client-only
+    // consumer (`traits: []`) still builds acpxd as part of the full graph. Guarding
+    // the body keeps that build green; the daemon then refuses to run if invoked.
     func run() async throws {
+        #if Server
         bootstrapACPXLogging()
         let log = Logger(label: "com.cocoanetics.acpx.acpxd")
 
@@ -108,6 +114,12 @@ struct AcpxdCommand: AsyncParsableCommand {
                 gracefulShutdownSignals: [.sigterm, .sigint],
                 logger: log))
         try await group.run()
+        #else
+        throw ValidationError("""
+            acpxd was built without the 'Server' trait; rebuild SwiftACP with the \
+            Server trait enabled to run the daemon.
+            """)
+        #endif
     }
 }
 
