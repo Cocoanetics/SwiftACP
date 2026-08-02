@@ -284,7 +284,8 @@ public struct ACPSession: Sendable {
             let response = try await prompt(blocks, meta: meta)
             await agent.connection.endSubscription(subscriptionId)
             await consumer.value
-            return await PromptOutcome(stopReason: response.stopReason, text: collector.text)
+            return await PromptOutcome(
+                stopReason: response.stopReason, text: collector.text, usage: response.usage)
         } catch {
             await agent.connection.endSubscription(subscriptionId)
             consumer.cancel()
@@ -316,6 +317,15 @@ public struct PromptOutcome: Sendable {
     public var stopReason: StopReason
     /// Concatenation of all `agent_message_chunk` text for the turn.
     public var text: String
+    /// The session's cumulative token counters from the prompt response, when
+    /// the agent reports them (Claude Code's adapter does; Codex sends none).
+    public var usage: PromptUsage?
+
+    public init(stopReason: StopReason, text: String, usage: PromptUsage? = nil) {
+        self.stopReason = stopReason
+        self.text = text
+        self.usage = usage
+    }
 }
 
 /// A tiny actor that accumulates streamed text without data races.
