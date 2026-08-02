@@ -68,7 +68,7 @@ struct AcpxdCommand: AsyncParsableCommand {
         // termination behaviors are graceful so even a transport *failure* unwinds in
         // that order, rather than cancelling every task concurrently (which could drop
         // the lock while a transport is still draining).
-        let bonjour = TCPBonjourTransport(server: daemon, serviceName: "acpx")
+        let bonjour = TCPBonjourTransport(server: daemon, instanceName: "acpx")
         var services: [ServiceGroupConfiguration.ServiceConfiguration] = [
             .init(
                 service: backend, successTerminationBehavior: .gracefullyShutdownGroup,
