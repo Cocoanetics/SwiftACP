@@ -40,7 +40,9 @@ enum ExecCommand {
                 inheritStderr: flags.verbose, onClientRequest: onClientRequest)
             do {
                 let session = try await handle.newSession(meta: meta)
-                let outcome = try await session.run(promptText) { renderer.render($0) }
+                let outcome = try await session.run(
+                    promptText, onUpdate: { renderer.render($0) },
+                    onClientOperation: { renderer.clientOperation($0) })
                 renderer.finish(stopReason: outcome.stopReason)
                 await handle.close()
                 return outcome.stopReason == .refusal ? ExitCodes.error : ExitCodes.success

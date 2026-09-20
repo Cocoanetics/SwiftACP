@@ -31,7 +31,11 @@ struct RenderOptions: Sendable {
 final class OutputRenderer: @unchecked Sendable {
     private let options: RenderOptions
     private let lock = NSLock()
-    private let useColor = isatty(fileno(stdout)) != 0
+    /// Where the transcript (stdout) and the quiet-mode notices (stderr) go — the
+    /// console by default; tests capture them.
+    private let out: @Sendable (String) -> Void
+    private let err: @Sendable (String) -> Void
+    private let useColor: Bool
 
     // Text-mode state
     private var toolStates: [String: ToolRenderState] = [:]
@@ -42,8 +46,16 @@ final class OutputRenderer: @unchecked Sendable {
     // Quiet-mode buffer
     private var quietChunks: [String] = []
 
-    init(options: RenderOptions) {
+    init(
+        options: RenderOptions,
+        out: @escaping @Sendable (String) -> Void = Console.out,
+        err: @escaping @Sendable (String) -> Void = Console.err,
+        color: Bool? = nil
+    ) {
         self.options = options
+        self.out = out
+        self.err = err
+        self.useColor = color ?? (isatty(fileno(stdout)) != 0)
     }
 
     // MARK: Entry points
@@ -52,7 +64,7 @@ final class OutputRenderer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         switch options.format {
-        case .json: Console.out(encodeLineJSON(update) + "\n")
+        case .json: out(encodeLineJSON(update) + "\n")
         case .quiet: renderQuiet(update)
         case .text: renderText(update)
         }
@@ -63,7 +75,7 @@ final class OutputRenderer: @unchecked Sendable {
         defer { lock.unlock() }
         switch options.format {
         case .json:
-            Console.out(encodeLineJSON(["stopReason": stopReason.rawValue]) + "\n")
+            out(encodeLineJSON(["stopReason": stopReason.rawValue]) + "\n")
         case .quiet:
             flushQuiet()
         case .text:
@@ -84,6 +96,39 @@ final class OutputRenderer: @unchecked Sendable {
         flushThoughtBuffer()
         beginSection()
         writeLine("\(bold("[client]")) \(method) (\(colorStatus("running", nil)))")
+    }
+
+    /// Render a client-side operation the connection reported during the turn —
+    /// today a permission notice: the refusal it sent Codex may end the turn (see
+    /// `CodexCompat`). Mirrors acpx's formatters: text mode prints
+    /// `[permission] <notice>` (any other operation as `[client] <summary> (<status>)`
+    /// plus its details), quiet mode writes `[acpx] permission: <notice>` to stderr
+    /// on one line, and JSON mode emits the operation as a line.
+    func clientOperation(_ operation: ClientOperation) {
+        lock.lock()
+        defer { lock.unlock() }
+        let isPermissionNotice = operation.method == ClientOperation.requestPermission
+        switch options.format {
+        case .json:
+            out(encodeLineJSON(operation) + "\n")
+        case .quiet:
+            guard isPermissionNotice else { return }
+            let oneLine = normalizeLineEndings(operation.summary).replacingOccurrences(of: "\n", with: " ")
+            err("[acpx] permission: \(oneLine)\n")
+        case .text:
+            flushThoughtBuffer()
+            beginSection()
+            if isPermissionNotice {
+                writeLine("\(bold("[permission]")) \(operation.summary)")
+                return
+            }
+            writeLine("\(bold("[client]")) \(operation.summary) (\(colorStatus(operation.status)))")
+            if let details = operation.details,
+                !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                writeLine("  details:")
+                writeLine(indentBlock(details, "    "))
+            }
+        }
     }
 
     /// Render a turn failure as `[error] <code>: <message>` (text mode only).
@@ -114,7 +159,7 @@ final class OutputRenderer: @unchecked Sendable {
 
     private func flushQuiet() {
         let text = quietChunks.joined()
-        Console.out(text.hasSuffix("\n") ? text : text + "\n")
+        out(text.hasSuffix("\n") ? text : text + "\n")
     }
 
     // MARK: Text mode
@@ -254,7 +299,7 @@ final class OutputRenderer: @unchecked Sendable {
 
     private func write(_ chunk: String) {
         guard !chunk.isEmpty else { return }
-        Console.out(chunk)
+        out(chunk)
         wroteAny = true
         atLineStart = chunk.hasSuffix("\n")
     }
@@ -279,6 +324,13 @@ final class OutputRenderer: @unchecked Sendable {
         case .some(.completed): return ansi(text, "32")
         case .some(.failed): return ansi(text, "31")
         default: return ansi(text, "33")
+        }
+    }
+    private func colorStatus(_ status: ClientOperationStatus) -> String {
+        switch status {
+        case .completed: return ansi(status.rawValue, "32")
+        case .failed: return ansi(status.rawValue, "31")
+        default: return ansi(status.rawValue, "33")
         }
     }
 }

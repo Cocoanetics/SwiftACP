@@ -371,23 +371,37 @@ actor ACPXDaemonBackend: ACPXBackend {
         // it into the event log on each checkpoint. Cleared when the turn ends.
         await connection.setWireObserver { line in eventBuffer.append(line) }
 
-        // Subscribe before prompting so no update is missed, then drain the
+        // Subscribe before prompting so no event is missed, then drain the
         // subscription deterministically: ending it (after `prompt` returns)
         // finishes the stream, so the consumer task completes having sent every
-        // update — in order — and built the agent's message content for the turn.
-        let (subscriptionId, stream) = await connection.makeSubscription()
+        // event — in order — and built the agent's message content for the turn.
+        let (subscriptionId, stream) = await connection.makeEventSubscription()
         let consumer = Task { () -> String in
             // Accumulate the full streamed text for the MCP result, and fold each
             // update into the persister (which debounce-saves the record as it goes).
             var fullText = ""
-            for await note in stream where note.sessionId == boundSessionId {
-                if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
-                    fullText += chunk
+            for await event in stream {
+                switch event {
+                case .update(let note) where note.sessionId == boundSessionId:
+                    if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
+                        fullText += chunk
+                    }
+                    await persister.apply(note.update)
+                    let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
+                    await clientSession?.sendLogNotification(
+                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
+                case .clientOperation(let operation)
+                    where operation.sessionId == nil || operation.sessionId == boundSessionId:
+                    // A client-side diagnostic the connection reported mid-turn — a
+                    // permission refusal that may end the turn (see `CodexCompat`).
+                    // Streamed in order like an update, so the CLI renders it in place;
+                    // not part of the conversation history (the wire log has the
+                    // annotated response).
+                    await clientSession?.sendLogNotification(
+                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
+                default:
+                    break
                 }
-                await persister.apply(note.update)
-                let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
             }
             return fullText
         }

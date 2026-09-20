@@ -261,23 +261,34 @@ public struct ACPSession: Sendable {
     }
 
     /// Send a prompt and collect the full turn: every streamed update is passed
-    /// to `onUpdate` (in order) and the agent's text is concatenated. Returns
-    /// once the turn ends. Deterministic — no updates are dropped.
+    /// to `onUpdate` (in order), any client operation the connection reports during
+    /// the turn — a permission refusal that may end it, see ``CodexCompat`` — to
+    /// `onClientOperation`, and the agent's text is concatenated. Returns once the
+    /// turn ends. Deterministic — no updates are dropped.
     @discardableResult
     public func run(
         _ blocks: [ContentBlock],
         meta: JSONValue? = nil,
-        onUpdate: (@Sendable (SessionUpdate) -> Void)? = nil
+        onUpdate: (@Sendable (SessionUpdate) -> Void)? = nil,
+        onClientOperation: (@Sendable (ClientOperation) -> Void)? = nil
     ) async throws -> PromptOutcome {
-        let (subscriptionId, stream) = await agent.connection.makeSubscription()
+        let (subscriptionId, stream) = await agent.connection.makeEventSubscription()
         let sessionId = id
         let collector = TextCollector()
         let consumer = Task {
-            for await note in stream where note.sessionId == sessionId {
-                if case .agentMessageChunk(let block) = note.update, let text = block.text {
-                    await collector.append(text)
+            for await event in stream {
+                switch event {
+                case .update(let note) where note.sessionId == sessionId:
+                    if case .agentMessageChunk(let block) = note.update, let text = block.text {
+                        await collector.append(text)
+                    }
+                    onUpdate?(note.update)
+                case .clientOperation(let operation)
+                    where operation.sessionId == nil || operation.sessionId == sessionId:
+                    onClientOperation?(operation)
+                default:
+                    break
                 }
-                onUpdate?(note.update)
             }
         }
         do {
@@ -297,9 +308,10 @@ public struct ACPSession: Sendable {
     public func run(
         _ text: String,
         meta: JSONValue? = nil,
-        onUpdate: (@Sendable (SessionUpdate) -> Void)? = nil
+        onUpdate: (@Sendable (SessionUpdate) -> Void)? = nil,
+        onClientOperation: (@Sendable (ClientOperation) -> Void)? = nil
     ) async throws -> PromptOutcome {
-        try await run([.text(text)], meta: meta, onUpdate: onUpdate)
+        try await run([.text(text)], meta: meta, onUpdate: onUpdate, onClientOperation: onClientOperation)
     }
 
     /// Request cancellation of the in-flight turn.

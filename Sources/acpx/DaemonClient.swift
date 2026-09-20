@@ -30,6 +30,12 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
             await stopReason.set(StopReason(rawValue: ended.stopReason))
             return
         }
+        // A client-side operation the daemon's connection reported mid-turn (a
+        // permission refusal that may end the turn), streamed in order with updates.
+        if let operation = try? message.data.decoded(ClientOperation.self) {
+            renderer.clientOperation(operation)
+            return
+        }
         guard let note = try? message.data.decoded(SessionNotification.self) else { return }
         renderer.render(note.update)
     }
