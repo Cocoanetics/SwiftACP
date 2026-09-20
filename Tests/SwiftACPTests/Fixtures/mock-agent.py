@@ -7,9 +7,20 @@ initialize -> session/new -> session/prompt, streaming a plan, a tool call and
 agent message chunks before returning a stop reason.
 
 It deliberately uses no third-party packages so it runs anywhere Python 3 does.
+
+Two knobs exercise the client's permission handling: MOCK_AGENT_NAME sets the
+agentInfo.name reported by initialize (so the mock can pose as, e.g., the Codex
+adapter), and a prompt of the form ``refuse:<id>[,<id>...]`` makes the turn ask
+permission for an execute tool offering ``allow`` plus those ``reject_once`` ids,
+then report the client's answer as text — ``selected:<id>`` or ``cancelled``,
+followed by ``|notice:<text>`` when the response carried
+``_meta.acpx.permissionNotice``.
 """
 import json
+import os
 import sys
+
+AGENT_NAME = os.environ.get("MOCK_AGENT_NAME", "mock-agent")
 
 
 def send(obj):
@@ -29,6 +40,50 @@ def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
 
 
+def request_permission(session_id, refusal_ids):
+    """Ask the client to approve an execute tool, offering ``allow`` plus one
+    ``reject_once`` option per id, and return the response's result (None if the
+    client went away first)."""
+    req_id = "perm-1"
+    options = [{"optionId": "allow", "name": "Yes, proceed", "kind": "allow_once"}]
+    options += [{"optionId": i, "name": i, "kind": "reject_once"} for i in refusal_ids]
+    send({"jsonrpc": "2.0", "id": req_id, "method": "session/request_permission", "params": {
+        "sessionId": session_id,
+        "toolCall": {"toolCallId": "call-refuse", "title": "rm -rf build",
+                     "kind": "execute", "status": "pending"},
+        "options": options,
+    }})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return None
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if message.get("id") == req_id and "result" in message:
+            return message["result"]
+        # Anything else (e.g. a session/cancel notification) is ignored while waiting.
+
+
+def handle_refusal_probe(req_id, session_id, spec):
+    refusal_ids = [i for i in spec.split(",") if i]
+    result = request_permission(session_id, refusal_ids) or {}
+    outcome = result.get("outcome", {})
+    if outcome.get("outcome") == "selected":
+        answer = "selected:" + outcome.get("optionId", "")
+    else:
+        answer = "cancelled"
+    notice = result.get("_meta", {}).get("acpx", {}).get("permissionNotice")
+    if notice:
+        answer += "|notice:" + notice
+    session_update(session_id, {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {"type": "text", "text": answer},
+    })
+    respond(req_id, {"stopReason": "end_turn"})
+
+
 def handle_prompt(req_id, params):
     session_id = params.get("sessionId", "mock-session")
     # Pull the user's text out of the prompt content blocks.
@@ -36,6 +91,10 @@ def handle_prompt(req_id, params):
     for block in params.get("prompt", []):
         if block.get("type") == "text":
             text += block.get("text", "")
+
+    if text.startswith("refuse:"):
+        handle_refusal_probe(req_id, session_id, text[len("refuse:"):].strip())
+        return
 
     # A short plan.
     session_update(session_id, {
@@ -102,7 +161,7 @@ def main():
         if method == "initialize":
             respond(req_id, {
                 "protocolVersion": 1,
-                "agentInfo": {"name": "mock-agent", "version": "0.1.0"},
+                "agentInfo": {"name": AGENT_NAME, "version": "0.1.0"},
                 "agentCapabilities": {"loadSession": False,
                                       "promptCapabilities": {"image": False, "audio": False}},
                 "authMethods": [],
