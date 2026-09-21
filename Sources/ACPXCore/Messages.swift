@@ -291,6 +291,12 @@ public struct SessionAcpxState: Codable, Sendable {
     public var availableCommands: [AvailableCommand]?
     public var configOptions: JSONValue?
     public var sessionOptions: SessionOptions?
+    /// The session's own MCP servers (config-file entry shape), persisted as
+    /// `mcp_servers`: set by the daemon's `newSession` / `setSessionMcpServers` or by
+    /// creating the session under `--mcp-config`, and sent again on every reconnect.
+    /// `nil` = the session uses the cwd's config-file servers. (A SwiftACP extension
+    /// of the npm record: npm acpx keeps MCP servers per invocation, not per record.)
+    public var mcpServers: [McpServerConfig]?
 
     /// A persisted slash command. Agents advertise these either as bare strings
     /// (codex: `"debug"`) or as objects (claude: `{name, description, has_input}`).

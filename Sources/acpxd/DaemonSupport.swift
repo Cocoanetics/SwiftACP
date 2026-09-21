@@ -14,6 +14,7 @@ enum DaemonError: LocalizedError {
     case emptySessionId
     case sessionNotFound(String)
     case sessionBusy(String)
+    case mcpConfigConflict(String)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +26,9 @@ enum DaemonError: LocalizedError {
             return "no session found for id: \(id)"
         case .sessionBusy(let id):
             return "session is busy running another turn (use --wait to queue): \(id)"
+        case .mcpConfigConflict(let id):
+            // npm acpx's QUEUE_MCP_CONFIG_CONFLICT wording.
+            return "session is live with a different MCP config; close the session before retrying: \(id)"
         }
     }
 }

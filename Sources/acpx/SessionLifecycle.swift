@@ -66,10 +66,13 @@ enum SessionLifecycle {
         let options = sessionOptions(flags)
         return try runBlocking {
             do {
+                // An explicit `--mcp-config` becomes the session's own server set,
+                // persisted so the daemon replays it on every reconnect.
                 return try await SessionEngine.createSession(
                     agentCommand: agent.agentCommand, cwd: agent.cwd, name: name,
                     permission: permission, authCredentials: config.auth,
                     authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
+                    sessionMcpServers: config.sessionMcpServers,
                     meta: meta, sessionOptions: options,
                     inheritStderr: flags.verbose)
             } catch {

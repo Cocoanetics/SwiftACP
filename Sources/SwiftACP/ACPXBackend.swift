@@ -14,10 +14,13 @@ import JSONFoundation
 /// notification; because the backend runs inside the tool-dispatch task, it reaches
 /// the serving session (`Session.current`) itself — the shell forwards nothing.
 public protocol ACPXBackend: Sendable {
-    func newSession(agentCommand: String, cwd: String, name: String?) async throws -> String
+    func newSession(
+        agentCommand: String, cwd: String, name: String?, mcpServers: [McpServerConfig]?
+    ) async throws -> String
     func listSessions(agentCommand: String?) async -> [SessionSummary]
     func showSession(sessionId: String) async throws -> SessionDetail
     func sessionHistory(sessionId: String, limit: Int?) async throws -> [HistoryEntry]
+    func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws -> Bool
     func setMode(sessionId: String, modeId: String) async throws -> Bool
     func setConfigOption(sessionId: String, configId: String, value: String) async throws -> [JSONValue]
     func setModel(sessionId: String, modelId: String) async throws -> Bool

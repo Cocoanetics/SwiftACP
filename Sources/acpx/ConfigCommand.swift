@@ -16,6 +16,7 @@ enum ConfigCommand {
     }
 
     private static func show(_ config: ResolvedAcpxConfig, format: String) -> Int32 {
+        // `mcp` (the explicit `--mcp-config` path) appears only when one was given.
         let payload = jsonObject([
             ("defaultAgent", .string(config.defaultAgent)),
             ("defaultPermissions", .string(config.defaultPermissions)),
@@ -28,10 +29,11 @@ enum ConfigCommand {
             ("agents", agentsDisplay(config.agents)),
             ("authMethods", .array(config.auth.keys.sorted().map { JSONValue.string($0) })),
             ("disableExec", .bool(config.disableExec)),
-            ("paths", jsonObject([
-                ("global", .string(config.globalPath)),
-                ("project", .string(config.projectPath))
-            ])),
+            ("paths", jsonObject(
+                [
+                    ("global", .string(config.globalPath)),
+                    ("project", .string(config.projectPath))
+                ] + (config.mcpConfigPath.map { [("mcp", JSONValue.string($0))] } ?? []))),
             ("loaded", jsonObject([
                 ("global", .bool(config.hasGlobalConfig)),
                 ("project", .bool(config.hasProjectConfig))

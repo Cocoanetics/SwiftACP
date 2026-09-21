@@ -155,6 +155,15 @@ enum DaemonClient {
         try await withClient { _ = try await $0.setMode(sessionId: sessionId, modeId: modeId) }
     }
 
+    /// Replace a session's own MCP servers via the daemon (which persists them and
+    /// sends them on the next reconnect). Fails if the daemon holds the session live
+    /// with a different set.
+    static func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws {
+        try await withClient {
+            _ = try await $0.setSessionMcpServers(sessionId: sessionId, mcpServers: mcpServers)
+        }
+    }
+
     /// Set a session's model on the live agent via the daemon (legacy set_model).
     static func setModel(sessionId: String, modelId: String) async throws {
         try await withClient { _ = try await $0.setModel(sessionId: sessionId, modelId: modelId) }

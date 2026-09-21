@@ -41,8 +41,16 @@ enum PromptCommand {
         // record here, or its stale pre-turn snapshot would clobber the turn the
         // daemon just persisted. There is no direct fallback: if the daemon can't be
         // reached the turn fails loudly rather than running outside the manager.
+        // `--mcp-config` on an existing session: hand the daemon the new server set
+        // first (it refuses while the session is live with a different one, like npm
+        // acpx). Unchanged sets skip the round-trip.
+        let sessionMcpServers = context.config.sessionMcpServers
         let stopReason: StopReason = try runBlocking {
             do {
+                if let sessionMcpServers, record.acpx?.mcpServers != sessionMcpServers {
+                    try await DaemonClient.setSessionMcpServers(
+                        sessionId: sessionId, mcpServers: sessionMcpServers)
+                }
                 return try await DaemonClient.runPrompt(
                     sessionId: sessionId, text: promptText, wait: wait, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {

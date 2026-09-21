@@ -124,6 +124,25 @@ an `@MCPServer` whose tools the CLI calls over MCP — the same generated
 executable-only dependencies (service-lifecycle, argument-parser) never reach
 consumers of the `SwiftACP` library product.
 
+### MCP servers for a session
+
+`mcpServers` in `~/.acpx/config.json` / `<cwd>/.acpxrc.json` (project replaces global)
+are sent on `session/new` and again on every reconnect (`session/load` / `session/resume`),
+as in npm acpx. Two ways attach servers to *one session* instead of a working tree:
+
+- `--mcp-config <path>` (CLI, npm parity): a JSON file with the same top-level
+  `mcpServers` array, replacing the config-file servers for the invocation. A session
+  created under it keeps that set — it is persisted on the record (`acpx.mcp_servers`,
+  a SwiftACP extension of the npm record) so `acpxd` replays it on every reconnect.
+- `newSession(mcpServers:)` / `setSessionMcpServers(sessionId:mcpServers:)` (daemon
+  tools): the same entry shape, inline, for MCP clients such as a dispatcher attaching a
+  run-scoped server. `[]` detaches every server; omitting the parameter keeps the
+  config-file ones.
+
+As in npm acpx, a session the daemon holds live cannot switch its MCP servers — close
+it first (`sessions close` / `closeSession`), then retry. `sessions show --format json`
+and `showSession` list the attached set.
+
 ## Status
 
 A byte-faithful Swift clone of

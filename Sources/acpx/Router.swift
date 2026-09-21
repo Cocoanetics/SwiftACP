@@ -55,7 +55,11 @@ enum Router {
     static func dispatch(_ rawArgs: [String]) throws -> Int32 {
         let routing = try ArgScanner.scan(rawArgs, options: routingSpecs)
         let cwd = routing.string("cwd") ?? physicalCWD()
-        let config = try ConfigLoader.load(cwd: cwd)
+        // `--mcp-config` is resolved here, with the config, because its servers
+        // replace the config-file ones for the whole invocation (relative to `--cwd`,
+        // as in npm acpx).
+        let config = try ConfigLoader.load(
+            cwd: ACPXPaths.resolve(cwd, base: physicalCWD()), mcpConfigPath: routing.string("mcp-config"))
         let knownAgents = Set(AgentRegistry.builtIn.keys)
             .union(AgentRegistry.aliases.keys)
             .union(config.agents.keys)

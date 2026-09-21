@@ -77,3 +77,55 @@ struct SessionRecordCodableTests {
         #expect(obj["thought_signature"] == .string("sig-abc"))
     }
 }
+
+// MARK: - acpx.mcp_servers (the session's own MCP servers)
+
+extension SessionRecordCodableTests {
+    /// The per-session server list is persisted under the `acpx` block as
+    /// `mcp_servers` in the config-file entry shape — snake_case wrapper key, the
+    /// entries' own keys (including `_meta`) untouched — and round-trips verbatim.
+    @Test func mcpServersRoundTripUnderSnakeCaseKey() throws {
+        let json = #"""
+            {"mcp_servers":[
+              {"name":"shot","command":"/bin/shot","args":["--run","42"],
+               "env":[{"name":"RUN_TOKEN","value":"secret"}],"_meta":{"run":"42"}},
+              {"type":"http","name":"remote","url":"https://example.com/mcp",
+               "headers":[{"name":"Authorization","value":"Bearer t"}]}
+            ]}
+            """#
+        let state = try decoder.decode(SessionAcpxState.self, from: Data(json.utf8))
+        #expect(state.mcpServers == [
+            McpServerConfig(
+                name: "shot", command: "/bin/shot", args: ["--run", "42"],
+                env: [.init(name: "RUN_TOKEN", value: "secret")], meta: ["run": .string("42")]),
+            McpServerConfig(
+                type: "http", name: "remote", url: "https://example.com/mcp",
+                headers: [.init(name: "Authorization", value: "Bearer t")])
+        ])
+
+        let out = try reencode(SessionAcpxState.self, json)
+        #expect(out == JSONValue.object(["mcp_servers": .array([
+            .object([
+                "name": .string("shot"), "command": .string("/bin/shot"),
+                "args": .array([.string("--run"), .string("42")]),
+                "env": .array([.object(["name": .string("RUN_TOKEN"), "value": .string("secret")])]),
+                "_meta": .object(["run": .string("42")])
+            ]),
+            .object([
+                "type": .string("http"), "name": .string("remote"),
+                "url": .string("https://example.com/mcp"),
+                "headers": .array([.object(["name": .string("Authorization"), "value": .string("Bearer t")])])
+            ])
+        ])]))
+    }
+
+    /// A record without the key decodes to `nil` (config-file servers apply) and an
+    /// explicit empty list stays an empty list (no servers) — the two are distinct.
+    @Test func mcpServersAbsentVersusEmpty() throws {
+        #expect(try decoder.decode(SessionAcpxState.self, from: Data("{}".utf8)).mcpServers == nil)
+        let empty = try decoder.decode(SessionAcpxState.self, from: Data(#"{"mcp_servers":[]}"#.utf8))
+        #expect(empty.mcpServers == [])
+        #expect(try reencode(SessionAcpxState.self, #"{"mcp_servers":[]}"#)
+            == JSONValue.object(["mcp_servers": .array([])]))
+    }
+}

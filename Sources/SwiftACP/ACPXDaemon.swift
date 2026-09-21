@@ -15,7 +15,8 @@ import SwiftMCP
 /// ``ACPXDaemon/Client`` compile for an iOS MCP client driving a remote daemon.
 ///
 /// ## MCP tools
-/// - ``newSession(agentCommand:cwd:name:)`` — create + persist a session, return its id.
+/// - ``newSession(agentCommand:cwd:name:mcpServers:)`` — create + persist a session
+///   (optionally with its own MCP servers), return its id.
 /// - ``runPrompt(sessionId:text:wait:)`` — run one prompt turn (agent + cwd come from
 ///   the session record), streaming each ACP `session/update` back to the caller
 ///   as an MCP log notification, and returning the agent's aggregate response
@@ -24,8 +25,9 @@ import SwiftMCP
 /// - ``cancelSession(sessionId:)`` — cancel an in-flight prompt.
 /// - ``listSessions(agentCommand:)`` / ``showSession(sessionId:)`` /
 ///   ``sessionHistory(sessionId:limit:)`` — read the persisted session store.
-/// - ``setMode(sessionId:modeId:)`` / ``setConfigOption(sessionId:configId:value:)`` /
-///   ``closeSession(sessionId:)`` / ``pruneSessions(agentCommand:olderThanDays:includeHistory:dryRun:)``
+/// - ``setSessionMcpServers(sessionId:mcpServers:)`` / ``setMode(sessionId:modeId:)`` /
+///   ``setConfigOption(sessionId:configId:value:)`` / ``closeSession(sessionId:)`` /
+///   ``pruneSessions(agentCommand:olderThanDays:includeHistory:dryRun:)``
 ///   — mutate live sessions and the store.
 @MCPServer(name: "acpx")
 public actor ACPXDaemon {
@@ -47,10 +49,35 @@ public actor ACPXDaemon {
     ///     resolved launch command is stored on the session.
     ///   - cwd: the working directory the agent runs in (`~` is expanded).
     ///   - name: an optional session label (like `sessions new --name`); blank = none.
+    ///   - mcpServers: MCP servers for this session only (the config-file
+    ///     `mcpServers` shape). They *replace* the cwd's config-file servers — like
+    ///     the CLI's `--mcp-config` — are persisted on the session, and are sent
+    ///     again on every reconnect (`session/load` / `session/resume`), so they
+    ///     survive daemon and adapter restarts. Omitted = use the config-file
+    ///     servers; `[]` = none.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
-    func newSession(agentCommand: String, cwd: String, name: String? = nil) async throws -> String {
-        try await backend.newSession(agentCommand: agentCommand, cwd: cwd, name: name)
+    func newSession(
+        agentCommand: String, cwd: String, name: String? = nil,
+        mcpServers: [McpServerConfig]? = nil
+    ) async throws -> String {
+        try await backend.newSession(
+            agentCommand: agentCommand, cwd: cwd, name: name, mcpServers: mcpServers)
+    }
+
+    /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
+    /// persist them. The change takes effect on the session's next reconnect; while
+    /// the daemon still holds the session live with a *different* server set the
+    /// call fails — close the session first (or pass the same set, a no-op) —
+    /// mirroring npm acpx, where a live session cannot switch MCP config.
+    ///
+    /// - Parameters:
+    ///   - sessionId: the acpx record id or the ACP session id.
+    ///   - mcpServers: the servers to attach from now on; `[]` detaches them all.
+    /// - Returns: `true` once persisted.
+    @MCPTool(idempotentHint: true)
+    func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws -> Bool {
+        try await backend.setSessionMcpServers(sessionId: sessionId, mcpServers: mcpServers)
     }
 
     /// List persisted sessions (newest-first), optionally filtered to one agent —

@@ -32,6 +32,7 @@ extension SessionDetail {
             lastAgentExitSignal: record.lastAgentExitSignal?.value,
             lastAgentExitAt: record.lastAgentExitAt,
             lastAgentDisconnectReason: record.lastAgentDisconnectReason,
-            historyEntries: SessionStore.conversationHistoryEntries(record).count)
+            historyEntries: SessionStore.conversationHistoryEntries(record).count,
+            mcpServers: record.acpx?.mcpServers)
     }
 }

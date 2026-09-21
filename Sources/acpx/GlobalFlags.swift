@@ -62,6 +62,9 @@ enum Flags {
         OptionSpec("terminal", negatable: true),
         OptionSpec("timeout", takesValue: true),
         OptionSpec("ttl", takesValue: true),
+        // Consumed by `Router.dispatch` when loading config (it must be known before
+        // any flag resolution); listed here so it scans as a known global option.
+        OptionSpec("mcp-config", takesValue: true),
         OptionSpec("verbose"),
         OptionSpec("help", short: "h")
     ]

@@ -44,7 +44,7 @@ enum HelpCatalog {
             after: examples)
     }
 
-    /// The 24 global options, listed only on the root command (cwd is dynamic).
+    /// The 25 global options, listed only on the root command (cwd is dynamic).
     private static func globalOptions(cwd: String) -> [HelpOption] {
         [
             HelpOption("-V, --version", "output the version number"),
@@ -78,6 +78,8 @@ enum HelpCatalog {
             HelpOption("--timeout <seconds>", "Maximum time to wait for agent response"),
             HelpOption(
                 "--ttl <seconds>", "Queue owner idle TTL before shutdown (0 = keep alive forever) (default: 300)"),
+            HelpOption(
+                "--mcp-config <path>", "Load MCP servers from a JSON config file instead of project/global mcpServers"),
             HelpOption("--verbose", "Enable verbose debug logs")
         ]
     }
