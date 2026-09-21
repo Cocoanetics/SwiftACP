@@ -20,7 +20,9 @@ public protocol ACPXBackend: Sendable {
     func listSessions(agentCommand: String?) async -> [SessionSummary]
     func showSession(sessionId: String) async throws -> SessionDetail
     func sessionHistory(sessionId: String, limit: Int?) async throws -> [HistoryEntry]
-    func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws -> Bool
+    func setSessionMcpServers(
+        sessionId: String, mcpServers: [McpServerConfig], restart: Bool
+    ) async throws -> Bool
     func setMode(sessionId: String, modeId: String) async throws -> Bool
     func setConfigOption(sessionId: String, configId: String, value: String) async throws -> [JSONValue]
     func setModel(sessionId: String, modelId: String) async throws -> Bool

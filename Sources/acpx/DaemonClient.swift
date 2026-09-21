@@ -155,12 +155,17 @@ enum DaemonClient {
         try await withClient { _ = try await $0.setMode(sessionId: sessionId, modeId: modeId) }
     }
 
-    /// Replace a session's own MCP servers via the daemon (which persists them and
-    /// sends them on the next reconnect). Fails if the daemon holds the session live
-    /// with a different set.
-    static func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws {
-        try await withClient {
-            _ = try await $0.setSessionMcpServers(sessionId: sessionId, mcpServers: mcpServers)
+    /// Replace a session's own MCP servers via a *running* daemon (which persists them
+    /// and sends them on the next reconnect), reconnecting a live session so the new
+    /// servers take effect without losing it. Throws ``DaemonUnavailable`` when no
+    /// daemon is running — then nothing holds the session, and the caller persists the
+    /// set itself.
+    static func setSessionMcpServers(
+        sessionId: String, mcpServers: [McpServerConfig], restart: Bool
+    ) async throws {
+        try await withClient(spawnIfNeeded: false) {
+            _ = try await $0.setSessionMcpServers(
+                sessionId: sessionId, mcpServers: mcpServers, restart: restart)
         }
     }
 

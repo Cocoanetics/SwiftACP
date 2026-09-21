@@ -94,13 +94,18 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Replace a session's own MCP servers and persist them (see `newSession`'s
     /// `mcpServers`); the next reconnect sends the new set. Refused while the daemon
     /// holds the session live with a different set — npm acpx likewise rejects
-    /// switching a live session's MCP config ("close the session before retrying").
+    /// switching a live session's MCP config ("close the session before retrying") —
+    /// unless `restart` is set, which drops that connection so the next turn
+    /// reconnects with the new servers, keeping the session (and its history) alive.
     ///
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - mcpServers: the servers to attach from now on; `[]` detaches them all.
+    ///   - restart: reconnect a live session instead of refusing the switch.
     /// - Returns: `true` once persisted.
-    func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws -> Bool {
+    func setSessionMcpServers(
+        sessionId: String, mcpServers: [McpServerConfig], restart: Bool = false
+    ) async throws -> Bool {
         // Reject malformed entries up front, before touching the record.
         let specs = try mcpServers.map { try $0.protocolSpec() }
         guard let initial = findRecord(sessionId) else {
@@ -111,6 +116,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         // can't race a turn that is about to (re)connect it.
         try await turnQueue.acquire(acpSessionId, wait: true)
         defer { Task { await turnQueue.release(acpSessionId) } }
+        // Re-read inside the slot: `evict` below (and any turn we queued behind) can
+        // suspend us, so the write must build on the current record.
         guard var record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
@@ -118,7 +125,11 @@ actor ACPXDaemonBackend: ACPXBackend {
         // differently (omitted vs explicit `args`/`env`/`type`) is the no-op it looks
         // like, rather than a conflict.
         if let entry = live[acpSessionId], entry.sessionSpecs != specs {
-            throw DaemonError.mcpConfigConflict(sessionId)
+            guard restart else { throw DaemonError.mcpConfigConflict(sessionId) }
+            // Safe here: this call holds the session's turn slot, so no turn is in
+            // flight. Only the adapter process goes; the record — and the agent's
+            // rollout behind it — stay, so the next turn reconnects with the new set.
+            await evict(acpSessionId)
         }
         var acpx = record.acpx ?? SessionAcpxState()
         acpx.mcpServers = mcpServers

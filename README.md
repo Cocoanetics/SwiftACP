@@ -139,9 +139,14 @@ as in npm acpx. Two ways attach servers to *one session* instead of a working tr
   run-scoped server. `[]` detaches every server; omitting the parameter keeps the
   config-file ones.
 
-As in npm acpx, a session the daemon holds live cannot switch its MCP servers — close
-it first (`sessions close` / `closeSession`), then retry. `sessions show --format json`
-and `showSession` list the attached set.
+A session the daemon holds live does not silently switch servers: `setSessionMcpServers`
+refuses, as npm acpx does. Passing `restart` applies the switch anyway by dropping the
+adapter — only the local process, so the session is restored with `session/load` and its
+history survives, where npm has to close the session outright because its queue owner
+*is* the session. The CLI's `--mcp-config` always takes that path, so re-prompting an
+existing session with a different config just works; `sessions ensure --mcp-config`
+likewise re-attaches to the session it reuses. `sessions show --format json` and
+`showSession` list the attached set.
 
 ## Status
 

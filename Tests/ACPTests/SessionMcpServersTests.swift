@@ -266,6 +266,54 @@ import Testing
         }
     }
 
+    @Test(.enabled(if: mockPythonAvailable))
+    func restartSwitchesALiveSessionsServersWithoutLosingIt() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let log = requestLogURL()
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory(),
+                mcpServers: [Self.own])
+            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
+
+            // Without `restart` the live session refuses the switch (npm's rule) …
+            await #expect(throws: DaemonError.self) {
+                try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.other])
+            }
+            // … with it, the switch is applied by dropping the adapter, so the next
+            // turn reconnects with the new servers. The session itself survives: it
+            // is restored, not recreated, and its history is intact.
+            #expect(try await daemon.setSessionMcpServers(
+                sessionId: id, mcpServers: [Self.other], restart: true))
+            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.other])
+
+            _ = try await daemon.runPrompt(sessionId: id, text: "after switch")
+            let requests = try sessionRequests(log)
+            #expect(requests.map(\.method) == [
+                "session/new", "session/load", "session/new", "session/load", "session/new"
+            ])
+            #expect(requests.prefix(3).allSatisfy { $0.servers.map { $0["name"] as? String } == ["shot"] })
+            #expect(requests.suffix(2).allSatisfy { $0.servers.map { $0["name"] as? String } == ["remote"] })
+            // Both turns are in one conversation — the switch kept the session.
+            #expect(try await daemon.sessionHistory(sessionId: id).count == 4)
+            _ = try await daemon.closeSession(sessionId: id)
+        }
+    }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func restartOnAnIdleSessionJustPersists() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: command, cwd: NSTemporaryDirectory(), mcpServers: [Self.own])
+            #expect(try await daemon.setSessionMcpServers(
+                sessionId: id, mcpServers: [Self.other], restart: true))
+            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.other])
+        }
+    }
+
     // MARK: - Helpers
 
     private func writeGlobalConfig(servers: String) throws {

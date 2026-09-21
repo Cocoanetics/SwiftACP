@@ -68,16 +68,26 @@ public actor ACPXDaemon {
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
     /// persist them. The change takes effect on the session's next reconnect; while
     /// the daemon still holds the session live with a *different* server set the
-    /// call fails — close the session first (or pass the same set, a no-op) —
-    /// mirroring npm acpx, where a live session cannot switch MCP config.
+    /// call fails — mirroring npm acpx, where a live session cannot switch MCP
+    /// config — unless `restart` says to reconnect it.
     ///
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - mcpServers: the servers to attach from now on; `[]` detaches them all.
+    ///   - restart: when the session is held live with a different set, drop that
+    ///     connection instead of failing, so the next turn reconnects with the new
+    ///     servers. Only the local adapter process goes away: the session itself is
+    ///     restored with `session/load` / `session/resume`, so its history survives —
+    ///     unlike npm acpx, whose per-session queue owner *is* the session and which
+    ///     therefore has to be closed. Defaults to `false`, so a client never has a
+    ///     warm adapter pulled out from under it by surprise.
     /// - Returns: `true` once persisted.
     @MCPTool(idempotentHint: true)
-    func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws -> Bool {
-        try await backend.setSessionMcpServers(sessionId: sessionId, mcpServers: mcpServers)
+    func setSessionMcpServers(
+        sessionId: String, mcpServers: [McpServerConfig], restart: Bool = false
+    ) async throws -> Bool {
+        try await backend.setSessionMcpServers(
+            sessionId: sessionId, mcpServers: mcpServers, restart: restart)
     }
 
     /// List persisted sessions (newest-first), optionally filtered to one agent —

@@ -46,7 +46,10 @@ enum SessionLifecycle {
         let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
         if let existing = SessionStore.findSessionByDirectoryWalk(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd) {
-            printEnsured(existing, created: false, format: flags.format)
+            // Reusing a session still honours `--mcp-config`: ensure promises a
+            // session set up the way this invocation asked for.
+            let reused = try applyExplicitMcpServers(to: existing, config: context.config)
+            printEnsured(reused, created: false, format: flags.format)
             return ExitCodes.success
         }
 
@@ -54,6 +57,41 @@ enum SessionLifecycle {
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         printEnsured(record, created: true, format: flags.format)
         return ExitCodes.success
+    }
+
+    /// Apply an explicit `--mcp-config` to a session that already exists, so a reused
+    /// record ends up with the servers this invocation asked for instead of silently
+    /// keeping its old ones. Returns the record to report on.
+    ///
+    /// A running daemon does it (it owns the live connection, and reconnects it so the
+    /// new servers take effect without losing the session); with no daemon running
+    /// there is no connection to reconcile, so the record is updated here.
+    /// Comparison is on the normalized wire specs, so a set spelled differently but
+    /// identical on the wire costs nothing.
+    static func applyExplicitMcpServers(
+        to record: SessionRecord, config: ResolvedAcpxConfig
+    ) throws -> SessionRecord {
+        guard let requested = config.sessionMcpServers else { return record }
+        let current = try record.acpx?.mcpServers.map { try $0.map { try $0.protocolSpec() } }
+        guard try current != requested.map({ try $0.protocolSpec() }) else { return record }
+
+        let sessionId = record.acpSessionId
+        do {
+            try runBlocking {
+                try await DaemonClient.setSessionMcpServers(
+                    sessionId: sessionId, mcpServers: requested, restart: true)
+            }
+        } catch is DaemonUnavailable {
+            var updated = record
+            var acpx = updated.acpx ?? SessionAcpxState()
+            acpx.mcpServers = requested
+            updated.acpx = acpx
+            try SessionStore.writeRecord(updated)
+            return updated
+        } catch {
+            throw CLIError(error.localizedDescription)
+        }
+        return SessionStore.loadRecord(record.acpxRecordId) ?? record
     }
 
     // MARK: - Create (shared engine → record)
