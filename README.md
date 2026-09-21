@@ -82,6 +82,18 @@ print(outcome.text, outcome.stopReason)
 await agent.close()
 ```
 
+Tool-call permission requests are answered by the `PermissionPolicy` (`.approveAll`,
+`.approveReads`, `.denyAll`, or a `.custom` resolver). A refusal never ends a turn by
+accident: the Codex adapter offers both a `decline` ("continue without running it")
+and a `cancel` ("abort the whole turn") one-time refusal — sometimes only `cancel` —
+so the connection ranks the non-aborting one first before the policy picks
+(`CodexCompat`). When only cancellation is offered it keeps the safe refusal and
+explains that it may end the turn, as a `ClientOperation` passed to
+`session.run(onClientOperation:)` and as `_meta.acpx.permissionNotice` on the
+response. The `acpx` CLI shows the notice as `[permission] …` (text), as
+`[acpx] permission: …` on stderr (quiet), or as a JSON line. No operation is ever
+approved to keep a turn running.
+
 ## The `acpx` CLI and `acpxd` daemon (macOS)
 
 The same package ships a headless CLI and a session daemon built on the library — a

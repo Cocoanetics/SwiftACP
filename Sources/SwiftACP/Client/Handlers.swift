@@ -10,6 +10,10 @@ public struct ACPClientHandlers: Sendable {
     /// Decide the outcome of a tool-call permission request. Called when the
     /// agent wants approval for a tool call; return the selected option, or
     /// `.cancelled` if the turn ended without a choice.
+    ///
+    /// The connection hands over the request with its adapter-compatibility ranking
+    /// applied (Codex's non-aborting refusal first — see ``CodexCompat``), and
+    /// explains a refusal that may end the turn on the way back.
     public var requestPermission:
         (@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)?
     /// Serve `fs/read_text_file`: return file content, honouring `line`/`limit`.
@@ -81,6 +85,9 @@ public enum PermissionPolicy: Sendable {
     }
 
     /// Select a reject option (preferring "once"), or cancel if none are offered.
+    /// Purely kind-based: which `reject_once` wins is the request's order, which is
+    /// why the connection ranks Codex's non-aborting refusal first beforehand (see
+    /// ``CodexCompat``).
     public static func reject(_ request: RequestPermissionRequest) -> RequestPermissionResponse {
         if let option = pick(request.options, [.rejectOnce, .rejectAlways]) {
             return .selected(option.optionId)

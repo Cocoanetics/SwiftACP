@@ -31,7 +31,20 @@ public struct PermissionOption: Codable, Sendable, Hashable {
 /// The client's decision on a permission request.
 public struct RequestPermissionResponse: Codable, Sendable {
     public var outcome: RequestPermissionOutcome
-    public init(outcome: RequestPermissionOutcome) { self.outcome = outcome }
+    /// Extension metadata riding on the response (`_meta`). The client attaches
+    /// `acpx.permissionNotice` here when the refusal it chose may end the turn —
+    /// see ``permissionNotice`` and ``CodexCompat``.
+    public var meta: JSONValue?
+
+    public init(outcome: RequestPermissionOutcome, meta: JSONValue? = nil) {
+        self.outcome = outcome
+        self.meta = meta
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case outcome
+        case meta = "_meta"
+    }
 
     /// The user (or policy) picked an option.
     public static func selected(_ optionId: String) -> RequestPermissionResponse {
@@ -43,9 +56,33 @@ public struct RequestPermissionResponse: Codable, Sendable {
     }
 }
 
+// MARK: - acpx response metadata
+
+extension RequestPermissionResponse {
+    /// A copy with `entries` merged into the response's `_meta.acpx` object, keeping
+    /// every other `_meta` key and any `acpx` entries already present — a port of
+    /// acpx's `withPermissionMetadata`.
+    public func addingACPXMetadata(_ entries: [String: JSONValue]) -> RequestPermissionResponse {
+        var meta = self.meta?.dictionaryValue ?? [:]
+        var acpx = meta["acpx"]?.dictionaryValue ?? [:]
+        acpx.merge(entries) { _, new in new }
+        meta["acpx"] = .object(acpx)
+        var copy = self
+        copy.meta = .object(meta)
+        return copy
+    }
+
+    /// The explanation the client attached under `_meta.acpx.permissionNotice` when
+    /// the refusal it chose may end the turn (see ``CodexCompat``), or `nil` — a port
+    /// of acpx's `parsePermissionNotice`.
+    public var permissionNotice: String? {
+        meta?["acpx"]?["permissionNotice"]?.stringValue
+    }
+}
+
 /// How a permission request resolved: an option was selected, or the turn was
 /// cancelled before a choice was made.
-public enum RequestPermissionOutcome: Codable, Sendable {
+public enum RequestPermissionOutcome: Codable, Sendable, Hashable {
     case cancelled
     case selected(optionId: String)
 

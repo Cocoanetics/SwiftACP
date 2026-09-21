@@ -12,6 +12,22 @@ public actor ACPAgentConnection {
     private let rpc: JSONRPCPeer
     private var handlers: ACPClientHandlers
     private var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
+    /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
+    /// operations this connection reports.
+    private var eventSinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
+
+    /// The agent's `initialize` response once the handshake succeeded. Its
+    /// `agentInfo` identifies the adapter for the compatibility rules applied to
+    /// permission requests (see ``CodexCompat``).
+    public private(set) var initializeResult: InitializeResponse?
+
+    /// Sessions with a `session/prompt` in flight.
+    private var promptingSessionIds: Set<SessionId> = []
+    /// Sessions whose in-flight turn this client is cancelling (`session/cancel`
+    /// sent, prompt not yet returned). A permission request answered meanwhile is
+    /// still resolved as usual, but a refusal isn't explained — the caller is ending
+    /// the turn itself. Mirrors acpx's `cancellingSessionIds`.
+    private var cancellingSessionIds: Set<SessionId> = []
 
     public init(transport: JSONRPCMessageTransport, handlers: ACPClientHandlers = ACPClientHandlers()) {
         self.rpc = JSONRPCPeer(transport: transport)
@@ -63,7 +79,9 @@ public actor ACPAgentConnection {
 
     public func close() {
         for sink in updateSinks.values { sink.finish() }
+        for sink in eventSinks.values { sink.finish() }
         updateSinks.removeAll()
+        eventSinks.removeAll()
         Task { await rpc.close() }
     }
 
@@ -90,13 +108,37 @@ public actor ACPAgentConnection {
         return (capturedId, stream)
     }
 
+    /// Like ``makeSubscription()``, but the stream carries every ``ConnectionEvent``
+    /// — each `session/update` plus the client operations this connection reports
+    /// (a permission refusal that may end the turn) — in wire order.
+    public func makeEventSubscription() -> (id: UUID, stream: AsyncStream<ConnectionEvent>) {
+        var capturedId = UUID()
+        let stream = AsyncStream<ConnectionEvent> { continuation in
+            let id = UUID()
+            capturedId = id
+            eventSinks[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeSink(id) }
+            }
+        }
+        return (capturedId, stream)
+    }
+
+    /// A new stream of every ``ConnectionEvent`` across all sessions. Subscribe
+    /// before prompting so no event is missed.
+    public func events() -> AsyncStream<ConnectionEvent> {
+        makeEventSubscription().stream
+    }
+
     /// Finish a subscription's stream; the consumer still receives buffered values.
     public func endSubscription(_ id: UUID) {
         updateSinks[id]?.finish()
+        eventSinks[id]?.finish()
     }
 
     private func removeSink(_ id: UUID) {
         updateSinks[id] = nil
+        eventSinks[id] = nil
     }
 
     // MARK: - Agent methods
@@ -105,9 +147,11 @@ public actor ACPAgentConnection {
         capabilities: ClientCapabilities,
         clientInfo: Implementation? = nil
     ) async throws -> InitializeResponse {
-        try await send(
+        let response: InitializeResponse = try await send(
             "initialize",
             InitializeRequest(clientCapabilities: capabilities, clientInfo: clientInfo))
+        initializeResult = response
+        return response
     }
 
     public func authenticate(methodId: String) async throws {
@@ -127,7 +171,15 @@ public actor ACPAgentConnection {
     }
 
     public func prompt(_ request: PromptRequest) async throws -> PromptResponse {
-        try await send("session/prompt", request)
+        // A turn starts un-cancelled; whichever way it ends, it is no longer being
+        // cancelled either (the bookkeeping acpx does around its active prompt).
+        cancellingSessionIds.remove(request.sessionId)
+        promptingSessionIds.insert(request.sessionId)
+        defer {
+            promptingSessionIds.remove(request.sessionId)
+            cancellingSessionIds.remove(request.sessionId)
+        }
+        return try await send("session/prompt", request)
     }
 
     public func setMode(_ request: SetSessionModeRequest) async throws {
@@ -147,7 +199,16 @@ public actor ACPAgentConnection {
     /// `session/cancel` is a notification — fire and forget.
     public func cancel(sessionId: SessionId) async throws {
         let params = try JSONValue(encoding: CancelNotification(sessionId: sessionId))
-        try await rpc.sendNotification(method: "session/cancel", params: params)
+        // Only a turn in flight can be "cancelling" (a stray cancel with no prompt
+        // running has nothing to suppress); undone if the notification never left.
+        let cancelling = promptingSessionIds.contains(sessionId)
+        if cancelling { cancellingSessionIds.insert(sessionId) }
+        do {
+            try await rpc.sendNotification(method: "session/cancel", params: params)
+        } catch {
+            if cancelling { cancellingSessionIds.remove(sessionId) }
+            throw error
+        }
     }
 
     // MARK: - Request plumbing
@@ -176,7 +237,7 @@ public actor ACPAgentConnection {
             }
             do {
                 let request: RequestPermissionRequest = try decode(params)
-                let response = await handler(request)
+                let response = await resolvePermission(request, with: handler)
                 return .success(try JSONValue(encoding: response))
             } catch let error as JSONRPCErrorBody {
                 return .failure(error)
@@ -213,12 +274,54 @@ public actor ACPAgentConnection {
         return try params.decoded(T.self)
     }
 
+    // MARK: - Permission requests
+
+    /// Answer a `session/request_permission` through the configured handler, with
+    /// the adapter-compatibility rules acpx applies at the client boundary (see
+    /// ``CodexCompat``): Codex's non-aborting refusal is ranked first before the
+    /// handler picks, and a refusal that may still end the turn is explained — as a
+    /// ``ClientOperation`` on the event subscriptions (ahead of anything the agent
+    /// sends in reaction) and as `_meta.acpx.permissionNotice` on the response.
+    /// Nothing here approves an operation to keep a turn running.
+    private func resolvePermission(
+        _ request: RequestPermissionRequest,
+        with handler: @Sendable (RequestPermissionRequest) async -> RequestPermissionResponse
+    ) async -> RequestPermissionResponse {
+        let agentName = initializeResult?.agentInfo?.name
+        let response = await handler(CodexCompat.preferPermissionRefusal(request, agentName: agentName))
+        guard let notice = CodexCompat.permissionNotice(
+            request: request, response: response, agentName: agentName),
+            !cancellingSessionIds.contains(request.sessionId),
+            !isDeliberateCancellation(request, response)
+        else { return response }
+        let operation = ClientOperation(
+            method: ClientOperation.requestPermission, status: .completed, summary: notice,
+            sessionId: request.sessionId)
+        for sink in eventSinks.values {
+            sink.yield(.clientOperation(operation))
+        }
+        return response.addingACPXMetadata(["permissionNotice": .string(notice)])
+    }
+
+    /// Whether a handler cancelled outright although the agent offered a refusal it
+    /// could have selected — acpx's explicit host `cancel` decision, which needs no
+    /// explaining. The built-in policies only cancel when no refusal exists at all.
+    private func isDeliberateCancellation(
+        _ request: RequestPermissionRequest, _ response: RequestPermissionResponse
+    ) -> Bool {
+        guard case .cancelled = response.outcome else { return false }
+        return request.options.contains { $0.kind == .rejectOnce || $0.kind == .rejectAlways }
+    }
+
     private func handleIncomingNotification(method: String, params: JSONValue?) async {
         guard method == "session/update", let params,
             let notification = try? params.decoded(SessionNotification.self)
         else { return }
         for sink in updateSinks.values {
             sink.yield(notification)
+        }
+        for sink in eventSinks.values {
+            sink.yield(.update(notification))
         }
     }
 }

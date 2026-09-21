@@ -77,4 +77,100 @@ struct MockAgentIntegrationTests {
 
         await agent.close()
     }
+
+    // MARK: - Permission refusals through the spawn client
+
+    /// Thread-safe log of what a turn's callbacks saw, in call order.
+    final class EventLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String] = []
+        private var operations: [ClientOperation] = []
+        func update(_ update: SessionUpdate) {
+            lock.lock()
+            entries.append("update:\(update.kind)")
+            lock.unlock()
+        }
+        func operation(_ operation: ClientOperation) {
+            lock.lock()
+            entries.append("operation")
+            operations.append(operation)
+            lock.unlock()
+        }
+        var all: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries
+        }
+        var reported: [ClientOperation] {
+            lock.lock()
+            defer { lock.unlock() }
+            return operations
+        }
+    }
+
+    /// Launch the mock posing as the Codex adapter (so the connection's Codex
+    /// compatibility rules apply) under a deny-all policy. A `refuse:<ids>` prompt
+    /// makes it request permission offering `allow` plus those `reject_once` ids,
+    /// then report the answer it received as text.
+    private func launchAsCodex() async throws -> ACPAgent {
+        let overrides = try #require(mockOverride())
+        var environment = ProcessInfo.processInfo.environment
+        environment["MOCK_AGENT_NAME"] = CodexCompat.agentName
+        return try await ACPAgent.launch(
+            agent: "mock", cwd: NSTemporaryDirectory(), permission: .denyAll,
+            environment: environment, inheritStderr: false, overrides: overrides)
+    }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func runKeepsTheTrailingClosureOnUpdatesAndCollectsNotices() async throws {
+        let agent = try await launchAsCodex()
+        #expect(agent.initializeResult.agentInfo?.name == CodexCompat.agentName)
+        let session = try await agent.newSession()
+
+        // The unlabeled trailing closure must stay bound to `onUpdate` in every
+        // language mode (see the overload note on `run`), and a refusal that may end
+        // the turn is still reported on the outcome without a live callback.
+        let log = EventLog()
+        let outcome = try await session.run("refuse:cancel") { log.update($0) }
+        #expect(log.all.contains("update:agent_message_chunk"))
+        #expect(outcome.stopReason == .endTurn)
+        #expect(outcome.text.hasPrefix("selected:cancel|notice:"))
+        #expect(outcome.clientOperations.count == 1)
+        #expect(outcome.clientOperations.first?.method == ClientOperation.requestPermission)
+        #expect(outcome.clientOperations.first?.summary.contains("can end the current turn") == true)
+
+        await agent.close()
+    }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func runWithBothCallbacksPrefersDeclineAndReportsAbortiveRefusalsLive() async throws {
+        let agent = try await launchAsCodex()
+        let session = try await agent.newSession()
+
+        // Both refusals offered, `cancel` listed first: the ranking picks `decline`,
+        // the turn continues, and there is nothing to explain.
+        let declined = EventLog()
+        let declinedOutcome = try await session.run(
+            "refuse:cancel,decline", onUpdate: { declined.update($0) },
+            onClientOperation: { declined.operation($0) })
+        #expect(declinedOutcome.text == "selected:decline")
+        #expect(declined.reported.isEmpty)
+        #expect(declinedOutcome.clientOperations.isEmpty)
+
+        // Only `cancel` offered: the safe refusal is kept and explained live — and
+        // in order, ahead of the agent's reaction to the answer.
+        let cancelled = EventLog()
+        let cancelledOutcome = try await session.run(
+            "refuse:cancel", onUpdate: { cancelled.update($0) },
+            onClientOperation: { cancelled.operation($0) })
+        #expect(cancelledOutcome.text.hasPrefix("selected:cancel|notice:"))
+        #expect(cancelled.reported.count == 1)
+        #expect(cancelledOutcome.clientOperations == cancelled.reported)
+        let order = cancelled.all
+        let operationAt = try #require(order.firstIndex(of: "operation"))
+        let reactionAt = try #require(order.firstIndex(of: "update:agent_message_chunk"))
+        #expect(operationAt < reactionAt)
+
+        await agent.close()
+    }
 }

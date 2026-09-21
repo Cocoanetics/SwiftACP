@@ -127,6 +127,19 @@ struct CodableTests {
         guard case .cancelled = decoded else { Issue.record("expected cancelled"); return }
     }
 
+    @Test func permissionResponseMetaRoundTrip() throws {
+        // A plain response carries no `_meta` key at all.
+        #expect(!(try encodedString(RequestPermissionResponse.selected("opt-1"))).contains("_meta"))
+        // The notice the client attaches rides under `_meta.acpx` and decodes back.
+        let explained = RequestPermissionResponse.cancelled
+            .addingACPXMetadata(["permissionNotice": .string("may end the turn")])
+        let json = try encodedString(explained)
+        #expect(json.contains(#""_meta":{"acpx":{"permissionNotice":"may end the turn"}}"#))
+        let decoded = try decode(RequestPermissionResponse.self, json)
+        #expect(decoded.outcome == .cancelled)
+        #expect(decoded.permissionNotice == "may end the turn")
+    }
+
     // MARK: Open enums
 
     @Test func openEnumDecodesUnknownValue() throws {
