@@ -24,6 +24,7 @@ public enum SessionEngine {
         permission: PermissionPolicy,
         authCredentials: [String: String],
         authPolicy: String,
+        mcpServers: [MCPServerSpec] = [],
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         inheritStderr: Bool = false
@@ -34,7 +35,7 @@ public enum SessionEngine {
             inheritStderr: inheritStderr)
         do {
             let response = try await handle.connection.newSession(
-                NewSessionRequest(cwd: cwd, mcpServers: [], meta: meta))
+                NewSessionRequest(cwd: cwd, mcpServers: mcpServers, meta: meta))
             let started = nowISO()
             var record = SessionRecord(
                 acpxRecordId: response.sessionId, acpSessionId: response.sessionId,

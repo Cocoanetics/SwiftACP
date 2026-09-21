@@ -29,6 +29,7 @@ enum ExecCommand {
             words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
+        let mcpServers = try context.config.mcpServerSpecs()
         let meta = SessionLifecycle.claudeMeta(agent: agent, flags: flags)
         let renderer = OutputRenderer(options: renderOptions(flags))
         let onClientRequest = clientOperationObserver(renderer)
@@ -39,7 +40,7 @@ enum ExecCommand {
                 authCredentials: context.config.auth, authPolicy: flags.authPolicy,
                 inheritStderr: flags.verbose, onClientRequest: onClientRequest)
             do {
-                let session = try await handle.newSession(meta: meta)
+                let session = try await handle.newSession(mcpServers: mcpServers, meta: meta)
                 let outcome = try await session.run(
                     promptText, onUpdate: { renderer.render($0) },
                     onClientOperation: { renderer.clientOperation($0) })

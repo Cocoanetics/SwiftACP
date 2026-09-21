@@ -9,6 +9,7 @@ agent message chunks before returning a stop reason.
 It deliberately uses no third-party packages so it runs anywhere Python 3 does.
 """
 import json
+import os
 import sys
 
 
@@ -27,6 +28,13 @@ def respond(req_id, result):
 
 def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
+
+
+def log_request(message):
+    path = os.environ.get("MOCK_REQUEST_LOG")
+    if path and message.get("method", "").startswith("session/"):
+        with open(path, "a", encoding="utf-8") as output:
+            output.write(json.dumps(message) + "\n")
 
 
 def handle_prompt(req_id, params):
@@ -98,6 +106,7 @@ def main():
 
         method = message.get("method")
         req_id = message.get("id")
+        log_request(message)
 
         if method == "initialize":
             respond(req_id, {
