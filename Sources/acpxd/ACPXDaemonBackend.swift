@@ -456,11 +456,9 @@ actor ACPXDaemonBackend: ACPXBackend {
         try await entry.session.cancel()
         return true
     }
-
-    /// Return the live entry for `sessionId` — launching the agent and reconnecting
-    /// the session if it isn't held. When the agent refuses the reconnect (it no
-    /// longer knows the session), fall back to a fresh `session/new` on the same
-    /// launch, still keyed under the caller's session id.
+    /// Return the live entry for `sessionId`, launching the agent and reconnecting
+    /// if needed. When the agent no longer knows the session, fall back to a fresh
+    /// `session/new` on the same launch, still keyed under the caller's session id.
     private func ensure(sessionId: String, agentCommand: String, cwd rawCwd: String) async throws
         -> Live {
         if let existing = live[sessionId] { return existing }
@@ -486,7 +484,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         live[sessionId] = entry
         return entry
     }
-
     /// Expand and validate a caller-supplied working directory. MCP clients have no
     /// shell, so expand `~` ourselves (the CLI relies on the shell) and require the
     /// directory to exist — otherwise the agent fails with a cryptic internal error.
