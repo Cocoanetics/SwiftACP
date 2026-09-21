@@ -22,10 +22,16 @@ actor ACPXDaemonBackend: ACPXBackend {
     struct Live {
         let agent: ACPAgent
         let session: ACPSession
-        /// The session's own MCP servers this connection was made with (`nil` =
-        /// the cwd's config-file servers). A record that later asks for a different
-        /// set can't be served by this connection — see ``ensure``.
-        let mcpServers: [McpServerConfig]?
+        /// The session's *own* MCP servers as sent on the wire when this connection
+        /// was made, or `nil` when the session uses the cwd's config-file servers.
+        /// Normalized (not the raw config shape) so entries that differ only in
+        /// omitted-vs-explicit defaults — `{name, command}` and
+        /// `{type: "stdio", name, command, args: [], env: []}` — compare equal,
+        /// the way npm acpx fingerprints the *parsed* server list. A record that
+        /// later asks for a different set can't be served by this connection; a
+        /// config-file-backed session (`nil`) never conflicts, matching npm, where
+        /// only an explicit `--mcp-config` is fingerprinted — see ``ensure``.
+        let sessionSpecs: [MCPServerSpec]?
     }
 
     /// Live sessions held open between prompts, keyed by ACP session id.
@@ -73,10 +79,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     ) async throws -> String {
         let cwd = try resolveCwd(rawCwd)
         let config = try ConfigLoader.load(cwd: cwd)
+        // Only normalize the config-file servers when they're the ones being sent:
+        // a caller supplying its own set must not be refused over an unrelated bad
+        // entry in the cwd's config.
+        let configServers = mcpServers == nil ? try config.mcpServerSpecs() : []
         let record = try await SessionEngine.createSession(
             agentCommand: launchCommand(for: agentCommand, config: config), cwd: cwd,
             name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-            authPolicy: config.authPolicy, mcpServers: try config.mcpServerSpecs(),
+            authPolicy: config.authPolicy, mcpServers: configServers,
             sessionMcpServers: mcpServers, inheritStderr: inheritAgentStderr)
         return record.acpxRecordId
     }
@@ -92,7 +102,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Returns: `true` once persisted.
     func setSessionMcpServers(sessionId: String, mcpServers: [McpServerConfig]) async throws -> Bool {
         // Reject malformed entries up front, before touching the record.
-        _ = try mcpServers.map { try $0.protocolSpec() }
+        let specs = try mcpServers.map { try $0.protocolSpec() }
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
@@ -104,7 +114,10 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard var record = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        if let entry = live[acpSessionId], entry.mcpServers != mcpServers {
+        // Compare what would go on the wire, so re-sending the same servers written
+        // differently (omitted vs explicit `args`/`env`/`type`) is the no-op it looks
+        // like, rather than a conflict.
+        if let entry = live[acpSessionId], entry.sessionSpecs != specs {
             throw DaemonError.mcpConfigConflict(sessionId)
         }
         var acpx = record.acpx ?? SessionAcpxState()
@@ -224,8 +237,13 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
-        guard var record = findRecord(sessionId) else { return false }
-        await evict(record.acpSessionId)
+        guard let initial = findRecord(sessionId) else { return false }
+        await evict(initial.acpSessionId)
+        // Re-read after the await: closing the agent suspends this actor, so another
+        // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
+        // here to unblock) may have persisted changes meanwhile. Writing the
+        // pre-suspension snapshot would silently revert them.
+        var record = findRecord(sessionId) ?? initial
         record.pid = nil
         record.closed = true
         record.closedAt = nowISO()
@@ -413,8 +431,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     private func ensure(
         sessionId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?
     ) async throws -> Live {
+        let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         if let existing = live[sessionId] {
-            guard existing.mcpServers == mcpServers else {
+            guard existing.sessionSpecs == sessionSpecs else {
                 throw DaemonError.mcpConfigConflict(sessionId)
             }
             return existing
@@ -423,8 +442,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         // Resolve config for this cwd so the agent gets the same injected `auth`
         // credentials / auth policy (and config-alias resolution) the CLI applies.
         let config = try ConfigLoader.load(cwd: cwd)
-        let specs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
-            ?? config.mcpServerSpecs()
+        let specs = try sessionSpecs ?? config.mcpServerSpecs()
         let handle = try await ACPAgent.launch(
             agent: launchCommand(for: agentCommand, config: config), cwd: cwd, permission: .approveAll,
             authCredentials: config.auth, authPolicy: config.authPolicy,
@@ -437,7 +455,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 NewSessionRequest(cwd: cwd, mcpServers: specs))
             session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
         }
-        let entry = Live(agent: handle, session: session, mcpServers: mcpServers)
+        let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[sessionId] = entry
         return entry
     }

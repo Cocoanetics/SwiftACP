@@ -59,7 +59,8 @@ enum Router {
         // replace the config-file ones for the whole invocation (relative to `--cwd`,
         // as in npm acpx).
         let config = try ConfigLoader.load(
-            cwd: ACPXPaths.resolve(cwd, base: physicalCWD()), mcpConfigPath: routing.string("mcp-config"))
+            cwd: ACPXPaths.resolve(cwd, base: physicalCWD()),
+            mcpConfigPath: ConfigLoader.explicitMcpConfigPath(routing.string("mcp-config")))
         let knownAgents = Set(AgentRegistry.builtIn.keys)
             .union(AgentRegistry.aliases.keys)
             .union(config.agents.keys)

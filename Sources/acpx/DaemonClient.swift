@@ -180,6 +180,19 @@ enum DaemonClient {
             .setConfigOption(sessionId: sessionId, configId: configId, value: value)) ?? []
     }
 
+    /// Ask a *running* daemon to release its live agent for `sessionId` and mark the
+    /// record closed. Returns whether a daemon handled it. Never spawns one — with no
+    /// daemon there is no held connection, and the caller marks the record itself.
+    ///
+    /// This is what makes the remedy the MCP-config conflict suggests ("close the
+    /// session before retrying") work from the CLI: only the daemon can drop the held
+    /// connection that pins the session's MCP servers.
+    static func closeSession(sessionId: String) async -> Bool {
+        (try? await withClient(spawnIfNeeded: false) {
+            try await $0.closeSession(sessionId: sessionId)
+        }) ?? false
+    }
+
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel.

@@ -56,21 +56,23 @@ import Testing
     @Test func explicitFileMustExistAndCarryTheArray() async throws {
         try await withIsolatedStore {
             let cwd = try makeProjectDir()
+            // A missing file and a file without the array are distinct errors, with
+            // npm acpx's two messages (loadExplicitMcpConfig / parseMcpServers).
             let missing = cwd + "/nope.json"
-            #expect(throws: ConfigError.self) {
-                try ConfigLoader.load(cwd: cwd, mcpConfigPath: missing)
-            }
             do {
                 _ = try ConfigLoader.load(cwd: cwd, mcpConfigPath: missing)
+                Issue.record("expected a ConfigError")
             } catch let error as ConfigError {
-                // npm acpx's parseMcpServers wording.
-                #expect(error.message == "Invalid mcpServers in \(missing): expected array")
+                #expect(error.message == "MCP config file not found: \(missing)")
             }
 
             let noArray = cwd + "/other.json"
             try #"{"defaultAgent":"codex"}"#.write(toFile: noArray, atomically: true, encoding: .utf8)
-            #expect(throws: ConfigError.self) {
-                try ConfigLoader.load(cwd: cwd, mcpConfigPath: noArray)
+            do {
+                _ = try ConfigLoader.load(cwd: cwd, mcpConfigPath: noArray)
+                Issue.record("expected a ConfigError")
+            } catch let error as ConfigError {
+                #expect(error.message == "Invalid mcpServers in \(noArray): expected array")
             }
 
             // An explicitly empty array is valid and detaches every server.
@@ -91,6 +93,24 @@ import Testing
             let config = try ConfigLoader.load(cwd: cwd, mcpConfigPath: bad)
             #expect(throws: ConfigError.self) { try config.mcpServerSpecs() }
         }
+    }
+
+    /// Config errors reach the user as their message: they are thrown before a
+    /// command runs, where the CLI prints `error.localizedDescription`.
+    @Test func configErrorsCarryTheirMessageThroughLocalizedDescription() {
+        let error = ConfigError("MCP config file not found: /tmp/nope.json")
+        #expect(error.localizedDescription == "MCP config file not found: /tmp/nope.json")
+        #expect((error as Error).localizedDescription == "MCP config file not found: /tmp/nope.json")
+    }
+
+    /// A blank value (or the bare `--` terminator) counts as "not given", the way
+    /// npm acpx's `resolveMcpConfigPath` treats it — not as a path to load.
+    @Test func blankFlagValueCountsAsNotGiven() {
+        #expect(ConfigLoader.explicitMcpConfigPath(nil) == nil)
+        #expect(ConfigLoader.explicitMcpConfigPath("") == nil)
+        #expect(ConfigLoader.explicitMcpConfigPath("   ") == nil)
+        #expect(ConfigLoader.explicitMcpConfigPath("--") == nil)
+        #expect(ConfigLoader.explicitMcpConfigPath("  run/mcp.json ") == "run/mcp.json")
     }
 
     // MARK: - Helpers

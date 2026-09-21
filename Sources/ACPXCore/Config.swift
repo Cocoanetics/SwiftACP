@@ -124,10 +124,16 @@ public struct ResolvedAcpxConfig: Sendable {
 }
 
 /// An unreadable/invalid config file, with a user-facing message.
-public struct ConfigError: Error, CustomStringConvertible {
+///
+/// `LocalizedError` so the message survives `localizedDescription` — config errors
+/// are thrown before a command runs (e.g. a bad `--mcp-config`), where the CLI's
+/// catch-all prints exactly that, and would otherwise show Foundation's opaque
+/// "The operation couldn't be completed" text.
+public struct ConfigError: Error, LocalizedError, CustomStringConvertible {
     public let message: String
     public init(_ message: String) { self.message = message }
     public var description: String { message }
+    public var errorDescription: String? { message }
 }
 
 /// Reads `~/.acpx/config.json` and `<cwd>/.acpxrc.json` and merges them into a
@@ -182,16 +188,29 @@ public enum ConfigLoader {
     }
 
     /// Read a `--mcp-config` file: a JSON object whose top-level `mcpServers` array
-    /// has the config-file entry shape. Unlike the config files, it is an error for
-    /// it to be missing or to lack the array (npm acpx's `parseMcpServers` message).
+    /// has the config-file entry shape. Unlike the config files, a missing file is an
+    /// error, and so is one without the array — with npm acpx's two messages
+    /// (`loadExplicitMcpConfig` / `parseMcpServers`).
     private static func loadExplicitMcpServers(
         _ rawPath: String, cwd: String
     ) throws -> (path: String, servers: [McpServerConfig]) {
         let path = ACPXPaths.resolve(rawPath, base: cwd)
-        guard let file = try readFile(URL(fileURLWithPath: path)), let servers = file.mcpServers else {
+        guard let file = try readFile(URL(fileURLWithPath: path)) else {
+            throw ConfigError("MCP config file not found: \(path)")
+        }
+        guard let servers = file.mcpServers else {
             throw ConfigError("Invalid mcpServers in \(path): expected array")
         }
         return (path, servers)
+    }
+
+    /// Normalize a raw `--mcp-config` value: blank (or the bare `--` terminator)
+    /// counts as "not given", matching npm acpx's `resolveMcpConfigPath`.
+    public static func explicitMcpConfigPath(_ rawValue: String?) -> String? {
+        guard let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !trimmed.isEmpty, trimmed != "--"
+        else { return nil }
+        return trimmed
     }
 
     private static func msFromSeconds(_ seconds: Double?) -> Int? {
