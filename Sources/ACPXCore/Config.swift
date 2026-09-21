@@ -52,6 +52,62 @@ public struct McpServerConfig: Codable, Sendable {
         case type, name, command, args, env, url, headers
         case meta = "_meta"
     }
+
+    /// Normalize the config shape to the ACP wire shape, matching npm acpx.
+    public func protocolSpec() throws -> MCPServerSpec {
+        let name = try nonEmpty(name, field: "name")
+        let type = try self.type.map { try nonEmpty($0, field: "type") } ?? "stdio"
+        switch type {
+        case "stdio":
+            guard let command else {
+                throw ConfigError("Invalid mcpServers entry \(name): missing command")
+            }
+            return .stdio(
+                StdioMCPServer(
+                    name: name, command: try nonEmpty(command, field: "command"),
+                    args: args ?? [], env: try environmentVariables(env), meta: meta))
+        case "http", "sse":
+            guard let url else {
+                throw ConfigError("Invalid mcpServers entry \(name): missing url")
+            }
+            var value: [String: JSONValue] = [
+                "type": .string(type),
+                "name": .string(name),
+                "url": .string(try nonEmpty(url, field: "url")),
+                "headers": .array(
+                    try environmentVariables(headers).map {
+                        .object(["name": .string($0.name), "value": .string($0.value)])
+                    })
+            ]
+            if let meta { value["_meta"] = meta }
+            return .other(.object(value))
+        default:
+            throw ConfigError("Invalid mcpServers entry \(name): expected type stdio, http, or sse")
+        }
+    }
+
+    private func environmentVariables(_ entries: [EnvEntry]?) throws -> [EnvVariable] {
+        try (entries ?? []).map {
+            EnvVariable(
+                name: try nonEmpty($0.name, field: "name"),
+                value: try nonEmpty($0.value, field: "value"))
+        }
+    }
+
+    private func nonEmpty(_ value: String, field: String) throws -> String {
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            throw ConfigError("Invalid mcpServers entry \(name): empty \(field)")
+        }
+        return value
+    }
+}
+
+extension ResolvedAcpxConfig {
+    /// MCP servers normalized for `session/new`, `session/load`, and `session/resume`.
+    public func mcpServerSpecs() throws -> [MCPServerSpec] {
+        try mcpServers.map { try $0.protocolSpec() }
+    }
 }
 
 /// The fully-resolved configuration (merge of global + project + defaults).

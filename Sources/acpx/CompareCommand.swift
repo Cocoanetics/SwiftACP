@@ -65,6 +65,7 @@ enum CompareCommand {
     ) throws -> Row {
         let invocation = try Flags.resolveAgentInvocation(agentName, flags, config: config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: config)
+        let mcpServers = try config.mcpServerSpecs()
         let agentCommand = invocation.agentCommand
         let cwd = invocation.cwd
         let start = Date()
@@ -75,7 +76,7 @@ enum CompareCommand {
                     authCredentials: config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: false)
                 do {
-                    let session = try await handle.newSession()
+                    let session = try await handle.newSession(mcpServers: mcpServers)
                     let result = try await session.run(prompt)
                     await handle.close()
                     return result

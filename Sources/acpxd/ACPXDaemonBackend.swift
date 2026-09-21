@@ -67,7 +67,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         let record = try await SessionEngine.createSession(
             agentCommand: launchCommand(for: agentCommand, config: config), cwd: cwd,
             name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-            authPolicy: config.authPolicy, inheritStderr: inheritAgentStderr)
+            authPolicy: config.authPolicy, mcpServers: try config.mcpServerSpecs(),
+            inheritStderr: inheritAgentStderr)
         return record.acpxRecordId
     }
 
@@ -455,11 +456,9 @@ actor ACPXDaemonBackend: ACPXBackend {
         try await entry.session.cancel()
         return true
     }
-
-    /// Return the live entry for `sessionId` — launching the agent and reconnecting
-    /// the session if it isn't held. When the agent refuses the reconnect (it no
-    /// longer knows the session), fall back to a fresh `session/new` on the same
-    /// launch, still keyed under the caller's session id.
+    /// Return the live entry for `sessionId`, launching the agent and reconnecting
+    /// if needed. When the agent no longer knows the session, fall back to a fresh
+    /// `session/new` on the same launch, still keyed under the caller's session id.
     private func ensure(sessionId: String, agentCommand: String, cwd rawCwd: String) async throws
         -> Live {
         if let existing = live[sessionId] { return existing }
@@ -467,23 +466,24 @@ actor ACPXDaemonBackend: ACPXBackend {
         // Resolve config for this cwd so the agent gets the same injected `auth`
         // credentials / auth policy (and config-alias resolution) the CLI applies.
         let config = try ConfigLoader.load(cwd: cwd)
+        let mcpServers = try config.mcpServerSpecs()
         let handle = try await ACPAgent.launch(
             agent: launchCommand(for: agentCommand, config: config), cwd: cwd, permission: .approveAll,
             authCredentials: config.auth, authPolicy: config.authPolicy,
             inheritStderr: inheritAgentStderr)
         let session: ACPSession
         do {
-            session = try await handle.reconnectSession(id: sessionId, cwd: cwd)
+            session = try await handle.reconnectSession(
+                id: sessionId, cwd: cwd, mcpServers: mcpServers)
         } catch {
             let response = try await handle.connection.newSession(
-                NewSessionRequest(cwd: cwd, mcpServers: []))
+                NewSessionRequest(cwd: cwd, mcpServers: mcpServers))
             session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
         }
         let entry = Live(agent: handle, session: session)
         live[sessionId] = entry
         return entry
     }
-
     /// Expand and validate a caller-supplied working directory. MCP clients have no
     /// shell, so expand `~` ourselves (the CLI relies on the shell) and require the
     /// directory to exist — otherwise the agent fails with a cryptic internal error.

@@ -49,11 +49,21 @@ public struct StdioMCPServer: Codable, Hashable, Sendable {
     public var command: String
     public var args: [String]
     public var env: [EnvVariable]
+    public var meta: JSONValue?
 
-    public init(name: String, command: String, args: [String] = [], env: [EnvVariable] = []) {
+    public init(
+        name: String, command: String, args: [String] = [], env: [EnvVariable] = [],
+        meta: JSONValue? = nil
+    ) {
         self.name = name
         self.command = command
         self.args = args
         self.env = env
+        self.meta = meta
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, command, args, env
+        case meta = "_meta"
     }
 }

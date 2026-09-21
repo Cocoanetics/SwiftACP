@@ -69,7 +69,8 @@ enum SessionLifecycle {
                 return try await SessionEngine.createSession(
                     agentCommand: agent.agentCommand, cwd: agent.cwd, name: name,
                     permission: permission, authCredentials: config.auth,
-                    authPolicy: flags.authPolicy, meta: meta, sessionOptions: options,
+                    authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
+                    meta: meta, sessionOptions: options,
                     inheritStderr: flags.verbose)
             } catch {
                 throw CLIError(error.localizedDescription)
