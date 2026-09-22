@@ -89,4 +89,30 @@ struct AgentRegistryTests {
         #expect(codexCommand?.contains("@agentclientprotocol/codex-acp@") == true)
         #expect(codexCommand?.contains("^0.0.44") == false)
     }
+
+    // MARK: - registry parity
+
+    /// The built-in list, in upstream's `AGENT_DEFINITIONS` declaration order — which
+    /// is also the order `--help` prints. Pinned deliberately: a clone that silently
+    /// drifts from the registry it mirrors is the bug this asserts against, so adding
+    /// an agent upstream should force a conscious edit here.
+    ///
+    /// `antigravity` is upstream-only on purpose: its fixed-choice questions must be
+    /// cancelled with a user-answer-required error (upstream 0.17.1, breaking), which
+    /// is a behavior change rather than a registry line.
+    @Test func builtInAgentsMatchUpstreamOrder() {
+        #expect(
+            AgentRegistry.orderedNames == [
+                "pi", "openclaw", "codex", "claude", "gemini", "cursor", "copilot", "devin",
+                "droid", "fast-agent", "fx", "grok-build", "iflow", "junie", "kilocode", "kimi",
+                "kiro", "mcode", "mux", "opencode", "pool", "qoder", "qwen", "trae", "zeroclaw"
+            ])
+        #expect(Set(AgentRegistry.orderedNames).count == AgentRegistry.orderedNames.count)
+        #expect(AgentRegistry.builtIn.count == AgentRegistry.orderedNames.count)
+    }
+
+    @Test func factoryDroidAliasesResolve() {
+        #expect(AgentRegistry.aliases["factory-droid"] == "droid")
+        #expect(AgentRegistry.aliases["factorydroid"] == "droid")
+    }
 }

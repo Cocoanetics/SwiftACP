@@ -8,26 +8,28 @@ import JSONRPCWire
 /// `npx`; if their adapter binary is already on `PATH` we prefer it to avoid the
 /// npx resolution step. Ported from acpx's `agent-registry.ts`.
 public enum AgentRegistry {
-    /// Pinned adapter package ranges. Mirrors upstream acpx, except `codex` is
-    /// intentionally bumped ahead: acpx still pins `^0.0.44`, whose bundled
-    /// `@openai/codex` (0.128.0) fails `initialize` with an opaque "Codex process
-    /// has exited with code 1" because macOS XProtect (def 5347) quarantines that
-    /// build as a false positive. `^1.1.0` bundles codex 0.142.x, which is not
-    /// flagged. The ``launch(for:cwd:environment:inheritStderr:overrides:)``
-    /// `CODEX_PATH` fallback covers this independently whenever a system `codex`
-    /// is installed. See issue #11 / openclaw/acpx#434.
+    /// Pinned adapter package ranges, mirroring upstream acpx's
+    /// `ACP_ADAPTER_PACKAGE_RANGES` (v0.19.1).
+    ///
+    /// `codex` used to be pinned ahead of acpx deliberately: at the 0.11.0 port
+    /// baseline acpx still pinned `^0.0.44`, whose bundled `@openai/codex` (0.128.0)
+    /// fails `initialize` with an opaque "Codex process has exited with code 1"
+    /// because macOS XProtect (def 5347) quarantines that build as a false positive
+    /// (issue #11 / openclaw/acpx#434). Upstream has since moved to `^1.1.5`, past
+    /// the flagged build, so these simply track upstream again. The
+    /// ``launch(for:cwd:environment:inheritStderr:overrides:)`` `CODEX_PATH` fallback
+    /// covers a flagged bundle independently whenever a system `codex` is installed.
     public enum PackageRange {
-        public static let claude = "^0.37.0"
-        public static let codex = "^1.1.0"
-        public static let mux = "^0.27.0"
-        public static let pi = "^0.0.26"
+        public static let claude = "^0.76.0"
+        public static let codex = "^1.1.5"
+        public static let mux = "^0.28.0"
+        public static let pi = "^0.0.33"
     }
 
     /// agent name → launch command line, in registry declaration order — the
     /// same order acpx lists them under `Commands:` in `--help`. Swift's
     /// `Dictionary` is unordered, so the ordered array is the source of truth and
-    /// ``builtIn`` is derived from it. Mirrors acpx's `AGENT_REGISTRY` (the
-    /// `codex` adapter range is bumped ahead of acpx — see ``PackageRange``).
+    /// ``builtIn`` is derived from it. Mirrors acpx's `AGENT_REGISTRY`.
     public static let ordered: [(name: String, command: String)] = [
         ("pi", "npx pi-acp@\(PackageRange.pi)"),
         ("openclaw", "openclaw acp"),
@@ -36,17 +38,28 @@ public enum AgentRegistry {
         ("gemini", "gemini --acp"),
         ("cursor", "cursor-agent acp"),
         ("copilot", "copilot --acp --stdio"),
+        // `antigravity` is deliberately absent: upstream 0.17.1 made its fixed-choice
+        // questions a user-answer-required cancellation that overrides `--approve-all`
+        // and permission policies, and the shortcut without that rule is worse than no
+        // shortcut. Tracked separately from the plain registry additions.
+        ("devin", "devin acp"),
         ("droid", "droid exec --output-format acp"),
         ("fast-agent", "uvx fast-agent-mcp acp"),
+        ("fx", "fx acp"),
+        ("grok-build", "grok agent stdio"),
         ("iflow", "iflow --experimental-acp"),
+        ("junie", "junie --acp=true"),
         ("kilocode", "npx -y @kilocode/cli acp"),
         ("kimi", "kimi acp"),
         ("kiro", "kiro-cli-chat acp"),
+        ("mcode", "mcode acp"),
         ("mux", "npx -y mux@\(PackageRange.mux) acp"),
         ("opencode", "npx -y opencode-ai acp"),
+        ("pool", "pool acp"),
         ("qoder", "qodercli --acp"),
         ("qwen", "qwen --acp"),
-        ("trae", "traecli acp serve")
+        ("trae", "traecli acp serve"),
+        ("zeroclaw", "zeroclaw acp")
     ]
 
     /// agent name → launch command line (unordered lookup view of ``ordered``).
@@ -54,7 +67,9 @@ public enum AgentRegistry {
         Dictionary(uniqueKeysWithValues: ordered.map { ($0.name, $0.command) })
 
     /// Agent name aliases resolved before lookup. Mirrors acpx's `AGENT_ALIASES`.
-    public static let aliases: [String: String] = ["factory-droid": "droid"]
+    public static let aliases: [String: String] = [
+        "factory-droid": "droid", "factorydroid": "droid"
+    ]
 
     /// Built-in agent names in registry order (for `--help` and listings).
     public static var orderedNames: [String] { ordered.map(\.name) }

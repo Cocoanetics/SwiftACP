@@ -199,7 +199,10 @@ public enum SessionStore {
     private static func isWithin(boundary: String, target: String) -> Bool {
         if boundary == target { return true }
         let rel = relativePath(from: boundary, to: target)
-        return rel != "" && !rel.hasPrefix("..") && !rel.hasPrefix("/")
+        // acpx's `isWithinBoundary`: only a relative path that *is* `..`, or steps up
+        // through `../`, leaves the boundary. A bare `..` prefix test would also reject
+        // a directory whose own name begins with two dots (`..foo`).
+        return rel != "" && rel != ".." && !rel.hasPrefix("../") && !rel.hasPrefix("/")
     }
 
     private static func nextWalkParent(_ current: String, boundary: String) -> String? {
@@ -221,14 +224,14 @@ public enum SessionStore {
         return combined.joined(separator: "/")
     }
 
-    /// Walk up looking for a directory containing a `.git` directory.
+    /// Walk up looking for a directory holding a `.git` entry — a directory in an
+    /// ordinary clone, a *file* carrying a `gitdir:` pointer in a worktree or a
+    /// submodule (acpx's `hasGitMarker`: `isDirectory() || isFile()`).
     public static func findGitRepositoryRoot(_ startDir: String) -> String? {
         var current = absolute(startDir)
         let fm = FileManager.default
         while true {
-            var isDir: ObjCBool = false
-            let gitPath = current + "/.git"
-            if fm.fileExists(atPath: gitPath, isDirectory: &isDir), isDir.boolValue {
+            if fm.fileExists(atPath: current + "/.git") {
                 return current
             }
             let parent = URL(fileURLWithPath: current).deletingLastPathComponent().path
@@ -276,10 +279,38 @@ func encodeForDisk<T: Encodable>(_ value: T, using encoder: JSONEncoder) throws 
     try encoder.encode(value) + Data("\n".utf8)
 }
 
+/// Write `data` to `url` so a concurrent reader — another CLI invocation, `acpxd`, or
+/// a real npm `acpx` sharing the same store — sees either the old file or the new one,
+/// never a missing one, and so the result stays readable only by its owner.
+///
+/// `rename(2)` replaces the destination atomically. `FileManager.moveItem` cannot, which
+/// is why this used to unlink the destination first and leave a window with no file at
+/// all. Records hold whole conversations, so the file is created `0600` rather than at
+/// the process umask (acpx keeps records and indexes private across atomic rewrites).
 func atomicWrite(_ data: Data, to url: URL) throws {
     let temp = url.deletingLastPathComponent()
-        .appendingPathComponent("\(url.lastPathComponent).\(getpid()).\(Int(Date().timeIntervalSince1970 * 1000)).tmp")
-    try data.write(to: temp)
-    _ = try? FileManager.default.removeItem(at: url)
-    try FileManager.default.moveItem(at: temp, to: url)
+        .appendingPathComponent(temporaryWriteName(for: url.lastPathComponent))
+    guard
+        FileManager.default.createFile(
+            atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600])
+    else {
+        throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temp.path])
+    }
+    guard rename(temp.path, url.path) == 0 else {
+        let failure = errno
+        try? FileManager.default.removeItem(at: temp)
+        throw NSError(
+            domain: NSPOSIXErrorDomain, code: Int(failure),
+            userInfo: [NSFilePathErrorKey: url.path])
+    }
+}
+
+/// A unique sibling name for `basename`'s temp file. Random rather than pid+millisecond
+/// so two writes from one process cannot collide, and trimmed to keep the component
+/// inside the 255-byte filesystem limit that a long session id would otherwise exceed.
+private func temporaryWriteName(for basename: String) -> String {
+    let suffix = ".\(UUID().uuidString.prefix(8)).tmp"
+    var trimmed = basename
+    while trimmed.utf8.count + suffix.utf8.count > 255 { trimmed.removeLast() }
+    return trimmed + suffix
 }
