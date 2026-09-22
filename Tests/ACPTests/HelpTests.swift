@@ -98,11 +98,11 @@ struct HelpTests {
     @Test func rootListsAllRegistryAgentsInOrder() {
         let root = HelpCatalog.root(cwd: "/tmp")
         let agentTerms = AgentRegistry.orderedNames.map { "\($0) [options] [prompt...]" }
-        // The first 18 Commands rows are the agents, in registry order.
+        // The leading Commands rows are the agents, in registry order — however many
+        // the registry holds (its exact contents are pinned in `AgentRegistryTests`).
         let leadingTerms = root.subcommands.prefix(agentTerms.count).map(\.term)
         #expect(Array(leadingTerms) == agentTerms)
         #expect(AgentRegistry.orderedNames.first == "pi")
-        #expect(AgentRegistry.orderedNames.count == 18)
     }
 
     // MARK: boxWrap algorithm
