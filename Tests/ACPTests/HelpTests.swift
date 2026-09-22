@@ -49,12 +49,17 @@ struct HelpTests {
         let rendered = HelpRenderer.render(HelpCatalog.root(cwd: "/tmp"))
         #expect(rendered.contains("Usage: acpx [options] [command] [prompt...]"))
         #expect(rendered.contains("Headless CLI client for the Agent Client Protocol"))
-        // 23 globals + auto -h, with the long permission-policy line on one line.
+        // 24 globals + auto -h, with the long permission-policy line on one line.
         #expect(
             rendered.contains(
                 "  --permission-policy <json-or-file>      Permission policy JSON or path "
                     + "(autoApprove, autoDeny, escalate, defaultAction)"))
         #expect(rendered.contains("--cwd <dir>                             Working directory (default: \"/tmp\")"))
+        // `--mcp-config` sits between --ttl and --verbose, as in npm acpx.
+        #expect(
+            rendered.contains(
+                "  --mcp-config <path>                     Load MCP servers from a JSON config file "
+                    + "instead of project/global mcpServers\n  --verbose"))
         #expect(rendered.hasSuffix("acpx --agent ./my-custom-server \"do something\"\n"))
     }
 

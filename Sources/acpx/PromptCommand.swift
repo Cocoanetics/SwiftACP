@@ -28,7 +28,12 @@ enum PromptCommand {
         // daemon reject the turn immediately instead of waiting.
         let wait = scan.boolean("wait") ?? true
 
-        let record = try findRoutedSessionOrThrow(agent: agent, name: name)
+        // `--mcp-config` re-attaches the named servers to the routed session before
+        // the turn: a running daemon reconnects the session so they take effect,
+        // which keeps the session (and its history) rather than making the caller
+        // close and recreate it.
+        let record = try SessionLifecycle.applyExplicitMcpServers(
+            to: try findRoutedSessionOrThrow(agent: agent, name: name), config: context.config)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
 
         let renderer = OutputRenderer(options: renderOptions(flags))

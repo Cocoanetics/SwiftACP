@@ -155,6 +155,20 @@ enum DaemonClient {
         try await withClient { _ = try await $0.setMode(sessionId: sessionId, modeId: modeId) }
     }
 
+    /// Replace a session's own MCP servers via a *running* daemon (which persists them
+    /// and sends them on the next reconnect), reconnecting a live session so the new
+    /// servers take effect without losing it. Throws ``DaemonUnavailable`` when no
+    /// daemon is running — then nothing holds the session, and the caller persists the
+    /// set itself.
+    static func setSessionMcpServers(
+        sessionId: String, mcpServers: [McpServerConfig], restart: Bool
+    ) async throws {
+        try await withClient(spawnIfNeeded: false) {
+            _ = try await $0.setSessionMcpServers(
+                sessionId: sessionId, mcpServers: mcpServers, restart: restart)
+        }
+    }
+
     /// Set a session's model on the live agent via the daemon (legacy set_model).
     static func setModel(sessionId: String, modelId: String) async throws {
         try await withClient { _ = try await $0.setModel(sessionId: sessionId, modelId: modelId) }
@@ -169,6 +183,19 @@ enum DaemonClient {
         defer { Task { await proxy.disconnect() } }
         return (try? await ACPXDaemon.Client(proxy: proxy)
             .setConfigOption(sessionId: sessionId, configId: configId, value: value)) ?? []
+    }
+
+    /// Ask a *running* daemon to release its live agent for `sessionId` and mark the
+    /// record closed. Returns whether a daemon handled it. Never spawns one — with no
+    /// daemon there is no held connection, and the caller marks the record itself.
+    ///
+    /// This is what makes the remedy the MCP-config conflict suggests ("close the
+    /// session before retrying") work from the CLI: only the daemon can drop the held
+    /// connection that pins the session's MCP servers.
+    static func closeSession(sessionId: String) async -> Bool {
+        (try? await withClient(spawnIfNeeded: false) {
+            try await $0.closeSession(sessionId: sessionId)
+        }) ?? false
     }
 
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.

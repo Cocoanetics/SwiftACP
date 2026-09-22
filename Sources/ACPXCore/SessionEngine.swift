@@ -14,6 +14,12 @@ public enum SessionEngine {
     /// and return it. The agent is closed before returning (ephemeral spawn).
     ///
     /// - Parameters:
+    ///   - mcpServers: the cwd's config-file servers for `session/new` (re-derived
+    ///     from config on every later reconnect, so not persisted).
+    ///   - sessionMcpServers: the session's *own* servers (`--mcp-config`, or the
+    ///     daemon's `newSession(mcpServers:)`). When given they replace
+    ///     `mcpServers` on the request and are persisted under the `acpx` state
+    ///     block so every reconnect replays them.
     ///   - sessionOptions: per-session options (model, allowed tools, …) to record
     ///     under the `acpx` state block, or `nil` to leave them unset.
     ///   - meta: optional `_meta` for the `session/new` request (e.g. claude model).
@@ -25,17 +31,21 @@ public enum SessionEngine {
         authCredentials: [String: String],
         authPolicy: String,
         mcpServers: [MCPServerSpec] = [],
+        sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         inheritStderr: Bool = false
     ) async throws -> SessionRecord {
+        // Validate the session's own servers before paying for a spawn.
+        let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
+            ?? mcpServers
         let handle = try await ACPAgent.launch(
             agent: agentCommand, cwd: cwd, permission: permission,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)
         do {
             let response = try await handle.connection.newSession(
-                NewSessionRequest(cwd: cwd, mcpServers: mcpServers, meta: meta))
+                NewSessionRequest(cwd: cwd, mcpServers: requestServers, meta: meta))
             let started = nowISO()
             var record = SessionRecord(
                 acpxRecordId: response.sessionId, acpSessionId: response.sessionId,
@@ -54,6 +64,7 @@ public enum SessionEngine {
             ModelSupport.applySessionModelState(
                 configOptions: response.configOptions, models: response.models, to: &acpx)
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
+            acpx.mcpServers = sessionMcpServers
             record.acpx = acpx
 
             // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF

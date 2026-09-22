@@ -172,11 +172,21 @@ enum SessionsCommand {
         else {
             throw CLIError(missingScopedSessionMessage(agent: agent, name: name))
         }
-        // (Daemon termination is wired once acpxd exists; mark closed locally.)
-        record.pid = nil
-        record.closed = true
-        record.closedAt = nowISO()
-        try SessionStore.writeRecord(record)
+        // Let a running daemon drop its live agent first — it owns the connection
+        // (and with it the session's MCP servers), and closes the record itself.
+        // With no daemon reachable there's nothing held, so mark the record here.
+        let acpSessionId = record.acpSessionId
+        let closedByDaemon = try runBlocking {
+            await DaemonClient.closeSession(sessionId: acpSessionId)
+        }
+        if closedByDaemon, let persisted = SessionStore.loadRecord(record.acpxRecordId) {
+            record = persisted
+        } else {
+            record.pid = nil
+            record.closed = true
+            record.closedAt = nowISO()
+            try SessionStore.writeRecord(record)
+        }
 
         switch flags.format {
         case "json":

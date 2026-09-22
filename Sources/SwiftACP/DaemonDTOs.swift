@@ -1,10 +1,74 @@
 import Foundation
+import JSONFoundation
 
 // The acpx daemon's MCP tool DTOs — the structured wire types the `acpx` MCP server
-// returns and streams. They live in this shared, iOS-capable library (rather than the
-// macOS-only `ACPXCore`) so the generated `ACPXDaemon.Client` and an iOS MCP client
-// can decode them. `ACPXCore` adds the `init(record:)` convenience initializers that
-// map a persisted `SessionRecord` into these.
+// accepts, returns and streams. They live in this shared, iOS-capable library (rather
+// than the macOS-only `ACPXCore`) so the generated `ACPXDaemon.Client` and an iOS MCP
+// client can encode/decode them. `ACPXCore` adds the `init(record:)` convenience
+// initializers that map a persisted `SessionRecord` into these.
+
+/// An MCP server entry in acpx's *config* shape — the flat stdio / http / sse union
+/// that `mcpServers` takes in `~/.acpx/config.json`, `.acpxrc.json` and `--mcp-config`
+/// files (npm acpx's `McpServerConfig`), and that the daemon's `newSession` /
+/// `setSessionMcpServers` tools accept per session.
+///
+/// It is deliberately a flat struct rather than the ACP wire enum ``MCPServerSpec``:
+/// an MCP tool parameter needs a JSON schema (`@Schema`), which only structs get, and
+/// callers should be able to omit `args` / `env` the way a config file can. `ACPXCore`
+/// normalizes it to the wire shape (`McpServerConfig.protocolSpec()`).
+@Schema
+public struct McpServerConfig: Codable, Hashable, Sendable {
+    /// The transport: `stdio` (the default when omitted), `http`, or `sse`.
+    public var type: String?
+    /// The server's name, as the agent lists it.
+    public var name: String
+    /// stdio: the executable the agent spawns.
+    public var command: String?
+    /// stdio: arguments for `command`.
+    public var args: [String]?
+    /// stdio: environment variables for the spawned server.
+    public var env: [EnvEntry]?
+    /// http / sse: the server URL.
+    public var url: String?
+    /// http / sse: HTTP headers to send.
+    public var headers: [EnvEntry]?
+    /// Optional `_meta` object, forwarded to the agent verbatim.
+    public var meta: [String: JSONValue]?
+
+    /// A name/value pair, used for both `env` (stdio) and `headers` (http/sse).
+    @Schema
+    public struct EnvEntry: Codable, Hashable, Sendable {
+        /// The variable / header name.
+        public var name: String
+        /// Its value.
+        public var value: String
+
+        public init(name: String, value: String) {
+            self.name = name
+            self.value = value
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, name, command, args, env, url, headers
+        case meta = "_meta"
+    }
+
+    public init(
+        type: String? = nil, name: String, command: String? = nil, args: [String]? = nil,
+        env: [EnvEntry]? = nil, url: String? = nil, headers: [EnvEntry]? = nil,
+        meta: [String: JSONValue]? = nil
+    ) {
+        self.type = type
+        self.name = name
+        self.command = command
+        self.args = args
+        self.env = env
+        self.url = url
+        self.headers = headers
+        self.meta = meta
+    }
+}
 
 /// The turn's terminal event, streamed as a final MCP log notification.
 ///
@@ -67,13 +131,18 @@ public struct SessionDetail: Codable, Sendable {
     public var lastAgentExitAt: String?
     public var lastAgentDisconnectReason: String?
     public var historyEntries: Int
+    /// The session's own MCP servers (set via `newSession` / `setSessionMcpServers`
+    /// or `--mcp-config`), replayed on every reconnect; `nil` = the session uses the
+    /// cwd's config-file servers.
+    public var mcpServers: [McpServerConfig]?
 
     public init(
         id: String, sessionId: String, agentSessionId: String?, agentCommand: String,
         cwd: String, name: String?, createdAt: String, lastUsedAt: String,
         lastPromptAt: String?, closed: Bool, closedAt: String?, pid: Int?,
         agentStartedAt: String?, lastAgentExitCode: Int?, lastAgentExitSignal: String?,
-        lastAgentExitAt: String?, lastAgentDisconnectReason: String?, historyEntries: Int
+        lastAgentExitAt: String?, lastAgentDisconnectReason: String?, historyEntries: Int,
+        mcpServers: [McpServerConfig]? = nil
     ) {
         self.id = id
         self.sessionId = sessionId
@@ -93,6 +162,7 @@ public struct SessionDetail: Codable, Sendable {
         self.lastAgentExitAt = lastAgentExitAt
         self.lastAgentDisconnectReason = lastAgentDisconnectReason
         self.historyEntries = historyEntries
+        self.mcpServers = mcpServers
     }
 }
 
