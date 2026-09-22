@@ -97,18 +97,32 @@ struct AgentRegistryTests {
     /// drifts from the registry it mirrors is the bug this asserts against, so adding
     /// an agent upstream should force a conscious edit here.
     ///
-    /// `antigravity` is upstream-only on purpose: its fixed-choice questions must be
-    /// cancelled with a user-answer-required error (upstream 0.17.1, breaking), which
-    /// is a behavior change rather than a registry line.
     @Test func builtInAgentsMatchUpstreamOrder() {
         #expect(
             AgentRegistry.orderedNames == [
-                "pi", "openclaw", "codex", "claude", "gemini", "cursor", "copilot", "devin",
-                "droid", "fast-agent", "fx", "grok-build", "iflow", "junie", "kilocode", "kimi",
-                "kiro", "mcode", "mux", "opencode", "pool", "qoder", "qwen", "trae", "zeroclaw"
+                "pi", "openclaw", "codex", "claude", "gemini", "cursor", "copilot",
+                "antigravity", "devin", "droid", "fast-agent", "fx", "grok-build", "iflow",
+                "junie", "kilocode", "kimi", "kiro", "mcode", "mux", "opencode", "pool", "qoder",
+                "qwen", "trae", "zeroclaw"
             ])
         #expect(Set(AgentRegistry.orderedNames).count == AgentRegistry.orderedNames.count)
         #expect(AgentRegistry.builtIn.count == AgentRegistry.orderedNames.count)
+    }
+
+    /// Antigravity is the one built-in whose entrypoint differs per platform; the spawn
+    /// client builds for macOS, Linux and Windows, so a single literal would be wrong on
+    /// two of them. Upstream: `.exe` on Windows, `--uid=` appended on Linux.
+    @Test func antigravityResolvesItsPlatformEntrypoint() throws {
+        let command = try #require(AgentRegistry.builtIn["antigravity"])
+        #if os(Windows)
+        #expect(command == "agy_acp_server.exe")
+        #elseif os(Linux)
+        #expect(command == "agy_acp_server.par --uid=")
+        #else
+        #expect(command == "agy_acp_server.par")
+        #endif
+        // Whatever the platform, the launch splits into an executable plus arguments.
+        #expect(!command.hasPrefix(" "))
     }
 
     @Test func factoryDroidAliasesResolve() {

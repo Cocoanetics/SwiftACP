@@ -288,19 +288,33 @@ public actor ACPAgentConnection {
         with handler: @Sendable (RequestPermissionRequest) async -> RequestPermissionResponse
     ) async -> RequestPermissionResponse {
         let agentName = initializeResult?.agentInfo?.name
+        // Ahead of the handler: an Antigravity interaction question has no answer any
+        // policy may give on the user's behalf, so it is cancelled rather than resolved.
+        if AntigravityCompat.isInteractionQuestion(request, agentName: agentName) {
+            let notice = AntigravityCompat.questionNotice
+            announce(notice, sessionId: request.sessionId)
+            return RequestPermissionResponse(outcome: .cancelled)
+                .addingACPXMetadata(["permissionNotice": .string(notice)])
+        }
         let response = await handler(CodexCompat.preferPermissionRefusal(request, agentName: agentName))
         guard let notice = CodexCompat.permissionNotice(
             request: request, response: response, agentName: agentName),
             !cancellingSessionIds.contains(request.sessionId),
             !isDeliberateCancellation(request, response)
         else { return response }
+        announce(notice, sessionId: request.sessionId)
+        return response.addingACPXMetadata(["permissionNotice": .string(notice)])
+    }
+
+    /// Report a permission notice to the event subscriptions, ahead of anything the
+    /// agent sends in reaction to the answer.
+    private func announce(_ notice: String, sessionId: SessionId) {
         let operation = ClientOperation(
             method: ClientOperation.requestPermission, status: .completed, summary: notice,
-            sessionId: request.sessionId)
+            sessionId: sessionId)
         for sink in eventSinks.values {
             sink.yield(.clientOperation(operation))
         }
-        return response.addingACPXMetadata(["permissionNotice": .string(notice)])
     }
 
     /// Whether a handler cancelled outright although the agent offered a refusal it
