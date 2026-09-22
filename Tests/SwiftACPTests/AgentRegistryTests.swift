@@ -109,6 +109,22 @@ struct AgentRegistryTests {
         #expect(AgentRegistry.builtIn.count == AgentRegistry.orderedNames.count)
     }
 
+    /// Antigravity is the one built-in whose entrypoint differs per platform; the spawn
+    /// client builds for macOS, Linux and Windows, so a single literal would be wrong on
+    /// two of them. Upstream: `.exe` on Windows, `--uid=` appended on Linux.
+    @Test func antigravityResolvesItsPlatformEntrypoint() throws {
+        let command = try #require(AgentRegistry.builtIn["antigravity"])
+        #if os(Windows)
+        #expect(command == "agy_acp_server.exe")
+        #elseif os(Linux)
+        #expect(command == "agy_acp_server.par --uid=")
+        #else
+        #expect(command == "agy_acp_server.par")
+        #endif
+        // Whatever the platform, the launch splits into an executable plus arguments.
+        #expect(!command.hasPrefix(" "))
+    }
+
     @Test func factoryDroidAliasesResolve() {
         #expect(AgentRegistry.aliases["factory-droid"] == "droid")
         #expect(AgentRegistry.aliases["factorydroid"] == "droid")

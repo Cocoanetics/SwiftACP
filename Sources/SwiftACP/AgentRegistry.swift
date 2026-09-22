@@ -39,9 +39,8 @@ public enum AgentRegistry {
         ("cursor", "cursor-agent acp"),
         ("copilot", "copilot --acp --stdio"),
         // Its interaction questions are cancelled rather than answered — see
-        // ``AntigravityCompat``. Upstream launches `agy_acp_server.exe` on Windows and
-        // appends `--uid=` on Linux; this CLI is macOS-only.
-        ("antigravity", "agy_acp_server.par"),
+        // ``AntigravityCompat``.
+        ("antigravity", antigravityCommand),
         ("devin", "devin acp"),
         ("droid", "droid exec --output-format acp"),
         ("fast-agent", "uvx fast-agent-mcp acp"),
@@ -61,6 +60,20 @@ public enum AgentRegistry {
         ("trae", "traecli acp serve"),
         ("zeroclaw", "zeroclaw acp")
     ]
+
+    /// Antigravity ships a different entrypoint per platform, so the registry resolves
+    /// it the way upstream's `process.platform` switch does: an `.exe` on Windows, and
+    /// on Linux the `.par` plus the `--uid=` argument its launcher requires. The spawn
+    /// client builds for all three desktop platforms, so this cannot be a macOS literal.
+    private static let antigravityCommand: String = {
+        #if os(Windows)
+        return "agy_acp_server.exe"
+        #elseif os(Linux)
+        return "agy_acp_server.par --uid="
+        #else
+        return "agy_acp_server.par"
+        #endif
+    }()
 
     /// agent name → launch command line (unordered lookup view of ``ordered``).
     public static let builtIn: [String: String] =
