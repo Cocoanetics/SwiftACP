@@ -97,15 +97,13 @@ struct AgentRegistryTests {
     /// drifts from the registry it mirrors is the bug this asserts against, so adding
     /// an agent upstream should force a conscious edit here.
     ///
-    /// `antigravity` is upstream-only on purpose: its fixed-choice questions must be
-    /// cancelled with a user-answer-required error (upstream 0.17.1, breaking), which
-    /// is a behavior change rather than a registry line.
     @Test func builtInAgentsMatchUpstreamOrder() {
         #expect(
             AgentRegistry.orderedNames == [
-                "pi", "openclaw", "codex", "claude", "gemini", "cursor", "copilot", "devin",
-                "droid", "fast-agent", "fx", "grok-build", "iflow", "junie", "kilocode", "kimi",
-                "kiro", "mcode", "mux", "opencode", "pool", "qoder", "qwen", "trae", "zeroclaw"
+                "pi", "openclaw", "codex", "claude", "gemini", "cursor", "copilot",
+                "antigravity", "devin", "droid", "fast-agent", "fx", "grok-build", "iflow",
+                "junie", "kilocode", "kimi", "kiro", "mcode", "mux", "opencode", "pool", "qoder",
+                "qwen", "trae", "zeroclaw"
             ])
         #expect(Set(AgentRegistry.orderedNames).count == AgentRegistry.orderedNames.count)
         #expect(AgentRegistry.builtIn.count == AgentRegistry.orderedNames.count)

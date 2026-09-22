@@ -38,10 +38,10 @@ public enum AgentRegistry {
         ("gemini", "gemini --acp"),
         ("cursor", "cursor-agent acp"),
         ("copilot", "copilot --acp --stdio"),
-        // `antigravity` is deliberately absent: upstream 0.17.1 made its fixed-choice
-        // questions a user-answer-required cancellation that overrides `--approve-all`
-        // and permission policies, and the shortcut without that rule is worse than no
-        // shortcut. Tracked separately from the plain registry additions.
+        // Its interaction questions are cancelled rather than answered — see
+        // ``AntigravityCompat``. Upstream launches `agy_acp_server.exe` on Windows and
+        // appends `--uid=` on Linux; this CLI is macOS-only.
+        ("antigravity", "agy_acp_server.par"),
         ("devin", "devin acp"),
         ("droid", "droid exec --output-format acp"),
         ("fast-agent", "uvx fast-agent-mcp acp"),

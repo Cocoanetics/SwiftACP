@@ -119,6 +119,9 @@ struct PermissionRefusalTests {
         var agentName: String
         var refusalIds: [String]
         var toolKind: ToolKind = .execute
+        /// Antigravity marks an interaction question by prefixing this — see
+        /// ``AntigravityCompat`` and `AntigravityQuestionTests`.
+        var toolCallId: String = "synthetic-call"
 
         func initialize(_ request: InitializeRequest) async -> InitializeResponse {
             InitializeResponse(agentInfo: Implementation(name: agentName, version: "1.12.0"))
@@ -132,7 +135,7 @@ struct PermissionRefusalTests {
             let options = [PermissionOption(optionId: "allow", name: "Allow", kind: .allowOnce)]
                 + refusalIds.map { PermissionOption(optionId: $0, name: $0, kind: .rejectOnce) }
             let response = try await session.requestPermission(
-                toolCall: ToolCallUpdate(toolCallId: "synthetic-call", title: "synthetic operation", kind: toolKind),
+                toolCall: ToolCallUpdate(toolCallId: toolCallId, title: "synthetic operation", kind: toolKind),
                 options: options)
             switch response.outcome {
             case .selected(let optionId): await session.sendText("selected:\(optionId)")
