@@ -274,9 +274,15 @@ public enum ConversationModel {
 
         // Result (output) goes into tool_results, keyed by id.
         if fields.hasResultPatch {
-            let isError = statusIndicatesError(fields.status?.rawValue)
+            // No `status` in this patch means "unchanged", not "not an error" — a
+            // recorded failure must survive a later output-only update (acpx:
+            // `is_error: status === undefined ? undefined : statusIndicatesError(status)`).
+            let isError = fields.status.map { statusIndicatesError($0.rawValue) }
+            // `JSONValue?.none`, not a bare `nil`: `JSONValue` is `ExpressibleByNilLiteral`,
+            // so `nil` here unifies as `JSONValue.null` and a status-only patch would
+            // overwrite recorded output with null instead of keeping it.
             let content: JSONValue? =
-                fields.hasRawOutput ? toToolResultContent(fields.rawOutput) : nil
+                fields.hasRawOutput ? toToolResultContent(fields.rawOutput) : JSONValue?.none
             upsertToolResult(
                 &agent, id: fields.id, toolName: tool.name, isError: isError,
                 content: content, output: fields.hasRawOutput ? fields.rawOutput : nil)
@@ -297,14 +303,14 @@ public enum ConversationModel {
     }
 
     private static func upsertToolResult(
-        _ agent: inout SessionAgentMessage, id: String, toolName: String, isError: Bool,
+        _ agent: inout SessionAgentMessage, id: String, toolName: String, isError: Bool?,
         content: JSONValue?, output: JSONValue?
     ) {
         let existing = agent.toolResults[id]
         agent.toolResults[id] = SessionToolResult(
             toolUseId: id,
             toolName: toolName,
-            isError: isError,
+            isError: isError ?? existing?.isError ?? false,
             content: content ?? existing?.content ?? .object(["Text": .string("")]),
             output: output ?? existing?.output)
     }
