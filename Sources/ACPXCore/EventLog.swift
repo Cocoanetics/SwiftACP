@@ -56,8 +56,7 @@ public struct SessionEventLogWriter {
     /// overflow `maxSegmentBytes`) and update the record's event-log metadata.
     public mutating func append(_ lines: [String], into record: inout SessionRecord) {
         guard !lines.isEmpty else { return }
-        try? FileManager.default.createDirectory(
-            at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+        try? SessionStore.createSessionsDirectory()
 
         for line in lines {
             let entry = line + "\n"
@@ -91,7 +90,10 @@ public struct SessionEventLogWriter {
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
-            try? data.write(to: url)
+            // The first write creates the log: owner-only, like the record beside it.
+            // Wire lines are the whole conversation, verbatim.
+            _ = FileManager.default.createFile(
+                atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600])
         }
     }
 

@@ -59,12 +59,26 @@ public enum SessionStore {
         try atomicWrite(encodeForDisk(record, using: recordDiskEncoder), to: url)
     }
 
-    /// `~/.acpx/sessions`, owner-only — the records inside hold whole conversations
-    /// (acpx's `ensureSessionDir`, mode 0700).
-    private static func createSessionsDirectory() throws {
-        try FileManager.default.createDirectory(
+    /// `~/.acpx/sessions`, owner-only — the records and event logs inside hold whole
+    /// conversations (acpx's `ensureSessionDir`, mode 0700).
+    ///
+    /// The mode is applied on creation *and* to a directory that already exists:
+    /// `createDirectory` ignores `attributes` when the directory is already there, so a
+    /// store created before this would otherwise keep its 0755 and stay traversable by
+    /// other local users. Only the group and other bits are cleared, so an owner who
+    /// tightened the directory further keeps their own mode.
+    static func createSessionsDirectory() throws {
+        let fm = FileManager.default
+        try fm.createDirectory(
             at: ACPXPaths.sessionsDir, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
+        let path = ACPXPaths.sessionsDir.path
+        guard let mode = (try? fm.attributesOfItem(atPath: path)[.posixPermissions]) as? NSNumber
+        else { return }
+        let tightened = mode.uint16Value & ~UInt16(0o077)
+        if tightened != mode.uint16Value {
+            try? fm.setAttributes([.posixPermissions: tightened], ofItemAtPath: path)
+        }
     }
 
     public static func deleteRecord(_ recordId: String, includeHistory: Bool) -> Int {

@@ -29,6 +29,35 @@ import Testing
         }
     }
 
+    /// The upgrade case: a store created before the store went owner-only keeps its
+    /// directory, and `createDirectory` applies `attributes` only when it creates one.
+    @Test func anExistingSessionsDirectoryIsTightened() async throws {
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(
+                at: ACPXPaths.sessionsDir, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o755])
+
+            try SessionStore.writeRecord(record(id: "upgrade-1"))
+
+            #expect(try mode(of: ACPXPaths.sessionsDir) == 0o700)
+        }
+    }
+
+    /// Event logs are the wire transcript — as private as the record beside them, and
+    /// they must not create the directory at a looser mode either.
+    @Test func eventLogsAreOwnerOnly() async throws {
+        try await withIsolatedStore {
+            var seed = record(id: "log-1")
+            var writer = SessionEventLogWriter(record: seed)
+            writer.append([#"{"jsonrpc":"2.0","method":"session/update"}"#], into: &seed)
+
+            let logMode = try mode(of: ACPXPaths.sessionStreamPath("log-1"))
+            let directoryMode = try mode(of: ACPXPaths.sessionsDir)
+            #expect(logMode == 0o600)
+            #expect(directoryMode == 0o700)
+        }
+    }
+
     @Test func rewritingKeepsThePrivateModeAndTheNewContent() async throws {
         try await withIsolatedStore {
             var seed = record(id: "priv-2")
