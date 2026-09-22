@@ -20,12 +20,12 @@ import Testing
         return try #require(attributes[.posixPermissions] as? NSNumber).uint16Value
     }
 
-    @Test func recordsAndIndexAreOwnerOnly() async throws {
+    @Test func recordsAndTheirDirectoryAreOwnerOnly() async throws {
         try await withIsolatedStore {
             try SessionStore.writeRecord(record(id: "priv-1"))
 
             #expect(try mode(of: ACPXPaths.sessionRecordPath("priv-1")) == 0o600)
-            #expect(try mode(of: ACPXPaths.sessionIndexPath) == 0o600)
+            #expect(try mode(of: ACPXPaths.sessionsDir) == 0o700)
         }
     }
 

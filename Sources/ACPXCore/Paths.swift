@@ -47,11 +47,6 @@ public enum ACPXPaths {
         sessionsDir.appendingPathComponent("\(safeSessionId(recordId)).json")
     }
 
-    /// `~/.acpx/sessions/index.json`
-    public static var sessionIndexPath: URL {
-        sessionsDir.appendingPathComponent("index.json")
-    }
-
     /// `~/.acpx/sessions/<id>.stream.ndjson`
     public static func sessionStreamPath(_ recordId: String) -> URL {
         sessionsDir.appendingPathComponent("\(safeSessionId(recordId)).stream.ndjson")
