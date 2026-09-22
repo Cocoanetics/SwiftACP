@@ -31,7 +31,6 @@ public enum Nullable<Wrapped: Codable & Sendable>: Codable, Sendable {
 }
 
 public let SESSION_RECORD_SCHEMA = "acpx.session.v1"
-public let SESSION_INDEX_SCHEMA = "acpx.session-index.v1"
 public let DEFAULT_EVENT_SEGMENT_MAX_BYTES = 64 * 1024 * 1024
 public let DEFAULT_EVENT_MAX_SEGMENTS = 5
 
@@ -239,39 +238,5 @@ public struct SessionEventLog: Codable, Sendable {
         } else {
             try c.encodeNil(forKey: .lastWriteError)
         }
-    }
-}
-
-/// One entry in `~/.acpx/sessions/index.json` (camelCase keys, unlike the record).
-public struct SessionIndexEntry: Codable, Sendable {
-    public var file: String
-    public var acpxRecordId: String
-    public var acpSessionId: String
-    public var agentCommand: String
-    public var cwd: String
-    public var name: String?
-    public var closed: Bool
-    public var lastUsedAt: String
-
-    public init(record: SessionRecord) {
-        self.file = "\(ACPXPaths.safeSessionId(record.acpxRecordId)).json"
-        self.acpxRecordId = record.acpxRecordId
-        self.acpSessionId = record.acpSessionId
-        self.agentCommand = record.agentCommand
-        self.cwd = record.cwd
-        self.name = record.name
-        self.closed = record.closed == true
-        self.lastUsedAt = record.lastUsedAt
-    }
-}
-
-public struct SessionIndex: Codable, Sendable {
-    public var schema = SESSION_INDEX_SCHEMA
-    public var files: [String]
-    public var entries: [SessionIndexEntry]
-
-    public init(files: [String] = [], entries: [SessionIndexEntry] = []) {
-        self.files = files
-        self.entries = entries
     }
 }

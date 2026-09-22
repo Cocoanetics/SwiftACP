@@ -22,30 +22,63 @@ private nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
     return f
 }()
 
-/// Reads and writes acpx session records + index under `~/.acpx/sessions`,
-/// faithfully to acpx 0.11.0 (`persistence/repository.ts`, `index.ts`).
+/// Reads and writes acpx session records under `~/.acpx/sessions`, faithfully to acpx
+/// (`persistence/repository.ts`, `persistence/discovery.ts`).
+///
+/// Lookups resolve from the saved records themselves, never from cached metadata: a
+/// record's filename must match its encoded id, a legacy `index.json` is ignored, and
+/// concurrent writes are observed per record rather than as one atomic snapshot of the
+/// store (acpx 0.19.0, `docs/sessions.md`).
 public enum SessionStore {
     // MARK: Record IO
 
-    public static func readRecord(at url: URL) -> SessionRecord? {
+    /// Decode the record at `url`, optionally requiring it to be the record `recordId`
+    /// names: a file claiming a different id is ignored, so a copy cannot answer for the
+    /// record it was copied from (acpx's `readSessionRecord`).
+    public static func readRecord(at url: URL, expecting recordId: String? = nil)
+        -> SessionRecord? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let record = try? recordDiskDecoder.decode(SessionRecord.self, from: data),
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
+        if let recordId, record.acpxRecordId != recordId { return nil }
         return record
     }
 
+    /// Lookup by exact record id reads that one file — no scan (acpx, `docs/sessions.md`).
     public static func loadRecord(_ recordId: String) -> SessionRecord? {
-        readRecord(at: ACPXPaths.sessionRecordPath(recordId))
+        readRecord(at: ACPXPaths.sessionRecordPath(recordId), expecting: recordId)
     }
 
-    /// Atomic write (temp + rename), pretty JSON + trailing newline, then index update.
+    /// Atomic write (temp + rename), pretty JSON + trailing newline. Nothing else is
+    /// written: acpx dropped the shared index in 0.19.0, so a checkpoint can no longer
+    /// fail on a second write after the record itself is committed.
     public static func writeRecord(_ record: SessionRecord) throws {
-        try FileManager.default.createDirectory(
-            at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+        try createSessionsDirectory()
         let url = ACPXPaths.sessionRecordPath(record.acpxRecordId)
         try atomicWrite(encodeForDisk(record, using: recordDiskEncoder), to: url)
-        try updateIndex(with: record)
+    }
+
+    /// `~/.acpx/sessions`, owner-only — the records and event logs inside hold whole
+    /// conversations (acpx's `ensureSessionDir`, mode 0700).
+    ///
+    /// The mode is applied on creation *and* to a directory that already exists:
+    /// `createDirectory` ignores `attributes` when the directory is already there, so a
+    /// store created before this would otherwise keep its 0755 and stay traversable by
+    /// other local users. Only the group and other bits are cleared, so an owner who
+    /// tightened the directory further keeps their own mode.
+    static func createSessionsDirectory() throws {
+        let fm = FileManager.default
+        try fm.createDirectory(
+            at: ACPXPaths.sessionsDir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        let path = ACPXPaths.sessionsDir.path
+        guard let mode = (try? fm.attributesOfItem(atPath: path)[.posixPermissions]) as? NSNumber
+        else { return }
+        let tightened = mode.uint16Value & ~UInt16(0o077)
+        if tightened != mode.uint16Value {
+            try? fm.setAttributes([.posixPermissions: tightened], ofItemAtPath: path)
+        }
     }
 
     public static func deleteRecord(_ recordId: String, includeHistory: Bool) -> Int {
@@ -67,68 +100,39 @@ public enum SessionStore {
         return freed
     }
 
-    // MARK: Index
+    // MARK: Discovery
 
-    public static func loadIndex() -> SessionIndex {
-        let files = recordFilesOnDisk()
-        if let data = try? Data(contentsOf: ACPXPaths.sessionIndexPath),
-            let index = try? plainDecoder.decode(SessionIndex.self, from: data),
-            index.files == files,
-            index.entries.count == files.count {
-            return index
-        }
-        return rebuildIndex(files: files)
-    }
-
-    private static func recordFilesOnDisk() -> [String] {
+    /// Every saved record, in filename order.
+    ///
+    /// A record whose filename does not match its own encoded id is skipped, so a copied
+    /// record cannot answer for the one it names — nor authorize pruning it. A corrupt or
+    /// concurrently removed file is skipped rather than hiding every other match. acpx's
+    /// `scanSessionRecords`; a legacy `index.json` is ignored.
+    public static func scanRecords() -> [SessionRecord] {
         let fm = FileManager.default
-        let contents = (try? fm.contentsOfDirectory(atPath: ACPXPaths.sessionsDir.path)) ?? []
-        return contents.filter { $0.hasSuffix(".json") && $0 != "index.json" }.sorted()
-    }
-
-    private static func rebuildIndex(files: [String]) -> SessionIndex {
-        var entries: [SessionIndexEntry] = []
-        for file in files {
-            let url = ACPXPaths.sessionsDir.appendingPathComponent(file)
-            if let record = readRecord(at: url) {
-                entries.append(SessionIndexEntry(record: record))
-            }
+        let names = ((try? fm.contentsOfDirectory(atPath: ACPXPaths.sessionsDir.path)) ?? [])
+            .filter { $0.hasSuffix(".json") && $0 != legacyIndexFileName }
+            .sorted()
+        return names.compactMap { name in
+            guard let record = readRecord(at: ACPXPaths.sessionsDir.appendingPathComponent(name)),
+                name == ACPXPaths.sessionRecordPath(record.acpxRecordId).lastPathComponent
+            else { return nil }
+            return record
         }
-        entries.sort { $0.lastUsedAt > $1.lastUsedAt }
-        let index = SessionIndex(files: files, entries: entries)
-        try? writeIndex(index)
-        return index
     }
 
-    private static func updateIndex(with record: SessionRecord) throws {
-        var index = loadIndex()
-        let entry = SessionIndexEntry(record: record)
-        index.entries.removeAll { $0.file == entry.file }
-        index.entries.append(entry)
-        index.entries.sort { $0.lastUsedAt > $1.lastUsedAt }
-        if !index.files.contains(entry.file) {
-            index.files.append(entry.file)
-            index.files.sort()
-        }
-        try writeIndex(index)
-    }
-
-    private static func writeIndex(_ index: SessionIndex) throws {
-        try atomicWrite(encodeForDisk(index, using: plainDiskEncoder), to: ACPXPaths.sessionIndexPath)
-    }
+    /// acpx kept a `sessions/index.json` until 0.19.0 and ignores it since; so do we.
+    private static let legacyIndexFileName = "index.json"
 
     // MARK: Listing
 
     public static func listSessions() -> [SessionRecord] {
-        loadIndex().entries.compactMap { entry in
-            readRecord(at: ACPXPaths.sessionsDir.appendingPathComponent(entry.file))
-        }.sorted { $0.lastUsedAt > $1.lastUsedAt }
+        scanRecords().sorted { $0.lastUsedAt > $1.lastUsedAt }
     }
 
     public static func listSessions(forAgent agentCommand: String) -> [SessionRecord] {
-        loadIndex().entries
+        scanRecords()
             .filter { $0.agentCommand == agentCommand }
-            .compactMap { readRecord(at: ACPXPaths.sessionsDir.appendingPathComponent($0.file)) }
             .sorted { $0.lastUsedAt > $1.lastUsedAt }
     }
 
@@ -146,54 +150,72 @@ public enum SessionStore {
     }
 
     private static func matches(
-        _ entry: SessionIndexEntry, cwd: String, name: String?, includeClosed: Bool
+        _ record: SessionRecord, agentCommand: String, name: String?, includeClosed: Bool
     ) -> Bool {
-        guard entry.cwd == cwd else { return false }
-        if !includeClosed && entry.closed { return false }
+        guard record.agentCommand == agentCommand else { return false }
+        if !includeClosed && record.closed == true { return false }
         let normalizedName = normalizeName(name)
-        if normalizedName == nil { return normalizeName(entry.name) == nil }
-        return normalizeName(entry.name) == normalizedName
+        if normalizedName == nil { return normalizeName(record.name) == nil }
+        return normalizeName(record.name) == normalizedName
     }
 
-    /// Exact-cwd lookup (no ancestor walk). `findSession` in acpx.
+    /// Whether `record` was used more recently than `previous` — acpx's `isNewer`.
+    private static func isNewer(_ record: SessionRecord, than previous: SessionRecord?) -> Bool {
+        guard let previous else { return true }
+        return record.lastUsedAt > previous.lastUsedAt
+    }
+
+    /// Exact-cwd lookup (no ancestor walk). `findSession` in acpx: among the records saved
+    /// for this cwd, the most recently used one wins.
     public static func findSession(
         agentCommand: String, cwd: String, name: String?, includeClosed: Bool = false
     ) -> SessionRecord? {
         let abs = absolute(cwd)
-        for entry in loadIndex().entries
-        where entry.agentCommand == agentCommand
-            && matches(entry, cwd: abs, name: name, includeClosed: includeClosed) {
-            if let record = readRecord(at: ACPXPaths.sessionsDir.appendingPathComponent(entry.file)) {
-                return record
-            }
+        var match: SessionRecord?
+        for record in scanRecords() where record.cwd == abs {
+            guard matches(
+                record, agentCommand: agentCommand, name: name, includeClosed: includeClosed)
+            else { continue }
+            if isNewer(record, than: match) { match = record }
         }
-        return nil
+        return match
     }
 
-    /// Ancestor-walk lookup up to `boundary`. `findSessionByDirectoryWalk` in acpx.
+    /// Ancestor-walk lookup up to `boundary`. `findSessionByDirectoryWalk` in acpx: the
+    /// directory nearest `cwd` wins, ties going to the most recently used record.
     public static func findSessionByDirectoryWalk(
         agentCommand: String, cwd: String, name: String?, boundary: String?
     ) -> SessionRecord? {
-        let entries = loadIndex().entries.filter { $0.agentCommand == agentCommand }
+        let distances = walkDistances(cwd: cwd, boundary: boundary)
+        var match: SessionRecord?
+        var nearest = Int.max
+        for record in scanRecords() {
+            guard let distance = distances[record.cwd],
+                matches(record, agentCommand: agentCommand, name: name, includeClosed: false)
+            else { continue }
+            if distance < nearest || (distance == nearest && isNewer(record, than: match)) {
+                match = record
+                nearest = distance
+            }
+        }
+        return match
+    }
+
+    /// The directories the walk covers, each mapped to its distance from `cwd` (0 = `cwd`
+    /// itself, rising towards the boundary). acpx's `walkDirectories`.
+    private static func walkDistances(cwd: String, boundary: String?) -> [String: Int] {
         let start = absolute(cwd)
         let resolvedBoundary = boundary.map(absolute)
         let walkBoundary =
             (resolvedBoundary != nil && isWithin(boundary: resolvedBoundary!, target: start))
             ? resolvedBoundary! : start
-
-        var current = start
-        while true {
-            if let entry = entries.first(where: {
-                matches($0, cwd: current, name: name, includeClosed: false)
-            }) {
-                if let record = readRecord(
-                    at: ACPXPaths.sessionsDir.appendingPathComponent(entry.file)) {
-                    return record
-                }
-            }
-            guard let parent = nextWalkParent(current, boundary: walkBoundary) else { return nil }
-            current = parent
+        var distances: [String: Int] = [:]
+        var current: String? = start
+        while let directory = current {
+            if distances[directory] == nil { distances[directory] = distances.count }
+            current = nextWalkParent(directory, boundary: walkBoundary)
         }
+        return distances
     }
 
     private static func isWithin(boundary: String, target: String) -> Bool {
