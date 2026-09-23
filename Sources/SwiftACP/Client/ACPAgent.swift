@@ -310,6 +310,22 @@ public struct ACPSession: Sendable {
         try await runTurn(blocks, meta: meta, onUpdate: onUpdate, onClientOperation: onClientOperation)
     }
 
+    /// As ``run(_:meta:onUpdate:onClientOperation:)``, also handing over each request
+    /// the agent makes of this client — see ``InboundRequest`` — in wire order with the
+    /// updates.
+    @discardableResult
+    public func run(
+        _ blocks: [ContentBlock],
+        meta: JSONValue? = nil,
+        onUpdate: @escaping @Sendable (SessionUpdate) -> Void,
+        onClientOperation: @escaping @Sendable (ClientOperation) -> Void,
+        onInboundRequest: @escaping @Sendable (InboundRequest) -> Void
+    ) async throws -> PromptOutcome {
+        try await runTurn(
+            blocks, meta: meta, onUpdate: onUpdate, onClientOperation: onClientOperation,
+            onInboundRequest: onInboundRequest)
+    }
+
     @discardableResult
     public func run(
         _ text: String,
@@ -335,7 +351,8 @@ public struct ACPSession: Sendable {
         _ blocks: [ContentBlock],
         meta: JSONValue?,
         onUpdate: (@Sendable (SessionUpdate) -> Void)?,
-        onClientOperation: (@Sendable (ClientOperation) -> Void)?
+        onClientOperation: (@Sendable (ClientOperation) -> Void)?,
+        onInboundRequest: (@Sendable (InboundRequest) -> Void)? = nil
     ) async throws -> PromptOutcome {
         let (subscriptionId, stream) = await agent.connection.makeEventSubscription()
         let sessionId = id
@@ -352,6 +369,9 @@ public struct ACPSession: Sendable {
                     where operation.sessionId == nil || operation.sessionId == sessionId:
                     await collector.record(operation)
                     onClientOperation?(operation)
+                case .inboundRequest(let request)
+                    where request.sessionId == nil || request.sessionId == sessionId:
+                    onInboundRequest?(request)
                 default:
                     break
                 }

@@ -95,21 +95,6 @@ public actor ACPAgentConnection {
         onClientRequest = observer
     }
 
-    private var onInboundRequest: (@Sendable (String) -> Void)?
-    private var onInboundFailure: (@Sendable (JSONRPCErrorBody) -> Void)?
-
-    /// Observe the agent's requests to this client (`fs/*`, `session/request_permission`)
-    /// as they arrive, and each one this client answers with an error — what acpx's
-    /// formatter renders as `[client] <method> (running)` and `[error] RUNTIME: …`,
-    /// since it prints every request and every error it sees on the wire. The closures
-    /// run synchronously, so they must be fast.
-    public func setInboundRequestObservers(
-        received: (@Sendable (String) -> Void)?, failed: (@Sendable (JSONRPCErrorBody) -> Void)?
-    ) {
-        onInboundRequest = received
-        onInboundFailure = failed
-    }
-
     /// Wire inbound routing and begin reading. Call once before any request.
     public func start() async {
         await rpc.setHandlers(
@@ -304,15 +289,24 @@ public actor ACPAgentConnection {
 
     // MARK: - Inbound routing
 
-    /// Route one inbound request, reporting its arrival and any failure to the
-    /// inbound observers around it.
+    /// Route one inbound request, reporting its arrival — and its refusal, if the client
+    /// refuses it — on the event stream, where they fall into wire order with the
+    /// session's updates.
     private func serveIncomingRequest(
         method: String, params: JSONValue?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
-        onInboundRequest?(method)
+        let sessionId = decodedSessionId(params)
+        publish(.inboundRequest(InboundRequest(method: method, sessionId: sessionId)))
         let result = await handleIncomingRequest(method: method, params: params)
-        if case .failure(let error) = result { onInboundFailure?(error) }
+        if case .failure(let error) = result {
+            publish(.inboundRequest(InboundRequest(
+                method: method, sessionId: sessionId, failure: InboundRequest.summary(of: error))))
+        }
         return result
+    }
+
+    private func publish(_ event: ConnectionEvent) {
+        for sink in eventSinks.values { sink.yield(event) }
     }
 
     private func handleIncomingRequest(

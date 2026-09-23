@@ -1,4 +1,5 @@
 import Foundation
+import JSONFoundation
 
 /// A client-side operation the connection performed on the agent's behalf, reported
 /// for diagnostics — a port of acpx's `ClientOperation` (the `onClientOperation`
@@ -65,4 +66,52 @@ public struct ClientOperationStatus: OpenStringEnum {
 public enum ConnectionEvent: Sendable {
     case update(SessionNotification)
     case clientOperation(ClientOperation)
+    /// A request the agent made of this client, as it arrived or as it was refused.
+    case inboundRequest(InboundRequest)
+}
+
+/// A request the agent made of this client — `fs/read_text_file`, `fs/write_text_file`,
+/// `session/request_permission` — reported as it arrives, and again with ``failure``
+/// if the client refused it.
+///
+/// acpx's formatter prints every request and every error it sees on the wire, which
+/// shows up as `[client] fs/write_text_file (running)` and
+/// `[error] RUNTIME: Permission denied for fs/write_text_file`. These carry those two
+/// facts through the same event stream as the session's updates, so an update the
+/// agent sent before a request is always seen before it, and a refusal always after
+/// its request. (The JSON-RPC peer delivers notifications inline but dispatches each
+/// request on its own task, so an update sent *after* a request, without awaiting its
+/// reply, may be seen before the request. Agents await `fs/*` and permission
+/// requests, so in practice this is wire order.)
+///
+/// Encoded with `inboundMethod` rather than `method` so it cannot be mistaken for a
+/// ``ClientOperation`` where both travel as untyped JSON (the daemon's log stream).
+public struct InboundRequest: Codable, Sendable, Hashable {
+    public var method: String
+    public var sessionId: SessionId?
+    /// Why the client refused it, or `nil` for the request arriving — see
+    /// ``summary(of:)``.
+    public var failure: String?
+
+    public init(method: String, sessionId: SessionId? = nil, failure: String? = nil) {
+        self.method = method
+        self.sessionId = sessionId
+        self.failure = failure
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case method = "inboundMethod"
+        case sessionId, failure
+    }
+
+    /// acpx's `parseJsonRpcErrorSummary`: an error's `data.details` when it is a
+    /// non-blank string — where a thrown handler error carries its real reason — else
+    /// its message.
+    public static func summary(of error: JSONRPCErrorBody) -> String {
+        if case .object(let data)? = error.data, case .string(let details)? = data["details"] {
+            let trimmed = details.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return error.message
+    }
 }

@@ -155,33 +155,36 @@ struct WriteGateTests {
         let server = ACPAgentServer(handler: agent, transport: serverTransport)
         let serverTask = Task { try await server.run() }
         let client = ACPAgentConnection(transport: clientTransport, handlers: handlers)
-        let received = Recorder<String>()
-        let failures = Recorder<String>()
-        await client.setInboundRequestObservers(
-            received: { received.append($0) },
-            failed: { failures.append($0.message) })
         await client.start()
         _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
         let session = try await client.newSession(NewSessionRequest(cwd: cwd))
 
         let (subscriptionId, stream) = await client.makeEventSubscription()
-        let consumer = Task { () -> String in
-            var text = ""
+        let consumer = Task { () -> Run in
+            var run = Run(reply: "", stats: PermissionStats(), received: [], failures: [])
             for await event in stream {
-                if case .update(let note) = event, case .agentMessageChunk(let block) = note.update,
-                    let chunk = block.text {
-                    text += chunk
+                switch event {
+                case .update(let note):
+                    if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
+                        run.reply += chunk
+                    }
+                case .inboundRequest(let request):
+                    if let failure = request.failure { run.failures.append(failure) } else {
+                        run.received.append(request.method)
+                    }
+                case .clientOperation:
+                    break
                 }
             }
-            return text
+            return run
         }
         _ = try await client.prompt(PromptRequest(sessionId: session.sessionId, prompt: [.text("go")]))
         await client.endSubscription(subscriptionId)
-        let reply = await consumer.value
-        let stats = await client.permissionStats(for: session.sessionId)
+        var run = await consumer.value
+        run.stats = await client.permissionStats(for: session.sessionId)
         await client.close()
         serverTask.cancel()
-        return Run(reply: reply, stats: stats, received: received.values, failures: failures.values)
+        return run
     }
 
     private func workspace() throws -> String {
@@ -223,7 +226,8 @@ struct WriteGateTests {
         #expect(!FileManager.default.fileExists(atPath: root + "/a.txt"))
         #expect(run.stats.denied == 1)
         #expect(run.stats.deniedEverything)
-        #expect(run.failures == ["Internal error"])
+        #expect(run.received == ["fs/write_text_file"])
+        #expect(run.failures == ["Permission denied for fs/write_text_file"])
     }
 
     @Test func anUnanswerablePromptUnderFailIsCountedAsSuch() async throws {
@@ -245,6 +249,65 @@ struct WriteGateTests {
         #expect(run.stats.approved == 1)
         #expect(run.stats.denied == 1)
         #expect(run.stats.deniedEverything == false)
+    }
+
+    /// The agent's requests travel the same stream as its updates, so a consumer sees
+    /// them in wire order: text the agent streamed before asking to write comes out
+    /// before the write, never after it.
+    @Test func inboundRequestsArriveInOrderWithUpdates() async throws {
+        struct ChattyWriter: ACPAgentHandler {
+            var path: String
+            func initialize(_ request: InitializeRequest) async -> InitializeResponse {
+                InitializeResponse(agentInfo: Implementation(name: "chatty", version: "1.0"))
+            }
+            func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
+                NewSessionResponse(sessionId: "chatty-session")
+            }
+            func prompt(
+                _ request: PromptRequest, session: ACPServerSession
+            ) async throws -> PromptResponse {
+                await session.sendText("before")
+                try? await session.writeTextFile(path: path, content: "x")
+                await session.sendText("after")
+                return PromptResponse(stopReason: .endTurn)
+            }
+        }
+        let root = try workspace()
+        let (clientTransport, serverTransport) = LoopbackTransport.pair()
+        let server = ACPAgentServer(handler: ChattyWriter(path: root + "/a.txt"), transport: serverTransport)
+        let serverTask = Task { try await server.run() }
+        let client = ACPAgentConnection(transport: clientTransport, handlers: handlers(.denyAll))
+        await client.start()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+        let session = try await client.newSession(NewSessionRequest(cwd: root))
+
+        let (subscriptionId, stream) = await client.makeEventSubscription()
+        let consumer = Task { () -> [String] in
+            var seen: [String] = []
+            for await event in stream {
+                switch event {
+                case .update(let note):
+                    if case .agentMessageChunk(let block) = note.update, let text = block.text {
+                        seen.append("text:\(text)")
+                    }
+                case .inboundRequest(let request):
+                    seen.append(request.failure.map { "refused:\($0)" } ?? "request:\(request.method)")
+                case .clientOperation:
+                    break
+                }
+            }
+            return seen
+        }
+        _ = try await client.prompt(PromptRequest(sessionId: session.sessionId, prompt: [.text("go")]))
+        await client.endSubscription(subscriptionId)
+        #expect(await consumer.value == [
+            "text:before",
+            "request:fs/write_text_file",
+            "refused:Permission denied for fs/write_text_file",
+            "text:after"
+        ])
+        await client.close()
+        serverTask.cancel()
     }
 
     /// acpx's order: a path plainly outside the workspace is refused *without asking*.

@@ -48,7 +48,6 @@ enum ExecCommand {
                 capabilities: flags.clientCapabilities,
                 authCredentials: context.config.auth, authPolicy: flags.authPolicy,
                 inheritStderr: flags.verbose, onClientRequest: onClientRequest)
-            await observeInboundRequests(on: handle.connection, renderer: renderer)
             do {
                 let response = try await handle.connection.newSession(
                     NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta))
@@ -59,7 +58,8 @@ enum ExecCommand {
                 let session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
                 let outcome = try await session.run(
                     prompt, onUpdate: { renderer.render($0) },
-                    onClientOperation: { renderer.clientOperation($0) })
+                    onClientOperation: { renderer.clientOperation($0) },
+                    onInboundRequest: { renderer.inboundRequest($0) })
                 renderer.finish(stopReason: outcome.stopReason)
                 let permissions = await handle.connection.permissionStats(for: response.sessionId)
                 await handle.close()
@@ -100,33 +100,11 @@ enum ExecCommand {
         return ExitCodes.permissionDenied
     }
 
-    /// acpx's formatter prints every request on the wire and every error, so the agent's
-    /// own requests show as `[client] fs/write_text_file (running)`, and a refusal the
-    /// client sends back as `[error] RUNTIME: <reason>` — the reason taken from
-    /// `data.details` when there is one, as `parseJsonRpcErrorSummary` does.
-    private static func observeInboundRequests(
-        on connection: ACPAgentConnection, renderer: OutputRenderer
-    ) async {
-        await connection.setInboundRequestObservers(
-            received: { renderer.clientOperation($0) },
-            failed: { renderer.renderError(code: "RUNTIME", errorSummary($0)) })
-    }
-
     /// acpx suppresses adapter-level warnings under `--json-strict` and
     /// `--format quiet`, where stderr is part of the machine-readable contract.
     private static func quietOutput(_ flags: GlobalFlags) -> Bool {
         flags.jsonStrict || flags.format == "quiet"
     }
-}
-
-/// acpx's `parseJsonRpcErrorSummary`: an error's `data.details` when it is a non-blank
-/// string — where a thrown handler error carries its real reason — else its message.
-func errorSummary(_ error: JSONRPCErrorBody) -> String {
-    if case .object(let data)? = error.data, case .string(let details)? = data["details"] {
-        let trimmed = details.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-    }
-    return error.message
 }
 
 /// Handle a failed prompt turn the way acpx does on both streams: render
