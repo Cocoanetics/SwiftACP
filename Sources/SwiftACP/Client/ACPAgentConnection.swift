@@ -21,6 +21,21 @@ public actor ACPAgentConnection {
     /// permission requests (see ``CodexCompat``).
     public private(set) var initializeResult: InitializeResponse?
 
+    /// How far an agent's `fs/*` requests may reach. Confined to each session's own
+    /// working directory by default; an embedder that mediates filesystem access itself
+    /// can set ``FileSystemAccessScope/unrestricted``.
+    public private(set) var fileSystemAccess: FileSystemAccessScope = .sessionRoot
+
+    /// Widen or restore how far `fs/*` may reach. Containment is the default; an
+    /// embedder that mediates filesystem access itself can opt out.
+    public func setFileSystemAccess(_ scope: FileSystemAccessScope) {
+        fileSystemAccess = scope
+    }
+
+    /// Each session's working directory, recorded from `session/new`, `session/load`
+    /// and `session/resume` — the root `fs/*` paths are confined to.
+    private var sessionRoots: [SessionId: String] = [:]
+
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
     /// Sessions whose in-flight turn this client is cancelling (`session/cancel`
@@ -159,15 +174,21 @@ public actor ACPAgentConnection {
     }
 
     public func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
-        try await send("session/new", request)
+        let response: NewSessionResponse = try await send("session/new", request)
+        sessionRoots[response.sessionId] = request.cwd
+        return response
     }
 
     public func loadSession(_ request: LoadSessionRequest) async throws -> LoadSessionResponse {
-        try await send("session/load", request)
+        let response: LoadSessionResponse = try await send("session/load", request)
+        sessionRoots[request.sessionId] = request.cwd
+        return response
     }
 
     public func resumeSession(_ request: ResumeSessionRequest) async throws -> ResumeSessionResponse {
-        try await send("session/resume", request)
+        let response: ResumeSessionResponse = try await send("session/resume", request)
+        sessionRoots[request.sessionId] = request.cwd
+        return response
     }
 
     public func prompt(_ request: PromptRequest) async throws -> PromptResponse {
@@ -228,9 +249,11 @@ public actor ACPAgentConnection {
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         switch method {
         case "fs/read_text_file":
-            return await route(params, handlers.readTextFile)
+            return await routeFileSystem(
+                method, params, access: .read, handlers.readTextFile)
         case "fs/write_text_file":
-            return await route(params, handlers.writeTextFile)
+            return await routeFileSystem(
+                method, params, access: .write, handlers.writeTextFile)
         case "session/request_permission":
             guard let handler = handlers.requestPermission else {
                 return .failure(.methodNotFound(method))
@@ -304,6 +327,39 @@ public actor ACPAgentConnection {
         else { return response }
         announce(notice, sessionId: request.sessionId)
         return response.addingACPXMetadata(["permissionNotice": .string(notice)])
+    }
+
+    /// Serve one `fs/*` request, confining its path to the session's working directory
+    /// first (see ``FileSystemAccessScope``). The handler only ever sees a path the
+    /// client has already vouched for, so a custom handler inherits the containment.
+    ///
+    /// A session this connection never opened has no root to check against, so its
+    /// requests are refused rather than served unchecked — an agent cannot reach out of
+    /// the workspace by naming a session id we do not know.
+    private func routeFileSystem<
+        Request: FileSystemPathRequest & Decodable & Sendable, Response: Encodable & Sendable
+    >(
+        _ method: String, _ params: JSONValue?, access: FileSystemContainment.Access,
+        _ handler: (@Sendable (Request) async throws -> Response)?
+    ) async -> Result<JSONValue, JSONRPCErrorBody> {
+        guard let handler else { return .failure(.methodNotFound(method)) }
+        do {
+            var request: Request = try decode(params)
+            if fileSystemAccess == .sessionRoot {
+                guard let root = sessionRoots[request.sessionId] else {
+                    return .failure(.invalidParams("Unknown session: \(request.sessionId)"))
+                }
+                request.path = try FileSystemContainment.resolve(
+                    path: request.path, under: root, for: access)
+            }
+            let contained = request
+            let response = try await handler(contained)
+            return .success(try JSONValue(encoding: response))
+        } catch let error as JSONRPCErrorBody {
+            return .failure(error)
+        } catch {
+            return .failure(.internalError(error.localizedDescription))
+        }
     }
 
     /// Report a permission notice to the event subscriptions, ahead of anything the
