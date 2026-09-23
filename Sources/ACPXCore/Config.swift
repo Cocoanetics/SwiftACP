@@ -160,8 +160,11 @@ public enum ConfigLoader {
         let explicitMcp = try mcpConfigPath.map { try loadExplicitMcpServers($0, cwd: cwd) }
 
         let agents = mergeAgents(global?.agents, project?.agents)
-        let agentOrder = WireJSON.propertyOrder(
+        // Every agent is listed: one the order-only read missed goes last rather than
+        // being dropped from the help.
+        var agentOrder = WireJSON.propertyOrder(
             (globalFile?.agentOrder ?? []) + (projectFile?.agentOrder ?? []))
+        agentOrder += agents.keys.filter { !agentOrder.contains($0) }.sorted()
         let auth = (global?.auth ?? [:]).merging(project?.auth ?? [:]) { _, new in new }
 
         return ResolvedAcpxConfig(
@@ -207,8 +210,13 @@ public enum ConfigLoader {
 
     /// The `agents` names as acpx's `parseAgents` produces them: `Object.entries` order,
     /// each normalized, a name repeated after normalizing keeping its first place.
+    ///
+    /// A leading UTF-8 BOM is skipped, as `JSONDecoder` skips it: the file has already
+    /// decoded by then, so its order must not be lost to it (whether such a file should
+    /// load at all — acpx refuses it — is #69).
     static func agentNames(in data: Data) -> [String] {
-        guard case .object(let members)? = WireJSON(parsing: data)?["agents"] else { return [] }
+        let text = data.starts(with: [0xEF, 0xBB, 0xBF]) ? data.dropFirst(3) : data
+        guard case .object(let members)? = WireJSON(parsing: Data(text))?["agents"] else { return [] }
         return WireJSON.propertyOrder(WireJSON.orderedForPrinting(members).map {
             AgentRegistry.normalize(String(decoding: $0.key, as: UTF16.self))
         })

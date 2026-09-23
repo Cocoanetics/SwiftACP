@@ -33,6 +33,17 @@ import Testing
         }
     }
 
+    /// `JSONDecoder` loads a file that starts with a BOM, so its agents are listed
+    /// too — in order (review of #67). Whether it should load at all is #69.
+    @Test func aByteOrderMarkDoesNotHideTheAgents() async throws {
+        try await withIsolatedStore {
+            let cwd = try project(
+                global: nil, project: "\u{FEFF}" + #"{"agents":{"zeta":{"command":"z"},"alpha":{"command":"a"}}}"#)
+            let config = try ConfigLoader.load(cwd: cwd)
+            #expect(config.agentOrder == ["zeta", "alpha"])
+        }
+    }
+
     @Test func noConfigNoAgents() async throws {
         try await withIsolatedStore {
             let config = try ConfigLoader.load(cwd: try project(global: nil, project: nil))
