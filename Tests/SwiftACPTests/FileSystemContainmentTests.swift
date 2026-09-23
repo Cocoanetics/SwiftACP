@@ -93,6 +93,8 @@ struct FileSystemContainmentTests {
         }
     }
 
+    // `mkfifo` is POSIX-only; Windows has no equivalent to exercise here.
+    #if !os(Windows)
     @Test func aSpecialFileIsNotReadable() throws {
         let (root, _) = try makeWorkspace()
         let fifo = root + "/pipe"
@@ -101,6 +103,7 @@ struct FileSystemContainmentTests {
             try FileSystemContainment.resolve(path: fifo, under: root, for: .read)
         }
     }
+    #endif
 
     // MARK: End to end, through the client
 

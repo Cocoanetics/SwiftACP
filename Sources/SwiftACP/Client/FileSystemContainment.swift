@@ -41,12 +41,14 @@ enum FileSystemContainment {
     /// where the file *would* land still has to be inside the root.
     static func resolve(path: String, under root: String, for access: Access) throws -> String {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true).resolvingSymlinksInPath()
+        // `isAbsolutePath` rather than a leading "/" so a Windows drive path is not
+        // mistaken for a relative one and quietly re-rooted.
         let requested =
-            path.hasPrefix("/")
+            (path as NSString).isAbsolutePath
             ? URL(fileURLWithPath: path) : URL(fileURLWithPath: path, relativeTo: rootURL)
         let resolved = resolvingExistingPrefix(of: requested)
 
-        guard isWithin(root: rootURL.path, resolved.path) else {
+        guard isWithin(root: rootURL, resolved) else {
             throw JSONRPCError.invalidParams(
                 "Path is outside the session's working directory: \(path)")
         }
@@ -87,10 +89,13 @@ enum FileSystemContainment {
         return resolved.standardizedFileURL
     }
 
-    /// Path containment by components, not by string prefix: `/work/bin` is inside
-    /// `/work`, `/workspace` is not.
-    private static func isWithin(root: String, _ path: String) -> Bool {
-        if path == root { return true }
-        return path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    /// Containment by path components, not by string prefix — `/work/bin` is inside
+    /// `/work` while `/workspace` is not, and the comparison does not depend on which
+    /// separator the platform writes.
+    private static func isWithin(root: URL, _ target: URL) -> Bool {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let targetComponents = target.standardizedFileURL.pathComponents
+        guard targetComponents.count >= rootComponents.count else { return false }
+        return Array(targetComponents.prefix(rootComponents.count)) == rootComponents
     }
 }
