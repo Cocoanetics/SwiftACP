@@ -35,7 +35,8 @@ extension ACPXDaemonBackend {
     func runPrompt(
         sessionId rawSessionId: String, text: String,
         blocks: [PromptBlock]? = nil, wait: Bool = true,
-        permissionMode: String? = nil, nonInteractivePermissions: String? = nil
+        permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
+        streamWire: Bool = false
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -89,7 +90,8 @@ extension ACPXDaemonBackend {
         }
         if !gated.isEmpty {
             let entry = try await ensure(
-                recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
+                recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
+                onConnectOutput: Self.forwardToClient(logger: recordId))
             let capabilities = entry.agent.promptCapabilities
             if let unmet = gated.first(where: { !$0.requirement.isAdvertised(by: capabilities) }) {
                 throw PromptBlockError.capabilityUnsupported(
@@ -109,7 +111,7 @@ extension ACPXDaemonBackend {
             return try await attemptPrompt(
                 recordId: recordId, agentCommand: agentCommand, cwd: cwd,
                 mcpServers: mcpServers, blocks: content, permissions: permissions,
-                persister: persister, eventBuffer: eventBuffer)
+                persister: persister, eventBuffer: eventBuffer, streamWire: streamWire)
         } catch {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
@@ -127,30 +129,56 @@ extension ACPXDaemonBackend {
             return try await attemptPrompt(
                 recordId: recordId, agentCommand: agentCommand, cwd: cwd,
                 mcpServers: mcpServers, blocks: content, permissions: permissions,
-                persister: persister, eventBuffer: eventBuffer)
+                persister: persister, eventBuffer: eventBuffer, streamWire: streamWire)
+        }
+    }
+
+    /// Forwards what connecting an agent for a turn put on the wire to the MCP client
+    /// the turn is for, before the turn's own messages.
+    static func forwardToClient(logger: String) -> ConnectOutputHandler {
+        let clientSession = Session.current
+        return { messages in
+            for message in messages {
+                await clientSession?.sendLogNotification(
+                    LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
+            }
         }
     }
 
     private func attemptPrompt(
         recordId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
         blocks: [ContentBlock], permissions: TurnPermissions, persister: TurnPersister,
-        eventBuffer: WireBuffer
+        eventBuffer: WireBuffer, streamWire: Bool
     ) async throws -> String {
         // A reconnect that has to start a new session hands it to the persister, so the
-        // turn's saves carry it on instead of writing the old session back.
+        // turn's saves carry it on instead of writing the old session back; what the
+        // connecting put on the wire goes to the calling client first.
         let entry = try await ensure(
             recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
-            onReplacement: { await persister.adoptReplacement($0) })
+            onReplacement: { await persister.adoptReplacement($0) },
+            onConnectOutput: Self.forwardToClient(logger: recordId))
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId
         // Whether any of this turn has been written to the agent — its prompt is the
         // first thing that is. Cleared when the turn ends.
         let wrote = WriteMark()
-        entry.agent.rawWire.set { direction, _ in if direction == .outbound { wrote.mark() } }
+        // `streamWire`: each message of the turn goes to the calling client as it crosses
+        // the wire, in order — `--format json` prints them, as acpx does.
+        let (wireMessages, wireFeed) = AsyncStream<WireMessageEvent>.makeStream()
+        entry.agent.rawWire.set { direction, body in
+            if direction == .outbound { wrote.mark() }
+            if streamWire { wireFeed.yield(WireMessageEvent(direction, body)) }
+        }
         defer { entry.agent.rawWire.set(nil) }
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
+        let wireForwarder = Task {
+            for await message in wireMessages {
+                await clientSession?.sendLogNotification(
+                    LogMessage(level: .info, logger: recordId, data: toJSONValue(message)))
+            }
+        }
 
         // This turn's permissions: acpx sends the mode with every prompt and the queue
         // owner applies it to that turn, so the live agent's handlers are swapped per
@@ -207,6 +235,9 @@ extension ACPXDaemonBackend {
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
             let fullText = await consumer.value
+            // The exchange ends with the prompt's response; the turn's end follows it.
+            wireFeed.finish()
+            await wireForwarder.value
             // Capture the token breakdown the agent reports on the response (Claude
             // Code does; acpx misses this — it only reads usage_update._meta.usage).
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
@@ -227,6 +258,8 @@ extension ACPXDaemonBackend {
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
             consumer.cancel()
+            wireFeed.finish()
+            await wireForwarder.value
             if ACPAgentConnection.isConnectionClosed(error), !wrote.happened {
                 throw AgentExitedBeforeTheTurn(underlying: error)
             }
@@ -293,5 +326,14 @@ final class WriteMark: @unchecked Sendable {
 
     var happened: Bool {
         lock.withLock { marked }
+    }
+
+}
+
+extension WireMessageEvent {
+    init(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+        self.init(
+            wireDirection: direction == .outbound ? "outbound" : "inbound",
+            wireLine: String(decoding: body, as: UTF8.self))
     }
 }

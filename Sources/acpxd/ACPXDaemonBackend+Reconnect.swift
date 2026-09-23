@@ -35,9 +35,14 @@ extension ACPXDaemonBackend {
     /// A turn in flight passes `onReplacement`: it saves the record it holds, so a
     /// replacement goes to it, and it writes the record. Otherwise the record is
     /// written here.
+    ///
+    /// A turn also passes `onConnectOutput`, which gets what connecting a new agent put
+    /// on the wire once it is connected (see ``ConnectOutputBuffer``). An agent already
+    /// held has nothing to show.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, onReplacement: ReplacementHandler? = nil
+        control: Bool = false, onReplacement: ReplacementHandler? = nil,
+        onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
@@ -68,17 +73,20 @@ extension ACPXDaemonBackend {
         // start of `connectAndLoadSession` for the same reason.
         let selections = record?.acpx
         let command = launchCommand(for: agentCommand, config: config)
+        let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
         let handle = try await ACPAgent.launch(
             agent: command, cwd: cwd, permission: .approveAll,
             capabilities: capabilities,
             authCredentials: config.auth, authPolicy: config.authPolicy,
-            inheritStderr: inheritAgentStderr)
+            inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)
         let session: ACPSession
+        let fellBack: Bool
         do {
             let reconnected = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
                 specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent)
             session = reconnected.session
+            fellBack = reconnected.replacement != nil
             // Settled before the replay below: while it runs, a turn could save the
             // record it holds, and with the old session that save would undo this.
             if let replacement = reconnected.replacement {
@@ -96,8 +104,15 @@ extension ACPXDaemonBackend {
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         await restoreSelections(selections, on: entry)
+        if let connectOutput, let onConnectOutput {
+            handle.rawWire.set(nil)
+            await onConnectOutput(connectOutput.flush(fellBack: fellBack))
+        }
         return entry
     }
+
+    /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
+    typealias ConnectOutputHandler = @Sendable ([WireMessageEvent]) async -> Void
 
     /// Takes a reconnect's replacement session — its `session/new` response — onto the
     /// record a turn in flight will save.

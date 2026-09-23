@@ -85,6 +85,23 @@ final class OutputRenderer: @unchecked Sendable {
         out(sanitizer.sanitize(message, direction: direction).stringified + "\n")
     }
 
+    /// A message from the daemon's wire. JSON wire mode prints it as ``acpMessage``
+    /// does; text mode shows a request or notification the way acpx's formatter does,
+    /// as `[client] <method> (running)` — which is what connecting the agent for a turn
+    /// looks like (the daemon streams the rest of a text-mode turn as updates).
+    func wireMessage(_ event: WireMessageEvent) {
+        let direction: JSONRPCPeer.WireDirection = event.wireDirection == "outbound" ? .outbound : .inbound
+        if streamsWireJSON {
+            acpMessage(direction, Data(event.wireLine.utf8))
+            return
+        }
+        guard let message = WireJSON(parsing: Data(event.wireLine.utf8)),
+            let method = message["method"]?.stringValue,
+            !["session/prompt", "session/cancel", "session/update"].contains(method)
+        else { return }
+        clientOperation(method)
+    }
+
     /// Whether the stream has already shown the failure described by `failureText`:
     /// acpx then prints nothing more for it.
     func showedFailure(_ failureText: String) -> Bool {

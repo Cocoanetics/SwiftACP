@@ -32,7 +32,10 @@ enum PromptCommand {
             to: try findRoutedSessionOrThrow(agent: agent, name: name), config: context.config)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
 
-        let renderer = OutputRenderer(options: renderOptions(flags))
+        // JSON mode prints the turn's exchange as it crosses the wire, as acpx does.
+        var options = renderOptions(flags)
+        options.streamsWire = true
+        let renderer = OutputRenderer(options: options)
         let sessionId = record.acpSessionId
 
         // The acpxd daemon owns turn persistence: by the time `runPrompt` returns it

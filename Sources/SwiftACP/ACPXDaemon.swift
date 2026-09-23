@@ -215,17 +215,22 @@ public actor ACPXDaemon {
     ///   - nonInteractivePermissions: `deny` or `fail` — what a write needing
     ///     confirmation does, since the daemon never has a terminal to ask on.
     ///     Defaults to `deny`.
+    ///   - streamWire: also stream every ACP message of the turn as a
+    ///     ``WireMessageEvent``, as acpx's `--format json` prints them. The messages of
+    ///     connecting the agent for the turn are streamed either way.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     @MCPTool(openWorldHint: true)
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]? = nil,
-        wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil
+        wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
+        streamWire: Bool? = nil
     ) async throws -> String {
         try await backend.runPrompt(
             sessionId: sessionId, text: text, blocks: blocks, wait: wait,
-            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions)
+            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
+            streamWire: streamWire ?? false)
     }
 
     /// Cancel an in-flight prompt for a session.
