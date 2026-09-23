@@ -215,6 +215,22 @@ func parseNonEmptyValue(_ label: String, _ value: String) throws -> String {
     return trimmed
 }
 
+/// acpx's `parseSessionConfigOptionAssignment`: split on the first `=`, which
+/// may be neither the first nor the last character, then trim both halves and
+/// require both to survive the trim.
+func parseSessionConfigOptionAssignment(
+    _ value: String
+) throws -> ModelApplication.ConfigOptionAssignment {
+    let malformed = UsageError(#"Session config option must use "<key>=<value>" with non-empty parts"#)
+    guard let separator = value.firstIndex(of: "="), separator != value.startIndex,
+        value.index(after: separator) != value.endIndex
+    else { throw malformed }
+    let configId = value[..<separator].trimmingCharacters(in: .whitespaces)
+    let optionValue = value[value.index(after: separator)...].trimmingCharacters(in: .whitespaces)
+    guard !configId.isEmpty, !optionValue.isEmpty else { throw malformed }
+    return ModelApplication.ConfigOptionAssignment(configId: configId, value: optionValue)
+}
+
 func parseHistoryLimit(_ value: String) throws -> Int {
     guard let n = Int(value), n > 0 else { throw UsageError("Limit must be a positive integer") }
     return n

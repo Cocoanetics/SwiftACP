@@ -31,6 +31,7 @@ enum Router {
         Flags.globalSpecs + [
             OptionSpec("session", short: "s", takesValue: true),
             OptionSpec("file", short: "f", takesValue: true),
+            OptionSpec("config-option", takesValue: true, repeats: true),
             OptionSpec("name", takesValue: true),
             OptionSpec("resume-session", takesValue: true),
             OptionSpec("cursor", takesValue: true),

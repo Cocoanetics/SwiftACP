@@ -1,17 +1,24 @@
 import Foundation
 
-/// One option definition (long/short, whether it takes a value, negatable).
+/// One option definition (long/short, whether it takes a value, negatable,
+/// repeatable). A repeatable option keeps every occurrence in order — commander's
+/// collecting options (`--config-option`) rather than its default last-wins.
 struct OptionSpec {
     let long: String
     let short: Character?
     let takesValue: Bool
     let negatable: Bool
+    let repeats: Bool
 
-    init(_ long: String, short: Character? = nil, takesValue: Bool = false, negatable: Bool = false) {
+    init(
+        _ long: String, short: Character? = nil, takesValue: Bool = false,
+        negatable: Bool = false, repeats: Bool = false
+    ) {
         self.long = long
         self.short = short
         self.takesValue = takesValue
         self.negatable = negatable
+        self.repeats = repeats
     }
 }
 
@@ -21,15 +28,26 @@ struct ScannedArgs {
     var values: [String: String] = [:]
     /// Long-names explicitly negated via `--no-<name>`.
     var negated: Set<String> = []
+    /// Every occurrence of a repeatable option, in the order given on the command line.
+    var repeated: [String: [String]] = [:]
     var positionals: [String] = []
 
     func string(_ name: String) -> String? { values[name] }
+    /// Every value given for a repeatable option, in command-line order.
+    func strings(_ name: String) -> [String] { repeated[name] ?? [] }
     func flag(_ name: String) -> Bool { values[name] == "true" }
     /// Tri-state for negatable booleans: true (present), false (--no-x), nil (absent).
     func boolean(_ name: String) -> Bool? {
         if values[name] == "true" { return true }
         if negated.contains(name) { return false }
         return nil
+    }
+
+    /// Store one occurrence of a value option: last-wins for `string`, and also
+    /// accumulated in order when the option is repeatable.
+    fileprivate mutating func record(_ spec: OptionSpec, _ value: String) {
+        values[spec.long] = value
+        if spec.repeats { repeated[spec.long, default: []].append(value) }
     }
 }
 
@@ -69,9 +87,9 @@ enum ArgScanner {
                 }
                 if spec.takesValue {
                     if let inlineValue {
-                        result.values[spec.long] = inlineValue
+                        result.record(spec, inlineValue)
                     } else if index < args.count {
-                        result.values[spec.long] = args[index]
+                        result.record(spec, args[index])
                         index += 1
                     } else {
                         throw UsageError("option '--\(spec.long)' argument missing")
@@ -87,11 +105,11 @@ enum ArgScanner {
                 }
                 if spec.takesValue {
                     if let inlineValue {
-                        result.values[spec.long] = inlineValue
+                        result.record(spec, inlineValue)
                     } else if flag.count > 1 {
-                        result.values[spec.long] = String(flag.dropFirst())
+                        result.record(spec, String(flag.dropFirst()))
                     } else if index < args.count {
-                        result.values[spec.long] = args[index]
+                        result.record(spec, args[index])
                         index += 1
                     } else {
                         throw UsageError("option '-\(first)' argument missing")

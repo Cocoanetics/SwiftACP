@@ -123,7 +123,9 @@ targets += [
             .product(name: "SwiftMCP", package: "SwiftMCP")
         ],
         // Both fixtures are read from disk by path (`#filePath`), not from a bundle.
-        exclude: ["Fixtures/mock-agent.py", "Fixtures/image-probe.png"]
+        exclude: [
+            "Fixtures/mock-agent.py", "Fixtures/model-agent.py", "Fixtures/image-probe.png"
+        ]
     )
 ]
 #endif

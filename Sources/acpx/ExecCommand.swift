@@ -6,7 +6,10 @@ import SwiftACP
 /// `acpx [<agent>] exec [prompt...]` — a one-shot prompt with no saved session.
 enum ExecCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("file", short: "f", takesValue: true)])
+        let scan = try context.scan([
+            OptionSpec("file", short: "f", takesValue: true),
+            OptionSpec("config-option", takesValue: true, repeats: true)
+        ])
         let flags = try context.globalFlags(scan)
 
         if context.config.disableExec {
@@ -25,6 +28,7 @@ enum ExecCommand {
             return ExitCodes.error
         }
 
+        let configOptions = try scan.strings("config-option").map(parseSessionConfigOptionAssignment)
         let prompt = try PromptBlock.contentBlocks(
             text: "",
             blocks: try PromptInputResolver.resolve(
@@ -44,7 +48,13 @@ enum ExecCommand {
                 authCredentials: context.config.auth, authPolicy: flags.authPolicy,
                 inheritStderr: flags.verbose, onClientRequest: onClientRequest)
             do {
-                let session = try await handle.newSession(mcpServers: mcpServers, meta: meta)
+                let response = try await handle.connection.newSession(
+                    NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta))
+                try await ModelApplication.applySessionControls(
+                    connection: handle.connection, session: response, model: flags.model,
+                    configOptions: configOptions, agentCommand: agent.agentCommand,
+                    onWarning: quietOutput(flags) ? nil : { Console.errLine("[acpx] warning: \($0)") })
+                let session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
                 let outcome = try await session.run(
                     prompt, onUpdate: { renderer.render($0) },
                     onClientOperation: { renderer.clientOperation($0) })
@@ -55,11 +65,20 @@ enum ExecCommand {
                 let cliError = turnFailure(error, renderer: renderer)
                 await handle.close()
                 throw cliError
+            } catch let error as ModelApplication.UnsupportedError {
+                await handle.close()
+                throw CLIError(error.message)
             } catch {
                 await handle.close()
                 throw CLIError(error.localizedDescription)
             }
         }
+    }
+
+    /// acpx suppresses adapter-level warnings under `--json-strict` and
+    /// `--format quiet`, where stderr is part of the machine-readable contract.
+    private static func quietOutput(_ flags: GlobalFlags) -> Bool {
+        flags.jsonStrict || flags.format == "quiet"
     }
 }
 
