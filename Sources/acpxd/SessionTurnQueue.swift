@@ -16,6 +16,14 @@ actor SessionTurnQueue {
     /// Monotonic source of waiter tokens.
     private var nextToken = 0
 
+    /// Told the session id whenever a turn queues behind another — so a test can
+    /// wait until a caller is waiting.
+    private var onQueued: (@Sendable (String) -> Void)?
+
+    func setOnQueued(_ observer: (@Sendable (String) -> Void)?) {
+        onQueued = observer
+    }
+
     /// Take the slot for `sessionId`, returning once this caller owns it. Queues
     /// behind any in-flight turn; when `wait` is false, throws
     /// ``DaemonError/sessionBusy`` instead of queueing. Pair every successful call
@@ -28,6 +36,7 @@ actor SessionTurnQueue {
         let acquired = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 waiters[sessionId, default: []].append((token, continuation))
+                onQueued?(sessionId)
             }
         } onCancel: {
             // onCancel is synchronous — a Task is the only way onto the actor. If

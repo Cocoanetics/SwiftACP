@@ -47,6 +47,11 @@ EXIT_AFTER_PROMPTS = int(os.environ.get("MOCK_EXIT_AFTER_PROMPTS", "0"))
 # mid-turn, after the prompt reached it. 0 = never.
 EXIT_ON_PROMPT = int(os.environ.get("MOCK_EXIT_ON_PROMPT", "0"))
 
+# Each process names its sessions after itself, so a replacement session is
+# distinguishable from the one it replaced. Off: every session is mock-session-1.
+SESSION_ID = ("mock-session-%d" % os.getpid()) if os.environ.get("MOCK_SESSION_ID_PER_PROCESS") \
+    else "mock-session-1"
+
 
 def log_request(message):
     path = os.environ.get("MOCK_REQUEST_LOG")
@@ -154,7 +159,7 @@ def main():
                 "authMethods": [],
             })
         elif method == "session/new":
-            respond(req_id, {"sessionId": "mock-session-1"})
+            respond(req_id, {"sessionId": SESSION_ID})
         elif method == "session/load" and LOAD_MODE != "unsupported":
             # `gone` (the default) is the usual reason a fresh agent process cannot
             # load a session: it no longer has it. `ok` takes it back; `internal`

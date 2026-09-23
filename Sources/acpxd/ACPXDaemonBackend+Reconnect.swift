@@ -1,6 +1,7 @@
 import ACPXCore
 import Foundation
 import JSONFoundation
+import Logging
 import SwiftACP
 
 // Getting a session live again: the daemon holds one agent per session, so every
@@ -26,22 +27,30 @@ extension ACPXDaemonBackend {
     /// is false. A `control` (mode, model, config option) that has to do that must get
     /// the *same* session back — acpx runs an idle owner's controls `same-session-only`
     /// — while a turn may fall back to a new one.
+    ///
+    /// Entries are keyed by the stable `acpxRecordId`: the ACP session behind a record
+    /// can change — a fallback replaces it, and the record moves to the new one — while
+    /// the record stays the same.
+    ///
+    /// A turn in flight passes `onReplacement`: it saves the record it holds, so a
+    /// replacement goes to it, and it writes the record. Otherwise the record is
+    /// written here.
     func ensure(
-        sessionId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false
+        recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
+        control: Bool = false, onReplacement: ReplacementHandler? = nil
     ) async throws -> Live {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
-        while let existing = live[sessionId] {
+        while let existing = live[recordId] {
             if await !existing.agent.connection.isClosed {
                 guard existing.sessionSpecs == sessionSpecs else {
-                    throw DaemonError.mcpConfigConflict(sessionId)
+                    throw DaemonError.mcpConfigConflict(recordId)
                 }
                 return existing
             }
             replacesExitedAgent = true
             // Re-checked after the suspension above: only drop the entry that died.
-            if live[sessionId]?.agent === existing.agent { live.removeValue(forKey: sessionId) }
+            if live[recordId]?.agent === existing.agent { live.removeValue(forKey: recordId) }
             await existing.agent.close()
         }
         let cwd = try resolveCwd(rawCwd)
@@ -52,8 +61,12 @@ extension ACPXDaemonBackend {
         // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
         // the record carries them, so every reconnect advertises what the session was
         // created with rather than the defaults.
-        let capabilities =
-            findRecord(sessionId)?.acpx?.clientCapabilities?.advertised ?? .headlessController
+        let record = findRecord(recordId)
+        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .headlessController
+        // What to put back is read now, before a replacement session's advertised state
+        // lands on the record — acpx takes the desired mode, model and options at the
+        // start of `connectAndLoadSession` for the same reason.
+        let selections = record?.acpx
         let command = launchCommand(for: agentCommand, config: config)
         let handle = try await ACPAgent.launch(
             agent: command, cwd: cwd, permission: .approveAll,
@@ -62,18 +75,46 @@ extension ACPXDaemonBackend {
             inheritStderr: inheritAgentStderr)
         let session: ACPSession
         do {
-            session = try await takeBackOrStartOver(
-                handle, sessionId: sessionId, cwd: cwd, specs: specs, command: command,
-                sameSessionOnly: control && replacesExitedAgent)
+            let reconnected = try await takeBackOrStartOver(
+                handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
+                specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent)
+            session = reconnected.session
+            // Settled before the replay below: while it runs, a turn could save the
+            // record it holds, and with the old session that save would undo this.
+            if let replacement = reconnected.replacement {
+                if let onReplacement {
+                    await onReplacement(replacement)
+                } else {
+                    recordReplacement(recordId: recordId, response: replacement)
+                }
+            }
         } catch {
             // Nothing will hold this agent: don't leave its process running.
             await handle.close()
             throw error
         }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
-        live[sessionId] = entry
-        await restoreSelections(for: sessionId, on: entry)
+        live[recordId] = entry
+        await restoreSelections(selections, on: entry)
         return entry
+    }
+
+    /// Takes a reconnect's replacement session — its `session/new` response — onto the
+    /// record a turn in flight will save.
+    typealias ReplacementHandler = @Sendable (NewSessionResponse) async -> Void
+
+    /// The session a fallback started is the record's session from now on: acpx moves
+    /// `acpSessionId` to it (keeping `acpxRecordId`) along with what it advertised, so
+    /// the next reconnect asks for this one — not the one that was already gone.
+    private func recordReplacement(recordId: String, response: NewSessionResponse) {
+        guard var record = findRecord(recordId) else { return }
+        record.moveToReplacement(
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
+        do {
+            try SessionStore.writeRecord(record)
+        } catch {
+            reconnectLog.warning("session record write failed after a fresh-session fallback: \(error)")
+        }
     }
 
     /// Take the session back on a fresh launch, or start a new one in its place —
@@ -86,14 +127,16 @@ extension ACPXDaemonBackend {
     /// id. A session imported from another client must stay the *same* session, so it
     /// is never replaced — acpx's `sameSessionOnly` — and neither is one the caller
     /// asks to keep (`sameSessionOnly`).
+    ///
+    /// Returns the session, and the `session/new` response when it is a replacement.
     private func takeBackOrStartOver(
-        _ handle: ACPAgent, sessionId: String, cwd: String, specs: [MCPServerSpec], command: String,
-        sameSessionOnly: Bool
-    ) async throws -> ACPSession {
+        _ handle: ACPAgent, recordId: String, sessionId: String, cwd: String, specs: [MCPServerSpec],
+        command: String, sameSessionOnly: Bool
+    ) async throws -> (session: ACPSession, replacement: NewSessionResponse?) {
         do {
-            return try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
+            return (try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs), nil)
         } catch {
-            let record = findRecord(sessionId)
+            let record = findRecord(recordId)
             switch ReconnectFallback.outcome(
                 after: error, sameSessionOnly: sameSessionOnly || record?.importedFrom != nil,
                 sessionHasAgentMessages: record?.hasAgentMessages ?? false) {
@@ -110,7 +153,7 @@ extension ACPXDaemonBackend {
                     cwd: cwd, mcpServers: specs,
                     meta: SessionMeta.build(
                         options: record?.acpx?.sessionOptions, agentCommand: command)))
-            return ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
+            return (ACPSession(id: response.sessionId, agent: handle, modes: response.modes), response)
         }
     }
 
@@ -138,8 +181,8 @@ extension ACPXDaemonBackend {
     /// Each is best-effort: an agent that no longer offers a saved choice must not fail
     /// the turn that triggered the reconnect, and the record keeps the user's intent
     /// either way.
-    func restoreSelections(for sessionId: String, on entry: Live) async {
-        guard let acpx = findRecord(sessionId)?.acpx else { return }
+    func restoreSelections(_ selections: SessionAcpxState?, on entry: Live) async {
+        guard let acpx = selections else { return }
         let desiredOptions = acpx.desiredConfigOptions ?? [:]
         // The record keeps the agent's advertised options verbatim; the model's option
         // id is derived from them the same way `session/new` derived it.
@@ -183,3 +226,5 @@ extension ACPXDaemonBackend {
         return cwd
     }
 }
+
+private let reconnectLog = Logger(label: "com.cocoanetics.acpx.acpxd.reconnect")

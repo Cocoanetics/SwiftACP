@@ -101,14 +101,16 @@ extension DaemonToolsTests {
     }
 
     /// The record keeps the user's intent even when the agent will not take it back, so
-    /// a retired model cannot strand the session on an unusable reconnect.
+    /// a retired model cannot strand the session on an unusable reconnect. The agent
+    /// takes the session itself back here: a new session in its place replaces the
+    /// advertised model state with its own, as acpx's does (#56).
     @Test(.enabled(if: mockPythonAvailable))
     func aRejectedSelectionDoesNotFailTheReconnect() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
-                agentCommand: command, cwd: NSTemporaryDirectory())
+                agentCommand: "/usr/bin/env MOCK_LOAD_SESSION=ok \(command)", cwd: NSTemporaryDirectory())
 
             // Pin something the mock has no idea about, behind the daemon's back.
             var record = try #require(SessionStore.loadRecord(id))

@@ -51,20 +51,23 @@ extension ACPXDaemonBackend {
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        let acpSessionId = initial.acpSessionId
+        let recordId = initial.acpxRecordId
 
         // One turn per session at a time: queue behind any in-flight turn (or, when
         // wait == false, reject), so concurrent CLI/MCP callers never drive one
-        // agent — or persist one record — concurrently. Keyed by ACP session id.
-        try await turnQueue.acquire(acpSessionId, wait: wait)
+        // agent — or persist one record — concurrently. Keyed by the record, whose
+        // ACP session a fallback can replace.
+        try await turnQueue.acquire(recordId, wait: wait)
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
-        defer { Task { await turnQueue.release(acpSessionId) } }
+        defer { Task { await turnQueue.release(recordId) } }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
-        // stale pre-wait snapshot (whose final flush would otherwise clobber it).
-        guard let record = findRecord(sessionId) else {
+        // stale pre-wait snapshot (whose final flush would otherwise clobber it). By the
+        // record id: that turn may also have moved the record to a new ACP session, and
+        // the caller's id may be the one it replaced.
+        guard let record = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let agentCommand = record.agentCommand
@@ -73,7 +76,7 @@ extension ACPXDaemonBackend {
         // Whether this turn starts on a connection the daemon already holds — the only
         // case in which a session-gone failure can mean the agent dropped the session
         // from under it (see the retry below).
-        let wasHeld = live[acpSessionId] != nil
+        let wasHeld = live[recordId] != nil
         // Gate each block on what the agent advertised, the way npm acpx's client
         // does: an agent without the capability either ignores the block or errors
         // opaquely. Capabilities come from `initialize`, so this has to connect first
@@ -86,8 +89,7 @@ extension ACPXDaemonBackend {
         }
         if !gated.isEmpty {
             let entry = try await ensure(
-                sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers)
+                recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
             let capabilities = entry.agent.promptCapabilities
             if let unmet = gated.first(where: { !$0.requirement.isAdvertised(by: capabilities) }) {
                 throw PromptBlockError.capabilityUnsupported(
@@ -100,11 +102,12 @@ extension ACPXDaemonBackend {
         // draining the wire buffer into the event log on each save. A session-gone
         // retry reuses both, so the prompt isn't double-recorded.
         let eventBuffer = WireBuffer()
-        let persister = TurnPersister(record: record, eventBuffer: eventBuffer)
+        // Read again: connecting above may have moved the record to a replacement session.
+        let persister = TurnPersister(record: findRecord(recordId) ?? record, eventBuffer: eventBuffer)
         await persister.recordPrompt(content)
         do {
             return try await attemptPrompt(
-                sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
+                recordId: recordId, agentCommand: agentCommand, cwd: cwd,
                 mcpServers: mcpServers, blocks: content, permissions: permissions,
                 persister: persister, eventBuffer: eventBuffer)
         } catch {
@@ -120,23 +123,27 @@ extension ACPXDaemonBackend {
             // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
             // launch unseen; one it did reach is never sent twice.
             guard wasHeld, isSessionGone(error) || error is AgentExitedBeforeTheTurn else { throw error }
-            await evict(acpSessionId)
+            await evict(recordId)
             return try await attemptPrompt(
-                sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
+                recordId: recordId, agentCommand: agentCommand, cwd: cwd,
                 mcpServers: mcpServers, blocks: content, permissions: permissions,
                 persister: persister, eventBuffer: eventBuffer)
         }
     }
 
     private func attemptPrompt(
-        sessionId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
+        recordId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
         blocks: [ContentBlock], permissions: TurnPermissions, persister: TurnPersister,
         eventBuffer: WireBuffer
     ) async throws -> String {
+        // A reconnect that has to start a new session hands it to the persister, so the
+        // turn's saves carry it on instead of writing the old session back.
         let entry = try await ensure(
-            sessionId: sessionId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
+            recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
+            onReplacement: { await persister.adoptReplacement($0) })
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
+        let sessionId = boundSessionId
         // Whether any of this turn has been written to the agent — its prompt is the
         // first thing that is. Cleared when the turn ends.
         let wrote = WriteMark()
