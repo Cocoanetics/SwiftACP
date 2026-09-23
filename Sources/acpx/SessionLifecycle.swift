@@ -100,7 +100,7 @@ enum SessionLifecycle {
         agent: AgentInvocation, name: String?, flags: GlobalFlags, config: ResolvedAcpxConfig
     ) throws -> SessionRecord {
         let permission = try permissionPolicy(flags, config: config)
-        let meta = claudeMeta(agent: agent, flags: flags)
+        let meta = sessionMeta(agent: agent, flags: flags)
         let options = sessionOptions(flags)
         return try runBlocking {
             do {
@@ -121,7 +121,7 @@ enum SessionLifecycle {
     }
 
     /// Collect the per-session options the CLI flags request, or `nil` if none.
-    private static func sessionOptions(_ flags: GlobalFlags) -> SessionAcpxState.SessionOptions? {
+    static func sessionOptions(_ flags: GlobalFlags) -> SessionAcpxState.SessionOptions? {
         var options = SessionAcpxState.SessionOptions()
         var any = false
         if let model = flags.model { options.model = model; any = true }
@@ -153,9 +153,11 @@ enum SessionLifecycle {
         }
     }
 
-    static func claudeMeta(agent: AgentInvocation, flags: GlobalFlags) -> JSONValue? {
-        guard agent.agentName == "claude", let model = flags.model else { return nil }
-        return .object(["claudeCode": .object(["options": .object(["model": .string(model)])])])
+    /// The `_meta` for this invocation's `session/new`. acpx sends the session
+    /// options for *every* agent — only Claude Code's `settingSources` is gated
+    /// on the adapter — so this is not conditioned on the agent name.
+    static func sessionMeta(agent: AgentInvocation, flags: GlobalFlags) -> JSONValue? {
+        SessionMeta.build(options: sessionOptions(flags), agentCommand: agent.agentCommand)
     }
 
     // MARK: - Output
