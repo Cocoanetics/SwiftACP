@@ -129,4 +129,14 @@ struct AgentRegistryTests {
         #expect(AgentRegistry.aliases["factory-droid"] == "droid")
         #expect(AgentRegistry.aliases["factorydroid"] == "droid")
     }
+
+    /// An explicit argv wins over an installed adapter binary: it is launched as given.
+    @Test func anExplicitArgvIsLaunchedEvenWhereTheAdapterIsInstalled() throws {
+        let installed = try AgentRegistry.launch(for: "codex", locate: { "/opt/bin/\($0)" })
+        #expect(installed.executable.hasPrefix("/opt/bin/"))
+        let given = try AgentRegistry.launch(
+            for: "codex", argv: ["/usr/bin/custom", "--flag", "a b"], locate: { "/opt/bin/\($0)" })
+        #expect(given.executable == "/usr/bin/custom")
+        #expect(given.arguments == ["--flag", "a b"])
+    }
 }

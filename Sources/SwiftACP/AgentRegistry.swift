@@ -123,9 +123,9 @@ public enum AgentRegistry {
 
     /// Resolve a runnable launch spec for the given agent.
     ///
-    /// - If a preferred adapter binary is installed, launch it directly.
     /// - With `argv` — a config agent's `argv`, or one a session recorded — launch
     ///   exactly that: acpx spawns an agent it has an argv for without re-splitting it.
+    /// - If a preferred adapter binary is installed, launch it directly.
     /// - Otherwise split the registry command line into executable + arguments.
     /// - An unknown name with no override is treated as a literal command line.
     ///
@@ -136,7 +136,8 @@ public enum AgentRegistry {
         cwd: String? = nil,
         environment: [String: String]? = nil,
         inheritStderr: Bool = true,
-        overrides: [String: String] = [:]
+        overrides: [String: String] = [:],
+        locate: (String) -> String? = { which($0) }
     ) throws -> ProcessLaunch {
         let key = normalize(name)
         // codex-acp only reaches a system codex through `CODEX_PATH`; when the
@@ -147,7 +148,9 @@ public enum AgentRegistry {
         let environment =
             key == "codex" ? injectingCodexPath(environment: environment) : environment
 
-        if let binary = preferredBinaries[key], let path = which(binary) {
+        // An explicit argv is launched as given, even for a built-in name whose adapter
+        // binary is installed.
+        if argv == nil, let binary = preferredBinaries[key], let path = locate(binary) {
             return ProcessLaunch(
                 executable: path, arguments: [], environment: environment,
                 workingDirectory: cwd, inheritStderr: inheritStderr)
