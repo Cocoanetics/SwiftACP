@@ -310,6 +310,70 @@ struct WriteGateTests {
         serverTask.cancel()
     }
 
+    /// An agent can ask for a write and end its turn without awaiting the answer. The
+    /// peer runs each request on its own task, so without care the write could be
+    /// handled after the turn returned — under the *next* turn's handlers (a `deny-all`
+    /// turn's write approved by a following `approve-all`), and counted against that
+    /// turn. The turn must not end until its requests are answered.
+    @Test func aTurnWaitsForARequestItsAgentDidNotAwait() async throws {
+        struct FireAndForgetWriter: ACPAgentHandler {
+            var path: String
+            var requestRead: Signal
+            func initialize(_ request: InitializeRequest) async -> InitializeResponse {
+                InitializeResponse(agentInfo: Implementation(name: "hasty", version: "1.0"))
+            }
+            func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
+                NewSessionResponse(sessionId: "hasty-session")
+            }
+            func prompt(
+                _ request: PromptRequest, session: ACPServerSession
+            ) async throws -> PromptResponse {
+                Task { try? await session.writeTextFile(path: path, content: "x") }
+                // End the turn as soon as the client has *read* the request — without
+                // waiting for its answer.
+                await requestRead.wait()
+                return PromptResponse(stopReason: .endTurn)
+            }
+        }
+
+        let root = try workspace()
+        let requestRead = Signal()
+        let release = Signal()
+        let answered = Signal()
+        var handlers = ACPClientHandlers.standard(permission: .denyAll)
+        handlers.authorizeWrite = { _ in
+            // Held until the turn is waiting for it. Without that wait nothing releases
+            // it before `prompt` returns, so the check below would find it unanswered.
+            await release.wait()
+            answered.fire()
+            throw FileSystemPermissionError.denied
+        }
+
+        let (clientTransport, serverTransport) = LoopbackTransport.pair()
+        let server = ACPAgentServer(
+            handler: FireAndForgetWriter(path: root + "/a.txt", requestRead: requestRead),
+            transport: serverTransport)
+        let serverTask = Task { try await server.run() }
+        let client = ACPAgentConnection(transport: clientTransport, handlers: handlers)
+        await client.setWireObserver { line in
+            if line.contains("\"method\":\"fs/write_text_file\"") { requestRead.fire() }
+        }
+        await client.inboundRequests.setOnWait { _ in release.fire() }
+        await client.start()
+        _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
+        let session = try await client.newSession(NewSessionRequest(cwd: root))
+
+        _ = try await client.prompt(PromptRequest(sessionId: session.sessionId, prompt: [.text("go")]))
+        // By the time the turn is over, its request has been answered — under this
+        // turn's handlers — and counted in this turn.
+        #expect(answered.isFired)
+        #expect(await client.permissionStats(for: session.sessionId).denied == 1)
+        #expect(!FileManager.default.fileExists(atPath: root + "/a.txt"))
+        release.fire()  // let a still-held handler finish before closing, should this fail
+        await client.close()
+        serverTask.cancel()
+    }
+
     /// acpx's order: a path plainly outside the workspace is refused *without asking*.
     @Test func aPathOutsideTheWorkspaceIsRefusedBeforeAnyoneIsAsked() async throws {
         let root = try workspace()
@@ -348,4 +412,34 @@ final class Recorder<Value: Sendable>: @unchecked Sendable {
     private var stored: [Value] = []
     func append(_ value: Value) { lock.withLock { stored.append(value) } }
     var values: [Value] { lock.withLock { stored } }
+}
+
+/// A one-shot signal: `wait` suspends until `fire`, and returns at once after it.
+final class Signal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func fire() {
+        let released: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard !fired else { return [] }
+            fired = true
+            defer { waiters.removeAll() }
+            return waiters
+        }
+        released.forEach { $0.resume() }
+    }
+
+    var isFired: Bool { lock.withLock { fired } }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let already: Bool = lock.withLock {
+                if fired { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if already { continuation.resume() }
+        }
+    }
 }

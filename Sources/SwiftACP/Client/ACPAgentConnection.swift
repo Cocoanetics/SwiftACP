@@ -14,7 +14,7 @@ public actor ACPAgentConnection {
     private var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
-    private var eventSinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
+    var eventSinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
@@ -77,14 +77,15 @@ public actor ACPAgentConnection {
     /// ``JSONRPCMessage`` values, back to the line-oriented observer this layer
     /// exposes: each message is re-encoded to its canonical wire string.
     public func setWireObserver(_ observer: (@Sendable (String) -> Void)?) async {
-        guard let observer else {
-            await rpc.setWireLog(nil)
-            return
-        }
-        await rpc.setWireLog { _, message in
-            if let line = try? message.encodedString() { observer(line) }
-        }
+        wireObserver.set(observer)
     }
+
+    /// The caller's wire observer; the peer's wire hook (installed once, in `start`)
+    /// forwards to it, since it also counts the agent's requests as they arrive.
+    private let wireObserver = WireObserverBox()
+    /// The agent's requests that arrived and are not yet answered, per session — what
+    /// a turn waits for before it ends. See ``InboundRequestLedger``.
+    let inboundRequests = InboundRequestLedger()
 
     private var onClientRequest: (@Sendable (String) -> Void)?
 
@@ -97,8 +98,25 @@ public actor ACPAgentConnection {
 
     /// Wire inbound routing and begin reading. Call once before any request.
     public func start() async {
+        // Runs inline as each message is read, in order: an agent request is counted
+        // here, before the peer hands it to its own task, so a turn that ends after
+        // reading it is sure to wait for it.
+        await rpc.setWireLog { [wireObserver, inboundRequests] direction, message in
+            if direction == .inbound, case .request(let request) = message,
+                let sessionId = InboundRequestLedger.sessionId(of: request.params) {
+                inboundRequests.arrived(sessionId)
+            }
+            if let observer = wireObserver.current, let line = try? message.encodedString() {
+                observer(line)
+            }
+        }
         await rpc.setHandlers(
-            request: { [weak self] method, params in
+            request: { [weak self, inboundRequests] method, params in
+                defer {
+                    if let sessionId = InboundRequestLedger.sessionId(of: params) {
+                        inboundRequests.finished(sessionId)
+                    }
+                }
                 guard let self else { return .failure(.internalError("connection released")) }
                 return await self.serveIncomingRequest(method: method, params: params)
             },
@@ -245,7 +263,17 @@ public actor ACPAgentConnection {
             promptingSessionIds.remove(request.sessionId)
             cancellingSessionIds.remove(request.sessionId)
         }
-        return try await send("session/prompt", request)
+        // The turn is not over until the agent's requests from it are answered: one it
+        // sent without awaiting would otherwise be handled after this returns — under
+        // the next turn's handlers, and counted against that turn.
+        do {
+            let response: PromptResponse = try await send("session/prompt", request)
+            await inboundRequests.waitUntilIdle(request.sessionId)
+            return response
+        } catch {
+            await inboundRequests.waitUntilIdle(request.sessionId)
+            throw error
+        }
     }
 
     public func setMode(_ request: SetSessionModeRequest) async throws {
@@ -289,27 +317,7 @@ public actor ACPAgentConnection {
 
     // MARK: - Inbound routing
 
-    /// Route one inbound request, reporting its arrival — and its refusal, if the client
-    /// refuses it — on the event stream, where they fall into wire order with the
-    /// session's updates.
-    private func serveIncomingRequest(
-        method: String, params: JSONValue?
-    ) async -> Result<JSONValue, JSONRPCErrorBody> {
-        let sessionId = decodedSessionId(params)
-        publish(.inboundRequest(InboundRequest(method: method, sessionId: sessionId)))
-        let result = await handleIncomingRequest(method: method, params: params)
-        if case .failure(let error) = result {
-            publish(.inboundRequest(InboundRequest(
-                method: method, sessionId: sessionId, failure: InboundRequest.summary(of: error))))
-        }
-        return result
-    }
-
-    private func publish(_ event: ConnectionEvent) {
-        for sink in eventSinks.values { sink.yield(event) }
-    }
-
-    private func handleIncomingRequest(
+    func handleIncomingRequest(
         method: String, params: JSONValue?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         switch method {
