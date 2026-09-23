@@ -278,6 +278,16 @@ public indirect enum WireJSON: Equatable, Sendable {
         return indexed.sorted { $0.0 < $1.0 }.map(\.1) + rest
     }
 
+    /// `keys` as a JavaScript object built by inserting them in this order lists them:
+    /// each once, where it was first inserted, with array-index keys first in numeric
+    /// order — the order `Object.entries`, `Object.fromEntries` and `{...a, ...b}` keep.
+    public static func propertyOrder(_ keys: [String]) -> [String] {
+        var seen = Set<String>()
+        let unique = keys.filter { seen.insert($0).inserted }
+        return orderedForPrinting(unique.map { Member($0, .null) })
+            .map { String(decoding: $0.key, as: UTF16.self) }
+    }
+
     /// The key's value as an array index: its canonical decimal form (no sign, no
     /// leading zero unless it is `0`) of an integer below 2³² − 1.
     static func arrayIndex(_ key: [UInt16]) -> UInt64? {
