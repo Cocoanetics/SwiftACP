@@ -12,21 +12,7 @@ enum ExecCommand {
         ])
         let flags = try context.globalFlags(scan)
 
-        if context.config.disableExec {
-            if flags.format == "json" {
-                Console.out(jsonObject([
-                    ("jsonrpc", .string("2.0")),
-                    ("error", jsonObject([
-                        ("code", .integer(-32603)),
-                        ("message", .string("exec subcommand is disabled by configuration (disableExec: true)")),
-                        ("data", jsonObject([("acpxCode", .string("EXEC_DISABLED"))]))
-                    ]))
-                ]).compact() + "\n")
-            } else {
-                Console.errLine("Error: exec subcommand is disabled by configuration (disableExec: true)")
-            }
-            return ExitCodes.error
-        }
+        if context.config.disableExec { return refuseDisabledExec(flags) }
 
         let configOptions = try scan.parsedAll("config-option", parseSessionConfigOptionAssignment)
         let prompt = try PromptBlock.contentBlocks(
@@ -38,16 +24,30 @@ enum ExecCommand {
         let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
         let mcpServers = try context.config.mcpServerSpecs()
         let meta = SessionLifecycle.sessionMeta(agent: agent, flags: flags)
-        let renderer = OutputRenderer(options: renderOptions(flags))
+        var options = renderOptions(flags)
+        options.streamsWire = true
+        let renderer = OutputRenderer(options: options)
         let onClientRequest = clientOperationObserver(renderer)
+        // JSON mode prints the exchange from the handshake on, so the tap goes in at launch.
+        let onRawWire: RawWireTap.Observer?
+        if renderer.streamsWireJSON {
+            onRawWire = { direction, body in renderer.acpMessage(direction, body) }
+        } else {
+            onRawWire = nil
+        }
 
         return try runBlocking {
-            let handle = try await ACPAgent.launch(
-                agent: agent.agentCommand, cwd: agent.cwd, permission: permission,
-                nonInteractivePermissions: flags.nonInteractivePolicy,
-                capabilities: flags.clientCapabilities,
-                authCredentials: context.config.auth, authPolicy: flags.authPolicy,
-                inheritStderr: flags.verbose, onClientRequest: onClientRequest)
+            let handle: ACPAgent
+            do {
+                handle = try await ACPAgent.launch(
+                    agent: agent.agentCommand, cwd: agent.cwd, permission: permission,
+                    nonInteractivePermissions: flags.nonInteractivePolicy,
+                    capabilities: flags.clientCapabilities,
+                    authCredentials: context.config.auth, authPolicy: flags.authPolicy,
+                    inheritStderr: flags.verbose, onClientRequest: onClientRequest, onRawWire: onRawWire)
+            } catch where renderer.streamsWireJSON {
+                return reportJSONFailure(error, renderer: renderer)
+            }
             do {
                 let response = try await handle.connection.newSession(
                     NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta))
@@ -63,19 +63,76 @@ enum ExecCommand {
                 renderer.finish(stopReason: outcome.stopReason)
                 let permissions = await handle.connection.permissionStats(for: response.sessionId)
                 await handle.close()
+                if renderer.streamsWireJSON, permissions.promptUnavailable {
+                    // acpx rethrows this after the turn; its top-level handler reports it
+                    // unless the stream already shows the client's refusal saying the same.
+                    return reportJSONFailure(PromptUnavailable(), renderer: renderer)
+                }
                 return permissionExitCode(permissions, quiet: flags.format == "quiet")
-            } catch let error as JSONRPCErrorBody {
-                let cliError = turnFailure(error, renderer: renderer)
-                await handle.close()
-                throw cliError
-            } catch let error as ModelApplication.UnsupportedError {
-                await handle.close()
-                throw CLIError(error.message)
             } catch {
+                let failure = renderer.streamsWireJSON ? nil : textFailure(error, renderer: renderer)
                 await handle.close()
-                throw CLIError(error.localizedDescription)
+                if let failure { throw failure }
+                return reportJSONFailure(error, renderer: renderer)
             }
         }
+    }
+
+    /// How text and quiet modes report a failed run (their exact acpx wording is #60).
+    private static func textFailure(_ error: Error, renderer: OutputRenderer) -> Error {
+        switch error {
+        case let rpc as JSONRPCErrorBody: return turnFailure(rpc, renderer: renderer)
+        case let unsupported as ModelApplication.UnsupportedError: return CLIError(unsupported.message)
+        default: return CLIError(error.localizedDescription)
+        }
+    }
+
+    /// A failure in JSON mode, as acpx's top-level handler reports it: nothing more
+    /// when the stream already shows it — the agent's error response, or the client's
+    /// refusal it repeats — else one JSON-RPC error line; never anything on stderr.
+    /// Returns the exit code for the failure's output code.
+    static func reportJSONFailure(_ error: Error, renderer: OutputRenderer) -> Int32 {
+        let outputCode: String
+        let detailCode: String?
+        let message: String
+        switch error {
+        case let rpc as JSONRPCErrorBody:
+            (outputCode, detailCode, message) = ("RUNTIME", nil, rpc.message)
+        case let launch as AgentLaunchError:
+            (outputCode, detailCode, message) = ("RUNTIME", launch.detailCode, launch.localizedDescription)
+        case let unsupported as ModelApplication.UnsupportedError:
+            (outputCode, detailCode, message) = ("RUNTIME", nil, unsupported.message)
+        case is PromptUnavailable:
+            (outputCode, detailCode, message) = (
+                "PERMISSION_PROMPT_UNAVAILABLE", nil, FileSystemPermissionError.promptUnavailable.description
+            )
+        default:
+            (outputCode, detailCode, message) = ("RUNTIME", nil, error.localizedDescription)
+        }
+        if !renderer.showedFailure(message) {
+            renderer.jsonFailure(outputCode: outputCode, detailCode: detailCode, message: message)
+        }
+        return exitCode(forOutputCode: outputCode)
+    }
+
+    /// A write needed a confirmation nobody could give (`--non-interactive-permissions fail`).
+    struct PromptUnavailable: Error {}
+
+    /// acpx refuses `exec` under `disableExec` the way it reports any failure, in the
+    /// chosen format: the JSON-RPC error line, the quiet `[acpx] error:` line, or the
+    /// bare message.
+    private static func refuseDisabledExec(_ flags: GlobalFlags) -> Int32 {
+        let message = "exec subcommand is disabled by configuration (disableExec: true)"
+        switch flags.format {
+        case "json":
+            Console.out(JSONErrorLine.make(
+                outputCode: "EXEC_DISABLED", origin: "cli", message: message, sessionId: "unknown") + "\n")
+        case "quiet":
+            Console.errLine("[acpx] error: EXEC_DISABLED \(message)")
+        default:
+            Console.errLine(message)
+        }
+        return ExitCodes.error
     }
 
     /// acpx suppresses adapter-level warnings under `--json-strict` and
