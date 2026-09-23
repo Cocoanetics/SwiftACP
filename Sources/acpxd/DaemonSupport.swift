@@ -17,6 +17,7 @@ enum DaemonError: LocalizedError {
     case mcpConfigConflict(String)
     case invalidPermissionMode(String)
     case invalidNonInteractivePermissions(String)
+    case sessionResumeRequired(String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +36,9 @@ enum DaemonError: LocalizedError {
             return "invalid permissionMode \"\(mode)\": expected approve-all, approve-reads or deny-all"
         case .invalidNonInteractivePermissions(let policy):
             return "invalid nonInteractivePermissions \"\(policy)\": expected deny or fail"
+        case .sessionResumeRequired(let id, let reason):
+            // npm acpx's SessionResumeRequiredError wording.
+            return "Persistent ACP session \(id) could not be resumed: \(reason)"
         }
     }
 }

@@ -70,6 +70,10 @@ extension ACPXDaemonBackend {
         let agentCommand = record.agentCommand
         let cwd = record.cwd
         let mcpServers = record.acpx?.mcpServers
+        // Whether this turn starts on a connection the daemon already holds — the only
+        // case in which a session-gone failure can mean the agent dropped the session
+        // from under it (see the retry below).
+        let wasHeld = live[acpSessionId] != nil
         // Gate each block on what the agent advertised, the way npm acpx's client
         // does: an agent without the capability either ignores the block or errors
         // opaquely. Capabilities come from `initialize`, so this has to connect first
@@ -107,8 +111,11 @@ extension ACPXDaemonBackend {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
             // launch. Only retry for session-gone errors, never transient ones like
-            // rate limits.
-            guard isSessionGone(error) else { throw error }
+            // rate limits — and only for a session held before this turn: when the
+            // turn connected it, the agent has just answered for a fresh launch, and a
+            // refused reconnect (which reads like a gone session) would only be asked
+            // again.
+            guard wasHeld, isSessionGone(error) else { throw error }
             await evict(acpSessionId)
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
