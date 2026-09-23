@@ -167,13 +167,13 @@ enum SessionLifecycle {
     private static func printNewSession(_ record: SessionRecord, replaced: SessionRecord?, format: String) {
         switch format {
         case "json":
-            var pairs: [(String, JSONValue)] = [
+            var pairs: [(String, JSONValue?)] = [
                 ("action", .string("session_ensured")),
                 ("created", .bool(true)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
-                ("agentSessionId", record.agentSessionId.map(JSONValue.string) ?? .null),
-                ("name", record.name.map(JSONValue.string) ?? .null)
+                ("agentSessionId", record.agentSessionId.map(JSONValue.string)),
+                ("name", record.name.map(JSONValue.string))
             ]
             if let replaced { pairs.append(("replacedSessionId", .string(replaced.acpxRecordId))) }
             Console.out(jsonObject(pairs).compact() + "\n")
@@ -196,8 +196,8 @@ enum SessionLifecycle {
                 ("created", .bool(created)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
-                ("agentSessionId", record.agentSessionId.map(JSONValue.string) ?? .null),
-                ("name", record.name.map(JSONValue.string) ?? .null)
+                ("agentSessionId", record.agentSessionId.map(JSONValue.string)),
+                ("name", record.name.map(JSONValue.string))
             ]).compact() + "\n")
         case "quiet":
             Console.out("\(record.acpxRecordId)\n")

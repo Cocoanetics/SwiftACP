@@ -44,33 +44,70 @@ public indirect enum WireJSON: Equatable, Sendable {
     /// order (see ``orderedForPrinting``), JavaScript's number and string forms.
     public var stringified: String {
         var output: [UInt16] = []
-        write(into: &output)
+        write(into: &output, gap: [], indentation: [])
         return String(decoding: output, as: UTF16.self)
     }
 
-    private func write(into output: inout [UInt16]) {
+    /// The value as `JSON.stringify(value, null, indent)` prints it: each member and
+    /// element on its own line, `indent` spaces deeper than its container, `": "`
+    /// between a key and its value — and an empty object or array still `{}` or `[]`.
+    /// As there, the indent is at most 10, and one below 1 prints the compact form.
+    public func stringified(indent: Int) -> String {
+        var output: [UInt16] = []
+        write(into: &output, gap: Array(repeating: 0x20, count: min(max(indent, 0), 10)), indentation: [])
+        return String(decoding: output, as: UTF16.self)
+    }
+
+    private func write(into output: inout [UInt16], gap: [UInt16], indentation: [UInt16]) {
         switch self {
         case .null: output += "null".utf16
         case .bool(let flag): output += (flag ? "true" : "false").utf16
         case .number(let value): output += Self.javaScriptString(for: value).utf16
         case .string(let units): Self.writeQuoted(units, into: &output)
         case .array(let items):
-            output.append(0x5B)
-            for (offset, item) in items.enumerated() {
-                if offset > 0 { output.append(0x2C) }
-                item.write(into: &output)
+            Self.writeContainer(
+                items, open: 0x5B, close: 0x5D, into: &output, gap: gap, indentation: indentation
+            ) { item, output, inner in
+                item.write(into: &output, gap: gap, indentation: inner)
             }
-            output.append(0x5D)
         case .object(let members):
-            output.append(0x7B)
-            for (offset, member) in Self.orderedForPrinting(members).enumerated() {
-                if offset > 0 { output.append(0x2C) }
+            Self.writeContainer(
+                Self.orderedForPrinting(members), open: 0x7B, close: 0x7D, into: &output, gap: gap,
+                indentation: indentation
+            ) { member, output, inner in
                 Self.writeQuoted(member.key, into: &output)
                 output.append(0x3A)
-                member.value.write(into: &output)
+                if !gap.isEmpty { output.append(0x20) }
+                member.value.write(into: &output, gap: gap, indentation: inner)
             }
-            output.append(0x7D)
         }
+    }
+
+    /// `SerializeJSONArray` / `SerializeJSONObject`: the elements one after another, or
+    /// with a gap each on its own line; nothing at all is just the brackets.
+    private static func writeContainer<Element>(
+        _ elements: [Element], open: UInt16, close: UInt16, into output: inout [UInt16], gap: [UInt16],
+        indentation: [UInt16], element: (Element, inout [UInt16], [UInt16]) -> Void
+    ) {
+        output.append(open)
+        guard !elements.isEmpty else {
+            output.append(close)
+            return
+        }
+        let inner = indentation + gap
+        for (offset, item) in elements.enumerated() {
+            if offset > 0 { output.append(0x2C) }
+            if !gap.isEmpty {
+                output.append(0x0A)
+                output += inner
+            }
+            element(item, &output, inner)
+        }
+        if !gap.isEmpty {
+            output.append(0x0A)
+            output += indentation
+        }
+        output.append(close)
     }
 
     /// A JavaScript object lists its array-index keys ("0", "1", … up to 2³² − 2)

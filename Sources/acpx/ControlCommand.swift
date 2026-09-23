@@ -75,7 +75,7 @@ enum ControlCommand {
                 ("resumed", .bool(false)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
-                ("agentSessionId", record.agentSessionId.map(JSONValue.string) ?? .null)
+                ("agentSessionId", record.agentSessionId.map(JSONValue.string))
             ]).compact() + "\n")
         case "quiet":
             Console.out("\(modeId)\n")
@@ -148,7 +148,7 @@ enum ControlCommand {
                 ("configOptions", .array(configOptions)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
-                ("agentSessionId", record.agentSessionId.map(JSONValue.string) ?? .null)
+                ("agentSessionId", record.agentSessionId.map(JSONValue.string))
             ]).compact() + "\n")
         case "quiet":
             Console.out("\(value)\n")
@@ -166,7 +166,7 @@ enum ControlCommand {
                 ("resumed", .bool(false)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
-                ("agentSessionId", record.agentSessionId.map(JSONValue.string) ?? .null)
+                ("agentSessionId", record.agentSessionId.map(JSONValue.string))
             ]).compact() + "\n")
         case "quiet":
             Console.out("\(modelId)\n")
