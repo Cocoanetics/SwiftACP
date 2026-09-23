@@ -40,8 +40,9 @@ extension ACPXDaemonBackend {
         // created with rather than the defaults.
         let capabilities =
             findRecord(sessionId)?.acpx?.clientCapabilities?.advertised ?? .headlessController
+        let command = launchCommand(for: agentCommand, config: config)
         let handle = try await ACPAgent.launch(
-            agent: launchCommand(for: agentCommand, config: config), cwd: cwd, permission: .approveAll,
+            agent: command, cwd: cwd, permission: .approveAll,
             capabilities: capabilities,
             authCredentials: config.auth, authPolicy: config.authPolicy,
             inheritStderr: inheritAgentStderr)
@@ -49,8 +50,18 @@ extension ACPXDaemonBackend {
         do {
             session = try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
         } catch {
+            // Falling back is a `session/new`, and a `session/new` carries the
+            // session's options as `_meta` — acpx builds every `createSession`
+            // from the options its client was made with, which on a reconnect
+            // come from the record. Without this the session that actually
+            // receives the prompt runs with none of them. `session/load` and
+            // `session/resume` carry no `_meta` upstream, so only this path does.
             let response = try await handle.connection.newSession(
-                NewSessionRequest(cwd: cwd, mcpServers: specs))
+                NewSessionRequest(
+                    cwd: cwd, mcpServers: specs,
+                    meta: SessionMeta.build(
+                        options: findRecord(sessionId)?.acpx?.sessionOptions,
+                        agentCommand: command)))
             session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
         }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)

@@ -44,6 +44,62 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A reconnect that falls back to a fresh session still creates it with the
+    /// session's options: upstream builds every `createSession` from the options
+    /// its client was made with, and on a reconnect those come from the record.
+    /// Without this the session that actually receives the prompt runs with none
+    /// of them — the model, tool allow-list and turn cap silently lapse.
+    @Test(.enabled(if: mockPythonAvailable))
+    func theFallbackSessionIsCreatedWithTheRecordsOptions() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(
+                at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            let loggedCommand = "/usr/bin/env MOCK_REQUEST_LOG='\(log.path)' \(command)"
+
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: loggedCommand, cwd: NSTemporaryDirectory())
+
+            var record = try #require(SessionStore.loadRecord(id))
+            var acpx = record.acpx ?? SessionAcpxState()
+            var options = SessionAcpxState.SessionOptions()
+            options.model = "sonnet"
+            options.allowedTools = ["Read"]
+            options.maxTurns = 4
+            options.systemPrompt = .string("be terse")
+            acpx.sessionOptions = options
+            record.acpx = acpx
+            try SessionStore.writeRecord(record)
+
+            // The mock answers `session/load` with method-not-found, so a restarted
+            // daemon takes the fresh-session fallback.
+            let restarted = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await restarted.runPrompt(sessionId: id, text: "ping")
+
+            let requests = try String(contentsOf: log, encoding: .utf8)
+                .split(separator: "\n")
+                .compactMap {
+                    (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
+                }
+            #expect(requests.contains { $0["method"] as? String == "session/load" })
+            let creations = requests.filter { $0["method"] as? String == "session/new" }
+            #expect(creations.count == 2, "one at creation, one for the fallback")
+
+            let fallback = try #require(creations.last?["params"] as? [String: Any])
+            let meta = try #require(fallback["_meta"] as? [String: Any])
+            #expect(meta["systemPrompt"] as? String == "be terse")
+            let claudeOptions = try #require(
+                (meta["claudeCode"] as? [String: Any])?["options"] as? [String: Any])
+            #expect(claudeOptions["model"] as? String == "sonnet")
+            #expect(claudeOptions["allowedTools"] as? [String] == ["Read"])
+            #expect(claudeOptions["maxTurns"] as? Int == 4)
+            // The mock is not Claude Code's adapter, so its settings stay out.
+            #expect(claudeOptions["settingSources"] == nil)
+        }
+    }
+
     /// The record keeps the user's intent even when the agent will not take it back, so
     /// a retired model cannot strand the session on an unusable reconnect.
     @Test(.enabled(if: mockPythonAvailable))
