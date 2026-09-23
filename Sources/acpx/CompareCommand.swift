@@ -108,7 +108,8 @@ enum CompareCommand {
     private static func printRows(_ rows: [Row], format: String) {
         switch format {
         case "json":
-            Console.out(JSONValue.array(rows.map { row in
+            // acpx's rows carry `null` where a value is missing, not an absent key.
+            Console.out(WireJSON.array(rows.map { row in
                 jsonObject([
                     ("agent", .string(row.agent)),
                     ("status", .string(row.status)),

@@ -8,6 +8,8 @@ import Testing
         let input: String
         /// What Node printed, or `nil` where `JSON.parse` threw.
         let output: String?
+        /// What `JSON.stringify(value, null, 2)` printed.
+        let pretty: String?
     }
 
     /// Every expectation in the fixture was printed by Node 25 — key order (array-index
@@ -20,6 +22,20 @@ import Testing
         #expect(cases.count > 20)
         for testCase in cases {
             #expect(WireJSON(parsing: testCase.input)?.stringified == testCase.output, "\(testCase.input)")
+        }
+    }
+
+    /// The same values as `JSON.stringify(value, null, 2)` prints them: a member or
+    /// element per line, two spaces deeper each level, `": "` after a key, and an empty
+    /// object or array still `{}` or `[]`.
+    @Test func prettyPrintsWhatJavaScriptPrints() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/wirejson-node.json")
+        let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: fixture))
+        let pretty = cases.filter { $0.pretty != nil }
+        #expect(pretty.count > 20)
+        for testCase in pretty {
+            #expect(WireJSON(parsing: testCase.input)?.stringified(indent: 2) == testCase.pretty, "\(testCase.input)")
         }
     }
 

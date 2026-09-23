@@ -133,20 +133,20 @@ enum SessionsCommand {
 
         switch flags.format {
         case "json":
-            let entries = JSONValue.array(visible.map {
+            let entries = WireJSON.array(visible.map {
                 jsonObject([
                     ("role", .string($0.role)),
                     ("timestamp", .string($0.timestamp)),
                     ("textPreview", .string($0.textPreview))
-                ])
+                ] as [(String, JSONValue?)])
             })
-            Console.out(jsonString(jsonObject([
-                ("id", .string(record.acpxRecordId)),
-                ("sessionId", .string(record.acpSessionId)),
+            Console.out(jsonObject([
+                ("id", .text(record.acpxRecordId)),
+                ("sessionId", .text(record.acpSessionId)),
                 ("limit", .integer(limit)),
                 ("count", .integer(visible.count)),
                 ("entries", entries)
-            ])) + "\n")
+            ] as [(String, WireJSON?)]).compact() + "\n")
         case "quiet":
             for e in visible { Console.out("\(e.textPreview)\n") }
         default:
@@ -190,12 +190,12 @@ enum SessionsCommand {
 
         switch flags.format {
         case "json":
-            Console.out(jsonString(jsonObject([
+            Console.out(jsonObject([
                 ("action", .string("session_closed")),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
-                ("agentSessionId", record.agentSessionId.map(JSONValue.string) ?? .null)
-            ])) + "\n")
+                ("agentSessionId", record.agentSessionId.map(JSONValue.string))
+            ]).compact() + "\n")
         case "quiet":
             break
         default:
@@ -248,13 +248,13 @@ enum SessionsCommand {
         let count = pruned.count
         switch format {
         case "json":
-            Console.out(jsonString(jsonObject([
+            Console.out(jsonObject([
                 ("action", .string(dryRun ? "sessions_prune_dry_run" : "sessions_pruned")),
                 ("dryRun", .bool(dryRun)),
                 ("count", .integer(count)),
                 ("bytesFreed", .integer(bytesFreed)),
                 ("pruned", .array(pruned.map { JSONValue.string($0.acpxRecordId) }))
-            ])) + "\n")
+            ]).compact() + "\n")
         case "quiet":
             for r in pruned { Console.out("\(r.acpxRecordId)\n") }
         default:
