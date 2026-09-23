@@ -122,7 +122,8 @@ targets += [
             "ACPXCore", "acpx", "acpxd",
             .product(name: "SwiftMCP", package: "SwiftMCP")
         ],
-        exclude: ["Fixtures/mock-agent.py"]
+        // Both fixtures are read from disk by path (`#filePath`), not from a bundle.
+        exclude: ["Fixtures/mock-agent.py", "Fixtures/image-probe.png"]
     )
 ]
 #endif

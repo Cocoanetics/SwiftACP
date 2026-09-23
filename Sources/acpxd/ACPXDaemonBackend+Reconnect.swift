@@ -10,6 +10,16 @@ import SwiftACP
 // Split from `ACPXDaemonBackend.swift` to keep that file inside the 500-line limit;
 // these are internal rather than private so both halves can reach them.
 extension ACPXDaemonBackend {
+    /// Return the live entry for `sessionId`, launching the agent and reconnecting
+    /// if needed. When the agent no longer knows the session, fall back to a fresh
+    /// `session/new` on the same launch, still keyed under the caller's session id.
+    ///
+    /// This is the one place a connection is made, so it is where the session's MCP
+    /// servers are resolved — like npm acpx's runtime, which resolves them "at
+    /// connection creation with the session's stored identity". `mcpServers` is the
+    /// record's own set; `nil` falls back to the cwd's config-file servers. A held
+    /// connection keeps the set it was made with, so a record that now asks for a
+    /// different one is refused rather than silently served with the old servers.
     func ensure(
         sessionId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?
     ) async throws -> Live {
@@ -50,25 +60,47 @@ extension ACPXDaemonBackend {
     ///
     /// The model goes first — a config option can depend on which model is selected,
     /// which is the order acpx applies them in (0.13.1, "re-apply a session-pinned model
-    /// before set_mode/set_model/set_config_option after reconnect"). Each is
-    /// best-effort: an agent that no longer offers a saved choice must not fail the turn
-    /// that triggered the reconnect, and the record keeps the user's intent either way.
+    /// before set_mode/set_model/set_config_option after reconnect"). Which request
+    /// carries the model depends on how the agent exposes it: adapters that advertise it
+    /// as a config option keep the choice in `desired_config_options` under that
+    /// option's id, and `current_model_id` can still hold the advertised default — so
+    /// the option is sent first and skipped when the rest are replayed, rather than
+    /// arriving somewhere in the middle of an unordered dictionary.
+    ///
+    /// Each is best-effort: an agent that no longer offers a saved choice must not fail
+    /// the turn that triggered the reconnect, and the record keeps the user's intent
+    /// either way.
     func restoreSelections(for sessionId: String, on entry: Live) async {
         guard let acpx = findRecord(sessionId)?.acpx else { return }
+        let desiredOptions = acpx.desiredConfigOptions ?? [:]
+        // The record keeps the agent's advertised options verbatim; the model's option
+        // id is derived from them the same way `session/new` derived it.
+        var advertised: [JSONValue]?
+        if case .array(let options)? = acpx.configOptions { advertised = options }
+        let modelConfigId = ModelSupport.modelState(fromConfigOptions: advertised)?.configId
 
-        if let modelId = acpx.currentModelId {
+        if let modelConfigId, let modelValue = desiredOptions[modelConfigId] {
+            await apply(configId: modelConfigId, value: modelValue, on: entry)
+        } else if let modelId = acpx.currentModelId, acpx.modelControl != "config_option" {
             try? await entry.agent.connection.setModel(
                 SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
         }
         if let modeId = acpx.desiredModeId ?? acpx.currentModeId {
             try? await entry.session.setMode(modeId)
         }
-        for (configId, value) in acpx.desiredConfigOptions ?? [:] {
-            _ = try? await entry.agent.connection.setConfigOption(
-                SetSessionConfigOptionRequest(
-                    sessionId: entry.session.id, configId: configId, value: value))
+        // Sorted so a replay is reproducible; the model is already applied.
+        for configId in desiredOptions.keys.sorted() where configId != modelConfigId {
+            guard let value = desiredOptions[configId] else { continue }
+            await apply(configId: configId, value: value, on: entry)
         }
     }
+
+    private func apply(configId: String, value: String, on entry: Live) async {
+        _ = try? await entry.agent.connection.setConfigOption(
+            SetSessionConfigOptionRequest(
+                sessionId: entry.session.id, configId: configId, value: value))
+    }
+
     /// Expand and validate a caller-supplied working directory. MCP clients have no
     /// shell, so expand `~` ourselves (the CLI relies on the shell) and require the
     /// directory to exist — otherwise the agent fails with a cryptic internal error.

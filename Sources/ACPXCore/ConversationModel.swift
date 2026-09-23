@@ -25,12 +25,48 @@ public enum ConversationModel {
     public static func recordPromptSubmission(
         into record: inout SessionRecord, prompt: String, timestamp: String = nowISO()
     ) -> String? {
+        recordPromptSubmission(into: &record, prompt: [.text(prompt)], timestamp: timestamp)
+    }
+
+    /// Append a structured prompt (text plus attachments) as a `User` message,
+    /// mapping each ACP content block onto the persisted thread schema. Returns the
+    /// message id, or nil when no block contributed content.
+    ///
+    /// Attachment *payloads* are deliberately not persisted: acpx writes an image's
+    /// full base64 into the record, which inflates every session file by the size of
+    /// the image and then prints it as the history preview. The bytes are already in
+    /// the turn's wire log if anyone needs them, so the record keeps the MIME type
+    /// and drops the data.
+    @discardableResult
+    public static func recordPromptSubmission(
+        into record: inout SessionRecord, prompt: [ContentBlock], timestamp: String = nowISO()
+    ) -> String? {
+        let content = prompt.compactMap(userContent)
+        guard !content.isEmpty else { return nil }
         let id = nextUserMessageId()
-        let text = trimRuntimeText(prompt, maxRuntimeAgentTextChars)
-        record.messages.append(.user(SessionUserMessage(id: id, content: [.text(text)])))
+        record.messages.append(.user(SessionUserMessage(id: id, content: content)))
         record.updatedAt = timestamp
         trimForRuntime(&record)
         return id
+    }
+
+    /// `contentToUserContent` — one ACP prompt block as persisted user content.
+    private static func userContent(_ block: ContentBlock) -> SessionUserContent? {
+        switch block {
+        case .text(let value):
+            return .text(trimRuntimeText(value.text, maxRuntimeAgentTextChars))
+        case .image(let image):
+            return .image(SessionMessageImage(source: "", mimeType: image.mimeType))
+        case .audio(let audio):
+            return .audio(SessionMessageAudio(source: "", mimeType: audio.mimeType))
+        case .resourceLink(let link):
+            return .mention(uri: link.uri, content: link.title ?? link.name)
+        case .resource(let resource):
+            guard let text = resource.resource.text else {
+                return .mention(uri: resource.resource.uri, content: resource.resource.uri)
+            }
+            return .text(trimRuntimeText(text, maxRuntimeAgentTextChars))
+        }
     }
 
     /// Apply one streamed `session/update` to the conversation.

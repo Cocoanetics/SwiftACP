@@ -44,6 +44,12 @@ public actor TurnPersister {
         request()
     }
 
+    /// Record a structured prompt (text plus attachments) as the turn's user message.
+    public func recordPrompt(_ blocks: [ContentBlock]) {
+        ConversationModel.recordPromptSubmission(into: &record, prompt: blocks)
+        request()
+    }
+
     /// Fold one streamed `session/update` into the conversation, then schedule a save.
     public func apply(_ update: SessionUpdate) {
         ConversationModel.recordSessionUpdate(

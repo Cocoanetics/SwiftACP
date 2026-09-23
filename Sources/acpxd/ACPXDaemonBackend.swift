@@ -39,7 +39,9 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Serializes prompt turns per session so concurrent CLI/MCP callers can't drive
     /// one agent — or persist one record — at the same time (see ``SessionTurnQueue``).
-    private let turnQueue = SessionTurnQueue()
+    /// Internal (not private) so the prompt turns in `ACPXDaemonBackend+Prompt.swift`
+    /// can take a session's slot.
+    let turnQueue = SessionTurnQueue()
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -262,149 +264,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         return true
     }
 
-    /// Run a prompt against an existing session, streaming each update as a log
-    /// notification and returning the agent's aggregate response text.
-    ///
-    /// The agent command and working directory are read from the session's
-    /// persisted record (created by `newSession`) — there's no need to repeat them,
-    /// just as the acpx CLI takes cwd from the process, not from each prompt.
-    ///
-    /// - Parameters:
-    ///   - sessionId: an existing session id (acpx record id or ACP session id).
-    ///     Reconnects to it, recreating the underlying session only if its rollout
-    ///     is gone. Must not be empty.
-    ///   - text: the prompt text.
-    ///   - wait: when another turn is already running for this session, `true` (the
-    ///     default) queues this one behind it; `false` rejects it immediately with a
-    ///     "session busy" error instead of waiting.
-    /// - Returns: the agent's aggregate response text for the turn. The turn's stop
-    ///   reason is streamed separately as a final ``TurnEndedEvent`` log
-    ///   notification (sent after the last `session/update`, before this returns).
-    func runPrompt(sessionId rawSessionId: String, text: String, wait: Bool = true) async throws
-        -> String {
-        let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let acpSessionId = initial.acpSessionId
-
-        // One turn per session at a time: queue behind any in-flight turn (or, when
-        // wait == false, reject), so concurrent CLI/MCP callers never drive one
-        // agent — or persist one record — concurrently. Keyed by ACP session id.
-        try await turnQueue.acquire(acpSessionId, wait: wait)
-        // `defer` can't await; the hop to the queue actor is safe because release
-        // hands the slot to the next FIFO waiter regardless of when it lands.
-        defer { Task { await turnQueue.release(acpSessionId) } }
-
-        // Reload the record *after* acquiring the slot: a turn we queued behind has
-        // just persisted new history, and the persister must build on that, not on a
-        // stale pre-wait snapshot (whose final flush would otherwise clobber it).
-        guard let record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let agentCommand = record.agentCommand
-        let cwd = record.cwd
-        let mcpServers = record.acpx?.mcpServers
-        // Record the user's prompt once, up front; the persister checkpoints the
-        // turn to disk on a debounce as updates stream in (acpx's live checkpoint),
-        // draining the wire buffer into the event log on each save. A session-gone
-        // retry reuses both, so the prompt isn't double-recorded.
-        let eventBuffer = WireBuffer()
-        let persister = TurnPersister(record: record, eventBuffer: eventBuffer)
-        await persister.recordPrompt(text)
-        do {
-            return try await attemptPrompt(
-                sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, text: text, persister: persister, eventBuffer: eventBuffer)
-        } catch {
-            // A held session can disappear (the agent dropped it — e.g. after an
-            // earlier failure). Evict the stale entry and try once more from a fresh
-            // launch. Only retry for session-gone errors, never transient ones like
-            // rate limits.
-            guard isSessionGone(error) else { throw error }
-            await evict(acpSessionId)
-            return try await attemptPrompt(
-                sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, text: text, persister: persister, eventBuffer: eventBuffer)
-        }
-    }
-
-    private func attemptPrompt(
-        sessionId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
-        text: String, persister: TurnPersister, eventBuffer: WireBuffer
-    ) async throws -> String {
-        let entry = try await ensure(
-            sessionId: sessionId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
-        let connection = entry.agent.connection
-        let boundSessionId = entry.session.id
-        // The calling client's MCP session — stream updates to it as log notifications.
-        let clientSession = Session.current
-
-        // Tee every JSON-RPC line on the wire into the buffer; the persister drains
-        // it into the event log on each checkpoint. Cleared when the turn ends.
-        await connection.setWireObserver { line in eventBuffer.append(line) }
-
-        // Subscribe before prompting so no event is missed, then drain the
-        // subscription deterministically: ending it (after `prompt` returns)
-        // finishes the stream, so the consumer task completes having sent every
-        // event — in order — and built the agent's message content for the turn.
-        let (subscriptionId, stream) = await connection.makeEventSubscription()
-        let consumer = Task { () -> String in
-            // Accumulate the full streamed text for the MCP result, and fold each
-            // update into the persister (which debounce-saves the record as it goes).
-            var fullText = ""
-            for await event in stream {
-                switch event {
-                case .update(let note) where note.sessionId == boundSessionId:
-                    if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
-                        fullText += chunk
-                    }
-                    await persister.apply(note.update)
-                    let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
-                    await clientSession?.sendLogNotification(
-                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
-                case .clientOperation(let operation)
-                    where operation.sessionId == nil || operation.sessionId == boundSessionId:
-                    // A client-side diagnostic the connection reported mid-turn — a
-                    // permission refusal that may end the turn (see `CodexCompat`).
-                    // Streamed in order like an update, so the CLI renders it in place;
-                    // not part of the conversation history (the wire log has the
-                    // annotated response).
-                    await clientSession?.sendLogNotification(
-                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
-                default:
-                    break
-                }
-            }
-            return fullText
-        }
-        do {
-            let response = try await entry.session.prompt(text)
-            await connection.endSubscription(subscriptionId)
-            await connection.setWireObserver(nil)
-            let fullText = await consumer.value
-            // Capture the token breakdown the agent reports on the response (Claude
-            // Code does; acpx misses this — it only reads usage_update._meta.usage).
-            if let usage = response.usage { await persister.applyResponseUsage(usage) }
-            // Final checkpoint: stamp timestamps and flush the completed turn —
-            // including any wire lines still buffered for the event log.
-            await persister.finish()
-            // Demote the stop reason to a streamed event: emit it last, after every
-            // update, so a client reconstructing the turn sees it in order.
-            await clientSession?.sendLogNotification(
-                LogMessage(
-                    level: .info, logger: sessionId,
-                    data: toJSONValue(TurnEndedEvent(stopReason: response.stopReason.rawValue))))
-            return fullText
-        } catch {
-            await connection.endSubscription(subscriptionId)
-            await connection.setWireObserver(nil)
-            consumer.cancel()
-            throw error
-        }
-    }
-
     /// Drop a live session and terminate its agent (so the next call relaunches).
     func evict(_ sessionId: String) async {
         guard let entry = live.removeValue(forKey: sessionId) else { return }
@@ -413,7 +272,7 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Whether `error` indicates the agent no longer has the session (ACP has no
     /// standard code, so match the text the agent puts in its error message/data).
-    private func isSessionGone(_ error: Error) -> Bool {
+    func isSessionGone(_ error: Error) -> Bool {
         let text = error.localizedDescription.lowercased()
         guard text.contains("session") else { return false }
         return ["not found", "unknown", "no such", "expired", "gone", "invalid"]
@@ -429,14 +288,4 @@ actor ACPXDaemonBackend: ACPXBackend {
         try await entry.session.cancel()
         return true
     }
-    /// Return the live entry for `sessionId`, launching the agent and reconnecting
-    /// if needed. When the agent no longer knows the session, fall back to a fresh
-    /// `session/new` on the same launch, still keyed under the caller's session id.
-    ///
-    /// This is the one place a connection is made, so it is where the session's MCP
-    /// servers are resolved — like npm acpx's runtime, which resolves them "at
-    /// connection creation with the session's stored identity". `mcpServers` is the
-    /// record's own set; `nil` falls back to the cwd's config-file servers. A held
-    /// connection keeps the set it was made with, so a record that now asks for a
-    /// different one is refused rather than silently served with the old servers.
 }

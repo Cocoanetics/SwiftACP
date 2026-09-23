@@ -17,11 +17,11 @@ import SwiftMCP
 /// ## MCP tools
 /// - ``newSession(agentCommand:cwd:name:mcpServers:)`` — create + persist a session
 ///   (optionally with its own MCP servers), return its id.
-/// - ``runPrompt(sessionId:text:wait:)`` — run one prompt turn (agent + cwd come from
-///   the session record), streaming each ACP `session/update` back to the caller
-///   as an MCP log notification, and returning the agent's aggregate response
-///   text. The turn's stop reason arrives as a final ``TurnEndedEvent`` log
-///   notification.
+/// - ``runPrompt(sessionId:text:blocks:wait:)`` — run one prompt turn of text plus
+///   optional content blocks (agent + cwd come from the session record),
+///   streaming each ACP `session/update` back to the caller as an MCP log
+///   notification, and returning the agent's aggregate response text. The turn's
+///   stop reason arrives as a final ``TurnEndedEvent`` log notification.
 /// - ``cancelSession(sessionId:)`` — cancel an in-flight prompt.
 /// - ``listSessions(agentCommand:)`` / ``showSession(sessionId:)`` /
 ///   ``sessionHistory(sessionId:limit:)`` — read the persisted session store.
@@ -40,8 +40,8 @@ public actor ACPXDaemon {
     /// Create a new session for an agent, persist its `~/.acpx/sessions` record
     /// (the same record the CLI's `sessions new` writes), and return its id.
     ///
-    /// The session id is then used with ``runPrompt(sessionId:text:wait:)``, which
-    /// reconnects and holds the adapter live across prompts.
+    /// The session id is then used with ``runPrompt(sessionId:text:blocks:wait:)``,
+    /// which reconnects and holds the adapter live across prompts.
     ///
     /// - Parameters:
     ///   - agentCommand: the agent adapter to launch — a built-in name (`claude`,
@@ -199,7 +199,11 @@ public actor ACPXDaemon {
     ///   - sessionId: an existing session id (acpx record id or ACP session id).
     ///     Reconnects to it, recreating the underlying session only if its rollout
     ///     is gone. Must not be empty.
-    ///   - text: the prompt text.
+    ///   - text: the prompt text. May be empty when `blocks` carries the turn.
+    ///   - blocks: ACP content blocks to send after the text — an image, a
+    ///     `resource_link` handing over a file, or inline resource text. The turn is
+    ///     refused up front if a block is malformed or the agent never advertised the
+    ///     capability it needs. See ``PromptBlock`` for which blocks are worth sending.
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
@@ -207,8 +211,12 @@ public actor ACPXDaemon {
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     @MCPTool(openWorldHint: true)
-    func runPrompt(sessionId: String, text: String, wait: Bool = true) async throws -> String {
-        try await backend.runPrompt(sessionId: sessionId, text: text, wait: wait)
+    func runPrompt(
+        sessionId: String, text: String, blocks: [PromptBlock]? = nil,
+        wait: Bool = true
+    ) async throws -> String {
+        try await backend.runPrompt(
+            sessionId: sessionId, text: text, blocks: blocks, wait: wait)
     }
 
     /// Cancel an in-flight prompt for a session.

@@ -8,6 +8,7 @@ agent message chunks before returning a stop reason.
 
 It deliberately uses no third-party packages so it runs anywhere Python 3 does.
 """
+import base64
 import json
 import os
 import sys
@@ -39,11 +40,18 @@ def log_request(message):
 
 def handle_prompt(req_id, params):
     session_id = params.get("sessionId", "mock-session")
-    # Pull the user's text out of the prompt content blocks.
+    # Pull the user's text out of the prompt content blocks, and summarize any
+    # non-text ones so a test can prove they arrived intact.
     text = ""
+    attachments = []
     for block in params.get("prompt", []):
         if block.get("type") == "text":
             text += block.get("text", "")
+        elif block.get("type") == "image":
+            attachments.append("[image %s %d bytes]" % (
+                block.get("mimeType", "?"),
+                len(base64.b64decode(block.get("data", ""))),
+            ))
 
     # A short plan.
     session_update(session_id, {
@@ -70,6 +78,8 @@ def handle_prompt(req_id, params):
 
     # Stream the reply word by word as agent_message_chunk.
     reply = "Hello from the mock agent! You said: " + text.strip()
+    if attachments:
+        reply += " with " + " ".join(attachments)
     for word in reply.split(" "):
         session_update(session_id, {
             "sessionUpdate": "agent_message_chunk",
@@ -112,8 +122,15 @@ def main():
             respond(req_id, {
                 "protocolVersion": 1,
                 "agentInfo": {"name": "mock-agent", "version": "0.1.0"},
-                "agentCapabilities": {"loadSession": False,
-                                      "promptCapabilities": {"image": False, "audio": False}},
+                # MOCK_IMAGE_CAPABLE flips the one capability that gates image
+                # prompt blocks, so tests can drive both sides of that gate.
+                "agentCapabilities": {
+                    "loadSession": False,
+                    "promptCapabilities": {
+                        "image": bool(os.environ.get("MOCK_IMAGE_CAPABLE")),
+                        "audio": False,
+                    },
+                },
                 "authMethods": [],
             })
         elif method == "session/new":

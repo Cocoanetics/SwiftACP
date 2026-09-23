@@ -46,6 +46,11 @@ public final class ACPAgent: Sendable {
     public let initializeResult: InitializeResponse
 
     public var agentCapabilities: AgentCapabilities? { initializeResult.agentCapabilities }
+    /// Which non-text prompt content the agent accepts, as it advertised on
+    /// `initialize`. `nil` (or an unset flag) means "not advertised" — treat as off.
+    public var promptCapabilities: PromptCapabilities? {
+        initializeResult.agentCapabilities?.promptCapabilities
+    }
     public var authMethods: [AuthMethod] { initializeResult.authMethods ?? [] }
 
     init(

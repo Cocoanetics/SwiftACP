@@ -69,4 +69,75 @@ extension DaemonToolsTests {
             #expect(SessionStore.loadRecord(id)?.acpx?.currentModelId == "no-such-model")
         }
     }
+
+    /// When the agent exposes model selection as a config option, the choice lives in
+    /// `desired_config_options` under that option's id while `current_model_id` can
+    /// still hold the advertised default. The option has to go first — ahead of the mode
+    /// and of the other options — not wherever dictionary order happens to put it.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aModelHeldAsAConfigOptionIsReplayedFirst() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(
+                at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            let loggedCommand = "/usr/bin/env MOCK_REQUEST_LOG='\(log.path)' \(command)"
+
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: loggedCommand, cwd: NSTemporaryDirectory())
+
+            var record = try #require(SessionStore.loadRecord(id))
+            var acpx = record.acpx ?? SessionAcpxState()
+            // The agent advertises model selection as a config option named `model`…
+            acpx.configOptions = .array([
+                .object([
+                    "id": .string("model"), "type": .string("select"),
+                    "category": .string("model"), "name": .string("Model"),
+                    "currentValue": .string("haiku"),
+                    "options": .array([
+                        .object(["value": .string("haiku"), "name": .string("Haiku")]),
+                        .object(["value": .string("opus"), "name": .string("Opus")])
+                    ])
+                ])
+            ])
+            acpx.modelControl = "config_option"
+            // …the record's `current_model_id` still holds the advertised default…
+            acpx.currentModelId = "haiku"
+            // …while the user's actual choice, and an unrelated option that sorts before
+            // it, live among the desired options.
+            acpx.desiredConfigOptions = ["model": "opus", "effort": "high"]
+            acpx.desiredModeId = "auto"
+            record.acpx = acpx
+            try SessionStore.writeRecord(record)
+
+            let restarted = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await restarted.runPrompt(sessionId: id, text: "ping")
+
+            let entries = try String(contentsOf: log, encoding: .utf8)
+                .split(separator: "\n")
+                .compactMap {
+                    (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
+                }
+            let lastReconnect = try #require(
+                entries.lastIndex { ($0["method"] as? String) == "session/load" })
+            let replayed = entries[lastReconnect...].compactMap { entry -> String? in
+                guard let method = entry["method"] as? String, method.hasPrefix("session/set_")
+                else { return nil }
+                if method == "session/set_config_option",
+                    let params = entry["params"] as? [String: Any],
+                    let configId = params["configId"] as? String {
+                    return "\(method):\(configId)"
+                }
+                return method
+            }
+
+            // The model option first, then the mode, then the rest — and no legacy
+            // `session/set_model` carrying the stale default.
+            #expect(replayed == [
+                "session/set_config_option:model", "session/set_mode",
+                "session/set_config_option:effort"
+            ])
+        }
+    }
 }

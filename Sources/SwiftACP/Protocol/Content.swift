@@ -29,6 +29,20 @@ public enum ContentBlock: Codable, Hashable, Sendable {
         }
     }
 
+    /// Which `promptCapabilities` flag the agent must advertise to accept this block
+    /// in a prompt — `nil` for `text` and `resource_link`, which ACP never gates.
+    ///
+    /// Mirrors npm acpx's `promptCapabilityRequirement`, which its client checks
+    /// before dispatch rather than letting the agent ignore a block it never claimed.
+    public var requiredPromptCapability: PromptCapabilityRequirement? {
+        switch self {
+        case .text, .resourceLink: return nil
+        case .image: return .image
+        case .audio: return .audio
+        case .resource: return .embeddedContext
+        }
+    }
+
     private enum DiscriminatorKey: String, CodingKey { case type }
 
     public init(from decoder: Decoder) throws {
@@ -54,6 +68,23 @@ public enum ContentBlock: Codable, Hashable, Sendable {
         case .audio(let value): try value.encode(to: encoder)
         case .resource(let value): try value.encode(to: encoder)
         case .resourceLink(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+/// A `promptCapabilities` flag that gates one kind of prompt content block.
+public enum PromptCapabilityRequirement: String, Sendable {
+    case image
+    case audio
+    case embeddedContext
+
+    /// Whether `capabilities` advertised this. An absent capabilities object — or an
+    /// unset flag — means "not advertised", which ACP treats as off.
+    public func isAdvertised(by capabilities: PromptCapabilities?) -> Bool {
+        switch self {
+        case .image: return capabilities?.image == true
+        case .audio: return capabilities?.audio == true
+        case .embeddedContext: return capabilities?.embeddedContext == true
         }
     }
 }
