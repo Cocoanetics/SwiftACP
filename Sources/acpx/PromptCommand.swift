@@ -13,12 +13,8 @@ import SwiftACP
 /// colliding on a session or clobbering its history.
 enum PromptCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec("session", short: "s", takesValue: true, value: "name"),
-            OptionSpec("file", short: "f", takesValue: true, value: "path"),
-            OptionSpec("wait", negatable: true)
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("session", parseSessionName)
         let promptBlocks = try PromptInputResolver.resolve(
@@ -26,7 +22,7 @@ enum PromptCommand {
         // Absent `--no-wait`, a turn for a session that's already running one queues
         // behind it (the daemon serializes turns per session); `--no-wait` makes the
         // daemon reject the turn immediately instead of waiting.
-        let wait = scan.boolean("wait") ?? true
+        let wait = !scan.flag("no-wait")
 
         // `--mcp-config` re-attaches the named servers to the routed session before
         // the turn: a running daemon reconnects the session so they take effect,

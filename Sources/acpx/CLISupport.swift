@@ -35,20 +35,16 @@ struct CLIError: Error {
     }
 }
 
-/// A `commander.InvalidArgumentError` equivalent — printed as `error: <message>`
-/// to stderr, exit code 2 (USAGE).
-/// A commander-style parse failure: a bad option, a missing argument, an invalid
-/// value. acpx prints `error: <message>`, a blank line and the command's full
-/// help screen to stderr, then exits 1 — commander's `showHelpAfterError()`.
+/// A commander parse failure: an unknown option, a missing or excess argument, a
+/// refused value. commander prints `error: <message>`, a blank line and the help of the
+/// command whose parse failed, to stderr — `showHelpAfterError()`. A subcommand then
+/// exits 1; the root's failure also reaches acpx's own handler, which reports it again
+/// in the requested format and exits 2 (`USAGE`).
 ///
-/// `usage` is the help screen, attached by ``Router`` once the command path is
-/// known (the scanner that throws these cannot know it). It is separate from
-/// acpx's `EXIT_CODES.USAGE` (2), which is for *runtime* errors carrying a
-/// `USAGE` output code, not for argv parsing.
+/// `usage` is that help screen, rendered by ``Router`` from `path` (the parse does
+/// not know the agents and cwd the screen shows).
 struct UsageError: Error {
-    /// Which command commander was parsing for. A global option is declared on
-    /// the root, so its rejection shows the *root* help and exits 2; a
-    /// subcommand's own option shows that command's help and exits 1.
+    /// Which command commander was parsing for: the root, or one below it.
     enum Scope {
         case root
         case command
@@ -57,11 +53,14 @@ struct UsageError: Error {
     var message: String
     var usage: String?
     var scope: Scope = .command
+    /// The command whose parse failed, below the root (`["sessions", "list"]`).
+    var path: [String]
 
-    init(_ message: String, usage: String? = nil, scope: Scope = .command) {
+    init(_ message: String, usage: String? = nil, scope: Scope = .command, path: [String] = []) {
         self.message = message
         self.usage = usage
         self.scope = scope
+        self.path = path
     }
 
     /// `error: option '-f, --file <path>' argument missing`
@@ -73,6 +72,14 @@ struct UsageError: Error {
     static func invalidArgument(_ term: String, _ value: String, _ reason: String) -> UsageError {
         UsageError("option '\(term)' argument '\(value)' is invalid. \(reason)")
     }
+}
+
+/// commander's `InvalidArgumentError` thrown from an action rather than a parser: a
+/// flag combination or input acpx refuses once the command runs. acpx reports it as a
+/// `USAGE` failure — the bare message, in the requested format — and exits 2.
+struct InvalidArgumentError: Error {
+    var message: String
+    init(_ message: String) { self.message = message }
 }
 
 /// A "no session" failure (exit 4). Message printed verbatim to stderr.

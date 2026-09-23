@@ -6,11 +6,8 @@ import SwiftACP
 /// `acpx [<agent>] exec [prompt...]` — a one-shot prompt with no saved session.
 enum ExecCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec("file", short: "f", takesValue: true, value: "path"),
-            OptionSpec("config-option", takesValue: true, repeats: true, value: "key=value")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
 
         if context.config.disableExec { return refuseDisabledExec(flags) }
 

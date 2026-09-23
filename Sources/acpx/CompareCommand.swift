@@ -22,13 +22,15 @@ enum CompareCommand {
         if context.config.disableExec {
             throw CLIError("compare subcommand is disabled by configuration (disableExec: true)")
         }
-        let scan = try context.scan([
-            OptionSpec("file", short: "f", takesValue: true, value: "path"),
-            OptionSpec("prompt-file", takesValue: true, value: "path"), OptionSpec("json")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        var flags = try context.globalFlags()
+        // The root's `--cwd` overwrites compare's own in the merged options; acpx then puts
+        // compare's own back.
+        if let cwd = context.ownOptions.string("cwd") {
+            flags.cwd = ACPXPaths.resolve(cwd, base: physicalCWD())
+        }
         if let agent = flags.agent, !agent.isEmpty {
-            throw UsageError("Do not combine compare with --agent; pass agent names")
+            throw InvalidArgumentError("Do not combine compare with --agent; pass agent names")
         }
         let format = scan.flag("json") ? "json" : flags.format
 
@@ -54,11 +56,11 @@ enum CompareCommand {
 
     private static func splitArgs(_ args: [String], promptFile: String?) throws -> ([String], String) {
         if promptFile != nil {
-            if args.isEmpty { throw UsageError("At least one agent is required") }
+            if args.isEmpty { throw InvalidArgumentError("At least one agent is required") }
             return (args, "")
         }
         guard args.count >= 2 else {
-            throw UsageError("Usage: acpx compare <agent>... '<prompt>'")
+            throw InvalidArgumentError("Usage: acpx compare <agent>... '<prompt>'")
         }
         return (Array(args.dropLast()), args.last!)
     }
