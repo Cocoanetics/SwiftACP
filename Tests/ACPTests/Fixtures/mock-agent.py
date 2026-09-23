@@ -43,6 +43,10 @@ FORGET_AFTER_PROMPTS = int(os.environ.get("MOCK_FORGET_AFTER_PROMPTS", "0"))
 # was killed between turns, while its client still holds the connection. 0 = never.
 EXIT_AFTER_PROMPTS = int(os.environ.get("MOCK_EXIT_AFTER_PROMPTS", "0"))
 
+# Exit on receiving the Nth prompt, without answering it — an adapter that crashes
+# mid-turn, after the prompt reached it. 0 = never.
+EXIT_ON_PROMPT = int(os.environ.get("MOCK_EXIT_ON_PROMPT", "0"))
+
 
 def log_request(message):
     path = os.environ.get("MOCK_REQUEST_LOG")
@@ -170,6 +174,8 @@ def main():
                       "error": {"code": -32002, "message": "Resource not found: session %s"
                                 % message.get("params", {}).get("sessionId", "?")}})
                 continue
+            if EXIT_ON_PROMPT and prompts_answered + 1 >= EXIT_ON_PROMPT:
+                os._exit(0)
             prompts_answered += 1
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:

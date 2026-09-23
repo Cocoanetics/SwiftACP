@@ -14,7 +14,7 @@ extension DaemonToolsTests {
     /// `forgetAfterPrompts` makes each mock process drop its sessions after that many
     /// answered prompts; `exitAfterPrompts` makes it exit.
     func withLoggedMock(
-        loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0,
+        loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0, exitOnPrompt: Int = 0,
         _ body: (_ command: String, _ methods: () throws -> [String]) async throws -> Void
     ) async throws {
         let command = try #require(mockCommand())
@@ -24,7 +24,8 @@ extension DaemonToolsTests {
             let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
             let logged =
                 "/usr/bin/env MOCK_LOAD_SESSION=\(loadMode) MOCK_FORGET_AFTER_PROMPTS=\(forgetAfterPrompts) "
-                + "MOCK_EXIT_AFTER_PROMPTS=\(exitAfterPrompts) MOCK_REQUEST_LOG='\(log.path)' \(command)"
+                + "MOCK_EXIT_AFTER_PROMPTS=\(exitAfterPrompts) MOCK_EXIT_ON_PROMPT=\(exitOnPrompt) "
+                + "MOCK_REQUEST_LOG='\(log.path)' \(command)"
             try await body(logged) {
                 try String(contentsOf: log, encoding: .utf8)
                     .split(separator: "\n")

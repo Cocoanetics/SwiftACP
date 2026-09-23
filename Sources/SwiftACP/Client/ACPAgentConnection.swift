@@ -106,6 +106,18 @@ public actor ACPAgentConnection {
         isClosed = true
     }
 
+    /// Whether `error` is this layer reporting the connection ended — a request sent
+    /// after, or pending when, the agent exited or the connection was closed.
+    public static func isConnectionClosed(_ error: Error) -> Bool {
+        (error as? JSONRPCPeerError) == .closed
+    }
+
+    /// Forget that the connection ended, as if its end had been read but not yet
+    /// recorded: lets a test reproduce a caller racing the agent's exit.
+    func forgetClosedForTesting() {
+        isClosed = false
+    }
+
     /// Observe each outgoing agent request method (e.g. `initialize`,
     /// `session/new`) as it is sent — used to render acpx's `[client]` progress
     /// lines. The closure runs synchronously, so it must be fast.

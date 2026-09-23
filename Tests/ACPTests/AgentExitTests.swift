@@ -1,7 +1,7 @@
 @testable import ACPXCore
 @testable import acpxd
 import Foundation
-import SwiftACP
+@testable import SwiftACP
 import Testing
 
 /// An agent that exits while acpxd holds its session (issue #55). acpx's queue owner
@@ -49,6 +49,42 @@ extension DaemonToolsTests {
 
             let answer = try await daemon.runPrompt(sessionId: id, text: "second")
             #expect(!answer.isEmpty)
+        }
+    }
+
+    /// The liveness check can race the exit: the agent's end has been read but not yet
+    /// recorded when `ensure` looks. None of the turn reaches the dead agent, so it goes
+    /// to a fresh launch instead of failing.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aTurnRacingTheExitGoesToAFreshLaunch() async throws {
+        try await withLoggedMock(loadMode: "ok", exitAfterPrompts: 1) { command, methods in
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            let connection = try #require(await daemon.live[id]?.agent.connection)
+            await connection.waitUntilClosed()
+            await connection.forgetClosedForTesting()
+
+            let answer = try await daemon.runPrompt(sessionId: id, text: "second")
+            #expect(!answer.isEmpty)
+            #expect(try methods() == [
+                "session/new", "session/load", "session/prompt", "session/load", "session/prompt"
+            ])
+        }
+    }
+
+    /// A turn that did reach the agent before it died is not sent again: the agent may
+    /// have acted on it. The failure is reported instead.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aTurnTheAgentReceivedIsNotSentTwice() async throws {
+        try await withLoggedMock(loadMode: "ok", exitOnPrompt: 2) { command, methods in
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            await #expect(throws: (any Error).self) {
+                _ = try await daemon.runPrompt(sessionId: id, text: "second")
+            }
+            #expect(try methods() == ["session/new", "session/load", "session/prompt", "session/prompt"])
         }
     }
 
