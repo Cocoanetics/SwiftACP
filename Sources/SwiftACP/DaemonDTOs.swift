@@ -319,22 +319,6 @@ public enum PromptBlockError: LocalizedError, Equatable {
         }
     }
 }
-/// What a session control (`setMode`, `setModel`, `setConfigOption`) reports, as
-/// acpx's control results do.
-public struct SessionControlResult: Codable, Sendable {
-    /// Whether the control had to take the session back first: the agent was not
-    /// running, and `session/load` or `session/resume` got the session back. `false`
-    /// for a session already held, and when a new session replaced one that was gone.
-    public var resumed: Bool
-    /// The agent's config options after `setConfigOption` (the data the CLI echoes;
-    /// may be empty if the agent reports none).
-    public var configOptions: [JSONValue]?
-
-    public init(resumed: Bool, configOptions: [JSONValue]? = nil) {
-        self.resumed = resumed
-        self.configOptions = configOptions
-    }
-}
 
 /// The turn's terminal event, streamed as a final MCP log notification.
 ///
