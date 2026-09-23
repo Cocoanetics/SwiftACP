@@ -190,8 +190,8 @@ enum DaemonClient {
     }
 
     /// Set a session's mode on the live agent via the daemon (which persists it).
-    static func setMode(sessionId: String, modeId: String) async throws {
-        try await withClient { _ = try await $0.setMode(sessionId: sessionId, modeId: modeId) }
+    static func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
+        try await withClient { try await $0.setMode(sessionId: sessionId, modeId: modeId) }
     }
 
     /// Replace a session's own MCP servers via a *running* daemon (which persists them
@@ -209,19 +209,18 @@ enum DaemonClient {
     }
 
     /// Set a session's model on the live agent via the daemon (legacy set_model).
-    static func setModel(sessionId: String, modelId: String) async throws {
-        try await withClient { _ = try await $0.setModel(sessionId: sessionId, modelId: modelId) }
+    static func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
+        try await withClient { try await $0.setModel(sessionId: sessionId, modelId: modelId) }
     }
 
-    /// Set a session config option on the live agent via the daemon. Returns the
-    /// agent's advertised config options after the change (empty if it reports none,
-    /// or if the result can't be decoded — in which case the option is still set).
+    /// Set a session config option on the live agent via the daemon: the agent's
+    /// advertised config options after the change, and whether the session had to be
+    /// taken back first.
     static func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> [JSONValue] {
-        let proxy = try await connect(spawnIfNeeded: true)
-        defer { Task { await proxy.disconnect() } }
-        return (try? await ACPXDaemon.Client(proxy: proxy)
-            .setConfigOption(sessionId: sessionId, configId: configId, value: value)) ?? []
+        -> SessionControlResult {
+        try await withClient {
+            try await $0.setConfigOption(sessionId: sessionId, configId: configId, value: value)
+        }
     }
 
     /// Ask a *running* daemon to release its live agent for `sessionId` and mark the
