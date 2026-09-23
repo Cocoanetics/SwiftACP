@@ -2,9 +2,9 @@ import Dispatch
 import Foundation
 import JSONFoundation
 
-// The agent's `session/update`s: fanned out to the subscriptions — except while a
-// `session/load` replays history the caller already has — and waited on until that
-// replay stops.
+// The agent's `session/update`s: fanned out to the subscriptions — except a
+// session's while its `session/load` replays history the caller already has — and
+// waited on until that replay stops.
 //
 // Split from `ACPAgentConnection.swift` to keep that file inside the 500-line limit;
 // the members this reaches are internal rather than private so both halves can.
@@ -15,8 +15,8 @@ extension ACPAgentConnection {
         guard method == "session/update", let params,
             let notification = try? params.decoded(SessionNotification.self)
         else { return }
-        lastSessionUpdate = DispatchTime.now().uptimeNanoseconds
-        if suppressingSessionUpdates { return }
+        lastSessionUpdate[notification.sessionId] = DispatchTime.now().uptimeNanoseconds
+        if replaySuppressed[notification.sessionId] != nil { return }
         for sink in updateSinks.values {
             sink.yield(notification)
         }
@@ -25,25 +25,25 @@ extension ACPAgentConnection {
         }
     }
 
-    /// Stop delivering `session/update`s when `enabled`, and return what was in force
-    /// before, for ``restoreSessionUpdateSuppression(_:)``.
-    func applySessionUpdateSuppression(_ enabled: Bool) -> Bool {
-        let previous = suppressingSessionUpdates
-        suppressingSessionUpdates = previous || enabled
-        return previous
+    /// Stop delivering `sessionId`'s `session/update`s until the matching
+    /// ``endSuppressingReplay(of:)``: its `session/load` replays history the caller
+    /// has. Other sessions' updates go on as usual.
+    func beginSuppressingReplay(of sessionId: SessionId) {
+        replaySuppressed[sessionId, default: 0] += 1
     }
 
-    func restoreSessionUpdateSuppression(_ previous: Bool) {
-        suppressingSessionUpdates = previous
+    func endSuppressingReplay(of sessionId: SessionId) {
+        guard let count = replaySuppressed[sessionId] else { return }
+        replaySuppressed[sessionId] = count > 1 ? count - 1 : nil
     }
 
-    /// Wait until no `session/update` has arrived for `idleMilliseconds` — the history
-    /// an agent replays for `session/load` has stopped — as acpx's
-    /// `waitForSessionUpdateDrain` does after every load. Throws
+    /// Wait until no `session/update` for `sessionId` has arrived for
+    /// `idleMilliseconds` — the history an agent replays for its `session/load` has
+    /// stopped — as acpx's `waitForSessionUpdateDrain` does after every load. Throws
     /// ``SessionReplayDrainTimeout`` when that has not happened within
-    /// `timeoutMilliseconds`.
+    /// `timeoutMilliseconds`. Other sessions' updates do not count.
     public func waitForSessionUpdateDrain(
-        idleMilliseconds: Int = 80, timeoutMilliseconds: Int = 5000
+        sessionId: SessionId, idleMilliseconds: Int = 80, timeoutMilliseconds: Int = 5000
     ) async throws {
         let idleMs = max(idleMilliseconds, 0)
         let timeoutMs = max(idleMs, timeoutMilliseconds)
@@ -51,7 +51,7 @@ extension ACPAgentConnection {
         let start = DispatchTime.now().uptimeNanoseconds
         let deadline = start + UInt64(timeoutMs) * 1_000_000
         while true {
-            let quietAt = max(start, lastSessionUpdate ?? start) + idle
+            let quietAt = max(start, lastSessionUpdate[sessionId] ?? start) + idle
             guard quietAt <= deadline else {
                 // Updates only move it later: this wait can no longer end in time.
                 try await Self.sleep(until: deadline)

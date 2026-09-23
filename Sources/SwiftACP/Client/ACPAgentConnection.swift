@@ -45,13 +45,13 @@ public actor ACPAgentConnection {
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
 
-    /// While on, `session/update`s are not delivered: they replay the history a
-    /// `session/load` is restoring — acpx's `suppressSessionUpdates`.
-    var suppressingSessionUpdates = false
-    /// When the latest `session/update` arrived, delivered or not, in `DispatchTime`
-    /// nanoseconds — what ``waitForSessionUpdateDrain(idleMilliseconds:timeoutMilliseconds:)``
-    /// watches go quiet.
-    var lastSessionUpdate: UInt64?
+    /// Sessions whose `session/update`s are not delivered — their `session/load` is
+    /// replaying history the caller has — with how many loads asked. acpx's
+    /// `suppressSessionUpdates`, kept per session: one connection can hold several.
+    var replaySuppressed: [SessionId: Int] = [:]
+    /// When each session's latest `session/update` arrived, delivered or not, in
+    /// `DispatchTime` nanoseconds: what the replay drain watches go quiet.
+    var lastSessionUpdate: [SessionId: UInt64] = [:]
 
     /// How each session's latest turn settled its permissions; reset when a turn
     /// starts. See ``permissionStats(for:)``.

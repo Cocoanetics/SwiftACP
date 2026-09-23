@@ -208,9 +208,9 @@ public final class ACPAgent: Sendable {
     /// `loadSessionWithOptions` waits the same way (80 ms without one, at most 5 s;
     /// longer fails the load).
     ///
-    /// - Parameter suppressReplayUpdates: neither deliver nor show (``rawWire``) the
-    ///   `session/update`s that arrive meanwhile: the caller already has that history.
-    ///   acpx does this when it reconnects a session for a turn or a control.
+    /// - Parameter suppressReplayUpdates: neither deliver nor show (``rawWire``) this
+    ///   session's `session/update`s that arrive meanwhile: the caller already has that
+    ///   history. acpx does this when it reconnects a session for a turn or a control.
     public func loadSession(
         id: SessionId,
         cwd: String? = nil,
@@ -219,22 +219,28 @@ public final class ACPAgent: Sendable {
         meta: JSONValue? = nil,
         suppressReplayUpdates: Bool = false
     ) async throws -> ACPSession {
-        let suppressed = await connection.applySessionUpdateSuppression(suppressReplayUpdates)
-        let hidden = rawWire.applySessionUpdateSuppression(suppressReplayUpdates)
+        if suppressReplayUpdates {
+            await connection.beginSuppressingReplay(of: id)
+            rawWire.beginSuppressingReplay(of: id)
+        }
         do {
             let response = try await connection.loadSession(
                 LoadSessionRequest(
                     sessionId: id, cwd: cwd ?? self.cwd, mcpServers: mcpServers,
                     additionalDirectories: additionalDirectories, meta: meta))
-            try await connection.waitForSessionUpdateDrain()
-            await connection.restoreSessionUpdateSuppression(suppressed)
-            rawWire.restoreSessionUpdateSuppression(hidden)
+            try await connection.waitForSessionUpdateDrain(sessionId: id)
+            await endSuppressingReplay(of: id, suppressReplayUpdates)
             return ACPSession(id: id, agent: self, modes: response.modes)
         } catch {
-            await connection.restoreSessionUpdateSuppression(suppressed)
-            rawWire.restoreSessionUpdateSuppression(hidden)
+            await endSuppressingReplay(of: id, suppressReplayUpdates)
             throw error
         }
+    }
+
+    private func endSuppressingReplay(of id: SessionId, _ suppressed: Bool) async {
+        guard suppressed else { return }
+        await connection.endSuppressingReplay(of: id)
+        rawWire.endSuppressingReplay(of: id)
     }
 
     /// Resume a previously created session (`session/resume`).
