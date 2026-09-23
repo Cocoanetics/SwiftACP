@@ -73,8 +73,8 @@ extension DaemonToolsTests {
             record.acpx = acpx
             try SessionStore.writeRecord(record)
 
-            // The mock answers `session/load` with method-not-found, so a restarted
-            // daemon takes the fresh-session fallback.
+            // The mock no longer has the session a restarted daemon asks it to load
+            // (`-32002`), so the daemon takes the fresh-session fallback.
             let restarted = ACPXDaemonBackend(inheritAgentStderr: false)
             _ = try await restarted.runPrompt(sessionId: id, text: "ping")
 

@@ -31,6 +31,15 @@ def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
 
 
+# How `session/load` behaves: gone (default) | ok | internal | unsupported.
+LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
+
+# After this many answered prompts, this process drops its sessions: later prompts
+# fail the way an agent answers for a session it no longer has, while the client
+# still holds the connection. A relaunched process remembers again. 0 = never.
+FORGET_AFTER_PROMPTS = int(os.environ.get("MOCK_FORGET_AFTER_PROMPTS", "0"))
+
+
 def log_request(message):
     path = os.environ.get("MOCK_REQUEST_LOG")
     if path and message.get("method", "").startswith("session/"):
@@ -105,6 +114,7 @@ def handle_prompt(req_id, params):
 
 
 def main():
+    prompts_answered = 0
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -125,7 +135,9 @@ def main():
                 # MOCK_IMAGE_CAPABLE flips the one capability that gates image
                 # prompt blocks, so tests can drive both sides of that gate.
                 "agentCapabilities": {
-                    "loadSession": False,
+                    # MOCK_LOAD_SESSION picks how `session/load` behaves (see below);
+                    # only `unsupported` stops advertising it.
+                    "loadSession": LOAD_MODE != "unsupported",
                     "promptCapabilities": {
                         "image": bool(os.environ.get("MOCK_IMAGE_CAPABLE")),
                         "audio": False,
@@ -135,7 +147,26 @@ def main():
             })
         elif method == "session/new":
             respond(req_id, {"sessionId": "mock-session-1"})
+        elif method == "session/load" and LOAD_MODE != "unsupported":
+            # `gone` (the default) is the usual reason a fresh agent process cannot
+            # load a session: it no longer has it. `ok` takes it back; `internal`
+            # fails the way an agent's own bug would.
+            if LOAD_MODE == "ok":
+                respond(req_id, {})
+            elif LOAD_MODE == "internal":
+                send({"jsonrpc": "2.0", "id": req_id,
+                      "error": {"code": -32603, "message": "Internal error"}})
+            else:
+                send({"jsonrpc": "2.0", "id": req_id,
+                      "error": {"code": -32002, "message": "Resource not found: session %s"
+                                % message.get("params", {}).get("sessionId", "?")}})
         elif method == "session/prompt":
+            if FORGET_AFTER_PROMPTS and prompts_answered >= FORGET_AFTER_PROMPTS:
+                send({"jsonrpc": "2.0", "id": req_id,
+                      "error": {"code": -32002, "message": "Resource not found: session %s"
+                                % message.get("params", {}).get("sessionId", "?")}})
+                continue
+            prompts_answered += 1
             handle_prompt(req_id, message.get("params", {}))
         elif method == "session/set_mode":
             # Echo the new mode back as a current_mode_update, then ack.
