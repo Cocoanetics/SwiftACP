@@ -25,15 +25,12 @@ enum HelpCatalog {
     /// acpx registers a command per agent — the built-ins, then the ones config
     /// adds — so `configAgents` join the `Commands:` block after them.
     ///
-    /// Upstream lists the configured ones in *file* order (its merge is a JS
-    /// object spread, which keeps insertion order). Nothing in our decode path
-    /// preserves that: `ResolvedAcpxConfig.agents`, `ACPXConfigFile.agents` and
-    /// `JSONFoundation.JSONDictionary` are all `Dictionary`, and Foundation's
-    /// `allKeys` is not document order — nor even stable across runs. Sorted is
-    /// the deterministic stand-in; see issue #47.
+    /// They come in config order — `ResolvedAcpxConfig.agentOrder`, which is how
+    /// acpx's object spread leaves them — and a name that shadows a built-in keeps the
+    /// built-in's row.
     static func root(cwd: String, configAgents: [String] = []) -> HelpScreen {
         let builtIn = AgentRegistry.orderedNames
-        let extra = configAgents.filter { !builtIn.contains($0) }.sorted()
+        let extra = configAgents.filter { !builtIn.contains($0) }
         var subs: [HelpSubcommand] = (builtIn + extra).map {
             HelpSubcommand("\($0) [options] [prompt...]", "Use \($0) agent")
         }
