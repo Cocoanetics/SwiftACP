@@ -92,7 +92,7 @@ enum Router {
             if helpPath.first == "help" { helpPath.removeFirst() }
             Console.out(HelpRouter.render(
                 path: helpPath, knownAgents: knownAgents, cwd: cwd,
-                configAgents: Array(config.agents.keys)))
+                configAgents: config.agentOrder))
             return ExitCodes.success
         }
 
@@ -138,7 +138,7 @@ enum Router {
         // subcommand's own path (`sessions list`), so a nested screen is reached.
         return try attachingUsage(
             path: (explicitAgent.map { [$0] } ?? []) + positionals,
-            knownAgents: knownAgents, cwd: cwd, configAgents: Array(config.agents.keys)
+            knownAgents: knownAgents, cwd: cwd, configAgents: config.agentOrder
         ) {
             try run(command, context)
         }

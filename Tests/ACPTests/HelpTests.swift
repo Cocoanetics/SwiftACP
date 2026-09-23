@@ -111,14 +111,12 @@ struct HelpTests {
     }
 
     /// acpx registers a command per configured agent, so they belong in the root
-    /// `Commands:` block after the built-ins. Upstream orders them by config file
-    /// order; nothing in our decode path preserves that, so they are sorted —
-    /// see issue #47.
+    /// `Commands:` block after the built-ins — in config order, not sorted (#47).
     @Test func configuredAgentsFollowTheBuiltInsInTheRootCommands() {
         let builtIn = AgentRegistry.orderedNames
         let root = HelpCatalog.root(cwd: "/tmp", configAgents: ["probe", "fakeclaude"])
         let terms = root.subcommands.map(\.term)
-        let expected = (builtIn + ["fakeclaude", "probe"]).map { "\($0) [options] [prompt...]" }
+        let expected = (builtIn + ["probe", "fakeclaude"]).map { "\($0) [options] [prompt...]" }
         #expect(Array(terms.prefix(expected.count)) == expected)
         // And each gets acpx's wording.
         let probe = root.subcommands.first { $0.term.hasPrefix("probe ") }

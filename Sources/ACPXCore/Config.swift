@@ -112,6 +112,10 @@ public struct ResolvedAcpxConfig: Sendable {
     public var queueMaxDepth: Int
     public var format: String
     public var agents: [String: String]
+    /// The names in ``agents`` in the order acpx lists them: its merge is a JavaScript
+    /// object spread (`{...global, ...project}`), so global agents come in file order,
+    /// then project-only ones in theirs, and a name in both keeps its global place.
+    public var agentOrder: [String]
     public var auth: [String: String]
     public var disableExec: Bool
     public var mcpServers: [McpServerConfig]
@@ -149,11 +153,15 @@ public enum ConfigLoader {
     public static func load(cwd: String, mcpConfigPath: String? = nil) throws -> ResolvedAcpxConfig {
         let globalPath = ACPXPaths.globalConfigPath
         let projectPath = ACPXPaths.projectConfigPath(cwd: cwd)
-        let global = try readFile(globalPath)
-        let project = try readFile(projectPath)
+        let globalFile = try readFile(globalPath)
+        let projectFile = try readFile(projectPath)
+        let global = globalFile?.file
+        let project = projectFile?.file
         let explicitMcp = try mcpConfigPath.map { try loadExplicitMcpServers($0, cwd: cwd) }
 
         let agents = mergeAgents(global?.agents, project?.agents)
+        let agentOrder = WireJSON.propertyOrder(
+            (globalFile?.agentOrder ?? []) + (projectFile?.agentOrder ?? []))
         let auth = (global?.auth ?? [:]).merging(project?.auth ?? [:]) { _, new in new }
 
         return ResolvedAcpxConfig(
@@ -169,6 +177,7 @@ public enum ConfigLoader {
             queueMaxDepth: project?.queueMaxDepth ?? global?.queueMaxDepth ?? DEFAULT_QUEUE_MAX_DEPTH,
             format: project?.format ?? global?.format ?? DEFAULT_OUTPUT_FORMAT,
             agents: agents,
+            agentOrder: agentOrder,
             auth: auth,
             disableExec: project?.disableExec ?? global?.disableExec ?? false,
             mcpServers: explicitMcp?.servers ?? project?.mcpServers ?? global?.mcpServers ?? [],
@@ -179,13 +188,30 @@ public enum ConfigLoader {
             hasProjectConfig: project != nil)
     }
 
-    private static func readFile(_ url: URL) throws -> ACPXConfigFile? {
+    /// A config file as decoded, plus the one thing decoding loses: the order of its
+    /// `agents`, which a Swift dictionary cannot hold.
+    private struct LoadedFile {
+        var file: ACPXConfigFile
+        var agentOrder: [String]
+    }
+
+    private static func readFile(_ url: URL) throws -> LoadedFile? {
         guard let data = try? Data(contentsOf: url) else { return nil } // ENOENT → not an error
         do {
-            return try JSONDecoder().decode(ACPXConfigFile.self, from: data)
+            let file = try JSONDecoder().decode(ACPXConfigFile.self, from: data)
+            return LoadedFile(file: file, agentOrder: agentNames(in: data))
         } catch {
             throw ConfigError("Invalid config in \(url.path): \(error.localizedDescription)")
         }
+    }
+
+    /// The `agents` names as acpx's `parseAgents` produces them: `Object.entries` order,
+    /// each normalized, a name repeated after normalizing keeping its first place.
+    static func agentNames(in data: Data) -> [String] {
+        guard case .object(let members)? = WireJSON(parsing: data)?["agents"] else { return [] }
+        return WireJSON.propertyOrder(WireJSON.orderedForPrinting(members).map {
+            AgentRegistry.normalize(String(decoding: $0.key, as: UTF16.self))
+        })
     }
 
     /// Read a `--mcp-config` file: a JSON object whose top-level `mcpServers` array
@@ -196,7 +222,7 @@ public enum ConfigLoader {
         _ rawPath: String, cwd: String
     ) throws -> (path: String, servers: [McpServerConfig]) {
         let path = ACPXPaths.resolve(rawPath, base: cwd)
-        guard let file = try readFile(URL(fileURLWithPath: path)) else {
+        guard let file = try readFile(URL(fileURLWithPath: path))?.file else {
             throw ConfigError("MCP config file not found: \(path)")
         }
         guard let servers = file.mcpServers else {
