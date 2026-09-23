@@ -15,8 +15,16 @@ struct CommandContext {
         try ArgScanner.scan(rawArgs, options: specs + Flags.globalSpecs)
     }
 
+    /// Global options are declared on commander's *root*, so a rejected value is
+    /// reported against the root — its help, and `EXIT_CODES.USAGE` — not against
+    /// whichever subcommand happened to follow them.
     func globalFlags(_ scan: ScannedArgs) throws -> GlobalFlags {
-        try Flags.resolveGlobalFlags(scan, config: config)
+        do {
+            return try Flags.resolveGlobalFlags(scan, config: config)
+        } catch var error as UsageError {
+            error.scope = .root
+            throw error
+        }
     }
 }
 
@@ -29,22 +37,22 @@ enum Router {
     /// Union of option specs used only to extract a clean positional list for routing.
     static let routingSpecs: [OptionSpec] =
         Flags.globalSpecs + [
-            OptionSpec("session", short: "s", takesValue: true),
-            OptionSpec("file", short: "f", takesValue: true),
-            OptionSpec("config-option", takesValue: true, repeats: true),
-            OptionSpec("name", takesValue: true),
-            OptionSpec("resume-session", takesValue: true),
-            OptionSpec("cursor", takesValue: true),
-            OptionSpec("filter-cwd", takesValue: true),
-            OptionSpec("limit", takesValue: true),
-            OptionSpec("tail", takesValue: true),
-            OptionSpec("output", takesValue: true),
-            OptionSpec("before", takesValue: true),
-            OptionSpec("older-than", takesValue: true),
-            OptionSpec("prompt-file", takesValue: true),
-            OptionSpec("input-json", takesValue: true),
-            OptionSpec("input-file", takesValue: true),
-            OptionSpec("default-agent", takesValue: true),
+            OptionSpec("session", short: "s", takesValue: true, value: "name"),
+            OptionSpec("file", short: "f", takesValue: true, value: "path"),
+            OptionSpec("config-option", takesValue: true, repeats: true, value: "key=value"),
+            OptionSpec("name", takesValue: true, value: "name"),
+            OptionSpec("resume-session", takesValue: true, value: "id"),
+            OptionSpec("cursor", takesValue: true, value: "cursor"),
+            OptionSpec("filter-cwd", takesValue: true, value: "dir"),
+            OptionSpec("limit", takesValue: true, value: "count"),
+            OptionSpec("tail", takesValue: true, value: "count"),
+            OptionSpec("output", takesValue: true, value: "path"),
+            OptionSpec("before", takesValue: true, value: "date"),
+            OptionSpec("older-than", takesValue: true, value: "days"),
+            OptionSpec("prompt-file", takesValue: true, value: "path"),
+            OptionSpec("input-json", takesValue: true, value: "json"),
+            OptionSpec("input-file", takesValue: true, value: "path"),
+            OptionSpec("default-agent", takesValue: true, value: "name"),
             OptionSpec("local"),
             OptionSpec("dry-run"),
             OptionSpec("include-history"),
@@ -54,7 +62,10 @@ enum Router {
         ]
 
     static func dispatch(_ rawArgs: [String]) throws -> Int32 {
-        let routing = try ArgScanner.scan(rawArgs, options: routingSpecs)
+        // Lenient: this pass only recovers the positional command path. A bad
+        // option is reported by the command's own scan, which knows which help
+        // to show — the same place commander reports it.
+        let routing = try ArgScanner.scan(rawArgs, options: routingSpecs, lenient: true)
         let cwd = routing.string("cwd") ?? physicalCWD()
         // `--mcp-config` is resolved here, with the config, because its servers
         // replace the config-file ones for the whole invocation (relative to `--cwd`,
@@ -119,6 +130,36 @@ enum Router {
         let context = CommandContext(
             explicitAgent: explicitAgent, positionals: rest, rawArgs: rawArgs, config: config)
 
+        // The scanner and the value parsers throw without knowing which command
+        // they were parsing for, so the help screen is attached here — the one
+        // place that has resolved the path. `positionals` still carries the
+        // subcommand's own path (`sessions list`), so a nested screen is reached.
+        return try attachingUsage(
+            path: (explicitAgent.map { [$0] } ?? []) + positionals,
+            knownAgents: knownAgents, cwd: cwd
+        ) {
+            try run(command, context)
+        }
+    }
+
+    /// Run `body`, giving any `UsageError` it throws the help screen for `path`
+    /// (commander's `showHelpAfterError()`). An error that already carries one
+    /// keeps it — the inner command resolved a more specific path.
+    private static func attachingUsage(
+        path: [String], knownAgents: Set<String>, cwd: String, _ body: () throws -> Int32
+    ) rethrows -> Int32 {
+        do {
+            return try body()
+        } catch var error as UsageError {
+            if error.usage == nil {
+                let screen = error.scope == .root ? [] : path
+                error.usage = HelpRouter.render(path: screen, knownAgents: knownAgents, cwd: cwd)
+            }
+            throw error
+        }
+    }
+
+    private static func run(_ command: String, _ context: CommandContext) throws -> Int32 {
         switch command {
         case "config": return try ConfigCommand.run(context)
         case "sessions": return try SessionsCommand.run(context)

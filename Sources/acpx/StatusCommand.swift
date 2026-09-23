@@ -5,10 +5,10 @@ import JSONFoundation
 /// `acpx [<agent>] status` — local status of the session for the current cwd.
 enum StatusCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true)])
+        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.string("session").map(parseSessionName)
+        let name = try scan.parsed("session", parseSessionName)
 
         guard let record = SessionStore.findSession(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)

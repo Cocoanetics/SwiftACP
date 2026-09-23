@@ -7,8 +7,8 @@ import SwiftACP
 enum ExecCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
-            OptionSpec("file", short: "f", takesValue: true),
-            OptionSpec("config-option", takesValue: true, repeats: true)
+            OptionSpec("file", short: "f", takesValue: true, value: "path"),
+            OptionSpec("config-option", takesValue: true, repeats: true, value: "key=value")
         ])
         let flags = try context.globalFlags(scan)
 
@@ -28,7 +28,7 @@ enum ExecCommand {
             return ExitCodes.error
         }
 
-        let configOptions = try scan.strings("config-option").map(parseSessionConfigOptionAssignment)
+        let configOptions = try scan.parsedAll("config-option", parseSessionConfigOptionAssignment)
         let prompt = try PromptBlock.contentBlocks(
             text: "",
             blocks: try PromptInputResolver.resolve(

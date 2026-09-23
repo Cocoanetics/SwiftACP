@@ -36,8 +36,8 @@ enum SessionsCommand {
 
     private static func list(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
-            OptionSpec("local"), OptionSpec("cursor", takesValue: true),
-            OptionSpec("filter-cwd", takesValue: true)
+            OptionSpec("local"), OptionSpec("cursor", takesValue: true, value: "cursor"),
+            OptionSpec("filter-cwd", takesValue: true, value: "dir")
         ])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
@@ -118,14 +118,14 @@ enum SessionsCommand {
 
     private static func history(_ context: CommandContext, defaultLimit: Int, tail: Bool) throws -> Int32 {
         let scan = try context.scan([
-            OptionSpec(tail ? "tail" : "limit", takesValue: true)
+            OptionSpec(tail ? "tail" : "limit", takesValue: true, value: "count")
         ])
         let flags = try context.globalFlags(scan)
         let limit: Int
         if tail {
-            limit = try scan.string("tail").map(parseHistoryLimit) ?? 0
+            limit = try scan.parsed("tail", parseHistoryLimit) ?? 0
         } else {
-            limit = try scan.string("limit").map(parseHistoryLimit) ?? defaultLimit
+            limit = try scan.parsed("limit", parseHistoryLimit) ?? defaultLimit
         }
         let record = try findScopedSessionOrThrow(context, flags, name: context.positionals.first)
         let all = SessionStore.conversationHistoryEntries(record)
@@ -209,14 +209,15 @@ enum SessionsCommand {
     private static func prune(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
             OptionSpec("dry-run"), OptionSpec("include-history"),
-            OptionSpec("before", takesValue: true), OptionSpec("older-than", takesValue: true)
+            OptionSpec("before", takesValue: true, value: "date"),
+            OptionSpec("older-than", takesValue: true, value: "days")
         ])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let dryRun = scan.flag("dry-run")
         let includeHistory = scan.flag("include-history")
-        let before = try scan.string("before").map(parseBeforeDate)
-        let olderThanDays = try scan.string("older-than").map(parseDaysOlderThan)
+        let before = try scan.parsed("before", parseBeforeDate)
+        let olderThanDays = try scan.parsed("older-than", parseDaysOlderThan)
 
         var cutoff: String?
         if let before {

@@ -23,8 +23,8 @@ enum CompareCommand {
             throw CLIError("compare subcommand is disabled by configuration (disableExec: true)")
         }
         let scan = try context.scan([
-            OptionSpec("file", short: "f", takesValue: true),
-            OptionSpec("prompt-file", takesValue: true), OptionSpec("json")
+            OptionSpec("file", short: "f", takesValue: true, value: "path"),
+            OptionSpec("prompt-file", takesValue: true, value: "path"), OptionSpec("json")
         ])
         let flags = try context.globalFlags(scan)
         if let agent = flags.agent, !agent.isEmpty {

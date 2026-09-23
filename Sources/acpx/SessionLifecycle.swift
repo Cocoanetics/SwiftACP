@@ -8,12 +8,12 @@ import SwiftACP
 enum SessionLifecycle {
     static func new(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
-            OptionSpec("name", short: "s", takesValue: true),
-            OptionSpec("resume-session", takesValue: true)
+            OptionSpec("name", short: "s", takesValue: true, value: "name"),
+            OptionSpec("resume-session", takesValue: true, value: "id")
         ])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.string("name").map(parseSessionName)
+        let name = try scan.parsed("name", parseSessionName)
 
         let replaced = SessionStore.findSession(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)
@@ -36,12 +36,12 @@ enum SessionLifecycle {
 
     static func ensure(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
-            OptionSpec("name", short: "s", takesValue: true),
-            OptionSpec("resume-session", takesValue: true)
+            OptionSpec("name", short: "s", takesValue: true, value: "name"),
+            OptionSpec("resume-session", takesValue: true, value: "id")
         ])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.string("name").map(parseSessionName)
+        let name = try scan.parsed("name", parseSessionName)
 
         let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
         if let existing = SessionStore.findSessionByDirectoryWalk(
