@@ -12,9 +12,9 @@ import Testing
 extension DaemonToolsTests {
     /// Runs `body` with the mock (in `loadMode`) logging the session requests it gets.
     /// `forgetAfterPrompts` makes each mock process drop its sessions after that many
-    /// answered prompts.
-    private func withLoggedMock(
-        loadMode: String, forgetAfterPrompts: Int = 0,
+    /// answered prompts; `exitAfterPrompts` makes it exit.
+    func withLoggedMock(
+        loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0,
         _ body: (_ command: String, _ methods: () throws -> [String]) async throws -> Void
     ) async throws {
         let command = try #require(mockCommand())
@@ -24,7 +24,7 @@ extension DaemonToolsTests {
             let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
             let logged =
                 "/usr/bin/env MOCK_LOAD_SESSION=\(loadMode) MOCK_FORGET_AFTER_PROMPTS=\(forgetAfterPrompts) "
-                + "MOCK_REQUEST_LOG='\(log.path)' \(command)"
+                + "MOCK_EXIT_AFTER_PROMPTS=\(exitAfterPrompts) MOCK_REQUEST_LOG='\(log.path)' \(command)"
             try await body(logged) {
                 try String(contentsOf: log, encoding: .utf8)
                     .split(separator: "\n")
@@ -194,7 +194,7 @@ extension DaemonToolsTests {
         let notFound = JSONRPCErrorBody(code: -32002, message: "Resource not found")
         let internalError = JSONRPCErrorBody(code: -32603, message: "Internal error")
         func outcome(_ error: Error, imported: Bool = false, messages: Bool = true) -> ReconnectFallback.Outcome {
-            ReconnectFallback.outcome(after: error, imported: imported, sessionHasAgentMessages: messages)
+            ReconnectFallback.outcome(after: error, sameSessionOnly: imported, sessionHasAgentMessages: messages)
         }
         #expect(outcome(CancellationError(), imported: true) == .surface)
         #expect(outcome(CancellationError()) == .surface)

@@ -39,6 +39,10 @@ LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
 # still holds the connection. A relaunched process remembers again. 0 = never.
 FORGET_AFTER_PROMPTS = int(os.environ.get("MOCK_FORGET_AFTER_PROMPTS", "0"))
 
+# After this many answered prompts, this process exits — an adapter that crashed or
+# was killed between turns, while its client still holds the connection. 0 = never.
+EXIT_AFTER_PROMPTS = int(os.environ.get("MOCK_EXIT_AFTER_PROMPTS", "0"))
+
 
 def log_request(message):
     path = os.environ.get("MOCK_REQUEST_LOG")
@@ -168,6 +172,9 @@ def main():
                 continue
             prompts_answered += 1
             handle_prompt(req_id, message.get("params", {}))
+            if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:
+                sys.stdout.flush()
+                os._exit(0)
         elif method == "session/set_mode":
             # Echo the new mode back as a current_mode_update, then ack.
             params = message.get("params", {})

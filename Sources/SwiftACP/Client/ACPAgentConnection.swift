@@ -89,6 +89,23 @@ public actor ACPAgentConnection {
 
     private var onClientRequest: (@Sendable (String) -> Void)?
 
+    /// Whether the connection has ended — the agent closed its end (it exited), or
+    /// ``close()`` was called. Nothing sent on a closed connection can arrive, so a
+    /// holder checks this before reusing it, as acpx's `hasLiveConnection` does.
+    public private(set) var isClosed = false
+    /// Resolves once the read loop has ended and ``isClosed`` is set.
+    private var closeWatch: Task<Void, Never>?
+
+    /// Suspends until the connection has ended (see ``isClosed``). Returns at once if
+    /// it was never started.
+    public func waitUntilClosed() async {
+        await closeWatch?.value
+    }
+
+    private func markClosed() {
+        isClosed = true
+    }
+
     /// Observe each outgoing agent request method (e.g. `initialize`,
     /// `session/new`) as it is sent — used to render acpx's `[client]` progress
     /// lines. The closure runs synchronously, so it must be fast.
@@ -124,9 +141,16 @@ public actor ACPAgentConnection {
                 await self?.handleIncomingNotification(method: method, params: params)
             })
         await rpc.start()
+        // Note the end of the stream, whichever side ends it. It lives as long as the
+        // read loop, which the agent exiting or `close()` ends.
+        closeWatch = Task { [weak self, rpc] in
+            await rpc.waitUntilClosed()
+            await self?.markClosed()
+        }
     }
 
     public func close() {
+        isClosed = true
         for sink in updateSinks.values { sink.finish() }
         for sink in eventSinks.values { sink.finish() }
         updateSinks.removeAll()
@@ -457,32 +481,3 @@ public actor ACPAgentConnection {
 
 /// Used for ACP methods whose result body is empty (`{}`).
 struct EmptyResponse: Codable, Sendable {}
-
-/// A prompt block the agent never advertised support for, refused before dispatch.
-///
-/// ACP gates `image`, `audio` and embedded `resource` blocks on
-/// `promptCapabilities`; an agent that receives one it did not claim is free to
-/// ignore it, so the refusal is the client's job. Mirrors npm acpx's
-/// `UnsupportedPromptContentError`.
-public struct UnsupportedPromptContentError: LocalizedError, Equatable {
-    /// Which block in the prompt was refused.
-    public let index: Int
-    /// The `promptCapabilities` flag it needed — `image`, `audio` or `embeddedContext`.
-    public let capability: String
-    /// The agent's self-reported name, when it gave one on `initialize`.
-    public let agent: String?
-
-    public init(index: Int, capability: String, agent: String?) {
-        self.index = index
-        self.capability = capability
-        self.agent = agent
-    }
-
-    public var errorDescription: String? {
-        let who = agent.map { "\"\($0)\"" } ?? "this agent"
-        return """
-            prompt[\(index)] needs promptCapabilities.\(capability), which \(who) does not \
-            advertise
-            """
-    }
-}

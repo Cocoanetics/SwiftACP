@@ -172,7 +172,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         }
         let entry = try await ensure(
             sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd,
-            mcpServers: record.acpx?.mcpServers)
+            mcpServers: record.acpx?.mcpServers, control: true)
         let result = try await body(entry, &record)
         record.lastUsedAt = nowISO()
         do {
@@ -284,7 +284,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Parameter sessionId: the ACP session id of the live session.
     /// - Returns: `false` if the session isn't currently live.
     func cancelSession(sessionId: String) async throws -> Bool {
-        guard let entry = live[sessionId] else { return false }
+        // An agent that exited has no turn to cancel.
+        guard let entry = live[sessionId], await !entry.agent.connection.isClosed else { return false }
         try await entry.session.cancel()
         return true
     }
