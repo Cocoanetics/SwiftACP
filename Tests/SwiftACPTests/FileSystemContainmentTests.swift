@@ -28,11 +28,17 @@ struct FileSystemContainmentTests {
 
     // MARK: Path rules
 
+    /// Join with the platform's own separator: a resolved path on Windows comes back
+    /// with backslashes, so `root + "/name"` would never match it.
+    private func path(_ base: String, _ components: String...) -> String {
+        components.reduce(URL(fileURLWithPath: base)) { $0.appendingPathComponent($1) }.path
+    }
+
     @Test func aFileInsideTheWorkspaceResolves() throws {
         let (root, _) = try makeWorkspace()
         let resolved = try FileSystemContainment.resolve(
-            path: root + "/inside.txt", under: root, for: .read)
-        #expect(resolved == root + "/inside.txt")
+            path: path(root, "inside.txt"), under: root, for: .read)
+        #expect(resolved == path(root, "inside.txt"))
     }
 
     @Test func aPathOutsideTheWorkspaceIsRefused() throws {
@@ -64,15 +70,15 @@ struct FileSystemContainmentTests {
 
         // The session cwd is the alias; a file named through it must still resolve.
         let resolved = try FileSystemContainment.resolve(
-            path: alias.path + "/inside.txt", under: alias.path, for: .read)
-        #expect(resolved == root + "/inside.txt")
+            path: path(alias.path, "inside.txt"), under: alias.path, for: .read)
+        #expect(resolved == path(root, "inside.txt"))
     }
 
     @Test func aWriteMayNameAFileThatDoesNotExistYet() throws {
         let (root, outside) = try makeWorkspace()
         let fresh = try FileSystemContainment.resolve(
-            path: root + "/nested/new.txt", under: root, for: .write)
-        #expect(fresh == root + "/nested/new.txt")
+            path: path(root, "nested", "new.txt"), under: root, for: .write)
+        #expect(fresh == path(root, "nested", "new.txt"))
 
         // …but not one that would land outside.
         #expect(throws: (any Error).self) {
