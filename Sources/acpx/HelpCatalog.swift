@@ -12,6 +12,9 @@ enum HelpCatalog {
     private static let noWaitOpt = HelpOption(
         "--no-wait", "Queue prompt and return immediately when another prompt is already running")
     private static let fileOpt = HelpOption("-f, --file <path>", "Read prompt text from file path (use - for stdin)")
+    private static let configOptionOpt = HelpOption(
+        "--config-option <key=value>",
+        "Set an ACP session config option before the one-shot prompt (repeatable)")
 
     // Shared argument rows.
     private static let promptArg = HelpArgument("prompt", "[prompt...]", "Prompt text")
@@ -140,7 +143,9 @@ enum HelpCatalog {
                 usagePath: "", description: "", arguments: [promptArg],
                 options: [sessionOpt, noWaitOpt, fileOpt])
         case "exec":
-            return HelpScreen(usagePath: "", description: "", arguments: [promptArg], options: [fileOpt])
+            return HelpScreen(
+                usagePath: "", description: "", arguments: [promptArg],
+                options: [fileOpt, configOptionOpt])
         case "cancel":
             return HelpScreen(usagePath: "", description: "", options: [sessionOpt])
         case "set-mode":
