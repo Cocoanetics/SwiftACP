@@ -11,7 +11,7 @@ import Foundation
 ///   A write that was allowed is not counted — upstream records delegated operations
 ///   only when they fail — so one approved tool call is enough to keep a turn with a
 ///   refused write from exiting 5.
-public struct PermissionStats: Sendable, Equatable {
+public struct PermissionStats: Codable, Sendable, Equatable {
     public var requested = 0
     public var approved = 0
     public var denied = 0

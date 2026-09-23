@@ -59,14 +59,17 @@ public struct ACPClientHandlers: Sendable {
     /// - Parameters:
     ///   - nonInteractivePermissions: what a write needing confirmation does when
     ///     there is no terminal to ask on.
-    ///   - confirmWrite: how to ask. `nil` asks on the terminal, as acpx does.
+    ///   - confirmWrite: how to ask. `nil` asks on `terminal`, as acpx does.
+    ///   - terminal: the terminal the default confirmation asks on.
     public static func standard(
         permission: PermissionPolicy,
         nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
-        confirmWrite: WriteApproval.Confirmation? = nil
+        confirmWrite: WriteApproval.Confirmation? = nil,
+        terminal: TerminalPermissionPrompt = .shared
     ) -> ACPClientHandlers {
         let approval = WriteApproval(
-            policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmWrite)
+            policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmWrite,
+            terminal: terminal)
         return ACPClientHandlers(
             requestPermission: { await permission.resolve($0) },
             readTextFile: { try LocalFileSystem.read($0) },
@@ -88,6 +91,17 @@ public enum PermissionPolicy: Sendable {
     case denyAll
     /// Delegate to a custom resolver (e.g. an interactive prompt).
     case custom(@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)
+
+    /// The policy for one of acpx's permission modes — `approve-all`, `approve-reads`,
+    /// `deny-all` — or `nil` for anything else.
+    public init?(acpxMode mode: String) {
+        switch mode {
+        case "approve-all": self = .approveAll
+        case "approve-reads": self = .approveReads
+        case "deny-all": self = .denyAll
+        default: return nil
+        }
+    }
 
     /// Tool kinds considered safe to auto-approve under `.approveReads`.
     private static let safeKinds: Set<ToolKind> = [.read, .search]

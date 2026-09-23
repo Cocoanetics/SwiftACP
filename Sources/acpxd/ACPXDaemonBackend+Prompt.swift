@@ -26,15 +26,23 @@ extension ACPXDaemonBackend {
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
+    ///   - permissionMode: how this turn's permission requests and writes are
+    ///     answered — see ``TurnPermissions``. `nil` approves everything.
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail`.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     func runPrompt(
         sessionId rawSessionId: String, text: String,
-        blocks: [PromptBlock]? = nil, wait: Bool = true
+        blocks: [PromptBlock]? = nil, wait: Bool = true,
+        permissionMode: String? = nil, nonInteractivePermissions: String? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
+        // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
+        // not something to find out after waiting out another turn.
+        let permissions = try TurnPermissions(
+            mode: permissionMode, nonInteractive: nonInteractivePermissions)
         // Validate before queueing: a malformed block should fail at once, not after
         // waiting out someone else's turn. The daemon's transport has a ceiling, so
         // the request size is capped here (a direct client has nothing in the way).
@@ -93,8 +101,8 @@ extension ACPXDaemonBackend {
         do {
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: content, persister: persister,
-                eventBuffer: eventBuffer)
+                mcpServers: mcpServers, blocks: content, permissions: permissions,
+                persister: persister, eventBuffer: eventBuffer)
         } catch {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
@@ -104,14 +112,15 @@ extension ACPXDaemonBackend {
             await evict(acpSessionId)
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: content, persister: persister,
-                eventBuffer: eventBuffer)
+                mcpServers: mcpServers, blocks: content, permissions: permissions,
+                persister: persister, eventBuffer: eventBuffer)
         }
     }
 
     private func attemptPrompt(
         sessionId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
-        blocks: [ContentBlock], persister: TurnPersister, eventBuffer: WireBuffer
+        blocks: [ContentBlock], permissions: TurnPermissions, persister: TurnPersister,
+        eventBuffer: WireBuffer
     ) async throws -> String {
         let entry = try await ensure(
             sessionId: sessionId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
@@ -119,6 +128,30 @@ extension ACPXDaemonBackend {
         let boundSessionId = entry.session.id
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
+
+        // This turn's permissions: acpx sends the mode with every prompt and the queue
+        // owner applies it to that turn, so the live agent's handlers are swapped per
+        // turn rather than fixed at launch. Turns are serialized per session, so no
+        // other turn can be reading them meanwhile.
+        await connection.setHandlers(permissions.handlers)
+        // The agent's own requests, and the client's refusals of them, stream to the
+        // CLI in order with the updates — acpx's formatter prints both.
+        await connection.setInboundRequestObservers(
+            received: { method in
+                Task {
+                    await clientSession?.sendLogNotification(LogMessage(
+                        level: .info, logger: sessionId,
+                        data: toJSONValue(InboundRequestEvent(inboundMethod: method))))
+                }
+            },
+            failed: { error in
+                Task {
+                    await clientSession?.sendLogNotification(LogMessage(
+                        level: .info, logger: sessionId,
+                        data: toJSONValue(InboundRequestEvent(
+                            inboundMethod: "", failure: TurnPermissions.summary(of: error)))))
+                }
+            })
 
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
