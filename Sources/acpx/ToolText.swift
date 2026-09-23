@@ -159,10 +159,16 @@ enum ToolText {
 
     static func isReadLike(title: String?, kind: ToolKind?) -> Bool {
         if kind?.rawValue.trimmingCharacters(in: .whitespaces).lowercased() == "read" { return true }
-        guard let head = title?.lowercased().split(separator: ":", maxSplits: 1).first?
-            .trimmingCharacters(in: .whitespaces), !head.isEmpty
-        else { return false }
-        return ["read", "cat", "open", "view"].contains { head.contains($0) }
+        // The leading *word* must be the action, not merely contain it. Splitting on the
+        // colon alone left the whole title as the head, and a substring test then read
+        // "Spreadsheet update" or "overwrite readme.md" as reads and hid their output —
+        // acpx's `inferToolKindFromTitle` splits on `[:\s]` and compares exactly.
+        let normalized = (title ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        guard !normalized.isEmpty else { return false }
+        let head = normalized.split(
+            maxSplits: 1, omittingEmptySubsequences: false,
+            whereSeparator: { $0 == ":" || $0.isWhitespace }).first ?? ""
+        return ["read", "cat", "open", "view"].contains(String(head))
     }
 
     // MARK: Small helpers (port of output.ts)

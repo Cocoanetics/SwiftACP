@@ -71,9 +71,10 @@ extension McpServerConfig {
 
     private func environmentVariables(_ entries: [EnvEntry]?) throws -> [EnvVariable] {
         try (entries ?? []).map {
-            EnvVariable(
-                name: try nonEmpty($0.name, field: "name"),
-                value: try nonEmpty($0.value, field: "value"))
+            // The name is trimmed and must be non-empty; the value is taken verbatim.
+            // An empty value and one carrying significant whitespace are both legitimate
+            // — acpx's `parseNonEmptyString` for the name, `parseString` for the value.
+            EnvVariable(name: try nonEmpty($0.name, field: "name"), value: $0.value)
         }
     }
 

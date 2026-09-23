@@ -11,6 +11,31 @@ import Testing
 ///
 /// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
 @Suite(.serialized) struct McpConfigLoaderTests {
+    /// Env and header *values* are wire data: an empty one and one carrying
+    /// significant whitespace must both survive verbatim. Only the name is trimmed and
+    /// required (acpx 0.19.0; `parseString` vs `parseNonEmptyString`, issue #28).
+    @Test func environmentValuesSurviveVerbatim() async throws {
+        try await withIsolatedStore {
+            let cwd = try makeProjectDir()
+            try #"""
+                {"mcpServers":[{"name":"tool","command":"run","env":[
+                  {"name":"EMPTY","value":""},
+                  {"name":"  PADDED_NAME  ","value":"  spaced  "},
+                  {"name":"NEWLINE","value":"one\ntwo"}]}]}
+                """#
+                .write(to: ACPXPaths.projectConfigPath(cwd: cwd), atomically: true, encoding: .utf8)
+
+            let config = try ConfigLoader.load(cwd: cwd)
+            guard case .stdio(let server) = try #require(config.mcpServers.first).protocolSpec()
+            else {
+                Issue.record("expected a stdio spec")
+                return
+            }
+            #expect(server.env.map(\.name) == ["EMPTY", "PADDED_NAME", "NEWLINE"])
+            #expect(server.env.map(\.value) == ["", "  spaced  ", "one\ntwo"])
+        }
+    }
+
     @Test func explicitFileReplacesConfigFileServers() async throws {
         try await withIsolatedStore {
             let cwd = try makeProjectDir()
