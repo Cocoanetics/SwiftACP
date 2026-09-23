@@ -32,10 +32,14 @@ struct ClientCapabilityTests {
     }
 
     private func runRead(capabilities: ClientCapabilities) async throws -> String {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        let created = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cap-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: created) }
+        // One canonical form for both the session cwd and the file the agent names:
+        // containment compares them as text, as acpx does, so a Windows 8.3 short name
+        // (RUNNER~1) on one side and the long name on the other would not match.
+        let directory = created.resolvingSymlinksInPath()
         let file = directory.appendingPathComponent("note.txt")
         try "contents".write(to: file, atomically: true, encoding: .utf8)
 
@@ -48,7 +52,7 @@ struct ClientCapabilityTests {
         await client.start()
         _ = try await client.initialize(capabilities: capabilities, clientInfo: .acpx)
         let session = try await client.newSession(
-            NewSessionRequest(cwd: directory.resolvingSymlinksInPath().path))
+            NewSessionRequest(cwd: directory.path))
 
         let (subscriptionId, stream) = await client.makeEventSubscription()
         let consumer = Task { () -> String in

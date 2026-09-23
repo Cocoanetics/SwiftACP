@@ -1,11 +1,15 @@
 @testable import SwiftACP
 import Foundation
+import JSONFoundation
 import Testing
 
-/// What an agent can reach through `fs/read_text_file` and `fs/write_text_file`. The
-/// client confines every path to the session's own working directory, decided on the
-/// resolved path so a symlinked workspace keeps working and a symlink out of it does
-/// not (acpx's fs-safe roots, 0.16.0 / 0.18.0 — issue #34).
+/// What an agent can reach through `fs/read_text_file` and `fs/write_text_file`, and
+/// what it hears back when it cannot (issue #34).
+///
+/// acpx checks twice — lexically before anything else, then on disk through its
+/// fs-safe root — and every refusal reaches the agent as the ACP SDK reports a thrown
+/// error: `-32603 "Internal error"` with the reason in `data.details`. The wording and
+/// shapes asserted here were captured from npm acpx 0.19.1 driving the same requests.
 struct FileSystemContainmentTests {
     // MARK: Fixtures
 
@@ -30,39 +34,81 @@ struct FileSystemContainmentTests {
         return (root.path, outside.path)
     }
 
-    // MARK: Path rules
-
     /// Join with the platform's own separator: a resolved path on Windows comes back
     /// with backslashes, so `root + "/name"` would never match it.
     private func path(_ base: String, _ components: String...) -> String {
         components.reduce(URL(fileURLWithPath: base)) { $0.appendingPathComponent($1) }.path
     }
 
-    @Test func aFileInsideTheWorkspaceResolves() throws {
-        let (root, _) = try makeWorkspace()
-        let resolved = try FileSystemContainment.resolve(
-            path: path(root, "inside.txt"), under: root, for: .read)
-        #expect(resolved == path(root, "inside.txt"))
+    /// The `data.details` a refusal carries, or `nil` if it is not a refusal.
+    private func details(_ error: Error?) -> String? {
+        guard let error = error as? JSONRPCErrorBody, error.code == -32603,
+            error.message == "Internal error",
+            case .object(let data)? = error.data, case .string(let details)? = data["details"]
+        else { return nil }
+        return details
     }
 
-    @Test func aPathOutsideTheWorkspaceIsRefused() throws {
-        let (root, outside) = try makeWorkspace()
-        #expect(throws: (any Error).self) {
-            try FileSystemContainment.resolve(path: outside, under: root, for: .read)
+    // MARK: Stage 1 — lexical
+
+    @Test func aFileInsideTheWorkspacePasses() throws {
+        let (root, _) = try makeWorkspace()
+        let named = try FileSystemContainment.lexicallyContained(path(root, "inside.txt"), under: root)
+        #expect(named == path(root, "inside.txt"))
+    }
+
+    #if !os(Windows)
+    @Test func aRelativePathIsRefusedBeforeAnythingElse() throws {
+        let (root, _) = try makeWorkspace()
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.lexicallyContained("inside.txt", under: root)
         }
-        // …including one that only leaves lexically.
-        #expect(throws: (any Error).self) {
-            try FileSystemContainment.resolve(
-                path: root + "/../outside.txt", under: root, for: .read)
+        #expect(details(error) == "Path must be absolute: inside.txt")
+    }
+
+    /// The refusal names the path with `..` folded — the path acpx itself reports.
+    @Test func aPathOutsideTheWorkspaceIsRefusedWithItsNormalizedForm() throws {
+        let (root, outside) = try makeWorkspace()
+        let direct = #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.lexicallyContained(outside, under: root)
+        }
+        #expect(details(direct) == "Path is outside allowed cwd subtree: \(outside)")
+
+        let climbing = #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.lexicallyContained(root + "/../outside.txt", under: root)
+        }
+        #expect(details(climbing) == "Path is outside allowed cwd subtree: \(outside)")
+    }
+
+    /// Purely textual: no disk access, and `/private` is not dropped the way
+    /// Foundation's `standardizingPath` drops it.
+    @Test func lexicalNormalizationFoldsWithoutTouchingTheDisk() {
+        #expect(FileSystemContainment.lexicallyNormalized("/private/tmp/a/./b/../c//d/")
+            == "/private/tmp/a/c/d")
+        #expect(FileSystemContainment.lexicallyNormalized("/../../x") == "/x")
+        #expect(FileSystemContainment.lexicallyNormalized("/") == "/")
+    }
+
+    /// The root itself counts as inside, as in fs-safe's `isPathInside`; a sibling that
+    /// merely shares a prefix does not.
+    @Test func containmentIsByComponentNotByPrefix() throws {
+        let (root, _) = try makeWorkspace()
+        #expect(throws: Never.self) { try FileSystemContainment.lexicallyContained(root, under: root) }
+        #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.lexicallyContained(root + "-sibling/x", under: root)
         }
     }
+    #endif
+
+    // MARK: Stage 2 — on disk
 
     @Test func aSymlinkLeavingTheWorkspaceIsRefused() throws {
         let (root, _) = try makeWorkspace()
         // The link itself lives inside the root; its target does not.
-        #expect(throws: (any Error).self) {
-            try FileSystemContainment.resolve(path: root + "/link-out", under: root, for: .read)
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.resolveWithinRealRoot(path(root, "link-out"), under: root)
         }
+        #expect(details(error) == "file is outside workspace root")
     }
 
     @Test func aSymlinkedWorkspaceStillWorks() throws {
@@ -73,39 +119,94 @@ struct FileSystemContainmentTests {
             at: alias, withDestinationURL: URL(fileURLWithPath: root))
 
         // The session cwd is the alias; a file named through it must still resolve.
-        let resolved = try FileSystemContainment.resolve(
-            path: path(alias.path, "inside.txt"), under: alias.path, for: .read)
-        #expect(resolved == path(root, "inside.txt"))
+        let named = path(alias.path, "inside.txt")
+        _ = try FileSystemContainment.lexicallyContained(named, under: alias.path)
+        let resolved = try FileSystemContainment.resolveWithinRealRoot(named, under: alias.path)
+        #expect(URL(fileURLWithPath: resolved).resolvingSymlinksInPath().path
+            == URL(fileURLWithPath: path(root, "inside.txt")).resolvingSymlinksInPath().path)
     }
 
     @Test func aWriteMayNameAFileThatDoesNotExistYet() throws {
         let (root, outside) = try makeWorkspace()
-        let fresh = try FileSystemContainment.resolve(
-            path: path(root, "nested", "new.txt"), under: root, for: .write)
-        #expect(fresh == path(root, "nested", "new.txt"))
+        let fresh = try FileSystemContainment.resolveWithinRealRoot(
+            path(root, "nested", "new.txt"), under: root)
+        #expect(fresh.hasSuffix("nested/new.txt") || fresh.hasSuffix("nested\\new.txt"))
 
         // …but not one that would land outside.
-        #expect(throws: (any Error).self) {
-            try FileSystemContainment.resolve(
-                path: (outside as NSString).deletingLastPathComponent + "/new.txt",
-                under: root, for: .write)
+        #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.resolveWithinRealRoot(
+                (outside as NSString).deletingLastPathComponent + "/new.txt", under: root)
         }
+    }
+
+    #if !os(Windows)
+    /// A missing file under a workspace reached through `/tmp` → `/private/tmp`. Found
+    /// while porting: comparing through `URL.standardizedFileURL` dropped `/private`
+    /// from the existing root but not from the not-yet-existing file, so every new file
+    /// looked outside the workspace.
+    @Test func aMissingFileUnderAnAliasedRootIsStillInside() throws {
+        let workspace = "/tmp/fs-alias-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: workspace) }
+        let privateForm = "/private" + workspace
+        guard FileManager.default.fileExists(atPath: privateForm) else { return }  // not macOS
+
+        let named = try FileSystemContainment.lexicallyContained(
+            privateForm + "/fresh.txt", under: privateForm)
+        #expect(named == privateForm + "/fresh.txt")
+        _ = try FileSystemContainment.resolveWithinRealRoot(named, under: privateForm)
+    }
+
+    /// acpx 0.18.0: `..` is applied to what a symlink points at, not folded into the
+    /// text first. `link/../file` with `link -> /elsewhere` is `/file` — outside —
+    /// not the lexical sibling `file`.
+    @Test func dotDotAfterAnEscapingSymlinkIsResolvedPhysically() throws {
+        let (root, _) = try makeWorkspace()
+        let outsideDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("elsewhere-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: outsideDir, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: root + "/away", withDestinationPath: outsideDir)
+
+        let named = root + "/away/../inside.txt"
+        // Lexically this is the workspace's own inside.txt…
+        #expect(try FileSystemContainment.lexicallyContained(named, under: root) == root + "/inside.txt")
+        // …but on disk it is not.
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try FileSystemContainment.resolveWithinRealRoot(named, under: root)
+        }
+        #expect(details(error) == "file is outside workspace root")
+    }
+    #endif
+
+    // MARK: Wire shapes
+
+    @Test func aRefusalIsAnInternalErrorWithDetails() {
+        let error = FileSystemContainment.refused("not a file")
+        #expect(error.code == -32603)
+        #expect(error.message == "Internal error")
+        #expect(error.data == .object(["details": .string("not a file")]))
+    }
+
+    /// acpx's `RequestError.resourceNotFound(pathToFileURL(path).href)`: the file URI in
+    /// both the message and `data.uri`, percent-encoded.
+    @Test func resourceNotFoundCarriesTheFileURI() {
+        let error = FileSystemContainment.resourceNotFound("/work/no such file.txt")
+        #expect(error.code == -32002)
+        #expect(error.message == "Resource not found: file:///work/no%20such%20file.txt")
+        #expect(error.data == .object(["uri": .string("file:///work/no%20such%20file.txt")]))
     }
 
     // MARK: What the open decides
 
     /// Existence and file type are settled on the descriptor, not on the path: between
-    /// a path check and an open, the object can be replaced. acpx's `fs-safe` opens
-    /// `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` for the same reason.
+    /// a path check and an open, the object can be replaced.
     @Test func aMissingFileReadsAsResourceNotFound() throws {
         let (root, _) = try makeWorkspace()
-        do {
-            _ = try LocalFileSystem.read(
-                ReadTextFileRequest(sessionId: "s", path: root + "/absent.txt"))
-            Issue.record("expected a resource-not-found error")
-        } catch let error as JSONRPCErrorBody {
-            #expect(error.code == FileSystemContainment.resourceNotFoundCode)
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try LocalFileSystem.read(ReadTextFileRequest(sessionId: "s", path: root + "/absent.txt"))
         }
+        #expect(error?.code == FileSystemContainment.resourceNotFoundCode)
     }
 
     @Test func aSymlinkSwappedInAfterContainmentFailsTheOpen() throws {
@@ -119,19 +220,77 @@ struct FileSystemContainmentTests {
         #expect(FileManager.default.contents(atPath: outside) != nil)
     }
 
-    // `mkfifo` is POSIX-only; Windows has no equivalent to exercise here.
+    // `mkfifo` and hard links are POSIX-only; Windows has no equivalent to exercise here.
     #if !os(Windows)
     @Test func aSpecialFileIsNotReadable() throws {
         let (root, _) = try makeWorkspace()
         let fifo = root + "/pipe"
         #expect(mkfifo(fifo, 0o600) == 0)
-        // `O_NONBLOCK` keeps the open from hanging on a reader-less fifo; `fstat` on the
-        // descriptor is what rejects it.
-        #expect(throws: (any Error).self) {
+        let error = #expect(throws: JSONRPCErrorBody.self) {
             try LocalFileSystem.read(ReadTextFileRequest(sessionId: "s", path: fifo))
         }
+        #expect(details(error) == "not a file")
+    }
+
+    @Test func aDirectoryIsNotReadable() throws {
+        let (root, _) = try makeWorkspace()
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try LocalFileSystem.read(ReadTextFileRequest(sessionId: "s", path: root))
+        }
+        #expect(details(error) == "not a file")
+    }
+
+    /// Opening a fifo for writing blocks until a reader turns up. Before `O_NONBLOCK`
+    /// this hung the client forever; it must now refuse at once.
+    @Test func writingToAFifoIsRefusedInsteadOfHanging() throws {
+        let (root, _) = try makeWorkspace()
+        let fifo = root + "/pipe"
+        #expect(mkfifo(fifo, 0o600) == 0)
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try LocalFileSystem.write(WriteTextFileRequest(sessionId: "s", path: fifo, content: "x"))
+        }
+        #expect(details(error) == "path is not a regular file under root")
+    }
+
+    @Test func writingToADirectoryIsRefused() throws {
+        let (root, _) = try makeWorkspace()
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try LocalFileSystem.write(WriteTextFileRequest(sessionId: "s", path: root, content: "x"))
+        }
+        #expect(details(error) == "not a file")
+    }
+
+    /// A hard link is a regular file, so `O_NOFOLLOW` does not stop it — and writing
+    /// through one changes the other link's file, which may be outside the workspace.
+    /// fs-safe refuses; the outside file must be untouched.
+    @Test func writingThroughAHardLinkIsRefusedAndLeavesTheOtherLinkAlone() throws {
+        let (root, outside) = try makeWorkspace()
+        let linked = root + "/linked.txt"
+        #expect(link(outside, linked) == 0)
+        let error = #expect(throws: JSONRPCErrorBody.self) {
+            try LocalFileSystem.write(
+                WriteTextFileRequest(sessionId: "s", path: linked, content: "overwritten"))
+        }
+        #expect(details(error) == "path alias escape blocked")
+        #expect(try String(contentsOfFile: outside, encoding: .utf8) == "secret")
+    }
+
+    /// …while *reading* through one is allowed, as upstream (`hardlinks: "allow"`).
+    @Test func readingThroughAHardLinkIsAllowed() throws {
+        let (root, outside) = try makeWorkspace()
+        #expect(link(outside, root + "/linked.txt") == 0)
+        let read = try LocalFileSystem.read(ReadTextFileRequest(sessionId: "s", path: root + "/linked.txt"))
+        #expect(read.content == "secret")
     }
     #endif
+
+    @Test func aWriteCreatesMissingParentsAndTruncates() throws {
+        let (root, _) = try makeWorkspace()
+        let nested = path(root, "a", "b", "c.txt")
+        _ = try LocalFileSystem.write(WriteTextFileRequest(sessionId: "s", path: nested, content: "first, longer"))
+        _ = try LocalFileSystem.write(WriteTextFileRequest(sessionId: "s", path: nested, content: "short"))
+        #expect(try String(contentsOfFile: nested, encoding: .utf8) == "short")
+    }
 
     // MARK: End to end, through the client
 
@@ -201,12 +360,11 @@ struct FileSystemContainmentTests {
 
         let refused = try await runRead(ReadProbeAgent(path: outside), cwd: root)
         #expect(refused.hasPrefix("error:"))
-        #expect(refused.contains("outside the session's working directory"))
     }
 
     /// A symlink *inside* the workspace pointing at a file inside it keeps working:
-    /// containment hands the handler the canonical path, so the no-follow open sees the
-    /// real file rather than the link. acpx calls this preserving contained aliases.
+    /// the handler is handed the resolved path, so the no-follow open sees the real
+    /// file rather than the link. acpx calls this preserving contained aliases.
     @Test func aContainedAliasStillReadsEndToEnd() async throws {
         let (root, _) = try makeWorkspace()
         try FileManager.default.createSymbolicLink(

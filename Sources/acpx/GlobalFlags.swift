@@ -221,6 +221,14 @@ func parseNonEmptyValue(_ label: String, _ value: String) throws -> String {
     return trimmed
 }
 
+extension GlobalFlags {
+    /// `--non-interactive-permissions` as the library's policy; the parser has already
+    /// rejected anything but `deny` and `fail`.
+    var nonInteractivePolicy: NonInteractivePermissionPolicy {
+        NonInteractivePermissionPolicy(rawValue: nonInteractivePermissions) ?? .deny
+    }
+}
+
 /// acpx's `parseSessionConfigOptionAssignment`: split on the first `=`, which
 /// may be neither the first nor the last character, then trim both halves and
 /// require both to survive the trim.

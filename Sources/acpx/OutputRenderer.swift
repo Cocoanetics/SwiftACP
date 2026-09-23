@@ -98,6 +98,18 @@ final class OutputRenderer: @unchecked Sendable {
         writeLine("\(bold("[client]")) \(method) (\(colorStatus("running", nil)))")
     }
 
+    /// Render a request the agent made of the client, the way acpx's formatter renders
+    /// what it sees on the wire: the request as `[client] <method> (running)`, and the
+    /// client's refusal as `[error] RUNTIME: <reason>`. Text mode only — acpx's quiet
+    /// mode prints neither, and its JSON mode is the raw stream (see issue #50).
+    func inboundRequest(_ request: InboundRequest) {
+        if let failure = request.failure {
+            renderError(code: "RUNTIME", failure)
+        } else {
+            clientOperation(request.method)
+        }
+    }
+
     /// Render a client-side operation the connection reported during the turn —
     /// today a permission notice: the refusal it sent Codex may end the turn (see
     /// `CodexCompat`). Mirrors acpx's formatters: text mode prints

@@ -114,11 +114,15 @@ public final class ACPAgent: Sendable {
         }
     }
 
-    /// Convenience that builds standard handlers from a permission policy.
+    /// Convenience that builds standard handlers from a permission policy. Writes
+    /// the agent asks for are gated by it too — see ``WriteApproval`` — with
+    /// `nonInteractivePermissions` deciding what a write needing confirmation does
+    /// when there is no terminal to ask on.
     public static func launch(
         agent name: String,
         cwd: String = FileManager.default.currentDirectoryPath,
         permission: PermissionPolicy,
+        nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
         clientInfo: Implementation = .acpx,
         capabilities: ClientCapabilities = .headlessController,
         environment: [String: String]? = nil,
@@ -129,7 +133,9 @@ public final class ACPAgent: Sendable {
         onClientRequest: (@Sendable (String) -> Void)? = nil
     ) async throws -> ACPAgent {
         try await launch(
-            agent: name, cwd: cwd, handlers: .standard(permission: permission),
+            agent: name, cwd: cwd,
+            handlers: .standard(
+                permission: permission, nonInteractivePermissions: nonInteractivePermissions),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest)
@@ -304,6 +310,22 @@ public struct ACPSession: Sendable {
         try await runTurn(blocks, meta: meta, onUpdate: onUpdate, onClientOperation: onClientOperation)
     }
 
+    /// As ``run(_:meta:onUpdate:onClientOperation:)``, also handing over each request
+    /// the agent makes of this client — see ``InboundRequest`` — in wire order with the
+    /// updates.
+    @discardableResult
+    public func run(
+        _ blocks: [ContentBlock],
+        meta: JSONValue? = nil,
+        onUpdate: @escaping @Sendable (SessionUpdate) -> Void,
+        onClientOperation: @escaping @Sendable (ClientOperation) -> Void,
+        onInboundRequest: @escaping @Sendable (InboundRequest) -> Void
+    ) async throws -> PromptOutcome {
+        try await runTurn(
+            blocks, meta: meta, onUpdate: onUpdate, onClientOperation: onClientOperation,
+            onInboundRequest: onInboundRequest)
+    }
+
     @discardableResult
     public func run(
         _ text: String,
@@ -329,7 +351,8 @@ public struct ACPSession: Sendable {
         _ blocks: [ContentBlock],
         meta: JSONValue?,
         onUpdate: (@Sendable (SessionUpdate) -> Void)?,
-        onClientOperation: (@Sendable (ClientOperation) -> Void)?
+        onClientOperation: (@Sendable (ClientOperation) -> Void)?,
+        onInboundRequest: (@Sendable (InboundRequest) -> Void)? = nil
     ) async throws -> PromptOutcome {
         let (subscriptionId, stream) = await agent.connection.makeEventSubscription()
         let sessionId = id
@@ -346,6 +369,9 @@ public struct ACPSession: Sendable {
                     where operation.sessionId == nil || operation.sessionId == sessionId:
                     await collector.record(operation)
                     onClientOperation?(operation)
+                case .inboundRequest(let request)
+                    where request.sessionId == nil || request.sessionId == sessionId:
+                    onInboundRequest?(request)
                 default:
                     break
                 }

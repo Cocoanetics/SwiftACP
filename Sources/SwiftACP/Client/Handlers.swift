@@ -33,24 +33,45 @@ public struct ACPClientHandlers: Sendable {
     /// Serve `fs/write_text_file`: write the given content to the given path.
     public var writeTextFile:
         (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)?
+    /// Authorize an `fs/write_text_file` before anything on disk is touched — acpx's
+    /// `isWriteApproved`. The connection calls it once the path is known to lie within
+    /// the session's working directory, and before the file itself is examined; throw
+    /// to refuse (a ``FileSystemPermissionError`` reaches the agent in acpx's words).
+    /// `nil` approves every write.
+    public var authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)?
 
     public init(
         requestPermission: (@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)? = nil,
         readTextFile: (@Sendable (ReadTextFileRequest) async throws -> ReadTextFileResponse)? = nil,
-        writeTextFile: (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)? = nil
+        writeTextFile: (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)? = nil,
+        authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)? = nil
     ) {
         self.requestPermission = requestPermission
         self.readTextFile = readTextFile
         self.writeTextFile = writeTextFile
+        self.authorizeWrite = authorizeWrite
     }
 
-    /// Sensible defaults for a headless controller: a permission policy plus
-    /// real local file access (matching the `fs` capability we advertise).
-    public static func standard(permission: PermissionPolicy) -> ACPClientHandlers {
-        ACPClientHandlers(
+    /// Sensible defaults for a headless controller: a permission policy plus real
+    /// local file access (matching the `fs` capability we advertise), with writes
+    /// gated the way acpx gates them — see ``WriteApproval``.
+    ///
+    /// - Parameters:
+    ///   - nonInteractivePermissions: what a write needing confirmation does when
+    ///     there is no terminal to ask on.
+    ///   - confirmWrite: how to ask. `nil` asks on the terminal, as acpx does.
+    public static func standard(
+        permission: PermissionPolicy,
+        nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
+        confirmWrite: WriteApproval.Confirmation? = nil
+    ) -> ACPClientHandlers {
+        let approval = WriteApproval(
+            policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmWrite)
+        return ACPClientHandlers(
             requestPermission: { await permission.resolve($0) },
             readTextFile: { try LocalFileSystem.read($0) },
-            writeTextFile: { try LocalFileSystem.write($0) })
+            writeTextFile: { try LocalFileSystem.write($0) },
+            authorizeWrite: { try await approval.authorize($0) })
     }
 }
 
@@ -137,10 +158,10 @@ public enum LocalFileSystem {
         return ReadTextFileResponse(content: lines.joined(separator: "\n"))
     }
 
+    /// acpx's write: missing parent directories are created, an existing file is
+    /// truncated and rewritten in place, and a new one is created `0666` (less the
+    /// umask) — the mode fs-safe's `openWritable` asks for.
     public static func write(_ request: WriteTextFileRequest) throws -> WriteTextFileResponse {
-        let url = URL(fileURLWithPath: request.path)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try write(request.content, toFileAt: request.path)
         return WriteTextFileResponse()
     }
@@ -154,12 +175,28 @@ public enum LocalFileSystem {
             throw FileSystemContainment.resourceNotFound(path)
         }
         guard attributes[.type] as? FileAttributeType == .typeRegular else {
-            throw FileSystemContainment.notARegularFile(path)
+            throw FileSystemContainment.refused(FileSystemContainment.notAFile)
         }
         return try String(contentsOfFile: path, encoding: .utf8)
     }
 
     private static func write(_ text: String, toFileAt path: String) throws {
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: path) {
+            switch attributes[.type] as? FileAttributeType {
+            case .typeRegular?: break
+            case .typeDirectory?: throw FileSystemContainment.refused(FileSystemContainment.notAFile)
+            default:
+                throw FileSystemContainment.refused(FileSystemContainment.notARegularFileUnderRoot)
+            }
+            if let links = attributes[.referenceCount] as? Int, links > 1 {
+                throw FileSystemContainment.refused(FileSystemContainment.aliasEscapeBlocked)
+            }
+        } else {
+            try FileManager.default.createDirectory(
+                atPath: (path as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+        }
+        // A rename-into-place never writes through a second link.
         try text.write(toFile: path, atomically: true, encoding: .utf8)
     }
     #else
@@ -171,43 +208,83 @@ public enum LocalFileSystem {
         let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard descriptor >= 0 else {
             switch errno {
-            case ENOENT: throw FileSystemContainment.resourceNotFound(path)
-            case ELOOP: throw FileSystemContainment.symlinkRefused(path)
-            default:
-                throw JSONRPCError.invalidParams(
-                    "Cannot read \(path): \(String(cString: strerror(errno)))")
+            case ENOENT, ENOTDIR: throw FileSystemContainment.resourceNotFound(path)
+            case ELOOP: throw FileSystemContainment.refused(FileSystemContainment.outsideWorkspaceRoot)
+            default: throw FileSystemContainment.refused(String(cString: strerror(errno)))
             }
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
-        try requireRegularFile(descriptor, path)
+        guard fileType(of: descriptor) == UInt32(S_IFREG) else {
+            throw FileSystemContainment.refused(FileSystemContainment.notAFile)
+        }
         let data = try handle.readToEnd() ?? Data()
         guard let contents = String(data: data, encoding: .utf8) else {
-            throw JSONRPCError.invalidParams("Not UTF-8 text: \(path)")
+            throw FileSystemContainment.refused("Not UTF-8 text: \(path)")
         }
         return contents
     }
 
+    /// Checked before the open so the common refusals need no descriptor, and again on
+    /// the descriptor so a swap in between cannot win: truncation waits until the open
+    /// file is known to be a regular file with one link. Truncating at open (`O_TRUNC`)
+    /// would already have emptied a hard link swapped in after the first check.
+    ///
+    /// `O_NONBLOCK` is what keeps a fifo from hanging the client: without it, opening a
+    /// fifo for writing blocks until a reader turns up, which never happens.
     private static func write(_ text: String, toFileAt path: String) throws {
-        let descriptor = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, mode_t(0o644))
+        var status = stat()
+        if lstat(path, &status) == 0 {
+            try requireWritableRegularFile(status)
+        } else if errno == ENOENT {
+            try FileManager.default.createDirectory(
+                atPath: (path as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+        }
+        let descriptor = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, mode_t(0o666))
         guard descriptor >= 0 else {
-            if errno == ELOOP { throw FileSystemContainment.symlinkRefused(path) }
-            throw JSONRPCError.invalidParams(
-                "Cannot write \(path): \(String(cString: strerror(errno)))")
+            switch errno {
+            case ENXIO: throw FileSystemContainment.refused(FileSystemContainment.notARegularFileUnderRoot)
+            case EISDIR: throw FileSystemContainment.refused(FileSystemContainment.notAFile)
+            case ELOOP: throw FileSystemContainment.refused(FileSystemContainment.outsideWorkspaceRoot)
+            default: throw FileSystemContainment.refused(String(cString: strerror(errno)))
+            }
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
-        try requireRegularFile(descriptor, path)
+        guard fstat(descriptor, &status) == 0 else {
+            throw FileSystemContainment.refused(String(cString: strerror(errno)))
+        }
+        try requireWritableRegularFile(status)
+        guard ftruncate(descriptor, 0) == 0 else {
+            throw FileSystemContainment.refused(String(cString: strerror(errno)))
+        }
         try handle.write(contentsOf: Data(text.utf8))
     }
 
-    /// Checked on the descriptor, not the path: `st_mode` is `UInt16` on Darwin and
+    /// fs-safe's refusals for a write target, in its words: a directory is "not a file",
+    /// anything else that is not a regular file (a fifo, a socket, a device) is "not a
+    /// regular file under root", and a regular file with a second link is refused
+    /// because that link may lie outside the workspace — writing through it would
+    /// change a file the agent was never given.
+    private static func requireWritableRegularFile(_ status: stat) throws {
+        switch UInt32(status.st_mode) & UInt32(S_IFMT) {
+        case UInt32(S_IFREG): break
+        case UInt32(S_IFDIR): throw FileSystemContainment.refused(FileSystemContainment.notAFile)
+        case UInt32(S_IFLNK): throw FileSystemContainment.refused(FileSystemContainment.outsideWorkspaceRoot)
+        default: throw FileSystemContainment.refused(FileSystemContainment.notARegularFileUnderRoot)
+        }
+        guard status.st_nlink <= 1 else {
+            throw FileSystemContainment.refused(FileSystemContainment.aliasEscapeBlocked)
+        }
+    }
+
+    /// The file-type bits of an open descriptor. `st_mode` is `UInt16` on Darwin and
     /// `UInt32` on Linux, so both sides are widened before masking.
-    private static func requireRegularFile(_ descriptor: Int32, _ path: String) throws {
+    private static func fileType(of descriptor: Int32) -> UInt32? {
         var status = stat()
-        guard fstat(descriptor, &status) == 0,
-            UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFREG)
-        else { throw FileSystemContainment.notARegularFile(path) }
+        guard fstat(descriptor, &status) == 0 else { return nil }
+        return UInt32(status.st_mode) & UInt32(S_IFMT)
     }
     #endif
 }
