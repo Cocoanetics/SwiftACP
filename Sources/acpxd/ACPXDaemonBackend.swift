@@ -313,8 +313,14 @@ actor ACPXDaemonBackend: ACPXBackend {
         // credentials / auth policy (and config-alias resolution) the CLI applies.
         let config = try ConfigLoader.load(cwd: cwd)
         let specs = try sessionSpecs ?? config.mcpServerSpecs()
+        // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
+        // the record carries them, so every reconnect advertises what the session was
+        // created with rather than the defaults.
+        let capabilities =
+            findRecord(sessionId)?.acpx?.clientCapabilities?.advertised ?? .headlessController
         let handle = try await ACPAgent.launch(
             agent: launchCommand(for: agentCommand, config: config), cwd: cwd, permission: .approveAll,
+            capabilities: capabilities,
             authCredentials: config.auth, authPolicy: config.authPolicy,
             inheritStderr: inheritAgentStderr)
         let session: ACPSession

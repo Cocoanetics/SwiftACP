@@ -308,6 +308,27 @@ public struct SessionAcpxState: Codable, Sendable {
     /// `nil` = the session uses the cwd's config-file servers. (A SwiftACP extension
     /// of the npm record: npm acpx keeps MCP servers per invocation, not per record.)
     public var mcpServers: [McpServerConfig]?
+    /// The client capabilities the session was created under — what `--no-fs` and
+    /// `--no-terminal` withheld — persisted as `client_capabilities` so every reconnect
+    /// advertises the same ones. `nil` = the defaults.
+    ///
+    /// A SwiftACP extension of the npm record, like `mcp_servers`, and for the same
+    /// reason: npm acpx carries capabilities on the queue owner that *is* the session,
+    /// while `acpxd` outlives any one connection and has to read them back.
+    public var clientCapabilities: PersistedCapabilities?
+
+    /// The `fs` / `terminal` switches in the record's own shape.
+    public struct PersistedCapabilities: Codable, Sendable, Hashable {
+        public var readTextFile: Bool
+        public var writeTextFile: Bool
+        public var terminal: Bool
+
+        public init(readTextFile: Bool, writeTextFile: Bool, terminal: Bool) {
+            self.readTextFile = readTextFile
+            self.writeTextFile = writeTextFile
+            self.terminal = terminal
+        }
+    }
 
     /// A persisted slash command. Agents advertise these either as bare strings
     /// (codex: `"debug"`) or as objects (claude: `{name, description, has_input}`).

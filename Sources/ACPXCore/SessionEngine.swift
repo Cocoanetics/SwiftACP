@@ -34,13 +34,14 @@ public enum SessionEngine {
         sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
+        capabilities: ClientCapabilities = .headlessController,
         inheritStderr: Bool = false
     ) async throws -> SessionRecord {
         // Validate the session's own servers before paying for a spawn.
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
         let handle = try await ACPAgent.launch(
-            agent: agentCommand, cwd: cwd, permission: permission,
+            agent: agentCommand, cwd: cwd, permission: permission, capabilities: capabilities,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)
         do {
@@ -65,6 +66,10 @@ public enum SessionEngine {
                 configOptions: response.configOptions, models: response.models, to: &acpx)
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
             acpx.mcpServers = sessionMcpServers
+            // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
+            // spawn: the daemon reconnects later and must advertise the same, or the
+            // restriction would silently lapse on the very turns it exists to cover.
+            acpx.clientCapabilities = capabilities.persistedIfRestricted
             record.acpx = acpx
 
             // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF

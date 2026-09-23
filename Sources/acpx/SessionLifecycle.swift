@@ -112,6 +112,7 @@ enum SessionLifecycle {
                     authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
                     sessionMcpServers: config.sessionMcpServers,
                     meta: meta, sessionOptions: options,
+                    capabilities: flags.clientCapabilities,
                     inheritStderr: flags.verbose)
             } catch {
                 throw CLIError(error.localizedDescription)

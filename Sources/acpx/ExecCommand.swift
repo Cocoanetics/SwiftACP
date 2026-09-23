@@ -40,6 +40,7 @@ enum ExecCommand {
         return try runBlocking {
             let handle = try await ACPAgent.launch(
                 agent: agent.agentCommand, cwd: agent.cwd, permission: permission,
+                capabilities: flags.clientCapabilities,
                 authCredentials: context.config.auth, authPolicy: flags.authPolicy,
                 inheritStderr: flags.verbose, onClientRequest: onClientRequest)
             do {
