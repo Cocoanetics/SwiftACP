@@ -115,4 +115,34 @@ struct UsageUpdateTests {
         #expect(session.cumulativeTokenUsage == nil)
         #expect(session.updatedAt == before)
     }
+
+    /// The wiring, not just the parameter: the persister must remember the turn's own
+    /// prompt, because a user message can be appended before the response lands.
+    @Test func thePersisterAttributesUsageToItsOwnPrompt() async throws {
+        try await withIsolatedStore {
+            let now = nowISO()
+            let seed = SessionRecord(
+                acpxRecordId: "tp-1", acpSessionId: "tp-1", agentCommand: "codex", cwd: "/tmp",
+                createdAt: now, lastUsedAt: now)
+            try SessionStore.writeRecord(seed)
+
+            let persister = TurnPersister(record: seed, intervalNanos: 20_000_000)
+            await persister.recordPrompt("the turn's prompt")
+            // The agent echoes the user's message back mid-turn, appending a second one.
+            await persister.apply(
+                .userMessageChunk(ContentBlock.text("echoed back")))
+            await persister.applyResponseUsage(PromptUsage(inputTokens: 10, outputTokens: 5))
+            await persister.finish()
+
+            let final = try #require(SessionStore.loadRecord("tp-1"))
+            let userIds = final.messages.compactMap { message -> String? in
+                if case .user(let user) = message { return user.id }
+                return nil
+            }
+            #expect(userIds.count == 2)
+            // Attributed to the first, not to the echo that arrived after it.
+            #expect(final.requestTokenUsage?[try #require(userIds.first)]?.inputTokens == 10)
+            #expect(final.requestTokenUsage?.count == 1)
+        }
+    }
 }
