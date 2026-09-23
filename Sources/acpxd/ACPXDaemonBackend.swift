@@ -119,8 +119,9 @@ actor ACPXDaemonBackend: ACPXBackend {
         try await turnQueue.acquire(recordId, wait: true)
         defer { Task { await turnQueue.release(recordId) } }
         // Re-read inside the slot: `evict` below (and any turn we queued behind) can
-        // suspend us, so the write must build on the current record.
-        guard var record = findRecord(sessionId) else {
+        // suspend us, so the write must build on the current record — found by its
+        // record id, as that turn may have moved it to a new ACP session.
+        guard var record = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         // Compare what would go on the wire, so re-sending the same servers written
@@ -258,7 +259,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
         // here to unblock) may have persisted changes meanwhile. Writing the
         // pre-suspension snapshot would silently revert them.
-        var record = findRecord(sessionId) ?? initial
+        var record = findRecord(initial.acpxRecordId) ?? initial
         record.pid = nil
         record.closed = true
         record.closedAt = nowISO()

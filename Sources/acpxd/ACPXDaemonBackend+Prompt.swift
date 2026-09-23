@@ -64,8 +64,10 @@ extension ACPXDaemonBackend {
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
-        // stale pre-wait snapshot (whose final flush would otherwise clobber it).
-        guard let record = findRecord(sessionId) else {
+        // stale pre-wait snapshot (whose final flush would otherwise clobber it). By the
+        // record id: that turn may also have moved the record to a new ACP session, and
+        // the caller's id may be the one it replaced.
+        guard let record = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let agentCommand = record.agentCommand
@@ -134,11 +136,11 @@ extension ACPXDaemonBackend {
         blocks: [ContentBlock], permissions: TurnPermissions, persister: TurnPersister,
         eventBuffer: WireBuffer
     ) async throws -> String {
+        // A reconnect that has to start a new session hands it to the persister, so the
+        // turn's saves carry it on instead of writing the old session back.
         let entry = try await ensure(
-            recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
-        // A reconnect that had to start a new session moved the record to it; the
-        // turn's saves must carry that on, not write the old session back.
-        if let current = findRecord(recordId) { await persister.adoptReplacement(from: current) }
+            recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
+            onReplacement: { await persister.adoptReplacement($0) })
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId

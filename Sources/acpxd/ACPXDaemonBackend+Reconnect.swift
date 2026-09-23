@@ -31,9 +31,13 @@ extension ACPXDaemonBackend {
     /// Entries are keyed by the stable `acpxRecordId`: the ACP session behind a record
     /// can change — a fallback replaces it, and the record moves to the new one — while
     /// the record stays the same.
+    ///
+    /// A turn in flight passes `onReplacement`: it saves the record it holds, so a
+    /// replacement goes to it, and it writes the record. Otherwise the record is
+    /// written here.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false
+        control: Bool = false, onReplacement: ReplacementHandler? = nil
     ) async throws -> Live {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
@@ -75,8 +79,14 @@ extension ACPXDaemonBackend {
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
                 specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent)
             session = reconnected.session
+            // Settled before the replay below: while it runs, a turn could save the
+            // record it holds, and with the old session that save would undo this.
             if let replacement = reconnected.replacement {
-                recordReplacement(recordId: recordId, session: session, response: replacement)
+                if let onReplacement {
+                    await onReplacement(replacement)
+                } else {
+                    recordReplacement(recordId: recordId, response: replacement)
+                }
             }
         } catch {
             // Nothing will hold this agent: don't leave its process running.
@@ -89,16 +99,17 @@ extension ACPXDaemonBackend {
         return entry
     }
 
+    /// Takes a reconnect's replacement session — its `session/new` response — onto the
+    /// record a turn in flight will save.
+    typealias ReplacementHandler = @Sendable (NewSessionResponse) async -> Void
+
     /// The session a fallback started is the record's session from now on: acpx moves
     /// `acpSessionId` to it (keeping `acpxRecordId`) along with what it advertised, so
     /// the next reconnect asks for this one — not the one that was already gone.
-    private func recordReplacement(recordId: String, session: ACPSession, response: NewSessionResponse) {
+    private func recordReplacement(recordId: String, response: NewSessionResponse) {
         guard var record = findRecord(recordId) else { return }
-        record.acpSessionId = session.id
-        var acpx = record.acpx ?? SessionAcpxState()
-        ModelSupport.applyFreshSessionModelState(
-            configOptions: response.configOptions, models: response.models, to: &acpx)
-        record.acpx = acpx
+        record.moveToReplacement(
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
         do {
             try SessionStore.writeRecord(record)
         } catch {

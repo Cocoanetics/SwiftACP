@@ -120,3 +120,17 @@ public enum ModelSupport {
         }
     }
 }
+
+extension SessionRecord {
+    /// Move the record to the session a reconnect started in place of the gone one —
+    /// acpx's fresh-session fallback: `acpSessionId` becomes the new session's, and
+    /// the model state it advertised replaces the old (see
+    /// ``ModelSupport/applyFreshSessionModelState(configOptions:models:to:)``).
+    /// `acpxRecordId` stays.
+    public mutating func moveToReplacement(sessionId: String, configOptions: [JSONValue]?, models: JSONValue?) {
+        acpSessionId = sessionId
+        var state = acpx ?? SessionAcpxState()
+        ModelSupport.applyFreshSessionModelState(configOptions: configOptions, models: models, to: &state)
+        acpx = state
+    }
+}
