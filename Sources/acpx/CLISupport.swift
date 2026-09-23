@@ -1,4 +1,5 @@
 import Foundation
+import SwiftACP
 import JSONFoundation
 
 /// Process exit codes (acpx `EXIT_CODES`).
@@ -127,4 +128,29 @@ func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -
     }
     semaphore.wait()
     return try outcome.get()
+}
+
+/// A finished turn exits 0 — whatever the stop reason, `refusal` included — unless
+/// it needed permission and was granted none: then `PERMISSION_DENIED` (5), even
+/// though the agent completed. acpx's `applyPermissionExitCode`; quiet mode also
+/// says why on stderr, since it prints nothing else.
+///
+/// A write that needed an answer nobody could give (`--non-interactive-permissions
+/// fail`) fails the run outright: upstream rethrows it after the turn, so it wins
+/// over any approval, and quiet mode names it as `PERMISSION_PROMPT_UNAVAILABLE`.
+/// On a persistent session that error comes back through acpx's queue, which adds
+/// the `QUEUE_RUNTIME_PROMPT_FAILED` detail code — pass it as `queueDetail`.
+func permissionExitCode(_ stats: PermissionStats, quiet: Bool, queueDetail: String? = nil) -> Int32 {
+    if stats.promptUnavailable {
+        if quiet {
+            let detail = queueDetail.map { "\($0) " } ?? ""
+            Console.errLine(
+                "[acpx] error: PERMISSION_PROMPT_UNAVAILABLE \(detail)"
+                    + FileSystemPermissionError.promptUnavailable.description)
+        }
+        return ExitCodes.permissionDenied
+    }
+    guard stats.deniedEverything else { return ExitCodes.success }
+    if quiet { Console.errLine("[acpx] error: PERMISSION_DENIED Permission request denied or cancelled") }
+    return ExitCodes.permissionDenied
 }

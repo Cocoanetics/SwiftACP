@@ -32,6 +32,13 @@ public final class TerminalPermissionPrompt: @unchecked Sendable {
         input: .standardInput, output: .standardError,
         isTerminal: { isatty(0) != 0 && isatty(2) != 0 })
 
+    /// No terminal at all: every question is answered *no* without being asked. For a
+    /// process that must never prompt on its own terminal — acpxd serves turns for
+    /// CLIs running elsewhere, as acpx's queue owner does, and its own stdin (if it
+    /// has one) is nobody's keyboard.
+    public static let none = TerminalPermissionPrompt(
+        input: .nullDevice, output: .nullDevice, isTerminal: { false })
+
     private let input: FileHandle
     private let output: FileHandle
     private let isTerminal: @Sendable () -> Bool

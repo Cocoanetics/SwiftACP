@@ -26,15 +26,23 @@ extension ACPXDaemonBackend {
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
+    ///   - permissionMode: how this turn's permission requests and writes are
+    ///     answered — see ``TurnPermissions``. `nil` approves everything.
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail`.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     func runPrompt(
         sessionId rawSessionId: String, text: String,
-        blocks: [PromptBlock]? = nil, wait: Bool = true
+        blocks: [PromptBlock]? = nil, wait: Bool = true,
+        permissionMode: String? = nil, nonInteractivePermissions: String? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
+        // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
+        // not something to find out after waiting out another turn.
+        let permissions = try TurnPermissions(
+            mode: permissionMode, nonInteractive: nonInteractivePermissions)
         // Validate before queueing: a malformed block should fail at once, not after
         // waiting out someone else's turn. The daemon's transport has a ceiling, so
         // the request size is capped here (a direct client has nothing in the way).
@@ -93,8 +101,8 @@ extension ACPXDaemonBackend {
         do {
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: content, persister: persister,
-                eventBuffer: eventBuffer)
+                mcpServers: mcpServers, blocks: content, permissions: permissions,
+                persister: persister, eventBuffer: eventBuffer)
         } catch {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
@@ -104,14 +112,15 @@ extension ACPXDaemonBackend {
             await evict(acpSessionId)
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: content, persister: persister,
-                eventBuffer: eventBuffer)
+                mcpServers: mcpServers, blocks: content, permissions: permissions,
+                persister: persister, eventBuffer: eventBuffer)
         }
     }
 
     private func attemptPrompt(
         sessionId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
-        blocks: [ContentBlock], persister: TurnPersister, eventBuffer: WireBuffer
+        blocks: [ContentBlock], permissions: TurnPermissions, persister: TurnPersister,
+        eventBuffer: WireBuffer
     ) async throws -> String {
         let entry = try await ensure(
             sessionId: sessionId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
@@ -120,6 +129,11 @@ extension ACPXDaemonBackend {
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
 
+        // This turn's permissions: acpx sends the mode with every prompt and the queue
+        // owner applies it to that turn, so the live agent's handlers are swapped per
+        // turn rather than fixed at launch. Turns are serialized per session, so no
+        // other turn can be reading them meanwhile.
+        await connection.setHandlers(permissions.handlers)
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
         await connection.setWireObserver { line in eventBuffer.append(line) }
@@ -143,6 +157,13 @@ extension ACPXDaemonBackend {
                     let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
                     await clientSession?.sendLogNotification(
                         LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
+                case .inboundRequest(let request)
+                    where request.sessionId == nil || request.sessionId == boundSessionId:
+                    // The agent's own request (a file write, a permission question), and
+                    // the client's refusal of it: acpx's formatter prints both, so they
+                    // stream in order with the updates.
+                    await clientSession?.sendLogNotification(
+                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
                 case .clientOperation(let operation)
                     where operation.sessionId == nil || operation.sessionId == boundSessionId:
                     // A client-side diagnostic the connection reported mid-turn — a
@@ -170,11 +191,14 @@ extension ACPXDaemonBackend {
             // including any wire lines still buffered for the event log.
             await persister.finish()
             // Demote the stop reason to a streamed event: emit it last, after every
-            // update, so a client reconstructing the turn sees it in order.
+            // update, so a client reconstructing the turn sees it in order. It carries
+            // how the turn's permissions went, which decides the CLI's exit code.
+            let permissionStats = await connection.permissionStats(for: boundSessionId)
             await clientSession?.sendLogNotification(
                 LogMessage(
                     level: .info, logger: sessionId,
-                    data: toJSONValue(TurnEndedEvent(stopReason: response.stopReason.rawValue))))
+                    data: toJSONValue(TurnEndedEvent(
+                        stopReason: response.stopReason.rawValue, permissions: permissionStats))))
             return fullText
         } catch {
             await connection.endSubscription(subscriptionId)
@@ -182,5 +206,43 @@ extension ACPXDaemonBackend {
             consumer.cancel()
             throw error
         }
+    }
+}
+
+/// One turn's permissions, as acpx sends them with every prompt: the mode
+/// (`--approve-all` / `--approve-reads` / `--deny-all`) and what a write needing
+/// confirmation does without a terminal. The daemon swaps the live agent's handlers
+/// to these for the turn — acpx's queue owner applies each prompt's mode to that turn.
+struct TurnPermissions: Sendable {
+    let handlers: ACPClientHandlers
+
+    /// - Parameters:
+    ///   - mode: `approve-all`, `approve-reads` or `deny-all`. `nil` — a caller that
+    ///     predates the parameter — keeps the old behaviour of approving everything.
+    ///   - nonInteractive: `deny` (the default) or `fail`.
+    init(mode: String?, nonInteractive: String?) throws {
+        let policy: PermissionPolicy
+        if let mode {
+            guard let parsed = PermissionPolicy(acpxMode: mode) else {
+                throw DaemonError.invalidPermissionMode(mode)
+            }
+            policy = parsed
+        } else {
+            policy = .approveAll
+        }
+        let unanswerable: NonInteractivePermissionPolicy
+        if let nonInteractive {
+            guard let parsed = NonInteractivePermissionPolicy(rawValue: nonInteractive) else {
+                throw DaemonError.invalidNonInteractivePermissions(nonInteractive)
+            }
+            unanswerable = parsed
+        } else {
+            unanswerable = .deny
+        }
+        // `.none`: the daemon's own terminal, if it has one, is not the user's. Like
+        // acpx's detached queue owner, it never asks — a write needing confirmation is
+        // refused, or refused as unanswerable under `fail`.
+        handlers = .standard(
+            permission: policy, nonInteractivePermissions: unanswerable, terminal: .none)
     }
 }

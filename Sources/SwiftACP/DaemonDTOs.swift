@@ -328,9 +328,33 @@ public enum PromptBlockError: LocalizedError, Equatable {
 public struct TurnEndedEvent: Codable, Sendable {
     /// The raw ACP stop reason (e.g. `end_turn`, `refusal`, `cancelled`).
     public var stopReason: String
+    /// How the turn's permissions were settled, which decides the CLI's exit code
+    /// (`PERMISSION_DENIED`, 5). `nil` from a daemon that predates it.
+    public var permissions: PermissionStats?
 
-    public init(stopReason: String) {
+    public init(stopReason: String, permissions: PermissionStats? = nil) {
         self.stopReason = stopReason
+        self.permissions = permissions
+    }
+}
+
+/// A request the agent made of the client during a daemon turn — `fs/write_text_file`,
+/// `session/request_permission` — streamed as a log notification when it arrives,
+/// and again with ``failure`` if the client refused it. acpx's formatter prints every
+/// request and error it sees on the wire, so the CLI renders these as
+/// `[client] <method> (running)` and `[error] RUNTIME: <failure>`, in order with the
+/// turn's updates.
+public struct InboundRequestEvent: Codable, Sendable {
+    /// The request's method. Named apart from ``ClientOperation/method`` so the two
+    /// cannot be mistaken for each other on the wire.
+    public var inboundMethod: String
+    /// Why the client refused it — the error's `data.details` when present, else its
+    /// message — or `nil` when this reports the request arriving.
+    public var failure: String?
+
+    public init(inboundMethod: String, failure: String? = nil) {
+        self.inboundMethod = inboundMethod
+        self.failure = failure
     }
 }
 

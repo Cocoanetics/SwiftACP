@@ -15,6 +15,8 @@ enum DaemonError: LocalizedError {
     case sessionNotFound(String)
     case sessionBusy(String)
     case mcpConfigConflict(String)
+    case invalidPermissionMode(String)
+    case invalidNonInteractivePermissions(String)
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +31,10 @@ enum DaemonError: LocalizedError {
         case .mcpConfigConflict(let id):
             // npm acpx's QUEUE_MCP_CONFIG_CONFLICT wording.
             return "session is live with a different MCP config; close the session before retrying: \(id)"
+        case .invalidPermissionMode(let mode):
+            return "invalid permissionMode \"\(mode)\": expected approve-all, approve-reads or deny-all"
+        case .invalidNonInteractivePermissions(let policy):
+            return "invalid nonInteractivePermissions \"\(policy)\": expected deny or fail"
         }
     }
 }

@@ -10,7 +10,19 @@ import SwiftMCP
 /// arrives.
 actor StopReasonBox {
     private(set) var value: StopReason?
-    func set(_ reason: StopReason) { value = reason }
+    /// How the turn's permissions went, when the daemon reported it.
+    private(set) var permissions: PermissionStats?
+    func set(_ reason: StopReason, permissions: PermissionStats?) {
+        value = reason
+        self.permissions = permissions
+    }
+}
+
+/// What a daemon turn ended with: its stop reason, and how its permissions went —
+/// which decides the exit code, as for `exec`.
+struct DaemonTurn {
+    var stopReason: StopReason
+    var permissions: PermissionStats?
 }
 
 /// Renders streamed session updates that arrive from the daemon as MCP log
@@ -27,7 +39,13 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
     func mcpServerProxy(_ proxy: MCPServerProxy, didReceiveLog message: LogMessage) async {
         // The terminal event carries the stop reason, not a renderable update.
         if let ended = try? message.data.decoded(TurnEndedEvent.self) {
-            await stopReason.set(StopReason(rawValue: ended.stopReason))
+            await stopReason.set(StopReason(rawValue: ended.stopReason), permissions: ended.permissions)
+            return
+        }
+        // A request the agent made of the daemon's client, or its refusal — acpx
+        // prints both. Checked before `ClientOperation`, whose shape it does not share.
+        if let request = try? message.data.decoded(InboundRequest.self) {
+            renderer.inboundRequest(request)
             return
         }
         // A client-side operation the daemon's connection reported mid-turn (a
@@ -133,8 +151,9 @@ enum DaemonClient {
     /// ignores (it streams the same output live via `renderer`). The stop reason
     /// arrives as a terminal ``TurnEndedEvent`` log notification, captured here.
     static func runPrompt(
-        sessionId: String, blocks: [PromptBlock], wait: Bool = true, renderer: OutputRenderer
-    ) async throws -> StopReason {
+        sessionId: String, blocks: [PromptBlock], wait: Bool = true,
+        permissionMode: String, nonInteractivePermissions: String, renderer: OutputRenderer
+    ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
             await proxy.setLogNotificationHandler(PromptLogRenderer(renderer, stopReason: stopReason))
@@ -143,11 +162,15 @@ enum DaemonClient {
 
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
-        _ = try await ACPXDaemon.Client(proxy: proxy)
-            .runPrompt(sessionId: sessionId, text: "", blocks: blocks, wait: wait)
+        // The permission mode travels with every turn, as acpx sends it with every
+        // prompt: the daemon applies it to this turn only.
+        _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
+            sessionId: sessionId, text: "", blocks: blocks, wait: wait,
+            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions)
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
-        return await stopReason.value ?? .endTurn
+        return DaemonTurn(
+            stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions)
     }
 
     /// Set a session's mode on the live agent via the daemon (which persists it).

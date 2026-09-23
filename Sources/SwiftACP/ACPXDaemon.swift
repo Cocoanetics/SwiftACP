@@ -207,16 +207,25 @@ public actor ACPXDaemon {
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
+    ///   - permissionMode: how this turn's permission requests and file writes are
+    ///     answered — `approve-all`, `approve-reads` or `deny-all`, as acpx's
+    ///     `--approve-all` / `--approve-reads` / `--deny-all`. Applies to this turn
+    ///     only; acpx sends it with every prompt. Omitted, the turn approves everything
+    ///     as before.
+    ///   - nonInteractivePermissions: `deny` or `fail` — what a write needing
+    ///     confirmation does, since the daemon never has a terminal to ask on.
+    ///     Defaults to `deny`.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     @MCPTool(openWorldHint: true)
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]? = nil,
-        wait: Bool = true
+        wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil
     ) async throws -> String {
         try await backend.runPrompt(
-            sessionId: sessionId, text: text, blocks: blocks, wait: wait)
+            sessionId: sessionId, text: text, blocks: blocks, wait: wait,
+            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions)
     }
 
     /// Cancel an in-flight prompt for a session.

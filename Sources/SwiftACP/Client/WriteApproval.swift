@@ -56,16 +56,18 @@ public struct WriteApproval: Sendable {
 
     private let prompt: TerminalPermissionPrompt
 
+    /// - Parameter terminal: where the default confirmation asks — the process's own
+    ///   terminal unless told otherwise. ``TerminalPermissionPrompt/none`` never asks,
+    ///   which is what a daemon serving someone else's CLI wants.
     public init(
         policy: PermissionPolicy,
         nonInteractive: NonInteractivePermissionPolicy = .deny,
-        confirm: Confirmation? = nil
+        confirm: Confirmation? = nil,
+        terminal: TerminalPermissionPrompt = .shared
     ) {
-        self.init(policy: policy, nonInteractive: nonInteractive, confirm: confirm, prompt: .shared)
+        self.init(policy: policy, nonInteractive: nonInteractive, confirm: confirm, prompt: terminal)
     }
 
-    /// `prompt` is the terminal the default confirmation asks on — the process's own,
-    /// except in tests, which must not end up waiting on a real one.
     init(
         policy: PermissionPolicy, nonInteractive: NonInteractivePermissionPolicy,
         confirm: Confirmation?, prompt: TerminalPermissionPrompt
