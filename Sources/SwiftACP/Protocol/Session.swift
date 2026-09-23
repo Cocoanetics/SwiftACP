@@ -185,6 +185,49 @@ public struct PromptUsage: Codable, Sendable {
         self.thoughtTokens = thoughtTokens
         self.totalTokens = totalTokens
     }
+
+    /// Decoding accepts the same spellings acpx's `sourceToTokenUsage` does — snake_case
+    /// first, then camelCase, then the `cached*` aliases — and ignores a value that is
+    /// not a finite, non-negative number, trying the next spelling instead (acpx's
+    /// `numberField`). Encoding stays camelCase, the shape acpx writes.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: AnyCodingKey.self)
+        inputTokens = Self.number(container, ["input_tokens", "inputTokens"])
+        outputTokens = Self.number(container, ["output_tokens", "outputTokens"])
+        cachedWriteTokens = Self.number(
+            container,
+            ["cache_creation_input_tokens", "cacheCreationInputTokens", "cachedWriteTokens"])
+        cachedReadTokens = Self.number(
+            container, ["cache_read_input_tokens", "cacheReadInputTokens", "cachedReadTokens"])
+        thoughtTokens = Self.number(container, ["thought_tokens", "thoughtTokens"])
+        totalTokens = Self.number(container, ["total_tokens", "totalTokens"])
+    }
+
+    private static func number(
+        _ container: KeyedDecodingContainer<AnyCodingKey>, _ keys: [String]
+    ) -> Double? {
+        for key in keys {
+            guard let value = try? container.decodeIfPresent(Double.self, forKey: AnyCodingKey(key)),
+                value.isFinite, value >= 0
+            else { continue }
+            return value
+        }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case inputTokens, outputTokens, cachedReadTokens, cachedWriteTokens
+        case thoughtTokens, totalTokens
+    }
+
+    /// A coding key for any of the spellings above.
+    private struct AnyCodingKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ stringValue: String) { self.stringValue = stringValue }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
 }
 
 // MARK: - session/cancel (notification)

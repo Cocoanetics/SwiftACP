@@ -22,6 +22,11 @@ public actor TurnPersister {
     private var eventWriter: SessionEventLogWriter
     private var dirty = false
     private var timer: Task<Void, Never>?
+    /// The user message this turn started with. The response's usage is attributed to
+    /// it, not to whatever user message happens to be last when the response lands — an
+    /// echoed `userMessageChunk`, or the next prompt, can arrive in between (acpx's
+    /// prompt turn passes the same id).
+    private var promptMessageId: String?
 
     public init(
         record: SessionRecord, eventBuffer: WireBuffer? = nil,
@@ -35,7 +40,13 @@ public actor TurnPersister {
 
     /// Record the user's prompt as one `User` message, then schedule a save.
     public func recordPrompt(_ text: String) {
-        ConversationModel.recordPromptSubmission(into: &record, prompt: text)
+        promptMessageId = ConversationModel.recordPromptSubmission(into: &record, prompt: text)
+        request()
+    }
+
+    /// Record a structured prompt (text plus attachments) as the turn's user message.
+    public func recordPrompt(_ blocks: [ContentBlock]) {
+        ConversationModel.recordPromptSubmission(into: &record, prompt: blocks)
         request()
     }
 
@@ -50,7 +61,8 @@ public actor TurnPersister {
     /// Record the token breakdown from the prompt response (the place agents
     /// actually report it). Flushed by the following ``finish()``.
     public func applyResponseUsage(_ usage: PromptUsage) {
-        ConversationModel.recordResponseUsage(into: &record, usage)
+        ConversationModel.recordResponseUsage(
+            into: &record, usage, promptMessageId: promptMessageId)
         dirty = true
     }
 

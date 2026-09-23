@@ -25,8 +25,11 @@ enum ExecCommand {
             return ExitCodes.error
         }
 
-        let promptText = try PromptInputResolver.resolve(
-            words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
+        let prompt = try PromptBlock.contentBlocks(
+            text: "",
+            blocks: try PromptInputResolver.resolve(
+                words: context.positionals, file: scan.string("file"), cwd: flags.cwd),
+            requestLimit: nil)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
         let mcpServers = try context.config.mcpServerSpecs()
@@ -43,7 +46,7 @@ enum ExecCommand {
             do {
                 let session = try await handle.newSession(mcpServers: mcpServers, meta: meta)
                 let outcome = try await session.run(
-                    promptText, onUpdate: { renderer.render($0) },
+                    prompt, onUpdate: { renderer.render($0) },
                     onClientOperation: { renderer.clientOperation($0) })
                 renderer.finish(stopReason: outcome.stopReason)
                 await handle.close()
@@ -92,35 +95,4 @@ func renderOptions(_ flags: GlobalFlags) -> RenderOptions {
     default: format = .text
     }
     return RenderOptions(format: format, suppressReads: flags.suppressReads)
-}
-
-/// Resolves prompt text from positional words, `--file` (`-` = stdin), or stdin.
-enum PromptInputResolver {
-    static func resolve(words: [String], file: String?, cwd: String) throws -> String {
-        if let file {
-            let source: String
-            if file == "-" {
-                source = readStdin()
-            } else {
-                let path = file.hasPrefix("/") ? file : cwd + "/" + file
-                source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            }
-            let merged = ([source] + words).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-            if merged.isEmpty { throw UsageError("Prompt from --file is empty") }
-            return merged
-        }
-        let joined = words.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-        if !joined.isEmpty { return joined }
-        if isatty(fileno(stdin)) == 0 {
-            let piped = readStdin().trimmingCharacters(in: .whitespacesAndNewlines)
-            if !piped.isEmpty { return piped }
-            throw UsageError("Prompt from stdin is empty")
-        }
-        throw UsageError("Prompt is required (pass as argument, --file, or pipe via stdin)")
-    }
-
-    private static func readStdin() -> String {
-        let data = FileHandle.standardInput.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
 }

@@ -25,12 +25,48 @@ public enum ConversationModel {
     public static func recordPromptSubmission(
         into record: inout SessionRecord, prompt: String, timestamp: String = nowISO()
     ) -> String? {
+        recordPromptSubmission(into: &record, prompt: [.text(prompt)], timestamp: timestamp)
+    }
+
+    /// Append a structured prompt (text plus attachments) as a `User` message,
+    /// mapping each ACP content block onto the persisted thread schema. Returns the
+    /// message id, or nil when no block contributed content.
+    ///
+    /// Attachment *payloads* are deliberately not persisted: acpx writes an image's
+    /// full base64 into the record, which inflates every session file by the size of
+    /// the image and then prints it as the history preview. The bytes are already in
+    /// the turn's wire log if anyone needs them, so the record keeps the MIME type
+    /// and drops the data.
+    @discardableResult
+    public static func recordPromptSubmission(
+        into record: inout SessionRecord, prompt: [ContentBlock], timestamp: String = nowISO()
+    ) -> String? {
+        let content = prompt.compactMap(userContent)
+        guard !content.isEmpty else { return nil }
         let id = nextUserMessageId()
-        let text = trimRuntimeText(prompt, maxRuntimeAgentTextChars)
-        record.messages.append(.user(SessionUserMessage(id: id, content: [.text(text)])))
+        record.messages.append(.user(SessionUserMessage(id: id, content: content)))
         record.updatedAt = timestamp
         trimForRuntime(&record)
         return id
+    }
+
+    /// `contentToUserContent` — one ACP prompt block as persisted user content.
+    private static func userContent(_ block: ContentBlock) -> SessionUserContent? {
+        switch block {
+        case .text(let value):
+            return .text(trimRuntimeText(value.text, maxRuntimeAgentTextChars))
+        case .image(let image):
+            return .image(SessionMessageImage(source: "", mimeType: image.mimeType))
+        case .audio(let audio):
+            return .audio(SessionMessageAudio(source: "", mimeType: audio.mimeType))
+        case .resourceLink(let link):
+            return .mention(uri: link.uri, content: link.title ?? link.name)
+        case .resource(let resource):
+            guard let text = resource.resource.text else {
+                return .mention(uri: resource.resource.uri, content: resource.resource.uri)
+            }
+            return .text(trimRuntimeText(text, maxRuntimeAgentTextChars))
+        }
     }
 
     /// Apply one streamed `session/update` to the conversation.
@@ -44,12 +80,19 @@ public enum ConversationModel {
     }
 
     /// Record the token breakdown an agent reports on the *prompt response* into
-    /// `cumulative_token_usage` (+ the turn's `request_token_usage`).
+    /// `cumulative_token_usage` and the turn's `request_token_usage` — acpx's
+    /// `recordPromptResponseUsage`, which its prompt turn calls with the id of the user
+    /// message that started the turn. Where Claude Code actually carries the breakdown.
     ///
-    /// This is where Claude Code actually carries the breakdown — acpx looks only
-    /// at `usage_update._meta.usage` and so misses it; capturing it here records
-    /// usage that upstream acpx drops.
-    public static func recordResponseUsage(into record: inout SessionRecord, _ usage: PromptUsage) {
+    /// - Parameters:
+    ///   - promptMessageId: the turn's user message; the last one on the record when
+    ///     omitted, as acpx falls back to `lastUserMessageId`.
+    /// - Returns: whether a breakdown was found and recorded.
+    @discardableResult
+    public static func recordResponseUsage(
+        into record: inout SessionRecord, _ usage: PromptUsage, promptMessageId: String? = nil,
+        timestamp: String = nowISO()
+    ) -> Bool {
         var tokens = SessionTokenUsage()
         tokens.inputTokens = usage.inputTokens
         tokens.outputTokens = usage.outputTokens
@@ -61,13 +104,18 @@ public enum ConversationModel {
             tokens.inputTokens, tokens.outputTokens, tokens.cacheReadInputTokens,
             tokens.cacheCreationInputTokens, tokens.thoughtTokens, tokens.totalTokens
         ]
-        guard fields.contains(where: { $0 != nil }) else { return }
+        guard fields.contains(where: { $0 != nil }) else { return false }
         record.cumulativeTokenUsage = tokens
-        if let userId = lastUserMessageId(record) {
+        if let userId = promptMessageId ?? lastUserMessageId(record) {
             var requests = record.requestTokenUsage ?? [:]
             requests[userId] = tokens
             record.requestTokenUsage = requests
         }
+        // acpx stamps the conversation and trims it here too, so a usage-only write
+        // leaves the record as current as any other update would.
+        record.updatedAt = timestamp
+        trimForRuntime(&record)
+        return true
     }
 
     // MARK: - Update dispatch (SESSION_UPDATE_HANDLERS)
@@ -162,13 +210,18 @@ public enum ConversationModel {
     }
 
     /// First numeric value among `keys` in `object`.
+    /// acpx's `numberField`: the first spelling whose value is a finite, non-negative
+    /// number. A present-but-unusable value (negative, NaN) is skipped rather than
+    /// taken, so a later spelling still gets its chance.
     private static func number(_ object: [String: JSONValue], _ keys: [String]) -> Double? {
         for key in keys {
+            let candidate: Double?
             switch object[key] {
-            case .integer(let value): return Double(value)
-            case .double(let value): return value
-            default: continue
+            case .integer(let value): candidate = Double(value)
+            case .double(let value): candidate = value
+            default: candidate = nil
             }
+            if let candidate, candidate.isFinite, candidate >= 0 { return candidate }
         }
         return nil
     }

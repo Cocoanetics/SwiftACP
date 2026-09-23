@@ -21,7 +21,7 @@ enum PromptCommand {
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.string("session").map(parseSessionName)
-        let promptText = try PromptInputResolver.resolve(
+        let promptBlocks = try PromptInputResolver.resolve(
             words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
         // Absent `--no-wait`, a turn for a session that's already running one queues
         // behind it (the daemon serializes turns per session); `--no-wait` makes the
@@ -49,7 +49,7 @@ enum PromptCommand {
         let stopReason: StopReason = try runBlocking {
             do {
                 return try await DaemonClient.runPrompt(
-                    sessionId: sessionId, text: promptText, wait: wait, renderer: renderer)
+                    sessionId: sessionId, blocks: promptBlocks, wait: wait, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }

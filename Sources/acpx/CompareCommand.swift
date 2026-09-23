@@ -34,8 +34,11 @@ enum CompareCommand {
 
         let promptFile = scan.string("file") ?? scan.string("prompt-file")
         let (agents, promptText) = try splitArgs(context.positionals, promptFile: promptFile)
-        let prompt = try PromptInputResolver.resolve(
-            words: promptText.isEmpty ? [] : [promptText], file: promptFile, cwd: flags.cwd)
+        let prompt = try PromptBlock.contentBlocks(
+            text: "",
+            blocks: try PromptInputResolver.resolve(
+                words: promptText.isEmpty ? [] : [promptText], file: promptFile, cwd: flags.cwd),
+            requestLimit: nil)
 
         var rows: [Row] = []
         for agentName in agents {
@@ -61,7 +64,8 @@ enum CompareCommand {
     }
 
     private static func runAgent(
-        _ agentName: String, prompt: String, flags: GlobalFlags, config: ResolvedAcpxConfig
+        _ agentName: String, prompt: [ContentBlock], flags: GlobalFlags,
+        config: ResolvedAcpxConfig
     ) throws -> Row {
         let invocation = try Flags.resolveAgentInvocation(agentName, flags, config: config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: config)

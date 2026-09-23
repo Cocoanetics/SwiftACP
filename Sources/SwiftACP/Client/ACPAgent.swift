@@ -46,6 +46,11 @@ public final class ACPAgent: Sendable {
     public let initializeResult: InitializeResponse
 
     public var agentCapabilities: AgentCapabilities? { initializeResult.agentCapabilities }
+    /// Which non-text prompt content the agent accepts, as it advertised on
+    /// `initialize`. `nil` (or an unset flag) means "not advertised" — treat as off.
+    public var promptCapabilities: PromptCapabilities? {
+        initializeResult.agentCapabilities?.promptCapabilities
+    }
     public var authMethods: [AuthMethod] { initializeResult.authMethods ?? [] }
 
     init(
@@ -82,6 +87,13 @@ public final class ACPAgent: Sendable {
         let spec = AgentRegistry.launch(
             for: name, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
+        // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
+        // here so the failure names the command instead of surfacing as an opaque
+        // subprocess error once the handshake times out.
+        if let failure = AgentLaunchPreflight.failure(
+            for: spec, agentCommand: AgentRegistry.command(for: name, overrides: overrides) ?? name) {
+            throw failure
+        }
         let transport = StdioTransport(endpoint: .childProcess(spec), framing: LineFraming())
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         await connection.start()
