@@ -15,7 +15,25 @@ extension DaemonToolsTests {
     /// answered prompts; `exitAfterPrompts` makes it exit.
     func withLoggedMock(
         loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0, exitOnPrompt: Int = 0,
+        sessionIdPerProcess: Bool = false,
         _ body: (_ command: String, _ methods: () throws -> [String]) async throws -> Void
+    ) async throws {
+        try await withLoggedMockRequests(
+            loadMode: loadMode, forgetAfterPrompts: forgetAfterPrompts, exitAfterPrompts: exitAfterPrompts,
+            exitOnPrompt: exitOnPrompt, sessionIdPerProcess: sessionIdPerProcess
+        ) { command, requests in
+            try await withoutActuallyEscaping(requests) { requests in
+                try await body(command) { try requests().compactMap { $0["method"] as? String } }
+            }
+        }
+    }
+
+    /// ``withLoggedMock(loadMode:forgetAfterPrompts:exitAfterPrompts:exitOnPrompt:sessionIdPerProcess:_:)``
+    /// with the whole logged requests, params included.
+    func withLoggedMockRequests(
+        loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0, exitOnPrompt: Int = 0,
+        sessionIdPerProcess: Bool = false,
+        _ body: (_ command: String, _ requests: () throws -> [[String: Any]]) async throws -> Void
     ) async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
@@ -25,6 +43,7 @@ extension DaemonToolsTests {
             let logged =
                 "/usr/bin/env MOCK_LOAD_SESSION=\(loadMode) MOCK_FORGET_AFTER_PROMPTS=\(forgetAfterPrompts) "
                 + "MOCK_EXIT_AFTER_PROMPTS=\(exitAfterPrompts) MOCK_EXIT_ON_PROMPT=\(exitOnPrompt) "
+                + (sessionIdPerProcess ? "MOCK_SESSION_ID_PER_PROCESS=1 " : "")
                 + "MOCK_REQUEST_LOG='\(log.path)' \(command)"
             try await body(logged) {
                 try String(contentsOf: log, encoding: .utf8)
@@ -32,7 +51,6 @@ extension DaemonToolsTests {
                     .compactMap {
                         (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
                     }
-                    .compactMap { $0["method"] as? String }
             }
         }
     }

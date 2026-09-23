@@ -38,6 +38,19 @@ public actor TurnPersister {
         self.intervalNanos = intervalNanos
     }
 
+    /// Move the turn's record to the session a reconnect just started in place of the
+    /// gone one (`response` is that session's `session/new` reply), and save it at once.
+    /// The turn saves the record it holds, so this is where the replacement has to
+    /// land: any later save would otherwise write the old session back. It applies
+    /// even when the agent reuses the old session id — what the new session advertised
+    /// still replaces the old state.
+    public func adoptReplacement(_ response: NewSessionResponse) {
+        record.moveToReplacement(
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
+        dirty = true
+        flush()
+    }
+
     /// Record the user's prompt as one `User` message, then schedule a save.
     public func recordPrompt(_ text: String) {
         promptMessageId = ConversationModel.recordPromptSubmission(into: &record, prompt: text)
