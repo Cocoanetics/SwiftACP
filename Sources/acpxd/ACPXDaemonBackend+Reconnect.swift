@@ -20,15 +20,29 @@ extension ACPXDaemonBackend {
     /// record's own set; `nil` falls back to the cwd's config-file servers. A held
     /// connection keeps the set it was made with, so a record that now asks for a
     /// different one is refused rather than silently served with the old servers.
+    ///
+    /// A held agent that has exited is not reused: its entry is dropped and the session
+    /// reconnected, as acpx's queue owner starts a new client once `hasLiveConnection`
+    /// is false. A `control` (mode, model, config option) that has to do that must get
+    /// the *same* session back — acpx runs an idle owner's controls `same-session-only`
+    /// — while a turn may fall back to a new one.
     func ensure(
-        sessionId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?
+        sessionId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
+        control: Bool = false
     ) async throws -> Live {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
-        if let existing = live[sessionId] {
-            guard existing.sessionSpecs == sessionSpecs else {
-                throw DaemonError.mcpConfigConflict(sessionId)
+        var replacesExitedAgent = false
+        while let existing = live[sessionId] {
+            if await !existing.agent.connection.isClosed {
+                guard existing.sessionSpecs == sessionSpecs else {
+                    throw DaemonError.mcpConfigConflict(sessionId)
+                }
+                return existing
             }
-            return existing
+            replacesExitedAgent = true
+            // Re-checked after the suspension above: only drop the entry that died.
+            if live[sessionId]?.agent === existing.agent { live.removeValue(forKey: sessionId) }
+            await existing.agent.close()
         }
         let cwd = try resolveCwd(rawCwd)
         // Resolve config for this cwd so the agent gets the same injected `auth`
@@ -49,7 +63,8 @@ extension ACPXDaemonBackend {
         let session: ACPSession
         do {
             session = try await takeBackOrStartOver(
-                handle, sessionId: sessionId, cwd: cwd, specs: specs, command: command)
+                handle, sessionId: sessionId, cwd: cwd, specs: specs, command: command,
+                sameSessionOnly: control && replacesExitedAgent)
         } catch {
             // Nothing will hold this agent: don't leave its process running.
             await handle.close()
@@ -69,16 +84,18 @@ extension ACPXDaemonBackend {
     /// nothing worth keeping (``ReconnectFallback``); otherwise the failure is surfaced
     /// rather than silently swapping the conversation for an empty one under the same
     /// id. A session imported from another client must stay the *same* session, so it
-    /// is never replaced — acpx's `sameSessionOnly`.
+    /// is never replaced — acpx's `sameSessionOnly` — and neither is one the caller
+    /// asks to keep (`sameSessionOnly`).
     private func takeBackOrStartOver(
-        _ handle: ACPAgent, sessionId: String, cwd: String, specs: [MCPServerSpec], command: String
+        _ handle: ACPAgent, sessionId: String, cwd: String, specs: [MCPServerSpec], command: String,
+        sameSessionOnly: Bool
     ) async throws -> ACPSession {
         do {
             return try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
         } catch {
             let record = findRecord(sessionId)
             switch ReconnectFallback.outcome(
-                after: error, imported: record?.importedFrom != nil,
+                after: error, sameSessionOnly: sameSessionOnly || record?.importedFrom != nil,
                 sessionHasAgentMessages: record?.hasAgentMessages ?? false) {
             case .surface: throw error
             case .refuse: throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error))

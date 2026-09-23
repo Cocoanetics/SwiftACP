@@ -115,7 +115,11 @@ extension ACPXDaemonBackend {
             // turn connected it, the agent has just answered for a fresh launch, and a
             // refused reconnect (which reads like a gone session) would only be asked
             // again.
-            guard wasHeld, isSessionGone(error) else { throw error }
+            //
+            // A held agent can also exit just after `ensure` found it open. When none of
+            // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
+            // launch unseen; one it did reach is never sent twice.
+            guard wasHeld, isSessionGone(error) || error is AgentExitedBeforeTheTurn else { throw error }
             await evict(acpSessionId)
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
@@ -133,6 +137,11 @@ extension ACPXDaemonBackend {
             sessionId: sessionId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers)
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
+        // Whether any of this turn has been written to the agent — its prompt is the
+        // first thing that is. Cleared when the turn ends.
+        let wrote = WriteMark()
+        entry.agent.rawWire.set { direction, _ in if direction == .outbound { wrote.mark() } }
+        defer { entry.agent.rawWire.set(nil) }
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
 
@@ -211,6 +220,9 @@ extension ACPXDaemonBackend {
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
             consumer.cancel()
+            if ACPAgentConnection.isConnectionClosed(error), !wrote.happened {
+                throw AgentExitedBeforeTheTurn(underlying: error)
+            }
             throw error
         }
     }
@@ -251,5 +263,28 @@ struct TurnPermissions: Sendable {
         // refused, or refused as unanswerable under `fail`.
         handlers = .standard(
             permission: policy, nonInteractivePermissions: unanswerable, terminal: .none)
+    }
+}
+
+/// The held agent had exited before any of the turn reached it: its connection was
+/// already closed when the prompt was sent. Nothing was seen by it, so the turn can go
+/// to a fresh launch. Reads as the closed connection it is.
+struct AgentExitedBeforeTheTurn: LocalizedError {
+    let underlying: Error
+    var errorDescription: String? { underlying.localizedDescription }
+}
+
+/// Set once anything is written to the agent. Marked from the transport's writer
+/// task, so lock-protected.
+final class WriteMark: @unchecked Sendable {
+    private let lock = NSLock()
+    private var marked = false
+
+    func mark() {
+        lock.withLock { marked = true }
+    }
+
+    var happened: Bool {
+        lock.withLock { marked }
     }
 }

@@ -29,14 +29,15 @@ public enum ReconnectFallback {
 
     /// The decision acpx's `loadRuntimeSession` makes after a failed reconnect, in its
     /// order: a cancelled reconnect is passed on untouched (`rethrowCancelledLoad` runs
-    /// first — it says nothing about the session); a session imported from another
-    /// client is refused rather than replaced (`sameSessionOnly`); an agent that cannot
-    /// take sessions back gets a new one; otherwise ``shouldStartFresh(after:sessionHasAgentMessages:)``.
+    /// first — it says nothing about the session); a session that must stay the same
+    /// one is refused rather than replaced (`sameSessionOnly` — an imported session, or
+    /// a control reconnecting an agent that exited); an agent that cannot take sessions
+    /// back gets a new one; otherwise ``shouldStartFresh(after:sessionHasAgentMessages:)``.
     public static func outcome(
-        after error: Error, imported: Bool, sessionHasAgentMessages: Bool
+        after error: Error, sameSessionOnly: Bool, sessionHasAgentMessages: Bool
     ) -> Outcome {
         if error is CancellationError { return .surface }
-        if imported { return .refuse }
+        if sameSessionOnly { return .refuse }
         if error is SessionReconnectUnsupported { return .startFresh }
         return shouldStartFresh(after: error, sessionHasAgentMessages: sessionHasAgentMessages)
             ? .startFresh : .surface
