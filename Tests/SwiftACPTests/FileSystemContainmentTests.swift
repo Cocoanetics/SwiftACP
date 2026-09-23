@@ -12,11 +12,15 @@ struct FileSystemContainmentTests {
     /// A workspace with `inside.txt`, a `link-out` symlink to a file outside it, and a
     /// sibling `outside.txt`. Returns (root, outsideFile).
     private func makeWorkspace() throws -> (root: String, outside: String) {
-        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+        let created = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("fs-\(UUID().uuidString)", isDirectory: true)
-            .resolvingSymlinksInPath()
-        let root = base.appendingPathComponent("workspace", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            .appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
+        // Canonicalise *after* creating it: only an existing path can be resolved, and
+        // the platform hands out aliases that containment will resolve away — macOS's
+        // /var → /private/var, and Windows' 8.3 short names (RUNNER~1 → runneradmin).
+        let root = created.resolvingSymlinksInPath()
+        let base = root.deletingLastPathComponent()
         try "inside".write(
             to: root.appendingPathComponent("inside.txt"), atomically: true, encoding: .utf8)
         let outside = base.appendingPathComponent("outside.txt")
