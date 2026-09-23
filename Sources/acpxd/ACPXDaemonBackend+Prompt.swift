@@ -134,25 +134,6 @@ extension ACPXDaemonBackend {
         // turn rather than fixed at launch. Turns are serialized per session, so no
         // other turn can be reading them meanwhile.
         await connection.setHandlers(permissions.handlers)
-        // The agent's own requests, and the client's refusals of them, stream to the
-        // CLI in order with the updates — acpx's formatter prints both.
-        await connection.setInboundRequestObservers(
-            received: { method in
-                Task {
-                    await clientSession?.sendLogNotification(LogMessage(
-                        level: .info, logger: sessionId,
-                        data: toJSONValue(InboundRequestEvent(inboundMethod: method))))
-                }
-            },
-            failed: { error in
-                Task {
-                    await clientSession?.sendLogNotification(LogMessage(
-                        level: .info, logger: sessionId,
-                        data: toJSONValue(InboundRequestEvent(
-                            inboundMethod: "", failure: TurnPermissions.summary(of: error)))))
-                }
-            })
-
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
         await connection.setWireObserver { line in eventBuffer.append(line) }
@@ -176,6 +157,13 @@ extension ACPXDaemonBackend {
                     let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
                     await clientSession?.sendLogNotification(
                         LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
+                case .inboundRequest(let request)
+                    where request.sessionId == nil || request.sessionId == boundSessionId:
+                    // The agent's own request (a file write, a permission question), and
+                    // the client's refusal of it: acpx's formatter prints both, so they
+                    // stream in order with the updates.
+                    await clientSession?.sendLogNotification(
+                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
                 case .clientOperation(let operation)
                     where operation.sessionId == nil || operation.sessionId == boundSessionId:
                     // A client-side diagnostic the connection reported mid-turn — a
@@ -203,11 +191,14 @@ extension ACPXDaemonBackend {
             // including any wire lines still buffered for the event log.
             await persister.finish()
             // Demote the stop reason to a streamed event: emit it last, after every
-            // update, so a client reconstructing the turn sees it in order.
+            // update, so a client reconstructing the turn sees it in order. It carries
+            // how the turn's permissions went, which decides the CLI's exit code.
+            let permissionStats = await connection.permissionStats(for: boundSessionId)
             await clientSession?.sendLogNotification(
                 LogMessage(
                     level: .info, logger: sessionId,
-                    data: toJSONValue(TurnEndedEvent(stopReason: response.stopReason.rawValue))))
+                    data: toJSONValue(TurnEndedEvent(
+                        stopReason: response.stopReason.rawValue, permissions: permissionStats))))
             return fullText
         } catch {
             await connection.endSubscription(subscriptionId)
@@ -215,5 +206,43 @@ extension ACPXDaemonBackend {
             consumer.cancel()
             throw error
         }
+    }
+}
+
+/// One turn's permissions, as acpx sends them with every prompt: the mode
+/// (`--approve-all` / `--approve-reads` / `--deny-all`) and what a write needing
+/// confirmation does without a terminal. The daemon swaps the live agent's handlers
+/// to these for the turn — acpx's queue owner applies each prompt's mode to that turn.
+struct TurnPermissions: Sendable {
+    let handlers: ACPClientHandlers
+
+    /// - Parameters:
+    ///   - mode: `approve-all`, `approve-reads` or `deny-all`. `nil` — a caller that
+    ///     predates the parameter — keeps the old behaviour of approving everything.
+    ///   - nonInteractive: `deny` (the default) or `fail`.
+    init(mode: String?, nonInteractive: String?) throws {
+        let policy: PermissionPolicy
+        if let mode {
+            guard let parsed = PermissionPolicy(acpxMode: mode) else {
+                throw DaemonError.invalidPermissionMode(mode)
+            }
+            policy = parsed
+        } else {
+            policy = .approveAll
+        }
+        let unanswerable: NonInteractivePermissionPolicy
+        if let nonInteractive {
+            guard let parsed = NonInteractivePermissionPolicy(rawValue: nonInteractive) else {
+                throw DaemonError.invalidNonInteractivePermissions(nonInteractive)
+            }
+            unanswerable = parsed
+        } else {
+            unanswerable = .deny
+        }
+        // `.none`: the daemon's own terminal, if it has one, is not the user's. Like
+        // acpx's detached queue owner, it never asks — a write needing confirmation is
+        // refused, or refused as unanswerable under `fail`.
+        handlers = .standard(
+            permission: policy, nonInteractivePermissions: unanswerable, terminal: .none)
     }
 }

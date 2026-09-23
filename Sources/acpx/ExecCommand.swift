@@ -78,28 +78,6 @@ enum ExecCommand {
         }
     }
 
-    /// A finished turn exits 0 — whatever the stop reason, `refusal` included — unless
-    /// it needed permission and was granted none: then `PERMISSION_DENIED` (5), even
-    /// though the agent completed. acpx's `applyPermissionExitCode`; quiet mode also
-    /// says why on stderr, since it prints nothing else.
-    ///
-    /// A write that needed an answer nobody could give (`--non-interactive-permissions
-    /// fail`) fails the run outright: upstream rethrows it after the turn, so it wins
-    /// over any approval, and quiet mode names it as `PERMISSION_PROMPT_UNAVAILABLE`.
-    private static func permissionExitCode(_ stats: PermissionStats, quiet: Bool) -> Int32 {
-        if stats.promptUnavailable {
-            if quiet {
-                Console.errLine(
-                    "[acpx] error: PERMISSION_PROMPT_UNAVAILABLE "
-                        + FileSystemPermissionError.promptUnavailable.description)
-            }
-            return ExitCodes.permissionDenied
-        }
-        guard stats.deniedEverything else { return ExitCodes.success }
-        if quiet { Console.errLine("[acpx] error: PERMISSION_DENIED Permission request denied or cancelled") }
-        return ExitCodes.permissionDenied
-    }
-
     /// acpx suppresses adapter-level warnings under `--json-strict` and
     /// `--format quiet`, where stderr is part of the machine-readable contract.
     private static func quietOutput(_ flags: GlobalFlags) -> Bool {

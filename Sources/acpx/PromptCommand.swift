@@ -46,16 +46,21 @@ enum PromptCommand {
         // record here, or its stale pre-turn snapshot would clobber the turn the
         // daemon just persisted. There is no direct fallback: if the daemon can't be
         // reached the turn fails loudly rather than running outside the manager.
-        let stopReason: StopReason = try runBlocking {
+        let permissionMode = try Flags.resolvePermissionMode(flags, default: context.config.defaultPermissions)
+        let turn: DaemonTurn = try runBlocking {
             do {
                 return try await DaemonClient.runPrompt(
-                    sessionId: sessionId, blocks: promptBlocks, wait: wait, renderer: renderer)
+                    sessionId: sessionId, blocks: promptBlocks, wait: wait,
+                    permissionMode: permissionMode,
+                    nonInteractivePermissions: flags.nonInteractivePermissions, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
         }
-        renderer.finish(stopReason: stopReason)
-        return stopReason == .refusal ? ExitCodes.error : ExitCodes.success
+        renderer.finish(stopReason: turn.stopReason)
+        return permissionExitCode(
+            turn.permissions ?? PermissionStats(), quiet: flags.format == "quiet",
+            queueDetail: "QUEUE_RUNTIME_PROMPT_FAILED")
     }
 
     // MARK: - Routing + banner
