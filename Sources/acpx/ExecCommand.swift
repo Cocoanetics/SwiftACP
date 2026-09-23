@@ -45,8 +45,8 @@ enum ExecCommand {
                     capabilities: flags.clientCapabilities,
                     authCredentials: context.config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: flags.verbose, onClientRequest: onClientRequest, onRawWire: onRawWire)
-            } catch where renderer.streamsWireJSON {
-                return reportJSONFailure(error, renderer: renderer)
+            } catch {
+                return reportFailure(error, renderer: renderer, format: flags.format)
             }
             do {
                 let response = try await handle.connection.newSession(
@@ -70,49 +70,94 @@ enum ExecCommand {
                 }
                 return permissionExitCode(permissions, quiet: flags.format == "quiet")
             } catch {
-                let failure = renderer.streamsWireJSON ? nil : textFailure(error, renderer: renderer)
                 await handle.close()
-                if let failure { throw failure }
-                return reportJSONFailure(error, renderer: renderer)
+                return reportFailure(error, renderer: renderer, format: flags.format)
             }
         }
     }
 
-    /// How text and quiet modes report a failed run (their exact acpx wording is #60).
-    private static func textFailure(_ error: Error, renderer: OutputRenderer) -> Error {
-        switch error {
-        case let rpc as JSONRPCErrorBody: return turnFailure(rpc, renderer: renderer)
-        case let unsupported as ModelApplication.UnsupportedError: return CLIError(unsupported.message)
-        default: return CLIError(error.localizedDescription)
+    /// Report a failed run the way acpx does in `format`, returning its exit code.
+    ///
+    /// - json: nothing more when the stream already shows the failure (the agent's
+    ///   error response, or the client's refusal it repeats), else one JSON-RPC error
+    ///   line; never anything on stderr.
+    /// - quiet: acpx's quiet formatter — one stderr line, the code qualified by any
+    ///   detail code, the agent's `data.details` in place of the message when given.
+    /// - text: the agent's error response is rendered where acpx's formatter renders
+    ///   it, as `[error] RUNTIME: <details or message>` with hints going by that text,
+    ///   and not repeated; anything else goes to stderr bare, with its hints, as acpx's
+    ///   top-level handler prints it.
+    static func reportFailure(
+        _ error: Error, renderer: OutputRenderer, format: String,
+        err: (String) -> Void = { Console.errLine($0) }
+    ) -> Int32 {
+        let failure = RunFailure(error)
+        switch format {
+        case "json":
+            if !renderer.showedFailure(failure.message) {
+                renderer.jsonFailure(
+                    outputCode: failure.outputCode, detailCode: failure.detailCode, message: failure.message)
+            }
+        case "quiet":
+            let qualifier = failure.detailCode.map { "\(failure.outputCode) \($0)" } ?? failure.outputCode
+            let text = (failure.acpDetails ?? failure.message)
+                .replacingOccurrences(of: "\r\n", with: " ")
+                .replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+            err("[acpx] error: \(qualifier) \(text)")
+        default:
+            if error is JSONRPCErrorBody {
+                renderer.renderError(code: "RUNTIME", failure.acpDetails ?? failure.message)
+            } else {
+                err(failure.message)
+                for hint in remediationHints(
+                    code: failure.outputCode, origin: "cli", detailCode: failure.detailCode,
+                    message: failure.message, acpCode: nil) {
+                    err(hint)
+                }
+            }
         }
+        return exitCode(forOutputCode: failure.outputCode)
     }
 
-    /// A failure in JSON mode, as acpx's top-level handler reports it: nothing more
-    /// when the stream already shows it — the agent's error response, or the client's
-    /// refusal it repeats — else one JSON-RPC error line; never anything on stderr.
-    /// Returns the exit code for the failure's output code.
+    /// ``reportFailure(_:renderer:format:)`` in JSON mode.
     static func reportJSONFailure(_ error: Error, renderer: OutputRenderer) -> Int32 {
-        let outputCode: String
-        let detailCode: String?
-        let message: String
-        switch error {
-        case let rpc as JSONRPCErrorBody:
-            (outputCode, detailCode, message) = ("RUNTIME", nil, rpc.message)
-        case let launch as AgentLaunchError:
-            (outputCode, detailCode, message) = ("RUNTIME", launch.detailCode, launch.localizedDescription)
-        case let unsupported as ModelApplication.UnsupportedError:
-            (outputCode, detailCode, message) = ("RUNTIME", nil, unsupported.message)
-        case is PromptUnavailable:
-            (outputCode, detailCode, message) = (
-                "PERMISSION_PROMPT_UNAVAILABLE", nil, FileSystemPermissionError.promptUnavailable.description
-            )
-        default:
-            (outputCode, detailCode, message) = ("RUNTIME", nil, error.localizedDescription)
+        reportFailure(error, renderer: renderer, format: "json")
+    }
+
+    /// A failed run as acpx's top-level `normalizeOutputError` sees it.
+    struct RunFailure {
+        var outputCode = "RUNTIME"
+        var detailCode: String?
+        var message: String
+        /// The agent's `data.details`, when the failure is its error response and it
+        /// gave some (acpx's `preferredAcpErrorDetails`).
+        var acpDetails: String?
+
+        init(_ error: Error) {
+            message = error.localizedDescription
+            switch error {
+            case let rpc as JSONRPCErrorBody:
+                message = rpc.message
+                if case .object(let fields)? = rpc.data, case .string(let details)? = fields["details"] {
+                    let trimmed = details.trimmingCharacters(in: .whitespacesAndNewlines)
+                    acpDetails = trimmed.isEmpty ? nil : trimmed
+                }
+            case let launch as AgentLaunchError:
+                detailCode = launch.detailCode
+            case let unsupported as ModelApplication.UnsupportedError:
+                message = unsupported.message
+            case is PromptUnavailable:
+                outputCode = "PERMISSION_PROMPT_UNAVAILABLE"
+                message = FileSystemPermissionError.promptUnavailable.description
+            default:
+                break
+            }
+            // `resolveOutputErrorCode`: a runtime failure saying the session is gone.
+            if outputCode == "RUNTIME", ReconnectFallback.isResourceNotFound(error) {
+                outputCode = "NO_SESSION"
+            }
         }
-        if !renderer.showedFailure(message) {
-            renderer.jsonFailure(outputCode: outputCode, detailCode: detailCode, message: message)
-        }
-        return exitCode(forOutputCode: outputCode)
     }
 
     /// A write needed a confirmation nobody could give (`--non-interactive-permissions fail`).
@@ -140,18 +185,6 @@ enum ExecCommand {
     private static func quietOutput(_ flags: GlobalFlags) -> Bool {
         flags.jsonStrict || flags.format == "quiet"
     }
-}
-
-/// Handle a failed prompt turn the way acpx does on both streams: render
-/// `[error] RUNTIME: <msg>` plus hint lines to the formatter (stdout), and
-/// return a `CLIError` whose message carries the same hints for stderr (exit 1).
-func turnFailure(_ error: JSONRPCErrorBody, renderer: OutputRenderer) -> CLIError {
-    renderer.renderError(code: "RUNTIME", error.message, acpCode: error.code)
-    // The CLI's stderr handler normalizes with a non-acp origin, so the
-    // acp-protocol hint (origin-gated) is omitted here even when it shows on stdout.
-    let hints = remediationHints(
-        code: "RUNTIME", origin: nil, detailCode: nil, message: error.message, acpCode: error.code)
-    return CLIError(([error.message] + hints).joined(separator: "\n"))
 }
 
 /// Builds the `[client]` progress observer: renders each outgoing agent request
