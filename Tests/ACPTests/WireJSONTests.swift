@@ -39,6 +39,15 @@ import Testing
         }
     }
 
+    /// `JSON.stringify` takes at most 10 spaces, and none below 1.
+    @Test func theIndentIsClampedAsJavaScriptClampsIt() throws {
+        let value = try #require(WireJSON(parsing: #"{"a":[1]}"#))
+        #expect(value.stringified(indent: -3) == #"{"a":[1]}"#)
+        #expect(value.stringified(indent: 0) == #"{"a":[1]}"#)
+        #expect(value.stringified(indent: 12) == value.stringified(indent: 10))
+        #expect(value.stringified(indent: 10).contains("\n" + String(repeating: " ", count: 10) + "\"a\""))
+    }
+
     private struct ErrorCase: Decodable {
         let input: String
         /// V8's `SyntaxError` message, or `nil` where `JSON.parse` succeeded.

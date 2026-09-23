@@ -51,9 +51,10 @@ public indirect enum WireJSON: Equatable, Sendable {
     /// The value as `JSON.stringify(value, null, indent)` prints it: each member and
     /// element on its own line, `indent` spaces deeper than its container, `": "`
     /// between a key and its value — and an empty object or array still `{}` or `[]`.
+    /// As there, the indent is at most 10, and one below 1 prints the compact form.
     public func stringified(indent: Int) -> String {
         var output: [UInt16] = []
-        write(into: &output, gap: Array(repeating: 0x20, count: indent), indentation: [])
+        write(into: &output, gap: Array(repeating: 0x20, count: min(max(indent, 0), 10)), indentation: [])
         return String(decoding: output, as: UTF16.self)
     }
 
