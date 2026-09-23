@@ -222,8 +222,11 @@ enum FileSystemContainment {
 
     private static func components(of path: String) -> [String] {
         #if os(Windows)
-            // Windows paths need Foundation's separator and drive handling.
-            return URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+            // Windows paths need Foundation's separator and drive handling, and compare
+            // case-insensitively — fs-safe lowercases a drive path before comparing
+            // (`resolveWindowsPathForComparison`). Like fs-safe, 8.3 short names are not
+            // expanded: `RUNNER~1` and `runneradmin` are different text.
+            return URL(fileURLWithPath: path).standardizedFileURL.pathComponents.map { $0.lowercased() }
         #else
             return path.split(separator: "/").map(String.init)
         #endif
