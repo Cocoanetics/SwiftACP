@@ -64,11 +64,10 @@ enum AgentLaunchPreflight {
         -> AgentLaunchError? {
         let command =
             agentCommand ?? ([launch.executable] + launch.arguments).joined(separator: " ")
-        let fileManager = FileManager.default
 
         if let directory = launch.workingDirectory {
             var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: directory, isDirectory: &isDirectory),
+            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
                 isDirectory.boolValue
             else {
                 return AgentLaunchError(
@@ -76,13 +75,45 @@ enum AgentLaunchPreflight {
                     detailCode: AgentLaunchError.spawnENOENT, missingPath: directory)
             }
         }
+        return executableFailure(for: launch, command: command)
+    }
 
-        guard resolvedExecutable(launch.executable, environment: launch.environment) == nil else {
-            return nil
+    #if os(Windows)
+    /// Windows resolves an executable through rules this cannot faithfully reproduce:
+    /// the variable is usually `Path` rather than `PATH`, entries are `;`-separated, and
+    /// a bare name is matched against `PATHEXT` extensions before it names a file at
+    /// all. Guessing would mean refusing launches that would have worked — far worse
+    /// than the opaque spawn error this replaces — so the executable is left to the
+    /// spawn. The working-directory check above still applies.
+    private static func executableFailure(for launch: ProcessLaunch, command: String)
+        -> AgentLaunchError? { nil }
+    #else
+    private static func executableFailure(for launch: ProcessLaunch, command: String)
+        -> AgentLaunchError? {
+        guard let resolved = resolvedExecutable(launch.executable, environment: launch.environment)
+        else {
+            // A file that is there but not executable failed on permissions, not on a
+            // missing path: acpx reserves the qualified wording for the latter, so this
+            // takes the bare message and no `AGENT_SPAWN_ENOENT`.
+            if launch.executable.contains("/"),
+                FileManager.default.fileExists(atPath: launch.executable) {
+                return AgentLaunchError(
+                    agentCommand: command, workingDirectory: launch.workingDirectory,
+                    detailCode: nil)
+            }
+            return AgentLaunchError(
+                agentCommand: command, workingDirectory: launch.workingDirectory,
+                detailCode: AgentLaunchError.spawnENOENT, missingPath: launch.executable)
         }
-        return AgentLaunchError(
-            agentCommand: command, workingDirectory: launch.workingDirectory,
-            detailCode: AgentLaunchError.spawnENOENT, missingPath: launch.executable)
+        // "a required executable, *interpreter*, … was not found" — a script whose `#!`
+        // names a missing interpreter is executable itself, yet the spawn still fails
+        // ENOENT, so the interpreter is what the message should name.
+        if let interpreter = missingInterpreter(of: resolved) {
+            return AgentLaunchError(
+                agentCommand: command, workingDirectory: launch.workingDirectory,
+                detailCode: AgentLaunchError.spawnENOENT, missingPath: interpreter)
+        }
+        return nil
     }
 
     /// The path the child would actually execute, or `nil` when nothing matches. A name
@@ -102,7 +133,26 @@ enum AgentLaunchPreflight {
         return nil
     }
 
+    /// The interpreter a `#!` line names, when that interpreter cannot be executed.
+    /// `nil` for a binary, an unreadable file, or an interpreter that is present.
+    private static func missingInterpreter(of executable: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: executable) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 256), head.starts(with: Data("#!".utf8))
+        else { return nil }
+        let firstLine = String(decoding: head, as: UTF8.self)
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        let interpreter = firstLine.dropFirst(2)
+            .trimmingCharacters(in: .whitespaces)
+            .split(separator: " ", maxSplits: 1).first.map(String.init)
+        guard let interpreter, !interpreter.isEmpty,
+            !FileManager.default.isExecutableFile(atPath: interpreter)
+        else { return nil }
+        return interpreter
+    }
+
     private static func path(in environment: [String: String]?) -> String {
         environment?["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
     }
+    #endif
 }
