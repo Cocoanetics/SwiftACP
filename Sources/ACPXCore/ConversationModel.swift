@@ -128,8 +128,18 @@ public enum ConversationModel {
     /// camelCase keys (as acpx's `numberField` does). Returns nil when the agent
     /// sent no breakdown (e.g. Codex, which sends only `used` / `size`).
     private static func tokenUsage(from update: UsageUpdate) -> SessionTokenUsage? {
-        guard case .object(let meta)? = update.meta, case .object(let source)? = meta["usage"]
-        else { return nil }
+        // `_meta.usage` when the adapter nests it there, else the update itself — acpx's
+        // `usageToTokenUsage` (`asRecord(usageMeta) ?? updateRecord`), so an adapter that
+        // reports the breakdown at the top level is captured too. A bare `used`/`size`
+        // update still yields nothing: none of those keys is a token field.
+        let source: [String: JSONValue]
+        if case .object(let meta)? = update.meta, case .object(let nested)? = meta["usage"] {
+            source = nested
+        } else if case .object(let body)? = update.raw {
+            source = body
+        } else {
+            return nil
+        }
         var usage = SessionTokenUsage()
         usage.inputTokens = number(source, ["input_tokens", "inputTokens"])
         usage.outputTokens = number(source, ["output_tokens", "outputTokens"])

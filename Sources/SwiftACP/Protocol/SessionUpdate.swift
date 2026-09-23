@@ -118,6 +118,11 @@ public struct UsageUpdate: Codable, Sendable {
     public var cost: UsageCost?
     /// `_meta`, which may carry a `usage` token breakdown.
     public var meta: JSONValue?
+    /// The update exactly as received. Some adapters report the token breakdown on the
+    /// update itself rather than under `_meta.usage`, and the modelled fields above
+    /// would drop it — acpx reads `_meta.usage` *or* the update record
+    /// (`usageToTokenUsage`), so the raw object is kept for ``ConversationModel``.
+    public var raw: JSONValue?
 
     /// A cost amount plus its currency code.
     public struct UsageCost: Codable, Sendable {
@@ -130,14 +135,27 @@ public struct UsageUpdate: Codable, Sendable {
     }
 
     public init(
-        used: Int? = nil, size: Int? = nil, cost: UsageCost? = nil, meta: JSONValue? = nil
+        used: Int? = nil, size: Int? = nil, cost: UsageCost? = nil, meta: JSONValue? = nil,
+        raw: JSONValue? = nil
     ) {
         self.used = used
         self.size = size
         self.cost = cost
         self.meta = meta
+        self.raw = raw
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        used = try container.decodeIfPresent(Int.self, forKey: .used)
+        size = try container.decodeIfPresent(Int.self, forKey: .size)
+        cost = try container.decodeIfPresent(UsageCost.self, forKey: .cost)
+        meta = try container.decodeIfPresent(JSONValue.self, forKey: .meta)
+        raw = try? JSONValue(from: decoder)
+    }
+
+    /// `raw` is a decode-side view, never re-encoded: the modelled fields are the wire
+    /// shape acpx writes.
     enum CodingKeys: String, CodingKey {
         case used, size, cost
         case meta = "_meta"
