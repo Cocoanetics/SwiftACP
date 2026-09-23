@@ -38,6 +38,8 @@ struct GlobalFlags {
 struct AgentInvocation {
     var agentName: String
     var agentCommand: String
+    /// The exact argv to launch, when there is one (see ``Flags/resolveAgentInvocation``).
+    var agentArgv: [String]?
     var cwd: String
 }
 
@@ -142,15 +144,16 @@ enum Flags {
             throw InvalidArgumentError("Do not combine positional agent with --agent override")
         }
         let agentName = explicitAgentName ?? config.defaultAgent
-        let agentCommand: String
-        if let override, !override.isEmpty {
-            agentCommand = override
+        // `--agent` is a command line to split; a name launches as acpx resolves it.
+        let (agentCommand, agentArgv) = if let override, !override.isEmpty {
+            (override, nil as [String]?)
         } else {
-            agentCommand = AgentRegistry.command(for: agentName, overrides: config.agents) ?? agentName
+            config.agentLaunch(for: agentName)
         }
         return AgentInvocation(
             agentName: agentName,
             agentCommand: agentCommand,
+            agentArgv: agentArgv,
             cwd: ACPXPaths.resolve(flags.cwd, base: physicalCWD()))
     }
 

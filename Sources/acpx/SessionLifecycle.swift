@@ -101,7 +101,7 @@ enum SessionLifecycle {
                 // An explicit `--mcp-config` becomes the session's own server set,
                 // persisted so the daemon replays it on every reconnect.
                 return try await SessionEngine.createSession(
-                    agentCommand: agent.agentCommand, cwd: agent.cwd, name: name,
+                    agentCommand: agent.agentCommand, agentArgv: agent.agentArgv, cwd: agent.cwd, name: name,
                     permission: permission, authCredentials: config.auth,
                     authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
                     sessionMcpServers: config.sessionMcpServers,

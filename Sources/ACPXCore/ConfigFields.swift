@@ -89,22 +89,28 @@ enum ConfigFields {
 
     // MARK: Agents and auth
 
-    /// `parseAgents`: each entry's launch command, under its normalized name, in
-    /// `Object.entries` order.
-    static func agents(_ value: WireJSON?, _ path: String) throws -> [(name: String, command: String)]? {
+    /// A config agent as acpx resolves it: the command line it shows, and — for an
+    /// `argv` entry, or a `command` with `args` — the exact argv it launches.
+    struct Agent: Equatable {
+        var command: String
+        var argv: [String]?
+    }
+
+    /// `parseAgents`: each entry, under its normalized name, in `Object.entries` order.
+    static func agents(_ value: WireJSON?, _ path: String) throws -> [(name: String, agent: Agent)]? {
         if isUnset(value) { return nil }
         guard case .object(let members)? = value else {
             throw ConfigError("Invalid config agents in \(path): expected object")
         }
         return try WireJSON.orderedForPrinting(members).map { member in
             let name = String(decoding: member.key, as: UTF16.self)
-            return (name.javaScriptTrimmed.lowercased(), try agentCommand(member.value, name: name, path))
+            return (name.javaScriptTrimmed.lowercased(), try agent(member.value, name: name, path))
         }
     }
 
     /// `parseAgentEntry`: an `argv` vector on its own, or a `command` string with
-    /// optional `args` — resolved to the command line acpx shows for it.
-    static func agentCommand(_ raw: WireJSON, name: String, _ path: String) throws -> String {
+    /// optional `args`.
+    static func agent(_ raw: WireJSON, name: String, _ path: String) throws -> Agent {
         guard case .object = raw else {
             throw ConfigError("Invalid config agents.\(name) in \(path): expected object with command")
         }
@@ -112,20 +118,23 @@ enum ConfigFields {
             guard !raw.hasMember("command"), !raw.hasMember("args") else {
                 throw ConfigError("Invalid config agents.\(name) in \(path): use argv alone, not command or args")
             }
-            return renderArgvIdentity(try argv(raw["argv"], name: name, path))
+            let argv = try argv(raw["argv"], name: name, path)
+            return Agent(command: renderArgvIdentity(argv), argv: argv)
         }
         guard let command = string(raw["command"]), !command.javaScriptTrimmed.isEmpty else {
             throw ConfigError("Invalid config agents.\(name).command in \(path): expected non-empty string")
         }
         let trimmed = command.javaScriptTrimmed
-        guard raw.hasMember("args") else { return trimmed }
+        guard raw.hasMember("args") else { return Agent(command: trimmed) }
         guard !trimmed.contains(where: { $0.isWhitespace || $0 == "'" || $0 == "\"" }) else {
             throw ConfigError(
                 "Invalid config agents.\(name).command in \(path): command must be an unquoted executable "
                     + "with no whitespace when args is present; migrate the complete launch to argv")
         }
         let args = try agentArgs(raw["args"], name: name, path)
-        return ([trimmed] + args.map { WireJSON.text($0).stringified }).joined(separator: " ")
+        return Agent(
+            command: ([trimmed] + args.map { WireJSON.text($0).stringified }).joined(separator: " "),
+            argv: [trimmed] + args)
     }
 
     static func argv(_ value: WireJSON?, name: String, _ path: String) throws -> [String] {

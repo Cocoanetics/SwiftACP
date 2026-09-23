@@ -127,6 +127,12 @@ def handle_prompt(req_id, params):
 
 
 def main():
+    # MOCK_ARGV_LOG: each launch appends the arguments it was given, so a test can see
+    # exactly what the client spawned.
+    argv_log = os.environ.get("MOCK_ARGV_LOG")
+    if argv_log:
+        with open(argv_log, "a", encoding="utf-8") as output:
+            output.write(json.dumps(sys.argv[1:]) + "\n")
     prompts_answered = 0
     for line in sys.stdin:
         line = line.strip()

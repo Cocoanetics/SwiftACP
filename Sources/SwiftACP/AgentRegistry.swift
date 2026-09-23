@@ -114,18 +114,30 @@ public enum AgentRegistry {
         return nil
     }
 
+    /// A built-in agent's argv — acpx's `resolveAgentArgv` — by name or alias; `nil` for
+    /// any other name.
+    public static func argv(for name: String) -> [String]? {
+        let key = normalize(name)
+        return (builtIn[key] ?? aliases[key].flatMap { builtIn[$0] }).map(splitCommandLine)
+    }
+
     /// Resolve a runnable launch spec for the given agent.
     ///
     /// - If a preferred adapter binary is installed, launch it directly.
+    /// - With `argv` — a config agent's `argv`, or one a session recorded — launch
+    ///   exactly that: acpx spawns an agent it has an argv for without re-splitting it.
     /// - Otherwise split the registry command line into executable + arguments.
     /// - An unknown name with no override is treated as a literal command line.
+    ///
+    /// Throws ``CommandLineError`` for a command line acpx refuses to split.
     public static func launch(
         for name: String,
+        argv: [String]? = nil,
         cwd: String? = nil,
         environment: [String: String]? = nil,
         inheritStderr: Bool = true,
         overrides: [String: String] = [:]
-    ) -> ProcessLaunch {
+    ) throws -> ProcessLaunch {
         let key = normalize(name)
         // codex-acp only reaches a system codex through `CODEX_PATH`; when the
         // caller hasn't set one, point it at a `codex` on the child's `PATH` (see
@@ -141,12 +153,9 @@ public enum AgentRegistry {
                 workingDirectory: cwd, inheritStderr: inheritStderr)
         }
 
-        let commandLine = command(for: key, overrides: overrides) ?? name
-        let tokens = splitCommandLine(commandLine)
-        let executable = tokens.first ?? name
-        let arguments = Array(tokens.dropFirst())
+        let tokens = try argv.map(commandParts) ?? commandLineParts(command(for: key, overrides: overrides) ?? name)
         return ProcessLaunch(
-            executable: executable, arguments: arguments, environment: environment,
+            executable: tokens[0], arguments: Array(tokens.dropFirst()), environment: environment,
             workingDirectory: cwd, inheritStderr: inheritStderr)
     }
 
@@ -182,36 +191,75 @@ public enum AgentRegistry {
         return augmented
     }
 
-    /// Split a command line on whitespace, honouring simple single/double quotes.
-    public static func splitCommandLine(_ commandLine: String) -> [String] {
-        var tokens: [String] = []
+    /// A command line acpx refuses to split (its `Invalid --agent command: …`).
+    public struct CommandLineError: Error, LocalizedError, Equatable, Sendable {
+        public let message: String
+        public var errorDescription: String? { message }
+        public init(message: String) { self.message = message }
+    }
+
+    /// acpx's `splitCommandLine`: words split on JavaScript whitespace; single and
+    /// double quotes group; a backslash escapes the next character except inside
+    /// single quotes, and a trailing one stays. An unterminated quote or an empty
+    /// command is refused.
+    public static func commandLineParts(_ commandLine: String) throws -> [String] {
+        var parts: [String] = []
         var current = ""
-        var quote: Character?
-        var hasToken = false
-        for character in commandLine {
-            if let active = quote {
-                if character == active {
-                    quote = nil
-                } else {
-                    current.append(character)
-                }
-            } else if character == "\"" || character == "'" {
-                quote = character
-                hasToken = true
-            } else if character.isWhitespace {
-                if hasToken {
-                    tokens.append(current)
-                    current = ""
-                    hasToken = false
-                }
+        var quote: Unicode.Scalar?
+        var escaping = false
+        var hasPart = false
+        func flush() {
+            guard hasPart else { return }
+            parts.append(current)
+            current = ""
+            hasPart = false
+        }
+        for scalar in commandLine.unicodeScalars {
+            if escaping {
+                current.unicodeScalars.append(scalar)
+                escaping = false
+                hasPart = true
+            } else if scalar == "\\", quote != "'" {
+                escaping = true
+            } else if let open = quote {
+                if scalar == open { quote = nil } else { current.unicodeScalars.append(scalar) }
+            } else if scalar == "'" || scalar == "\"" {
+                quote = scalar
+                hasPart = true
+            } else if javaScriptWhitespace.contains(scalar) {
+                flush()
             } else {
-                current.append(character)
-                hasToken = true
+                current.unicodeScalars.append(scalar)
+                hasPart = true
             }
         }
-        if hasToken { tokens.append(current) }
-        return tokens
+        if escaping {
+            current += "\\"
+            hasPart = true
+        }
+        if quote != nil { throw CommandLineError(message: "Invalid --agent command: unterminated quote") }
+        flush()
+        return try commandParts(parts)
     }
+
+    /// acpx's `toCommandParts`: the executable must not be empty.
+    public static func commandParts(_ argv: [String]) throws -> [String] {
+        guard let executable = argv.first, !executable.isEmpty else {
+            throw CommandLineError(message: "Invalid --agent command: empty command")
+        }
+        return argv
+    }
+
+    /// ``commandLineParts(_:)`` for reading a command's shape: a command line it
+    /// refuses has no words.
+    public static func splitCommandLine(_ commandLine: String) -> [String] {
+        (try? commandLineParts(commandLine)) ?? []
+    }
+
+    /// JavaScript's `\s`: its whitespace and line terminators.
+    private static let javaScriptWhitespace = CharacterSet(
+        charactersIn: "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}"
+    ).union(CharacterSet(charactersIn: "\u{2000}"..."\u{200A}"))
 
     /// Locate an executable by name on a `PATH`.
     ///

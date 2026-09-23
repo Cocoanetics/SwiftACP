@@ -85,8 +85,9 @@ actor ACPXDaemonBackend: ACPXBackend {
         // a caller supplying its own set must not be refused over an unrelated bad
         // entry in the cwd's config.
         let configServers = mcpServers == nil ? try config.mcpServerSpecs() : []
+        let launch = config.agentLaunch(for: agentCommand)
         let record = try await SessionEngine.createSession(
-            agentCommand: launchCommand(for: agentCommand, config: config), cwd: cwd,
+            agentCommand: launch.command, agentArgv: launch.argv, cwd: cwd,
             name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
             authPolicy: config.authPolicy, mcpServers: configServers,
             sessionMcpServers: mcpServers, inheritStderr: inheritAgentStderr)
@@ -140,14 +141,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         record.lastUsedAt = nowISO()
         try SessionStore.writeRecord(record)
         return true
-    }
-
-    /// Resolve an agent name to its launch command line, the way the CLI does — a
-    /// built-in name or a config-defined alias (`config.agents`) maps to its full
-    /// command; a full command line passes through unchanged. So an MCP client can
-    /// say `agentCommand: "codex-alice"` and get the same wrapper the CLI uses.
-    func launchCommand(for agentCommand: String, config: ResolvedAcpxConfig) -> String {
-        AgentRegistry.command(for: agentCommand, overrides: config.agents) ?? agentCommand
     }
 
     // MARK: - Mutation tools

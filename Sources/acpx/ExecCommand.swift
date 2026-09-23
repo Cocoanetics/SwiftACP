@@ -37,7 +37,7 @@ enum ExecCommand {
             let handle: ACPAgent
             do {
                 handle = try await ACPAgent.launch(
-                    agent: agent.agentCommand, cwd: agent.cwd, permission: permission,
+                    agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd, permission: permission,
                     nonInteractivePermissions: flags.nonInteractivePolicy,
                     capabilities: flags.clientCapabilities,
                     authCredentials: context.config.auth, authPolicy: flags.authPolicy,
