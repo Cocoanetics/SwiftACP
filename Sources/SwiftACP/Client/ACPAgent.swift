@@ -114,11 +114,15 @@ public final class ACPAgent: Sendable {
         }
     }
 
-    /// Convenience that builds standard handlers from a permission policy.
+    /// Convenience that builds standard handlers from a permission policy. Writes
+    /// the agent asks for are gated by it too — see ``WriteApproval`` — with
+    /// `nonInteractivePermissions` deciding what a write needing confirmation does
+    /// when there is no terminal to ask on.
     public static func launch(
         agent name: String,
         cwd: String = FileManager.default.currentDirectoryPath,
         permission: PermissionPolicy,
+        nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
         clientInfo: Implementation = .acpx,
         capabilities: ClientCapabilities = .headlessController,
         environment: [String: String]? = nil,
@@ -129,7 +133,9 @@ public final class ACPAgent: Sendable {
         onClientRequest: (@Sendable (String) -> Void)? = nil
     ) async throws -> ACPAgent {
         try await launch(
-            agent: name, cwd: cwd, handlers: .standard(permission: permission),
+            agent: name, cwd: cwd,
+            handlers: .standard(
+                permission: permission, nonInteractivePermissions: nonInteractivePermissions),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest)

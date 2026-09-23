@@ -40,10 +40,20 @@ public actor ACPAgentConnection {
 
     /// Each session's working directory, recorded from `session/new`, `session/load`
     /// and `session/resume` — the root `fs/*` paths are confined to.
-    private var sessionRoots: [SessionId: String] = [:]
+    var sessionRoots: [SessionId: String] = [:]
 
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
+
+    /// How each session's latest turn settled its permissions; reset when a turn
+    /// starts. See ``permissionStats(for:)``.
+    var turnPermissionStats: [SessionId: PermissionStats] = [:]
+
+    /// How the permissions asked for during `sessionId`'s latest turn were settled —
+    /// read it once the turn returns to decide the exit code, as acpx does.
+    public func permissionStats(for sessionId: SessionId) -> PermissionStats {
+        turnPermissionStats[sessionId] ?? PermissionStats()
+    }
     /// Sessions whose in-flight turn this client is cancelling (`session/cancel`
     /// sent, prompt not yet returned). A permission request answered meanwhile is
     /// still resolved as usual, but a refusal isn't explained — the caller is ending
@@ -85,12 +95,27 @@ public actor ACPAgentConnection {
         onClientRequest = observer
     }
 
+    private var onInboundRequest: (@Sendable (String) -> Void)?
+    private var onInboundFailure: (@Sendable (JSONRPCErrorBody) -> Void)?
+
+    /// Observe the agent's requests to this client (`fs/*`, `session/request_permission`)
+    /// as they arrive, and each one this client answers with an error — what acpx's
+    /// formatter renders as `[client] <method> (running)` and `[error] RUNTIME: …`,
+    /// since it prints every request and every error it sees on the wire. The closures
+    /// run synchronously, so they must be fast.
+    public func setInboundRequestObservers(
+        received: (@Sendable (String) -> Void)?, failed: (@Sendable (JSONRPCErrorBody) -> Void)?
+    ) {
+        onInboundRequest = received
+        onInboundFailure = failed
+    }
+
     /// Wire inbound routing and begin reading. Call once before any request.
     public func start() async {
         await rpc.setHandlers(
             request: { [weak self] method, params in
                 guard let self else { return .failure(.internalError("connection released")) }
-                return await self.handleIncomingRequest(method: method, params: params)
+                return await self.serveIncomingRequest(method: method, params: params)
             },
             notification: { [weak self] method, params in
                 await self?.handleIncomingNotification(method: method, params: params)
@@ -230,6 +255,7 @@ public actor ACPAgentConnection {
         // cancelled either (the bookkeeping acpx does around its active prompt).
         cancellingSessionIds.remove(request.sessionId)
         promptingSessionIds.insert(request.sessionId)
+        turnPermissionStats[request.sessionId] = PermissionStats()
         defer {
             promptingSessionIds.remove(request.sessionId)
             cancellingSessionIds.remove(request.sessionId)
@@ -278,6 +304,17 @@ public actor ACPAgentConnection {
 
     // MARK: - Inbound routing
 
+    /// Route one inbound request, reporting its arrival and any failure to the
+    /// inbound observers around it.
+    private func serveIncomingRequest(
+        method: String, params: JSONValue?
+    ) async -> Result<JSONValue, JSONRPCErrorBody> {
+        onInboundRequest?(method)
+        let result = await handleIncomingRequest(method: method, params: params)
+        if case .failure(let error) = result { onInboundFailure?(error) }
+        return result
+    }
+
     private func handleIncomingRequest(
         method: String, params: JSONValue?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
@@ -293,7 +330,8 @@ public actor ACPAgentConnection {
                 return .failure(.methodNotFound(method))
             }
             return await routeFileSystem(
-                method, params, access: .write, handlers.writeTextFile)
+                method, params, access: .write, handlers.writeTextFile,
+                authorize: handlers.authorizeWrite)
         case "session/request_permission":
             guard let handler = handlers.requestPermission else {
                 return .failure(.methodNotFound(method))
@@ -330,7 +368,7 @@ public actor ACPAgentConnection {
         }
     }
 
-    private func decode<T: Decodable>(_ params: JSONValue?) throws -> T {
+    func decode<T: Decodable>(_ params: JSONValue?) throws -> T {
         guard let params else {
             throw JSONRPCErrorBody.invalidParams("missing params")
         }
@@ -347,6 +385,18 @@ public actor ACPAgentConnection {
     /// sends in reaction) and as `_meta.acpx.permissionNotice` on the response.
     /// Nothing here approves an operation to keep a turn running.
     private func resolvePermission(
+        _ request: RequestPermissionRequest,
+        with handler: @Sendable (RequestPermissionRequest) async -> RequestPermissionResponse
+    ) async -> RequestPermissionResponse {
+        let response = await answerPermission(request, with: handler)
+        // Every answer is counted, whichever way it was reached — acpx's
+        // `finishPermissionRequest` classifies the response that actually went back.
+        turnPermissionStats[request.sessionId, default: PermissionStats()]
+            .record(PermissionStats.classify(request, response))
+        return response
+    }
+
+    private func answerPermission(
         _ request: RequestPermissionRequest,
         with handler: @Sendable (RequestPermissionRequest) async -> RequestPermissionResponse
     ) async -> RequestPermissionResponse {
@@ -367,39 +417,6 @@ public actor ACPAgentConnection {
         else { return response }
         announce(notice, sessionId: request.sessionId)
         return response.addingACPXMetadata(["permissionNotice": .string(notice)])
-    }
-
-    /// Serve one `fs/*` request, confining its path to the session's working directory
-    /// first (see ``FileSystemAccessScope``). The handler only ever sees a path the
-    /// client has already vouched for, so a custom handler inherits the containment.
-    ///
-    /// A session this connection never opened has no root to check against, so its
-    /// requests are refused rather than served unchecked — an agent cannot reach out of
-    /// the workspace by naming a session id we do not know.
-    private func routeFileSystem<
-        Request: FileSystemPathRequest & Decodable & Sendable, Response: Encodable & Sendable
-    >(
-        _ method: String, _ params: JSONValue?, access: FileSystemContainment.Access,
-        _ handler: (@Sendable (Request) async throws -> Response)?
-    ) async -> Result<JSONValue, JSONRPCErrorBody> {
-        guard let handler else { return .failure(.methodNotFound(method)) }
-        do {
-            var request: Request = try decode(params)
-            if fileSystemAccess == .sessionRoot {
-                guard let root = sessionRoots[request.sessionId] else {
-                    return .failure(.invalidParams("Unknown session: \(request.sessionId)"))
-                }
-                request.path = try FileSystemContainment.resolve(
-                    path: request.path, under: root, for: access)
-            }
-            let contained = request
-            let response = try await handler(contained)
-            return .success(try JSONValue(encoding: response))
-        } catch let error as JSONRPCErrorBody {
-            return .failure(error)
-        } catch {
-            return .failure(.internalError(error.localizedDescription))
-        }
     }
 
     /// Report a permission notice to the event subscriptions, ahead of anything the
