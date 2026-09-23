@@ -17,6 +17,31 @@ public enum ReconnectFallback {
     /// The codes agents answer a missing session with.
     static let resourceNotFoundCodes: Set<Int> = [-32001, -32002]
 
+    /// What to do once reconnecting failed.
+    public enum Outcome: Equatable, Sendable {
+        /// Pass the failure on as it is.
+        case surface
+        /// Refuse: the session must stay the same one (acpx's `SessionResumeRequiredError`).
+        case refuse
+        /// Replace it with a new session.
+        case startFresh
+    }
+
+    /// The decision acpx's `loadRuntimeSession` makes after a failed reconnect, in its
+    /// order: a cancelled reconnect is passed on untouched (`rethrowCancelledLoad` runs
+    /// first — it says nothing about the session); a session imported from another
+    /// client is refused rather than replaced (`sameSessionOnly`); an agent that cannot
+    /// take sessions back gets a new one; otherwise ``shouldStartFresh(after:sessionHasAgentMessages:)``.
+    public static func outcome(
+        after error: Error, imported: Bool, sessionHasAgentMessages: Bool
+    ) -> Outcome {
+        if error is CancellationError { return .surface }
+        if imported { return .refuse }
+        if error is SessionReconnectUnsupported { return .startFresh }
+        return shouldStartFresh(after: error, sessionHasAgentMessages: sessionHasAgentMessages)
+            ? .startFresh : .surface
+    }
+
     /// Whether to start a fresh session after reconnecting failed with `error`.
     ///
     /// - Parameter sessionHasAgentMessages: whether the record holds any agent reply —

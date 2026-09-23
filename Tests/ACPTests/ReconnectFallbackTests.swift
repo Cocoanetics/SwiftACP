@@ -188,6 +188,24 @@ extension DaemonToolsTests {
 
     // MARK: - The rule itself
 
+    /// acpx's order: cancellation first (it is not the agent's answer, even for an
+    /// imported session), then the imported-session refusal, then the fallback rule.
+    @Test func whatAFailedReconnectLeadsTo() {
+        let notFound = JSONRPCErrorBody(code: -32002, message: "Resource not found")
+        let internalError = JSONRPCErrorBody(code: -32603, message: "Internal error")
+        func outcome(_ error: Error, imported: Bool = false, messages: Bool = true) -> ReconnectFallback.Outcome {
+            ReconnectFallback.outcome(after: error, imported: imported, sessionHasAgentMessages: messages)
+        }
+        #expect(outcome(CancellationError(), imported: true) == .surface)
+        #expect(outcome(CancellationError()) == .surface)
+        #expect(outcome(notFound, imported: true) == .refuse)
+        #expect(outcome(SessionReconnectUnsupported(), imported: true) == .refuse)
+        #expect(outcome(SessionReconnectUnsupported()) == .startFresh)
+        #expect(outcome(notFound) == .startFresh)
+        #expect(outcome(internalError) == .surface)
+        #expect(outcome(internalError, messages: false) == .startFresh)
+    }
+
     @Test func whichFailuresMayStartOver() {
         let notFound = JSONRPCErrorBody(code: -32002, message: "Resource not found")
         let unsupported = JSONRPCErrorBody(code: -32601, message: "Method not found")

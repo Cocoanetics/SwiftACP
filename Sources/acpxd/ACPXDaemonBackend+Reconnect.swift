@@ -77,14 +77,13 @@ extension ACPXDaemonBackend {
             return try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
         } catch {
             let record = findRecord(sessionId)
-            if record?.importedFrom != nil {
-                throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error))
+            switch ReconnectFallback.outcome(
+                after: error, imported: record?.importedFrom != nil,
+                sessionHasAgentMessages: record?.hasAgentMessages ?? false) {
+            case .surface: throw error
+            case .refuse: throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error))
+            case .startFresh: break
             }
-            let unsupported = error is SessionReconnectUnsupported
-            guard unsupported
-                || ReconnectFallback.shouldStartFresh(
-                    after: error, sessionHasAgentMessages: record?.hasAgentMessages ?? false)
-            else { throw error }
             // Falling back is a `session/new`, and a `session/new` carries the
             // session's options as `_meta` — acpx builds every `createSession` from
             // the options its client was made with, which on a reconnect come from the
