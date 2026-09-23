@@ -74,6 +74,7 @@ enum HelpCatalog {
             HelpOption("--prompt-retries <count>", "Retry failed prompt turns on transient errors (default: 0)"),
             HelpOption(
                 "--json-strict", "Strict JSON mode: requires --format json and suppresses non-JSON stderr output"),
+            HelpOption("--no-fs", "Do not advertise ACP filesystem capabilities"),
             HelpOption("--no-terminal", "Do not advertise ACP terminal capability"),
             HelpOption("--timeout <seconds>", "Maximum time to wait for agent response"),
             HelpOption(

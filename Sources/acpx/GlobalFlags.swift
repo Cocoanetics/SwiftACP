@@ -16,6 +16,9 @@ struct GlobalFlags {
     var permissionPolicy: String?
     var jsonStrict: Bool
     var suppressReads: Bool
+    /// `--no-fs` / `--no-terminal`: whether the client advertises those capabilities.
+    /// `nil` means the flag was not given, so the default applies.
+    var fs: Bool?
     var terminal: Bool?
     var timeoutMs: Int?
     var ttlMs: Int
@@ -59,6 +62,7 @@ enum Flags {
         OptionSpec("append-system-prompt", takesValue: true),
         OptionSpec("prompt-retries", takesValue: true),
         OptionSpec("json-strict"),
+        OptionSpec("fs", negatable: true),
         OptionSpec("terminal", negatable: true),
         OptionSpec("timeout", takesValue: true),
         OptionSpec("ttl", takesValue: true),
@@ -91,6 +95,7 @@ enum Flags {
             permissionPolicy: permissionPolicy,
             jsonStrict: jsonStrict,
             suppressReads: args.flag("suppress-reads"),
+            fs: args.boolean("fs"),
             terminal: args.boolean("terminal"),
             timeoutMs: try args.string("timeout").map(parseTimeoutSeconds) ?? config.timeoutMs,
             ttlMs: try args.string("ttl").map(parseTtlSeconds) ?? config.ttlMs,
@@ -243,4 +248,19 @@ func parsePromptRetries(_ value: String) throws -> Int {
         throw UsageError("Prompt retries must be a non-negative integer")
     }
     return n
+}
+
+extension GlobalFlags {
+    /// What this invocation advertises in `initialize`. `--no-fs` withholds both
+    /// filesystem methods and `--no-terminal` the terminal capability — and the client
+    /// then refuses those methods if an agent calls them anyway, which is what acpx
+    /// means by keeping registered methods aligned with the advertised capabilities.
+    var clientCapabilities: ClientCapabilities {
+        var capabilities = ClientCapabilities.headlessController
+        if fs == false {
+            capabilities.fs = FileSystemCapability(readTextFile: false, writeTextFile: false)
+        }
+        if terminal == false { capabilities.terminal = false }
+        return capabilities
+    }
 }
