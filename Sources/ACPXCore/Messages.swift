@@ -118,7 +118,11 @@ public enum SessionUserContent: Codable, Sendable {
         switch self {
         case .text(let t): return t
         case .mention(_, let content): return content
-        case .image(let image): return image.source.isEmpty ? "[image]" : image.source
+        // acpx returns `source` (the raw base64) here; ours is empty by design, so
+        // name the type instead — a history listing wants a label, not a payload.
+        case .image(let image):
+            guard image.source.isEmpty else { return image.source }
+            return "[image] \(image.mimeType ?? "image")"
         case .audio(let audio): return "[audio] \(audio.mimeType ?? "audio")"
         case .other: return ""
         }
@@ -183,9 +187,16 @@ public enum SessionAgentContent: Codable, Sendable {
 // MARK: - Leaf content types
 
 /// A persisted image block: its `source` string plus optional pixel dimensions.
+///
+/// `source` is acpx's field for the image's base64 data. We record the MIME type
+/// instead and leave `source` empty — see
+/// ``ConversationModel/recordPromptSubmission(into:prompt:timestamp:)-(_,[ContentBlock],_)``
+/// — while still decoding a populated `source` from records acpx itself wrote.
 public struct SessionMessageImage: Codable, Sendable {
     public var source: String
     public var size: Size?
+    /// The image's MIME type, when known. An acpx extension: upstream records omit it.
+    public var mimeType: String?
     public struct Size: Codable, Sendable {
         public var width: Double
         public var height: Double

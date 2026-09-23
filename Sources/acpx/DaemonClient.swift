@@ -133,7 +133,7 @@ enum DaemonClient {
     /// ignores (it streams the same output live via `renderer`). The stop reason
     /// arrives as a terminal ``TurnEndedEvent`` log notification, captured here.
     static func runPrompt(
-        sessionId: String, text: String, wait: Bool = true, renderer: OutputRenderer
+        sessionId: String, blocks: [PromptBlock], wait: Bool = true, renderer: OutputRenderer
     ) async throws -> StopReason {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
@@ -144,7 +144,7 @@ enum DaemonClient {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
         _ = try await ACPXDaemon.Client(proxy: proxy)
-            .runPrompt(sessionId: sessionId, text: text, wait: wait)
+            .runPrompt(sessionId: sessionId, text: "", blocks: blocks, wait: wait)
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
         return await stopReason.value ?? .endTurn

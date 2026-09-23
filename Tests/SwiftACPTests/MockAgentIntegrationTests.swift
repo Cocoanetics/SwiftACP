@@ -33,6 +33,43 @@ struct MockAgentIntegrationTests {
         return ["mock": "'\(python)' '\(fixtures.path)'"]
     }
 
+    /// The client refuses prompt content the agent never advertised, rather than
+    /// letting it be silently ignored — ACP gates image, audio and embedded resource
+    /// blocks on `promptCapabilities`, and an agent handed one it did not claim is
+    /// free to drop it and answer anyway, which reads as a reply to a question it
+    /// never saw. The fixture advertises none of the three.
+    @Test(.enabled(if: mockPythonAvailable))
+    func unadvertisedPromptContentIsRefusedBeforeDispatch() async throws {
+        let overrides = try #require(mockOverride())
+        let agent = try await ACPAgent.launch(
+            agent: "mock", cwd: NSTemporaryDirectory(), permission: .approveAll,
+            inheritStderr: false, overrides: overrides)
+        defer { Task { await agent.close() } }
+        let session = try await agent.newSession()
+
+        let gated: [(ContentBlock, String)] = [
+            (.image(ImageContent(data: "aGk=", mimeType: "image/png")), "image"),
+            (.audio(AudioContent(data: "aGk=", mimeType: "audio/wav")), "audio"),
+            (.resource(EmbeddedResource(resource: ResourceContents(uri: "file:///a", text: "hi"))),
+             "embeddedContext")
+        ]
+        for (block, capability) in gated {
+            let error = await #expect(throws: UnsupportedPromptContentError.self) {
+                try await session.prompt([.text("look"), block])
+            }
+            #expect(error?.index == 1, "\(capability)")
+            #expect(error?.capability == capability)
+            #expect(error?.agent == "mock-agent")
+        }
+
+        // Text and resource_link are never gated, so an ordinary turn still runs.
+        let outcome = try await session.run([
+            .text("hello"),
+            .resourceLink(ResourceLink(uri: "file:///tmp/a.txt", name: "a.txt"))
+        ])
+        #expect(outcome.stopReason == .endTurn)
+    }
+
     @Test(.enabled(if: mockPythonAvailable))
     func fullTurnStreamsAndStops() async throws {
         let overrides = try #require(mockOverride())
