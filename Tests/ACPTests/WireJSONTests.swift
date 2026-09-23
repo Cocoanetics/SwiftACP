@@ -23,6 +23,30 @@ import Testing
         }
     }
 
+    private struct ErrorCase: Decodable {
+        let input: String
+        /// V8's `SyntaxError` message, or `nil` where `JSON.parse` succeeded.
+        let error: String?
+    }
+
+    /// Every message in the fixture is what Node 25 (V8) threw for the input: which
+    /// failure, at which position, line and column, and how much of the text an
+    /// unexpected character quotes.
+    @Test func rejectsWhatJavaScriptRejectsInItsWords() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/v8-json-errors.json")
+        let cases = try JSONDecoder().decode([ErrorCase].self, from: Data(contentsOf: fixture))
+        #expect(cases.count > 80)
+        for testCase in cases {
+            do {
+                _ = try WireJSON.parse(testCase.input)
+                #expect(testCase.error == nil, "\(testCase.input.debugDescription) parsed")
+            } catch let error as WireJSON.SyntaxError {
+                #expect(error.message == testCase.error, "\(testCase.input.debugDescription)")
+            }
+        }
+    }
+
     /// Bytes that are not UTF-8 read as U+FFFD, the way `TextDecoder` reads them.
     @Test func invalidUTF8BecomesTheReplacementCharacter() {
         let bytes = Data([0x22, 0x61, 0xFF, 0x62, 0x22])  // "a<0xFF>b"

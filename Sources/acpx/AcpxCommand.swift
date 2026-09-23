@@ -44,14 +44,10 @@ private func dispatch(_ arguments: [String]) -> Int32 {
         // own top-level handler prints the same message again and exits USAGE.
         Console.errLine("error: \(error.message)")
         return ExitCodes.usage
-    } catch let error as NoSessionError {
-        Console.errLine(error.message)
-        return ExitCodes.noSession
-    } catch let error as CLIError {
-        Console.errLine(error.message)
-        return error.code
     } catch {
-        Console.errLine("error: \(error.localizedDescription)")
-        return ExitCodes.error
+        // Everything else — a broken config, a missing session, a command's own
+        // failure — is reported as acpx's top-level handler reports it, in the output
+        // format the invocation asked for.
+        return TopLevelFailure.report(error, arguments: arguments)
     }
 }

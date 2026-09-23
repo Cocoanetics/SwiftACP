@@ -10,28 +10,6 @@ public let DEFAULT_TTL_MS = 300_000
 public let DEFAULT_QUEUE_MAX_DEPTH = 16
 public let DEFAULT_OUTPUT_FORMAT = "text"
 
-/// The raw shape of `~/.acpx/config.json` / `.acpxrc.json`. All fields optional.
-public struct ACPXConfigFile: Codable, Sendable {
-    public var defaultAgent: String?
-    public var defaultPermissions: String?
-    public var nonInteractivePermissions: String?
-    public var authPolicy: String?
-    public var ttl: Double?
-    public var timeout: Double?
-    public var queueMaxDepth: Int?
-    public var format: String?
-    public var agents: [String: AgentEntry]?
-    public var auth: [String: String]?
-    public var disableExec: Bool?
-    public var mcpServers: [McpServerConfig]?
-
-    /// A custom agent definition: launch command plus optional arguments.
-    public struct AgentEntry: Codable, Sendable {
-        public var command: String
-        public var args: [String]?
-    }
-}
-
 /// Normalizing the config-shaped `McpServerConfig` (a flat stdio/http/sse union,
 /// shared with the daemon's tool DTOs in `SwiftACP`) to the ACP wire shape.
 extension McpServerConfig {
@@ -144,46 +122,98 @@ public struct ConfigError: Error, LocalizedError, CustomStringConvertible {
 /// Reads `~/.acpx/config.json` and `<cwd>/.acpxrc.json` and merges them into a
 /// ``ResolvedAcpxConfig``.
 public enum ConfigLoader {
-    /// Load + resolve config for `cwd` (defaults applied, project over global).
+    /// Load + resolve config for `cwd` (defaults applied, project over global), as
+    /// acpx's `loadResolvedConfig` does: each file must be JSON — as `JSON.parse` reads
+    /// it — with an object at the top, and each field valid, or the whole load fails
+    /// naming the field and the file.
     ///
-    /// - Parameter mcpConfigPath: an explicit `--mcp-config` file (relative paths
-    ///   resolve from `cwd`). Its `mcpServers` array *replaces* the project/global
-    ///   one for this invocation, matching npm acpx; the file must exist and carry
-    ///   that array.
-    public static func load(cwd: String, mcpConfigPath: String? = nil) throws -> ResolvedAcpxConfig {
+    /// Fields resolve in acpx's order, project first: the project's value when it has
+    /// one, else the global's, else the default — each checked only when reached, so a
+    /// valid project value leaves the global one unchecked. Agents and auth merge like
+    /// a JavaScript spread, `{...global, ...project}`.
+    ///
+    /// - Parameters:
+    ///   - mcpConfigPath: an explicit `--mcp-config` file (relative paths resolve from
+    ///     `cwd`). Its `mcpServers` array *replaces* the project/global one for this
+    ///     invocation, matching npm acpx; the file must exist and carry that array.
+    ///   - ownMcpServers: the caller brings its own servers (the daemon's tools), which
+    ///     replace the config files' — so theirs are neither read nor checked, as acpx
+    ///     skips them under `--mcp-config`.
+    public static func load(
+        cwd: String, mcpConfigPath: String? = nil, ownMcpServers: Bool = false
+    ) throws -> ResolvedAcpxConfig {
         let globalPath = ACPXPaths.globalConfigPath
         let projectPath = ACPXPaths.projectConfigPath(cwd: cwd)
-        let globalFile = try readFile(globalPath)
-        let projectFile = try readFile(projectPath)
-        let global = globalFile?.file
-        let project = projectFile?.file
-        let explicitMcp = try mcpConfigPath.map { try loadExplicitMcpServers($0, cwd: cwd) }
+        let global = try readFile(globalPath)
+        let project = try readFile(projectPath)
+        let explicitMcp = try mcpConfigPath.map { try readExplicitMcpFile($0, cwd: cwd) }
 
-        let agents = mergeAgents(global?.agents, project?.agents)
-        // Every agent is listed: one the order-only read missed goes last rather than
-        // being dropped from the help.
-        var agentOrder = WireJSON.propertyOrder(
-            (globalFile?.agentOrder ?? []) + (projectFile?.agentOrder ?? []))
-        agentOrder += agents.keys.filter { !agentOrder.contains($0) }.sorted()
-        let auth = (global?.auth ?? [:]).merging(project?.auth ?? [:]) { _, new in new }
+        func scalar<T>(_ key: String, _ parse: (WireJSON?, String) throws -> T?) throws -> T? {
+            if let project, let value = try parse(project[key], project.path) { return value }
+            if let global, let value = try parse(global[key], global.path) { return value }
+            return nil
+        }
+        typealias Fields = ConfigFields
+        let defaultAgent = try scalar("defaultAgent", Fields.defaultAgent) ?? AgentRegistry.defaultAgent
+        let defaultPermissions = try scalar("defaultPermissions") {
+            try Fields.choice($0, $1, field: "defaultPermissions",
+                              allowed: ["approve-all", "approve-reads", "deny-all"],
+                              expected: "approve-all, approve-reads, or deny-all")
+        } ?? DEFAULT_PERMISSION_MODE
+        let nonInteractive = try scalar("nonInteractivePermissions") {
+            try Fields.choice($0, $1, field: "nonInteractivePermissions", allowed: ["deny", "fail"],
+                              expected: "deny or fail")
+        } ?? DEFAULT_NON_INTERACTIVE_PERMISSION_POLICY
+        let authPolicy = try scalar("authPolicy") {
+            try Fields.choice($0, $1, field: "authPolicy", allowed: ["skip", "fail"], expected: "skip or fail")
+        } ?? DEFAULT_AUTH_POLICY
+        let ttlMs = try scalar("ttl", Fields.ttlMs) ?? DEFAULT_TTL_MS
+        // A `timeout` key in the project — even `null` — settles it (`resolveTimeoutMs`).
+        let timeoutMs: Int?
+        if let project, project.has("timeout") {
+            timeoutMs = try Fields.timeoutMs(project["timeout"], project.path)
+        } else if let global, global.has("timeout") {
+            timeoutMs = try Fields.timeoutMs(global["timeout"], global.path)
+        } else {
+            timeoutMs = nil
+        }
+        let queueMaxDepth = try scalar("queueMaxDepth", Fields.queueMaxDepth) ?? DEFAULT_QUEUE_MAX_DEPTH
+        let format = try scalar("format") {
+            try Fields.choice($0, $1, field: "format", allowed: ["text", "json", "quiet"],
+                              expected: "text, json, or quiet")
+        } ?? DEFAULT_OUTPUT_FORMAT
+
+        let (agents, agentNames) = try mergedAgents(global, project)
+        let auth = try mergedAuth(global, project)
+        // `resolveMcpServers`: an explicit file's, else the project's, else the global's.
+        let mcpServers: [McpServerConfig]
+        if let explicitMcp {
+            mcpServers = try Fields.mcpServers(explicitMcp["mcpServers"], explicitMcp.path)
+        } else if ownMcpServers {
+            mcpServers = []
+        } else if let project, project.has("mcpServers") {
+            mcpServers = try Fields.mcpServers(project["mcpServers"], project.path)
+        } else if let global, global.has("mcpServers") {
+            mcpServers = try Fields.mcpServers(global["mcpServers"], global.path)
+        } else {
+            mcpServers = []
+        }
+        let disableExec = try scalar("disableExec", Fields.disableExec) ?? false
 
         return ResolvedAcpxConfig(
-            defaultAgent: AgentRegistry.normalize(
-                project?.defaultAgent ?? global?.defaultAgent ?? AgentRegistry.defaultAgent),
-            defaultPermissions: project?.defaultPermissions ?? global?.defaultPermissions
-                ?? DEFAULT_PERMISSION_MODE,
-            nonInteractivePermissions: project?.nonInteractivePermissions
-                ?? global?.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_PERMISSION_POLICY,
-            authPolicy: project?.authPolicy ?? global?.authPolicy ?? DEFAULT_AUTH_POLICY,
-            ttlMs: msFromSeconds(project?.ttl ?? global?.ttl) ?? DEFAULT_TTL_MS,
-            timeoutMs: msFromSeconds(project?.timeout ?? global?.timeout),
-            queueMaxDepth: project?.queueMaxDepth ?? global?.queueMaxDepth ?? DEFAULT_QUEUE_MAX_DEPTH,
-            format: project?.format ?? global?.format ?? DEFAULT_OUTPUT_FORMAT,
+            defaultAgent: defaultAgent,
+            defaultPermissions: defaultPermissions,
+            nonInteractivePermissions: nonInteractive,
+            authPolicy: authPolicy,
+            ttlMs: ttlMs,
+            timeoutMs: timeoutMs,
+            queueMaxDepth: queueMaxDepth,
+            format: format,
             agents: agents,
-            agentOrder: agentOrder,
+            agentOrder: WireJSON.propertyOrder(agentNames),
             auth: auth,
-            disableExec: project?.disableExec ?? global?.disableExec ?? false,
-            mcpServers: explicitMcp?.servers ?? project?.mcpServers ?? global?.mcpServers ?? [],
+            disableExec: disableExec,
+            mcpServers: mcpServers,
             globalPath: globalPath.path,
             projectPath: projectPath.path,
             mcpConfigPath: explicitMcp?.path,
@@ -191,52 +221,82 @@ public enum ConfigLoader {
             hasProjectConfig: project != nil)
     }
 
-    /// A config file as decoded, plus the one thing decoding loses: the order of its
-    /// `agents`, which a Swift dictionary cannot hold.
-    private struct LoadedFile {
-        var file: ACPXConfigFile
-        var agentOrder: [String]
+    /// `{...parseAgents(global), ...parseAgents(project)}`: each file's agents in order,
+    /// a name in both keeping its global place and taking the project's command.
+    private static func mergedAgents(
+        _ global: ConfigFields.File?, _ project: ConfigFields.File?
+    ) throws -> (agents: [String: String], names: [String]) {
+        var agents: [String: String] = [:]
+        var names: [String] = []
+        for file in [global, project].compactMap({ $0 }) {
+            for (name, command) in try ConfigFields.agents(file["agents"], file.path) ?? [] {
+                agents[name] = command
+                names.append(name)
+            }
+        }
+        return (agents, names)
     }
 
-    private static func readFile(_ url: URL) throws -> LoadedFile? {
-        guard let data = try? Data(contentsOf: url) else { return nil } // ENOENT → not an error
+    /// `{...parseAuth(global), ...parseAuth(project)}`.
+    private static func mergedAuth(
+        _ global: ConfigFields.File?, _ project: ConfigFields.File?
+    ) throws -> [String: String] {
+        var auth: [String: String] = [:]
+        for file in [global, project].compactMap({ $0 }) {
+            for (methodId, credential) in try ConfigFields.auth(file["auth"], file.path) ?? [] {
+                auth[methodId] = credential
+            }
+        }
+        return auth
+    }
+
+    /// acpx's `readConfigFile`: a missing file is no config; one that cannot be read
+    /// fails as Node's read does; the text must be JSON as `JSON.parse` reads it (a BOM
+    /// included) and hold an object.
+    private static func readFile(_ url: URL) throws -> ConfigFields.File? {
+        let data: Data
         do {
-            let file = try JSONDecoder().decode(ACPXConfigFile.self, from: data)
-            return LoadedFile(file: file, agentOrder: agentNames(in: data))
+            data = try Data(contentsOf: url)
         } catch {
-            throw ConfigError("Invalid config in \(url.path): \(error.localizedDescription)")
+            if let failure = readFailure(error, path: url.path) { throw failure }
+            return nil
+        }
+        let root: WireJSON
+        do {
+            root = try WireJSON.parse(String(decoding: data, as: UTF8.self))
+        } catch let error as WireJSON.SyntaxError {
+            throw ConfigError("Invalid JSON in \(url.path): \(error.message)")
+        }
+        guard case .object = root else {
+            throw ConfigError("Invalid config in \(url.path): expected top-level JSON object")
+        }
+        return ConfigFields.File(path: url.path, root: root)
+    }
+
+    /// Node's message for a config file that exists but cannot be read; `nil` when it
+    /// does not exist.
+    private static func readFailure(_ error: Error, path: String) -> ConfigError? {
+        let posix = ((error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError)?.code
+        switch posix.map({ POSIXErrorCode(rawValue: Int32($0)) }) {
+        case .some(.EISDIR): return ConfigError("EISDIR: illegal operation on a directory, read")
+        case .some(.EACCES): return ConfigError("EACCES: permission denied, open '\(path)'")
+        default:
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return ConfigError("EISDIR: illegal operation on a directory, read")
+            }
+            return nil
         }
     }
 
-    /// The `agents` names as acpx's `parseAgents` produces them: `Object.entries` order,
-    /// each normalized, a name repeated after normalizing keeping its first place.
-    ///
-    /// A leading UTF-8 BOM is skipped, as `JSONDecoder` skips it: the file has already
-    /// decoded by then, so its order must not be lost to it (whether such a file should
-    /// load at all — acpx refuses it — is #69).
-    static func agentNames(in data: Data) -> [String] {
-        let text = data.starts(with: [0xEF, 0xBB, 0xBF]) ? data.dropFirst(3) : data
-        guard case .object(let members)? = WireJSON(parsing: Data(text))?["agents"] else { return [] }
-        return WireJSON.propertyOrder(WireJSON.orderedForPrinting(members).map {
-            AgentRegistry.normalize(String(decoding: $0.key, as: UTF16.self))
-        })
-    }
-
-    /// Read a `--mcp-config` file: a JSON object whose top-level `mcpServers` array
-    /// has the config-file entry shape. Unlike the config files, a missing file is an
-    /// error, and so is one without the array — with npm acpx's two messages
-    /// (`loadExplicitMcpConfig` / `parseMcpServers`).
-    private static func loadExplicitMcpServers(
-        _ rawPath: String, cwd: String
-    ) throws -> (path: String, servers: [McpServerConfig]) {
+    /// Read a `--mcp-config` file. Unlike the config files, a missing file is an error;
+    /// its `mcpServers` are checked later, where acpx checks them.
+    private static func readExplicitMcpFile(_ rawPath: String, cwd: String) throws -> ConfigFields.File {
         let path = ACPXPaths.resolve(rawPath, base: cwd)
-        guard let file = try readFile(URL(fileURLWithPath: path))?.file else {
+        guard let file = try readFile(URL(fileURLWithPath: path)) else {
             throw ConfigError("MCP config file not found: \(path)")
         }
-        guard let servers = file.mcpServers else {
-            throw ConfigError("Invalid mcpServers in \(path): expected array")
-        }
-        return (path, servers)
+        return file
     }
 
     /// Normalize a raw `--mcp-config` value: blank (or the bare `--` terminator)
@@ -246,42 +306,5 @@ public enum ConfigLoader {
             !trimmed.isEmpty, trimmed != "--"
         else { return nil }
         return trimmed
-    }
-
-    private static func msFromSeconds(_ seconds: Double?) -> Int? {
-        guard let seconds else { return nil }
-        return Int((seconds * 1000).rounded())
-    }
-
-    /// Shallow merge `{...global, ...project}`, normalize keys, flatten to command strings.
-    private static func mergeAgents(
-        _ global: [String: ACPXConfigFile.AgentEntry]?,
-        _ project: [String: ACPXConfigFile.AgentEntry]?
-    ) -> [String: String] {
-        var result: [String: String] = [:]
-        for (name, entry) in global ?? [:] {
-            result[AgentRegistry.normalize(name)] = flatten(entry)
-        }
-        for (name, entry) in project ?? [:] {
-            result[AgentRegistry.normalize(name)] = flatten(entry)
-        }
-        return result
-    }
-
-    private static func flatten(_ entry: ACPXConfigFile.AgentEntry) -> String {
-        let command = entry.command.trimmingCharacters(in: .whitespaces)
-        guard let args = entry.args, !args.isEmpty else { return command }
-        let quoted = args.map { jsonQuote($0) }.joined(separator: " ")
-        return "\(command) \(quoted)"
-    }
-
-    /// `JSON.stringify(value)` for a string — double-quoted with JSON escaping.
-    private static func jsonQuote(_ value: String) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes]
-        if let data = try? encoder.encode(value), let s = String(data: data, encoding: .utf8) {
-            return s
-        }
-        return "\"\(value)\""
     }
 }
