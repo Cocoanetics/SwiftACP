@@ -44,7 +44,9 @@ final class ConnectOutputBuffer: @unchecked Sendable {
     }
 
     /// The ids of reconnect requests that were answered with an error. Like acpx's, the
-    /// ids of both sides share one table, in the order the messages came.
+    /// ids of both sides share one table, in the order the messages came — which lets
+    /// an agent request that reuses the id hide or keep the wrong messages
+    /// (openclaw/acpx#764); kept as acpx has it until upstream changes it.
     private static func failedReconnectIds(_ messages: [WireJSON]) -> Set<String> {
         var methodById: [String: String] = [:]
         var failed: Set<String> = []

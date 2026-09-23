@@ -76,7 +76,7 @@ extension DaemonToolsTests {
     /// an id, `1` is not `"1"`, and one table serves the ids of both sides in the order
     /// the messages came. So an agent request that reuses the failed load's id hides
     /// nothing when it comes before the load's error, and takes the client's reply to it
-    /// along when it comes after.
+    /// along when it comes after (openclaw/acpx#764).
     @Test func theFallbackFilterKeysIdsAsAcpxDoes() {
         func flushed(_ messages: [(JSONRPCPeer.WireDirection, String)]) -> [String] {
             let buffer = ConnectOutputBuffer()
