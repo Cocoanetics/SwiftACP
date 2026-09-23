@@ -114,7 +114,7 @@ struct ReplaySuppressionTests {
         let delivered = Task { await texts(stream) }
 
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
-        try await client.waitForSessionUpdateDrain(idle: .milliseconds(200), timeout: .seconds(10))
+        try await client.waitForSessionUpdateDrain(idleMilliseconds: 200, timeoutMilliseconds: 10_000)
         await client.endSubscription(subscription)
 
         #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 10))
@@ -128,7 +128,7 @@ struct ReplaySuppressionTests {
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
 
         let error = await #expect(throws: SessionReplayDrainTimeout.self) {
-            try await client.waitForSessionUpdateDrain(idle: .milliseconds(200), timeout: .milliseconds(400))
+            try await client.waitForSessionUpdateDrain(idleMilliseconds: 200, timeoutMilliseconds: 400)
         }
         #expect(error?.localizedDescription == "Timed out waiting for session replay drain after 400ms")
         await client.close()

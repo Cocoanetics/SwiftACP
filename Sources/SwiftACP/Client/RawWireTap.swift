@@ -44,8 +44,11 @@ public final class RawWireTap: @unchecked Sendable {
     }
 
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        let (observer, suppressing) = lock.withLock { (observer, suppressingSessionUpdates) }
-        guard let observer else { return }
+        lock.lock()
+        let current = self.observer
+        let suppressing = suppressingSessionUpdates
+        lock.unlock()
+        guard let observer = current else { return }
         if suppressing, direction == .inbound, Self.isSessionUpdateNotification(body) { return }
         observer(direction, body)
     }

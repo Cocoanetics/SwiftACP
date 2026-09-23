@@ -48,9 +48,10 @@ public actor ACPAgentConnection {
     /// While on, `session/update`s are not delivered: they replay the history a
     /// `session/load` is restoring — acpx's `suppressSessionUpdates`.
     var suppressingSessionUpdates = false
-    /// When the latest `session/update` arrived, delivered or not — what
-    /// ``waitForSessionUpdateDrain(idle:timeout:)`` watches go quiet.
-    var lastSessionUpdate: ContinuousClock.Instant?
+    /// When the latest `session/update` arrived, delivered or not, in `DispatchTime`
+    /// nanoseconds — what ``waitForSessionUpdateDrain(idleMilliseconds:timeoutMilliseconds:)``
+    /// watches go quiet.
+    var lastSessionUpdate: UInt64?
 
     /// How each session's latest turn settled its permissions; reset when a turn
     /// starts. See ``permissionStats(for:)``.

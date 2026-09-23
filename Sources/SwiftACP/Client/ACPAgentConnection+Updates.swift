@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 import JSONFoundation
 
@@ -14,7 +15,7 @@ extension ACPAgentConnection {
         guard method == "session/update", let params,
             let notification = try? params.decoded(SessionNotification.self)
         else { return }
-        lastSessionUpdate = ContinuousClock.now
+        lastSessionUpdate = DispatchTime.now().uptimeNanoseconds
         if suppressingSessionUpdates { return }
         for sink in updateSinks.values {
             sink.yield(notification)
@@ -36,28 +37,35 @@ extension ACPAgentConnection {
         suppressingSessionUpdates = previous
     }
 
-    /// Wait until no `session/update` has arrived for `idle` — the history an agent
-    /// replays for `session/load` has stopped — as acpx's `waitForSessionUpdateDrain`
-    /// does after every load. Throws ``SessionReplayDrainTimeout`` when that has not
-    /// happened within `timeout`.
+    /// Wait until no `session/update` has arrived for `idleMilliseconds` — the history
+    /// an agent replays for `session/load` has stopped — as acpx's
+    /// `waitForSessionUpdateDrain` does after every load. Throws
+    /// ``SessionReplayDrainTimeout`` when that has not happened within
+    /// `timeoutMilliseconds`.
     public func waitForSessionUpdateDrain(
-        idle: Duration = .milliseconds(80), timeout: Duration = .seconds(5)
+        idleMilliseconds: Int = 80, timeoutMilliseconds: Int = 5000
     ) async throws {
-        let clock = ContinuousClock()
-        let idle = max(idle, .zero)
-        let timeout = max(idle, timeout)
-        let start = clock.now
-        let deadline = start + timeout
+        let idleMs = max(idleMilliseconds, 0)
+        let timeoutMs = max(idleMs, timeoutMilliseconds)
+        let idle = UInt64(idleMs) * 1_000_000
+        let start = DispatchTime.now().uptimeNanoseconds
+        let deadline = start + UInt64(timeoutMs) * 1_000_000
         while true {
             let quietAt = max(start, lastSessionUpdate ?? start) + idle
             guard quietAt <= deadline else {
                 // Updates only move it later: this wait can no longer end in time.
-                try await clock.sleep(until: deadline)
-                throw SessionReplayDrainTimeout(timeout: timeout)
+                try await Self.sleep(until: deadline)
+                throw SessionReplayDrainTimeout(timeoutMilliseconds: timeoutMs)
             }
-            if clock.now >= quietAt { return }
-            try await clock.sleep(until: quietAt)
+            if DispatchTime.now().uptimeNanoseconds >= quietAt { return }
+            try await Self.sleep(until: quietAt)
         }
+    }
+
+    /// Sleep until `instant`, in `DispatchTime` nanoseconds.
+    private static func sleep(until instant: UInt64) async throws {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if instant > now { try await Task.sleep(nanoseconds: instant - now) }
     }
 }
 
@@ -65,15 +73,13 @@ extension ACPAgentConnection {
 /// kept arriving for the whole drain — acpx's error for the same case, which fails
 /// the load.
 public struct SessionReplayDrainTimeout: LocalizedError, Equatable, Sendable {
-    public let timeout: Duration
+    public let timeoutMilliseconds: Int
 
-    public init(timeout: Duration) {
-        self.timeout = timeout
+    public init(timeoutMilliseconds: Int) {
+        self.timeoutMilliseconds = timeoutMilliseconds
     }
 
     public var errorDescription: String? {
-        let (seconds, attoseconds) = timeout.components
-        let milliseconds = seconds * 1000 + attoseconds / 1_000_000_000_000_000
-        return "Timed out waiting for session replay drain after \(milliseconds)ms"
+        "Timed out waiting for session replay drain after \(timeoutMilliseconds)ms"
     }
 }
