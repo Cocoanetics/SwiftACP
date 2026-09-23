@@ -47,7 +47,7 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// When true, spawned agents inherit the daemon's stderr — surfacing agent
     /// diagnostics (e.g. rate-limit messages) that otherwise stay hidden.
-    private let inheritAgentStderr: Bool
+    let inheritAgentStderr: Bool
 
     /// The singleton lock the daemon holds for its lifetime and releases on a graceful
     /// shutdown (nil in tests that don't exercise the lifecycle). Released by the
@@ -145,7 +145,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// built-in name or a config-defined alias (`config.agents`) maps to its full
     /// command; a full command line passes through unchanged. So an MCP client can
     /// say `agentCommand: "codex-alice"` and get the same wrapper the CLI uses.
-    private func launchCommand(for agentCommand: String, config: ResolvedAcpxConfig) -> String {
+    func launchCommand(for agentCommand: String, config: ResolvedAcpxConfig) -> String {
         AgentRegistry.command(for: agentCommand, overrides: config.agents) ?? agentCommand
     }
 
@@ -287,65 +287,5 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let entry = live[sessionId] else { return false }
         try await entry.session.cancel()
         return true
-    }
-    /// Return the live entry for `sessionId`, launching the agent and reconnecting
-    /// if needed. When the agent no longer knows the session, fall back to a fresh
-    /// `session/new` on the same launch, still keyed under the caller's session id.
-    ///
-    /// This is the one place a connection is made, so it is where the session's MCP
-    /// servers are resolved — like npm acpx's runtime, which resolves them "at
-    /// connection creation with the session's stored identity". `mcpServers` is the
-    /// record's own set; `nil` falls back to the cwd's config-file servers. A held
-    /// connection keeps the set it was made with, so a record that now asks for a
-    /// different one is refused rather than silently served with the old servers.
-    func ensure(
-        sessionId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?
-    ) async throws -> Live {
-        let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
-        if let existing = live[sessionId] {
-            guard existing.sessionSpecs == sessionSpecs else {
-                throw DaemonError.mcpConfigConflict(sessionId)
-            }
-            return existing
-        }
-        let cwd = try resolveCwd(rawCwd)
-        // Resolve config for this cwd so the agent gets the same injected `auth`
-        // credentials / auth policy (and config-alias resolution) the CLI applies.
-        let config = try ConfigLoader.load(cwd: cwd)
-        let specs = try sessionSpecs ?? config.mcpServerSpecs()
-        // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
-        // the record carries them, so every reconnect advertises what the session was
-        // created with rather than the defaults.
-        let capabilities =
-            findRecord(sessionId)?.acpx?.clientCapabilities?.advertised ?? .headlessController
-        let handle = try await ACPAgent.launch(
-            agent: launchCommand(for: agentCommand, config: config), cwd: cwd, permission: .approveAll,
-            capabilities: capabilities,
-            authCredentials: config.auth, authPolicy: config.authPolicy,
-            inheritStderr: inheritAgentStderr)
-        let session: ACPSession
-        do {
-            session = try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
-        } catch {
-            let response = try await handle.connection.newSession(
-                NewSessionRequest(cwd: cwd, mcpServers: specs))
-            session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
-        }
-        let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
-        live[sessionId] = entry
-        return entry
-    }
-    /// Expand and validate a caller-supplied working directory. MCP clients have no
-    /// shell, so expand `~` ourselves (the CLI relies on the shell) and require the
-    /// directory to exist — otherwise the agent fails with a cryptic internal error.
-    private func resolveCwd(_ rawCwd: String) throws -> String {
-        let cwd = (rawCwd as NSString).expandingTildeInPath
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory),
-            isDirectory.boolValue
-        else {
-            throw DaemonError.invalidCwd(rawCwd)
-        }
-        return cwd
     }
 }
