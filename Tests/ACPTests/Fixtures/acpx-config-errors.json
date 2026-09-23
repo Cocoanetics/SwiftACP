@@ -1,0 +1,344 @@
+[
+ {
+  "global": null,
+  "project": "{\"defaultAgent\": \"\"}",
+  "exitCode": 1,
+  "error": "Invalid config defaultAgent in <project>: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"defaultAgent\": 5}",
+  "exitCode": 1,
+  "error": "Invalid config defaultAgent in <project>: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"defaultPermissions\": \"yes\"}",
+  "exitCode": 1,
+  "error": "Invalid config defaultPermissions in <project>: expected approve-all, approve-reads, or deny-all"
+ },
+ {
+  "global": null,
+  "project": "{\"nonInteractivePermissions\": \"maybe\"}",
+  "exitCode": 1,
+  "error": "Invalid config nonInteractivePermissions in <project>: expected deny or fail"
+ },
+ {
+  "global": null,
+  "project": "{\"authPolicy\": 1}",
+  "exitCode": 1,
+  "error": "Invalid config authPolicy in <project>: expected skip or fail"
+ },
+ {
+  "global": null,
+  "project": "{\"ttl\": -1}",
+  "exitCode": 1,
+  "error": "Invalid config ttl in <project>: expected non-negative seconds"
+ },
+ {
+  "global": null,
+  "project": "{\"ttl\": \"5\"}",
+  "exitCode": 1,
+  "error": "Invalid config ttl in <project>: expected non-negative seconds"
+ },
+ {
+  "global": null,
+  "project": "{\"ttl\": 1e10}",
+  "exitCode": 1,
+  "error": "Invalid config ttl in <project>: exceeds maximum supported timer delay"
+ },
+ {
+  "global": null,
+  "project": "{\"ttl\": 0}",
+  "exitCode": 0,
+  "error": null
+ },
+ {
+  "global": null,
+  "project": "{\"ttl\": 0.0001}",
+  "exitCode": 0,
+  "error": null
+ },
+ {
+  "global": null,
+  "project": "{\"timeout\": 0}",
+  "exitCode": 1,
+  "error": "Invalid config timeout in <project>: expected positive seconds or null"
+ },
+ {
+  "global": null,
+  "project": "{\"timeout\": null}",
+  "exitCode": 0,
+  "error": null
+ },
+ {
+  "global": null,
+  "project": "{\"timeout\": 3e6}",
+  "exitCode": 1,
+  "error": "Invalid config timeout in <project>: exceeds maximum supported timer delay"
+ },
+ {
+  "global": null,
+  "project": "{\"queueMaxDepth\": 1.5}",
+  "exitCode": 1,
+  "error": "Invalid config queueMaxDepth in <project>: expected positive integer"
+ },
+ {
+  "global": null,
+  "project": "{\"queueMaxDepth\": 0}",
+  "exitCode": 1,
+  "error": "Invalid config queueMaxDepth in <project>: expected positive integer"
+ },
+ {
+  "global": null,
+  "project": "{\"format\": \"xml\"}",
+  "exitCode": 1,
+  "error": "Invalid config format in <project>: expected text, json, or quiet"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": []}",
+  "exitCode": 1,
+  "error": "Invalid config agents in <project>: expected object"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": 5}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a in <project>: expected object with command"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"argv\": [], \"command\": \"x\"}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a in <project>: use argv alone, not command or args"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"argv\": []}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.argv in <project>: expected non-empty array of strings"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"argv\": [\"x\", 5]}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.argv[1] in <project>: expected string"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"argv\": [\"\"]}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.argv[0] in <project>: expected non-empty executable"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"command\": \"\"}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.command in <project>: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"command\": \"my cmd\", \"args\": [\"x\"]}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.command in <project>: command must be an unquoted executable with no whitespace when args is present; migrate the complete launch to argv"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"command\": \"x\", \"args\": \"y\"}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.args in <project>: expected array of strings"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"a\": {\"command\": \"x\", \"args\": [1]}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a.args[0] in <project>: expected string"
+ },
+ {
+  "global": null,
+  "project": "{\"agents\": {\"Ab\": {\"command\": \" \"}}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.Ab.command in <project>: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"auth\": []}",
+  "exitCode": 1,
+  "error": "Invalid config auth in <project>: expected object"
+ },
+ {
+  "global": null,
+  "project": "{\"auth\": {\"k\": \"\"}}",
+  "exitCode": 1,
+  "error": "Invalid config auth.k in <project>: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"disableExec\": \"yes\"}",
+  "exitCode": 1,
+  "error": "Invalid config disableExec in <project>: expected boolean"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": {}}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers in <project>: expected array"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [5]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>: expected object"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.name: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\"}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.command: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"type\": \"ws\"}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.type: expected http, sse, or stdio"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"type\": null}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.type: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"type\": \"http\"}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.url: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"args\": \"x\"}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.args: expected array"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"args\": [1]}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.args[0]: expected string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"env\": {}}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.env: expected array"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"env\": [5]}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.env[0]: expected object"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"env\": [{\"name\": \"\", \"value\": \"v\"}]}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.env[0].name: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"env\": [{\"name\": \"N\", \"value\": 1}]}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>.env[0].value: expected string"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": [{\"name\": \"a\", \"command\": \"c\", \"_meta\": 5}]}",
+  "exitCode": 1,
+  "error": "Invalid mcpServers[0] in <project>._meta: expected object or null"
+ },
+ {
+  "global": null,
+  "project": "{\"format\": \"xml\", \"defaultAgent\": \"\"}",
+  "exitCode": 1,
+  "error": "Invalid config defaultAgent in <project>: expected non-empty string"
+ },
+ {
+  "global": null,
+  "project": "{\"disableExec\": 1, \"agents\": 5}",
+  "exitCode": 1,
+  "error": "Invalid config agents in <project>: expected object"
+ },
+ {
+  "global": null,
+  "project": "{\"mcpServers\": 5, \"auth\": 5}",
+  "exitCode": 1,
+  "error": "Invalid config auth in <project>: expected object"
+ },
+ {
+  "global": null,
+  "project": "[]",
+  "exitCode": 1,
+  "error": "Invalid config in <project>: expected top-level JSON object"
+ },
+ {
+  "global": null,
+  "project": "\"str\"",
+  "exitCode": 1,
+  "error": "Invalid config in <project>: expected top-level JSON object"
+ },
+ {
+  "global": null,
+  "project": "null",
+  "exitCode": 1,
+  "error": "Invalid config in <project>: expected top-level JSON object"
+ },
+ {
+  "global": null,
+  "project": "﻿{}",
+  "exitCode": 1,
+  "error": "Invalid JSON in <project>: Unexpected token '﻿', \"﻿{}\" is not valid JSON"
+ },
+ {
+  "global": null,
+  "project": "{\"a\":",
+  "exitCode": 1,
+  "error": "Invalid JSON in <project>: Unexpected end of JSON input"
+ },
+ {
+  "global": "{\"format\": \"xml\"}",
+  "project": "{\"format\": \"json\"}",
+  "exitCode": 0,
+  "error": null
+ },
+ {
+  "global": "{\"format\": \"xml\"}",
+  "project": "{\"ttl\": 5}",
+  "exitCode": 1,
+  "error": "Invalid config format in <global>: expected text, json, or quiet"
+ },
+ {
+  "global": "{\"agents\": {\"a\": 5}}",
+  "project": "{\"agents\": {\"b\": 5}}",
+  "exitCode": 1,
+  "error": "Invalid config agents.a in <global>: expected object with command"
+ },
+ {
+  "global": "{\"a\":",
+  "project": "{\"b\":",
+  "exitCode": 1,
+  "error": "Invalid JSON in <global>: Unexpected end of JSON input"
+ },
+ {
+  "global": "{\"timeout\": -5}",
+  "project": null,
+  "exitCode": 1,
+  "error": "Invalid config timeout in <global>: expected positive seconds or null"
+ }
+]

@@ -114,9 +114,10 @@ import Testing
             let cwd = try makeProjectDir()
             let bad = cwd + "/bad.json"
             try #"{"mcpServers":[{"name":"broken"}]}"#.write(toFile: bad, atomically: true, encoding: .utf8)
-            // Loading succeeds (the shape is fine); normalizing for the wire rejects it.
-            let config = try ConfigLoader.load(cwd: cwd, mcpConfigPath: bad)
-            #expect(throws: ConfigError.self) { try config.mcpServerSpecs() }
+            // Refused while loading, as acpx's `parseMcpServers` refuses it — with its path,
+            // the field after the file.
+            let error = #expect(throws: ConfigError.self) { try ConfigLoader.load(cwd: cwd, mcpConfigPath: bad) }
+            #expect(error?.message == "Invalid mcpServers[0] in \(bad).command: expected non-empty string")
         }
     }
 

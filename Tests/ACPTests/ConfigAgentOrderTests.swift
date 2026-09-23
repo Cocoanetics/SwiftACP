@@ -33,14 +33,14 @@ import Testing
         }
     }
 
-    /// `JSONDecoder` loads a file that starts with a BOM, so its agents are listed
-    /// too — in order (review of #67). Whether it should load at all is #69.
-    @Test func aByteOrderMarkDoesNotHideTheAgents() async throws {
+    /// A file that starts with a byte-order mark is not JSON to `JSON.parse`, so acpx
+    /// refuses it — and so does this (#69).
+    @Test func aByteOrderMarkIsRefusedAsAcpxRefusesIt() async throws {
         try await withIsolatedStore {
-            let cwd = try project(
-                global: nil, project: "\u{FEFF}" + #"{"agents":{"zeta":{"command":"z"},"alpha":{"command":"a"}}}"#)
-            let config = try ConfigLoader.load(cwd: cwd)
-            #expect(config.agentOrder == ["zeta", "alpha"])
+            let cwd = try project(global: nil, project: "\u{FEFF}" + #"{"agents":{"zeta":{"command":"z"}}}"#)
+            let error = #expect(throws: ConfigError.self) { try ConfigLoader.load(cwd: cwd) }
+            let expected = #"Unexpected token '\#u{FEFF}', "\#u{FEFF}{"agents""... is not valid JSON"#
+            #expect(error?.message.hasSuffix(expected) == true)
         }
     }
 
@@ -53,10 +53,17 @@ import Testing
 
     /// `Object.entries` lists array-index names first, in numeric order; names are
     /// trimmed and lowercased, and one repeated after that keeps its first place.
-    @Test func namesAreOrderedAsAJavaScriptObjectOrdersThem() {
-        #expect(ConfigLoader.agentNames(in: Data(#"{"agents":{"b":{},"2":{},"1":{}}}"#.utf8)) == ["1", "2", "b"])
-        #expect(ConfigLoader.agentNames(in: Data(#"{"agents":{" Beta ":{},"beta":{},"gamma":{}}}"#.utf8))
-            == ["beta", "gamma"])
-        #expect(ConfigLoader.agentNames(in: Data(#"{"defaultAgent":"codex"}"#.utf8)).isEmpty)
+    @Test func namesAreOrderedAsAJavaScriptObjectOrdersThem() async throws {
+        try await withIsolatedStore {
+            let numeric = try project(
+                global: nil, project: #"{"agents":{"b":{"command":"b"},"2":{"command":"2"},"1":{"command":"1"}}}"#)
+            #expect(try ConfigLoader.load(cwd: numeric).agentOrder == ["1", "2", "b"])
+            let repeated = try project(
+                global: nil,
+                project: #"{"agents":{" Beta ":{"command":"x"},"beta":{"command":"y"},"gamma":{"command":"z"}}}"#)
+            let config = try ConfigLoader.load(cwd: repeated)
+            #expect(config.agentOrder == ["beta", "gamma"])
+            #expect(config.agents["beta"] == "y")
+        }
     }
 }

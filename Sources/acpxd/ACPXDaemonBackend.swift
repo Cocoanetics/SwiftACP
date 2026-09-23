@@ -80,7 +80,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         mcpServers: [McpServerConfig]? = nil
     ) async throws -> String {
         let cwd = try resolveCwd(rawCwd)
-        let config = try ConfigLoader.load(cwd: cwd)
+        let config = try ConfigLoader.load(cwd: cwd, ownMcpServers: mcpServers != nil)
         // Only normalize the config-file servers when they're the ones being sent:
         // a caller supplying its own set must not be refused over an unrelated bad
         // entry in the cwd's config.

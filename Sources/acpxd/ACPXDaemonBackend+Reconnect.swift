@@ -47,7 +47,7 @@ extension ACPXDaemonBackend {
         let cwd = try resolveCwd(rawCwd)
         // Resolve config for this cwd so the agent gets the same injected `auth`
         // credentials / auth policy (and config-alias resolution) the CLI applies.
-        let config = try ConfigLoader.load(cwd: cwd)
+        let config = try ConfigLoader.load(cwd: cwd, ownMcpServers: sessionSpecs != nil)
         let specs = try sessionSpecs ?? config.mcpServerSpecs()
         // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
         // the record carries them, so every reconnect advertises what the session was

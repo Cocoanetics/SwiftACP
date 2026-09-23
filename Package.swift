@@ -125,7 +125,8 @@ targets += [
         // Both fixtures are read from disk by path (`#filePath`), not from a bundle.
         exclude: [
             "Fixtures/mock-agent.py", "Fixtures/model-agent.py", "Fixtures/write-agent.py",
-            "Fixtures/image-probe.png", "Fixtures/wirejson-node.json"
+            "Fixtures/image-probe.png", "Fixtures/wirejson-node.json", "Fixtures/v8-json-errors.json",
+            "Fixtures/acpx-config-errors.json"
         ]
     )
 ]
