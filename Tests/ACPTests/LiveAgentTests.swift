@@ -83,9 +83,7 @@ struct LiveAgentTests {
         let reply = try await daemon.runPrompt(
             sessionId: id,
             text: "Reply with only the code text shown in the attached image, nothing else.",
-            attachments: [
-                PromptAttachment(mimeType: "image/png", data: png.base64EncodedString())
-            ])
+            blocks: [.image(mimeType: "image/png", data: png.base64EncodedString())])
 
         print("\n===== \(agent) image attachment =====\nreply: \(reply.prefix(200))")
         #expect(reply.contains("VX7-QUARTZ-4192"))

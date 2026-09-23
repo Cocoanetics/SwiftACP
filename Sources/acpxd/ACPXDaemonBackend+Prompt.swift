@@ -18,11 +18,11 @@ extension ACPXDaemonBackend {
     ///   - sessionId: an existing session id (acpx record id or ACP session id).
     ///     Reconnects to it, recreating the underlying session only if its rollout
     ///     is gone. Must not be empty.
-    ///   - text: the prompt text. May be empty when `attachments` carries the turn.
-    ///   - attachments: images to send with the text, as base64 + MIME type; they
-    ///     become ACP `image` blocks after the text block. Validated before the turn
-    ///     is queued, and refused if the agent never advertised
-    ///     `promptCapabilities.image` — see ``PromptAttachment``.
+    ///   - text: the prompt text. May be empty when `blocks` carries the turn.
+    ///   - blocks: ACP content blocks to send after the text — an image, a
+    ///     `resource_link` handing over a file, or inline resource text. Validated
+    ///     before the turn is queued, and refused if the agent never advertised the
+    ///     capability a block needs — see ``PromptBlock``.
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
@@ -31,13 +31,15 @@ extension ACPXDaemonBackend {
     ///   notification (sent after the last `session/update`, before this returns).
     func runPrompt(
         sessionId rawSessionId: String, text: String,
-        attachments: [PromptAttachment]? = nil, wait: Bool = true
+        blocks: [PromptBlock]? = nil, wait: Bool = true
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
-        // Validate before queueing: a malformed attachment should fail at once, not
-        // after waiting out someone else's turn.
-        let blocks = try PromptAttachment.promptBlocks(text: text, attachments: attachments)
+        // Validate before queueing: a malformed block should fail at once, not after
+        // waiting out someone else's turn. The daemon's transport has a ceiling, so
+        // the request size is capped here (a direct client has nothing in the way).
+        let content = try PromptBlock.contentBlocks(
+            text: text, blocks: blocks, requestLimit: PromptBlock.maxRequestBytes)
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
@@ -60,18 +62,25 @@ extension ACPXDaemonBackend {
         let agentCommand = record.agentCommand
         let cwd = record.cwd
         let mcpServers = record.acpx?.mcpServers
-        // Gate images on what the agent advertised, the way npm acpx's client does:
-        // an agent without `promptCapabilities.image` either ignores the block or
-        // errors opaquely. Capabilities come from `initialize`, so this has to
-        // connect first — `ensure` is idempotent, and the turn below reuses the
-        // entry it warms. Refusing *here*, before the prompt is recorded, keeps a
-        // turn the agent never saw out of the session's history.
-        if blocks.contains(where: \.isImage) {
+        // Gate each block on what the agent advertised, the way npm acpx's client
+        // does: an agent without the capability either ignores the block or errors
+        // opaquely. Capabilities come from `initialize`, so this has to connect first
+        // — `ensure` is idempotent, and the turn below reuses the entry it warms.
+        // Refusing *here*, before the prompt is recorded, keeps a turn the agent
+        // never saw out of the session's history. Text and `resource_link` are never
+        // gated, so an ordinary turn still connects lazily.
+        let gated = content.enumerated().compactMap { index, block in
+            block.requiredPromptCapability.map { (index: index, requirement: $0) }
+        }
+        if !gated.isEmpty {
             let entry = try await ensure(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
                 mcpServers: mcpServers)
-            guard entry.agent.promptCapabilities?.image == true else {
-                throw PromptAttachmentError.imagesUnsupported(agent: agentCommand)
+            let capabilities = entry.agent.promptCapabilities
+            if let unmet = gated.first(where: { !$0.requirement.isAdvertised(by: capabilities) }) {
+                throw PromptBlockError.capabilityUnsupported(
+                    index: unmet.index, capability: unmet.requirement.rawValue,
+                    agent: agentCommand)
             }
         }
         // Record the user's prompt once, up front; the persister checkpoints the
@@ -80,11 +89,11 @@ extension ACPXDaemonBackend {
         // retry reuses both, so the prompt isn't double-recorded.
         let eventBuffer = WireBuffer()
         let persister = TurnPersister(record: record, eventBuffer: eventBuffer)
-        await persister.recordPrompt(blocks)
+        await persister.recordPrompt(content)
         do {
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: blocks, persister: persister,
+                mcpServers: mcpServers, blocks: content, persister: persister,
                 eventBuffer: eventBuffer)
         } catch {
             // A held session can disappear (the agent dropped it — e.g. after an
@@ -95,7 +104,7 @@ extension ACPXDaemonBackend {
             await evict(acpSessionId)
             return try await attemptPrompt(
                 sessionId: acpSessionId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: blocks, persister: persister,
+                mcpServers: mcpServers, blocks: content, persister: persister,
                 eventBuffer: eventBuffer)
         }
     }

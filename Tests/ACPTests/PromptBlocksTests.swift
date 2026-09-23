@@ -4,18 +4,18 @@ import Foundation
 import SwiftACP
 import Testing
 
-/// Image attachments on `runPrompt`: what reaches the agent on the wire, what the
-/// daemon refuses before it gets there, and what lands in the persisted record.
+/// Prompt content blocks on `runPrompt`: what reaches the agent on the wire, what
+/// the daemon refuses before it gets there, and what lands in the persisted record.
 ///
 /// Serialized for the same reason as ``DaemonToolsTests`` — these redirect the
 /// process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct PromptAttachmentsTests {
+@Suite(.serialized) struct PromptBlocksTests {
     /// A 2×2 red PNG — small, but a real one, so `Data(base64Encoded:)` and the mock
     /// agent's own decode both have something valid to chew on.
     static let pngBase64 = """
         iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP8zwACTGCSAQANHQEDgslx/wAAAABJRU5ErkJggg==
         """
-    static var png: PromptAttachment { PromptAttachment(mimeType: "image/png", data: pngBase64) }
+    static var png: PromptBlock { .image(mimeType: "image/png", data: pngBase64) }
 
     // MARK: - What reaches the agent
 
@@ -29,7 +29,7 @@ import Testing
                 agentCommand: imageCapable(command, log: log), cwd: NSTemporaryDirectory())
 
             let reply = try await daemon.runPrompt(
-                sessionId: id, text: "what is this?", attachments: [Self.png])
+                sessionId: id, text: "what is this?", blocks: [Self.png])
 
             // The mock decodes the base64 itself and reports the byte count, so a
             // reply naming it proves the payload survived the round trip intact.
@@ -56,7 +56,7 @@ import Testing
             let id = try await daemon.newSession(
                 agentCommand: imageCapable(command, log: log), cwd: NSTemporaryDirectory())
 
-            _ = try await daemon.runPrompt(sessionId: id, text: "", attachments: [Self.png])
+            _ = try await daemon.runPrompt(sessionId: id, text: "", blocks: [Self.png])
 
             let blocks = try promptBlocks(log)
             #expect(blocks.count == 1)
@@ -76,9 +76,9 @@ import Testing
             let id = try await daemon.newSession(
                 agentCommand: command, cwd: NSTemporaryDirectory())
 
-            await #expect(throws: PromptAttachmentError.self) {
+            await #expect(throws: PromptBlockError.self) {
                 _ = try await daemon.runPrompt(
-                    sessionId: id, text: "look", attachments: [Self.png])
+                    sessionId: id, text: "look", blocks: [Self.png])
             }
 
             // The gate runs before the prompt is recorded, so a turn the agent never
@@ -88,91 +88,124 @@ import Testing
     }
 
     /// A PDF is the case from the field: both shipped adapters mishandle an embedded
-    /// blob (one drops it, one inlines its base64 as text), so we refuse it here and
-    /// point the caller at the path that does work.
-    @Test func nonImageAttachmentsAreRefusedWithGuidance() throws {
-        #expect(throws: PromptAttachmentError.unsupportedMimeType(index: 0, mimeType: "application/pdf")) {
-            _ = try PromptAttachment.promptBlocks(
-                text: "read this",
-                attachments: [PromptAttachment(mimeType: "application/pdf", data: Self.pngBase64)])
+    /// blob (one drops it, one inlines its base64 as text), so an image block refuses
+    /// it and points the caller at the path that does work.
+    @Test func nonImageTypesAreRefusedWithGuidance() throws {
+        let bad = PromptBlock.image(mimeType: "application/pdf", data: Self.pngBase64)
+        #expect(throws: PromptBlockError.unsupportedImageMimeType(
+            index: 0, mimeType: "application/pdf")) {
+            _ = try blocks("read this", bad)
         }
-        let message = PromptAttachmentError
-            .unsupportedMimeType(index: 0, mimeType: "application/pdf").errorDescription ?? ""
-        #expect(message.contains("images only"))
-        #expect(message.contains("name its path in the prompt text"))
+        let message = PromptBlockError
+            .unsupportedImageMimeType(index: 0, mimeType: "application/pdf")
+            .errorDescription ?? ""
+        #expect(message.contains("send a resource_link"))
+    }
+
+    /// The same guidance for the other way a caller reaches for a binary: an embedded
+    /// resource with no text. There is no `blob` field to fill in the first place.
+    @Test func embeddedResourcesWithoutTextAreRefused() {
+        #expect(throws: PromptBlockError.binaryResource(index: 0)) {
+            _ = try blocks("read this", PromptBlock(type: "resource", uri: "file:///tmp/a.pdf"))
+        }
+        #expect(throws: Never.self) {
+            _ = try blocks(
+                "read this",
+                PromptBlock(type: "resource", text: "hello", uri: "file:///tmp/a.txt"))
+        }
+    }
+
+    @Test func unknownBlockTypesAndMissingFieldsAreRefused() {
+        #expect(throws: PromptBlockError.unsupportedBlockType(index: 0, type: "video")) {
+            _ = try blocks("hi", PromptBlock(type: "video"))
+        }
+        #expect(throws: PromptBlockError.missingField(index: 0, type: "text", field: "text")) {
+            _ = try blocks("hi", PromptBlock(type: "text"))
+        }
+        #expect(throws: PromptBlockError.missingField(index: 0, type: "resource_link", field: "uri")) {
+            _ = try blocks("hi", PromptBlock(type: "resource_link", name: "a.txt"))
+        }
+    }
+
+    /// `resource_link` is the file path, and the common case — a bare URI — should
+    /// not need a name spelled out, so it falls back to the URI's last component.
+    @Test func resourceLinksNameThemselvesFromTheirURI() throws {
+        let content = try blocks("read this", .resourceLink(uri: "file:///tmp/spec.pdf"))
+        guard case .resourceLink(let link) = content.last else {
+            Issue.record("expected a resource_link block")
+            return
+        }
+        #expect(link.uri == "file:///tmp/spec.pdf")
+        #expect(link.name == "spec.pdf")
     }
 
     @Test func malformedBase64IsRefused() {
-        for data in ["", "not base64!", "iVBORw0KGgo"] {
-            #expect(throws: PromptAttachmentError.invalidBase64(index: 0)) {
-                _ = try PromptAttachment.promptBlocks(
-                    text: "hi", attachments: [PromptAttachment(mimeType: "image/png", data: data)])
+        // Present but not decodable, including the padding-less and wrapped forms the
+        // adapters would pass straight through to the model.
+        for data in ["not base64!", "iVBORw0KGgo", "iVBO Rw0K"] {
+            #expect(throws: PromptBlockError.invalidBase64(index: 0), "\(data)") {
+                _ = try blocks("hi", .image(mimeType: "image/png", data: data))
             }
+        }
+        // Absent entirely reads as the missing field it is, not as bad base64.
+        #expect(throws: PromptBlockError.missingField(index: 0, type: "image", field: "data")) {
+            _ = try blocks("hi", .image(mimeType: "image/png", data: ""))
         }
     }
 
-    /// The cap is on the turn's total, not on any single attachment.
-    @Test func oversizedAttachmentsAreRefusedInAggregate() throws {
+    /// The cap is on the turn's total, not on any single block.
+    @Test func oversizedBlocksAreRefusedInAggregate() throws {
         // Each a little over half the budget: one fits, the pair does not.
-        let encoded = PromptAttachment.maxRequestBytes / 2 + 16 * 1024
-        let half = PromptAttachment(
+        let encoded = PromptBlock.maxRequestBytes / 2 + 16 * 1024
+        let half = PromptBlock.image(
             mimeType: "image/png",
             data: Data(repeating: 0x41, count: encoded / 4 * 3).base64EncodedString())
-        #expect(throws: Never.self) {
-            _ = try PromptAttachment.promptBlocks(text: "one", attachments: [half])
-        }
-        #expect(throws: PromptAttachmentError.self) {
-            _ = try PromptAttachment.promptBlocks(text: "two", attachments: [half, half])
-        }
+        #expect(throws: Never.self) { _ = try blocks("one", half) }
+        #expect(throws: PromptBlockError.self) { _ = try blocks("two", half, half) }
     }
 
     /// The budget is spent on the *encoded* request, not on the bytes it decodes to.
     /// An image decoding to 3 MiB is exactly 4 MiB of base64 — the whole transport
     /// ceiling, with nothing left for the prompt and envelope around it — so it has
     /// to be refused even though its decoded size sounds modest.
-    @Test func anAttachmentFillingTheTransportBudgetIsRefused() {
-        let attachment = PromptAttachment(
+    @Test func aBlockFillingTheTransportBudgetIsRefused() {
+        let image = PromptBlock.image(
             mimeType: "image/png",
-            data: Data(repeating: 0x41, count: PromptAttachment.maxRequestBytes / 4 * 3)
+            data: Data(repeating: 0x41, count: PromptBlock.maxRequestBytes / 4 * 3)
                 .base64EncodedString())
-        #expect(throws: PromptAttachmentError.self) {
-            _ = try PromptAttachment.promptBlocks(text: "hi", attachments: [attachment])
+        #expect(throws: PromptBlockError.self) { _ = try blocks("hi", image) }
+    }
+
+    /// Prompt text shares the budget with the blocks.
+    @Test func longPromptTextCountsAgainstTheBudget() throws {
+        let image = PromptBlock.image(
+            mimeType: "image/png",
+            data: Data(repeating: 0x41, count: PromptBlock.maxRequestBytes / 2)
+                .base64EncodedString())
+        #expect(throws: Never.self) { _ = try blocks("short", image) }
+        #expect(throws: PromptBlockError.self) {
+            _ = try blocks(String(repeating: "x", count: PromptBlock.maxRequestBytes / 2), image)
         }
     }
 
-    /// Prompt text shares the budget with the attachments.
-    @Test func longPromptTextCountsAgainstTheBudget() throws {
-        let attachment = PromptAttachment(
+    /// A caller talking to an agent directly has no transport in the way, so the cap
+    /// is the daemon's to apply, not the conversion's.
+    @Test func withoutARequestLimitSizeIsNotChecked() {
+        let huge = PromptBlock.image(
             mimeType: "image/png",
-            data: Data(repeating: 0x41, count: PromptAttachment.maxRequestBytes / 2)
+            data: Data(repeating: 0x41, count: PromptBlock.maxRequestBytes)
                 .base64EncodedString())
         #expect(throws: Never.self) {
-            _ = try PromptAttachment.promptBlocks(text: "short", attachments: [attachment])
-        }
-        #expect(throws: PromptAttachmentError.self) {
-            _ = try PromptAttachment.promptBlocks(
-                text: String(repeating: "x", count: PromptAttachment.maxRequestBytes / 2),
-                attachments: [attachment])
+            _ = try PromptBlock.contentBlocks(text: "hi", blocks: [huge], requestLimit: nil)
         }
     }
 
-    @Test func aTurnWithNeitherTextNorAttachmentsIsRefused() {
-        #expect(throws: PromptAttachmentError.emptyPrompt) {
-            _ = try PromptAttachment.promptBlocks(text: "", attachments: nil)
+    @Test func aTurnWithNeitherTextNorBlocksIsRefused() {
+        #expect(throws: PromptBlockError.emptyPrompt) {
+            _ = try PromptBlock.contentBlocks(text: "", blocks: nil, requestLimit: nil)
         }
-        #expect(throws: PromptAttachmentError.emptyPrompt) {
-            _ = try PromptAttachment.promptBlocks(text: "", attachments: [])
-        }
-    }
-
-    /// Validation runs before the record lookup, so a caller learns their attachment
-    /// is bad even when the session id is also wrong.
-    @Test func attachmentsAreValidatedBeforeTheSessionIsResolved() async throws {
-        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-        await #expect(throws: PromptAttachmentError.self) {
-            _ = try await daemon.runPrompt(
-                sessionId: "does-not-exist", text: "hi",
-                attachments: [PromptAttachment(mimeType: "image/tiff", data: Self.pngBase64)])
+        #expect(throws: PromptBlockError.emptyPrompt) {
+            _ = try PromptBlock.contentBlocks(text: "", blocks: [], requestLimit: nil)
         }
     }
 
@@ -190,7 +223,7 @@ import Testing
                 cwd: NSTemporaryDirectory())
 
             _ = try await daemon.runPrompt(
-                sessionId: id, text: "what is this?", attachments: [Self.png])
+                sessionId: id, text: "what is this?", blocks: [Self.png])
 
             let history = try await daemon.sessionHistory(sessionId: id)
             let user = try #require(history.first)
@@ -219,6 +252,12 @@ import Testing
     }
 
     // MARK: - Helpers
+
+    /// Convert with the daemon's transport cap applied — what a `runPrompt` turn does.
+    private func blocks(_ text: String, _ blocks: PromptBlock...) throws -> [ContentBlock] {
+        try PromptBlock.contentBlocks(
+            text: text, blocks: blocks, requestLimit: PromptBlock.maxRequestBytes)
+    }
 
     private func requestLog() -> URL {
         ACPXPaths.baseDir.appendingPathComponent("requests-\(UUID().uuidString).ndjson")

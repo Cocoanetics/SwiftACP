@@ -31,7 +31,7 @@ public protocol ACPXBackend: Sendable {
         agentCommand: String?, olderThanDays: Int?, includeHistory: Bool, dryRun: Bool
     ) async -> PruneResult
     func runPrompt(
-        sessionId: String, text: String, attachments: [PromptAttachment]?, wait: Bool
+        sessionId: String, text: String, blocks: [PromptBlock]?, wait: Bool
     ) async throws -> String
     func cancelSession(sessionId: String) async throws -> Bool
 }
