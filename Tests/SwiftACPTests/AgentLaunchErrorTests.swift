@@ -18,13 +18,18 @@ struct AgentLaunchErrorTests {
         let launch = ProcessLaunch(
             executable: "/nonexistent/definitely-not-here", arguments: ["acp"],
             environment: ["PATH": "/usr/bin:/bin"], workingDirectory: "/tmp")
-        let failure = try #require(AgentLaunchPreflight.failure(for: launch))
+        // The configured command line, quoting included — acpx names the agent by that
+        // string, not by a re-joined argv. Verified against acpx 0.19.1, which prints
+        // `/nonexistent/definitely-not-here "acp"` for this very config.
+        let failure = try #require(
+            AgentLaunchPreflight.failure(
+                for: launch, agentCommand: #"/nonexistent/definitely-not-here "acp""#))
 
         #expect(failure.detailCode == AgentLaunchError.spawnENOENT)
         #expect(failure.missingPath == "/nonexistent/definitely-not-here")
         #expect(
             failure.errorDescription
-                == "Failed to spawn agent command: /nonexistent/definitely-not-here acp. "
+                == #"Failed to spawn agent command: /nonexistent/definitely-not-here "acp". "#
                     + qualified)
     }
 

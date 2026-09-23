@@ -56,8 +56,14 @@ public struct AgentLaunchError: Error, LocalizedError, Sendable {
 /// instead of surfacing as an opaque subprocess error.
 enum AgentLaunchPreflight {
     /// The error to throw instead of spawning, or `nil` when the launch looks viable.
-    static func failure(for launch: ProcessLaunch) -> AgentLaunchError? {
-        let command = ([launch.executable] + launch.arguments).joined(separator: " ")
+    ///
+    /// - Parameter agentCommand: the *resolved command line*, as configured — acpx names
+    ///   the agent by that string, quoting included, not by a re-joined argv. Falls back
+    ///   to the split launch only when the caller has nothing better.
+    static func failure(for launch: ProcessLaunch, agentCommand: String? = nil)
+        -> AgentLaunchError? {
+        let command =
+            agentCommand ?? ([launch.executable] + launch.arguments).joined(separator: " ")
         let fileManager = FileManager.default
 
         if let directory = launch.workingDirectory {

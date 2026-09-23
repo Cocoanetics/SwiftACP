@@ -85,7 +85,10 @@ public final class ACPAgent: Sendable {
         // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
         // here so the failure names the command instead of surfacing as an opaque
         // subprocess error once the handshake times out.
-        if let failure = AgentLaunchPreflight.failure(for: spec) { throw failure }
+        if let failure = AgentLaunchPreflight.failure(
+            for: spec, agentCommand: AgentRegistry.command(for: name, overrides: overrides) ?? name) {
+            throw failure
+        }
         let transport = StdioTransport(endpoint: .childProcess(spec), framing: LineFraming())
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         await connection.start()
