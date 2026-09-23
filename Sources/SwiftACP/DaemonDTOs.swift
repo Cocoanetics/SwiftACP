@@ -70,6 +70,117 @@ public struct McpServerConfig: Codable, Hashable, Sendable {
     }
 }
 
+/// An image attached to a `runPrompt` turn, carried inline as base64.
+///
+/// Images only, deliberately. Both shipped adapters advertise
+/// `promptCapabilities.image` and map an ACP `image` block onto their model's native
+/// image input, but neither does anything useful with a *non-image* binary:
+/// `claude-agent-acp` drops an embedded `resource` blob outright, and `codex-acp`
+/// inlines its base64 into the prompt text, where it costs tokens and the model
+/// answers from surrounding context instead of erroring. Refusing those here beats
+/// forwarding them into a silent wrong answer. To hand an agent a PDF or any other
+/// file, name its path in the prompt text and let the agent open it with its own
+/// tools — that is what both adapters reduce a `resource_link` to anyway.
+@Schema
+public struct PromptAttachment: Codable, Hashable, Sendable {
+    /// The image's MIME type: `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
+    public var mimeType: String
+    /// The image itself, base64-encoded — the bare payload, no `data:` URI prefix.
+    public var data: String
+
+    public init(mimeType: String, data: String) {
+        self.mimeType = mimeType
+        self.data = data
+    }
+}
+
+extension PromptAttachment {
+    /// The image types the agents' models actually accept. Stricter than ACP (which
+    /// gates only on `promptCapabilities.image`) and stricter than npm acpx (which
+    /// checks the `image/` prefix and nothing more), because neither adapter
+    /// validates: an `image/bmp` sails through both and fails at the model instead.
+    public static let supportedMimeTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+    /// Ceiling on the decoded bytes of one turn's attachments.
+    ///
+    /// Our own guard, not a transport limit: the daemon's TCP/Bonjour transport is
+    /// newline-framed and imposes no maximum, but base64 inflates by ~4/3, so this
+    /// keeps a turn's request under the 4 MB `maxMessageSize` that SwiftMCP's
+    /// HTTP-SSE transport does enforce — while staying far above any screenshot.
+    public static let maxTotalBytes = 3 * 1024 * 1024
+
+    /// Validate `attachments` and turn the turn's `text` + images into ACP content
+    /// blocks, in that order (text first, as npm acpx's `toPromptInput` does).
+    ///
+    /// Empty text contributes no block, so an image-only turn is possible; an empty
+    /// prompt overall is rejected, since every agent errors on one anyway.
+    public static func promptBlocks(
+        text: String, attachments: [PromptAttachment]?
+    ) throws -> [ContentBlock] {
+        var blocks: [ContentBlock] = []
+        if !text.isEmpty { blocks.append(.text(text)) }
+
+        var totalBytes = 0
+        for (index, attachment) in (attachments ?? []).enumerated() {
+            guard supportedMimeTypes.contains(attachment.mimeType.lowercased()) else {
+                throw PromptAttachmentError.unsupportedMimeType(
+                    index: index, mimeType: attachment.mimeType)
+            }
+            // Reject padding-less / whitespace-wrapped payloads too: the adapters pass
+            // base64 straight through, so anything we let past fails at the model.
+            guard let decoded = Data(base64Encoded: attachment.data), !decoded.isEmpty else {
+                throw PromptAttachmentError.invalidBase64(index: index)
+            }
+            totalBytes += decoded.count
+            guard totalBytes <= maxTotalBytes else {
+                throw PromptAttachmentError.tooLarge(bytes: totalBytes, limit: maxTotalBytes)
+            }
+            blocks.append(
+                .image(ImageContent(data: attachment.data, mimeType: attachment.mimeType)))
+        }
+
+        guard !blocks.isEmpty else { throw PromptAttachmentError.emptyPrompt }
+        return blocks
+    }
+}
+
+/// Why a turn's attachments were refused before reaching the agent.
+public enum PromptAttachmentError: LocalizedError, Equatable {
+    case unsupportedMimeType(index: Int, mimeType: String)
+    case invalidBase64(index: Int)
+    case tooLarge(bytes: Int, limit: Int)
+    case emptyPrompt
+    /// The agent's `initialize` did not advertise `promptCapabilities.image`.
+    case imagesUnsupported(agent: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedMimeType(let index, let mimeType):
+            return """
+                attachments[\(index)]: unsupported mimeType "\(mimeType)" — \
+                runPrompt takes images only \
+                (\(PromptAttachment.supportedMimeTypes.joined(separator: ", "))). \
+                To share a PDF or other file, name its path in the prompt text and let \
+                the agent open it.
+                """
+        case .invalidBase64(let index):
+            return "attachments[\(index)]: data must be non-empty, unwrapped base64"
+        case .tooLarge(let bytes, let limit):
+            return """
+                attachments exceed the per-turn limit: \(bytes) bytes decoded, \
+                limit \(limit)
+                """
+        case .emptyPrompt:
+            return "prompt must have text, attachments, or both"
+        case .imagesUnsupported(let agent):
+            return """
+                agent "\(agent)" does not advertise promptCapabilities.image, \
+                so it cannot accept image attachments
+                """
+        }
+    }
+}
+
 /// The turn's terminal event, streamed as a final MCP log notification.
 ///
 /// The `runPrompt` tool result is the agent's aggregate response *text* (so an MCP

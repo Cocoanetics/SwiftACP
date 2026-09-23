@@ -29,6 +29,13 @@ public enum ContentBlock: Codable, Hashable, Sendable {
         }
     }
 
+    /// Whether this is an image block — the one prompt block gated on
+    /// `promptCapabilities.image`.
+    public var isImage: Bool {
+        if case .image = self { return true }
+        return false
+    }
+
     private enum DiscriminatorKey: String, CodingKey { case type }
 
     public init(from decoder: Decoder) throws {

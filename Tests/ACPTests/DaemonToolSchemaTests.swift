@@ -31,4 +31,22 @@ struct DaemonToolSchemaTests {
         #expect(servers.isRequired)
         #expect(try JSONValue(encoding: servers.schema)["items"]?["type"] == .string("object"))
     }
+
+    /// Same contract for `runPrompt`'s `attachments`: an MCP client must be able to
+    /// build one from the tool listing, knowing both fields are required.
+    @Test func runPromptAdvertisesAttachmentsAsObjectSchema() async throws {
+        let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
+        let tools = await daemon.mcpToolMetadata
+        let runPrompt = try #require(tools.first { $0.functionMetadata.name == "runPrompt" })
+        let parameter = try #require(
+            runPrompt.functionMetadata.parameters.first { $0.name == "attachments" })
+        #expect(!parameter.isRequired)
+        let schema = try JSONValue(encoding: parameter.schema)
+        #expect(schema["type"] == .string("array"))
+        let items = try #require(schema["items"])
+        #expect(items["type"] == .string("object"))
+        #expect(items["required"] == .array([.string("mimeType"), .string("data")]))
+        #expect(items["properties"]?["mimeType"] != nil)
+        #expect(items["properties"]?["data"] != nil)
+    }
 }

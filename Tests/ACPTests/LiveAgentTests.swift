@@ -56,4 +56,54 @@ struct LiveAgentTests {
     @Test func codex() async throws { try await runAgent("codex", requiresTokenUsage: true) }
     @Test func claude() async throws { try await runAgent("claude", requiresTokenUsage: true) }
     @Test func cursor() async throws { try await runAgent("cursor", requiresTokenUsage: false) }
+
+    /// An image attachment, all the way to a real model: `Fixtures/image-probe.png`
+    /// shows the code `VX7-QUARTZ-4192` between an orange triangle and a blue circle,
+    /// so a reply carrying that code can only have come from the image being seen.
+    private func runImageAttachment(_ agent: String) async throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/image-probe.png")
+        let png = try Data(contentsOf: fixture)
+
+        let store = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("acpx-live-image-\(agent)-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let original = ACPXPaths.baseDir
+        ACPXPaths.baseDir = store
+        defer {
+            ACPXPaths.baseDir = original
+            try? FileManager.default.removeItem(at: store)
+        }
+        let cwd = store.appendingPathComponent("cwd", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: true)
+        let id = try await daemon.newSession(agentCommand: agent, cwd: cwd.path)
+        let reply = try await daemon.runPrompt(
+            sessionId: id,
+            text: "Reply with only the code text shown in the attached image, nothing else.",
+            attachments: [
+                PromptAttachment(mimeType: "image/png", data: png.base64EncodedString())
+            ])
+
+        print("\n===== \(agent) image attachment =====\nreply: \(reply.prefix(200))")
+        #expect(reply.contains("VX7-QUARTZ-4192"))
+
+        // The turn is recorded with the image's type but not its bytes.
+        let record = try #require(SessionStore.loadRecord(id))
+        guard case .user(let message) = try #require(record.messages.first) else {
+            Issue.record("first message is not a user message")
+            return
+        }
+        guard case .image(let image) = message.content.last else {
+            Issue.record("prompt was not persisted with an image block")
+            return
+        }
+        #expect(image.mimeType == "image/png")
+        #expect(image.source.isEmpty)
+    }
+
+    @Test func codexImageAttachment() async throws { try await runImageAttachment("codex") }
+    @Test func claudeImageAttachment() async throws { try await runImageAttachment("claude") }
 }
