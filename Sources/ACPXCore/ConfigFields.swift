@@ -283,12 +283,15 @@ private let javaScriptWhitespace = CharacterSet(
 ).union(CharacterSet(charactersIn: "\u{2000}"..."\u{200A}"))
 
 extension WireJSON {
-    /// The value as JSONFoundation's `JSONValue` — object member order is lost.
+    /// The value as JSONFoundation's `JSONValue` — object member order is lost. A number
+    /// too large for a double (`1e400`) parses to infinity, as in `JSON.parse`, and
+    /// becomes `null`, which is how `JSON.stringify` sends it on.
     var jsonValue: JSONValue {
         switch self {
         case .null: return .null
         case .bool(let flag): return .bool(flag)
         case .number(let value):
+            guard value.isFinite else { return .null }
             return value.rounded() == value && abs(value) < 9e15 ? .integer(Int(value)) : .double(value)
         case .string: return .string(stringValue ?? "")
         case .array(let items): return .array(items.map(\.jsonValue))

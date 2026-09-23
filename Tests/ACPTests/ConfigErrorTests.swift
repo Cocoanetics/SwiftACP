@@ -57,6 +57,26 @@ import Testing
         }
     }
 
+    /// A number too large for a double parses to infinity, as in `JSON.parse`, and goes
+    /// on the wire as `null`, as `JSON.stringify` sends it — not as a value the encoder
+    /// refuses, which would keep the session from starting.
+    @Test func anOverflowingNumberInMetaIsSentAsNull() async throws {
+        try await withIsolatedStore {
+            let cwd = NSTemporaryDirectory() + "acpx-config-meta-\(UUID().uuidString)"
+            try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+            try Data(#"""
+                {"mcpServers": [{"name": "a", "command": "c", "_meta": {"big": 1e400, "list": [-1e400, 1, 2.5]}}]}
+                """#.utf8).write(to: ACPXPaths.projectConfigPath(cwd: cwd))
+            let specs = try ConfigLoader.load(cwd: cwd).mcpServerSpecs()
+            let sent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(specs)) as? [[String: Any]]
+            let meta = try #require(sent?.first?["_meta"] as? [String: Any])
+            #expect(meta["big"] is NSNull)
+            let list = try #require(meta["list"] as? [Any])
+            #expect(list.first is NSNull)
+            #expect(list.dropFirst().compactMap { $0 as? Double } == [1, 2.5])
+        }
+    }
+
     /// The `argv` form resolves to the command line acpx shows for it; legacy `args`
     /// are quoted as `JSON.stringify` quotes them.
     @Test func agentEntriesResolveToAcpxsCommandLine() async throws {
