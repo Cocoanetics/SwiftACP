@@ -91,7 +91,7 @@ enum ExecCommand {
     /// when the stream already shows it — the agent's error response, or the client's
     /// refusal it repeats — else one JSON-RPC error line; never anything on stderr.
     /// Returns the exit code for the failure's output code.
-    private static func reportJSONFailure(_ error: Error, renderer: OutputRenderer) -> Int32 {
+    static func reportJSONFailure(_ error: Error, renderer: OutputRenderer) -> Int32 {
         let outputCode: String
         let detailCode: String?
         let message: String
@@ -116,7 +116,7 @@ enum ExecCommand {
     }
 
     /// A write needed a confirmation nobody could give (`--non-interactive-permissions fail`).
-    private struct PromptUnavailable: Error {}
+    struct PromptUnavailable: Error {}
 
     /// acpx refuses `exec` under `disableExec` the way it reports any failure, in the
     /// chosen format: the JSON-RPC error line, the quiet `[acpx] error:` line, or the
