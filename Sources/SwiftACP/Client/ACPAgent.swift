@@ -215,8 +215,15 @@ public final class ACPAgent: Sendable {
         return ACPSession(id: id, agent: self, modes: response.modes)
     }
 
-    /// Reconnect to an existing session, preferring `session/resume` when the
-    /// agent advertises it (as Codex does), else `session/load`.
+    /// Reconnect to an existing session the way the agent says it can be reconnected:
+    /// `session/resume` when it advertises that (as Codex does), else `session/load`
+    /// when it advertises `loadSession`.
+    ///
+    /// Throws ``SessionReconnectUnsupported`` when it advertises neither, without
+    /// sending anything: a client should not call a method the agent said it lacks,
+    /// and one that does not answer unknown methods would hang the caller. acpx makes
+    /// the same decision (`supportsResumeSession` / `supportsLoadSession`) and then
+    /// starts a new session instead.
     public func reconnectSession(
         id: SessionId, cwd: String? = nil, mcpServers: [MCPServerSpec] = [],
         additionalDirectories: [String]? = nil, meta: JSONValue? = nil
@@ -225,6 +232,9 @@ public final class ACPAgent: Sendable {
             return try await resumeSession(
                 id: id, cwd: cwd, mcpServers: mcpServers,
                 additionalDirectories: additionalDirectories, meta: meta)
+        }
+        guard agentCapabilities?.loadSession == true else {
+            throw SessionReconnectUnsupported()
         }
         return try await loadSession(
             id: id, cwd: cwd, mcpServers: mcpServers,
@@ -434,3 +444,12 @@ actor TurnCollector {
 }
 
 #endif
+
+/// The agent advertises neither `session/resume` nor `session/load`, so it cannot take
+/// back a session it created earlier — the caller starts a new one, or refuses to.
+public struct SessionReconnectUnsupported: LocalizedError, Equatable, Sendable {
+    public init() {}
+
+    /// acpx's reason for the same case.
+    public var errorDescription: String? { "agent does not support session/resume or session/load" }
+}

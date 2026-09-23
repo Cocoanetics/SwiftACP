@@ -48,26 +48,61 @@ extension ACPXDaemonBackend {
             inheritStderr: inheritAgentStderr)
         let session: ACPSession
         do {
-            session = try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
+            session = try await takeBackOrStartOver(
+                handle, sessionId: sessionId, cwd: cwd, specs: specs, command: command)
         } catch {
-            // Falling back is a `session/new`, and a `session/new` carries the
-            // session's options as `_meta` — acpx builds every `createSession`
-            // from the options its client was made with, which on a reconnect
-            // come from the record. Without this the session that actually
-            // receives the prompt runs with none of them. `session/load` and
-            // `session/resume` carry no `_meta` upstream, so only this path does.
-            let response = try await handle.connection.newSession(
-                NewSessionRequest(
-                    cwd: cwd, mcpServers: specs,
-                    meta: SessionMeta.build(
-                        options: findRecord(sessionId)?.acpx?.sessionOptions,
-                        agentCommand: command)))
-            session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
+            // Nothing will hold this agent: don't leave its process running.
+            await handle.close()
+            throw error
         }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[sessionId] = entry
         await restoreSelections(for: sessionId, on: entry)
         return entry
+    }
+
+    /// Take the session back on a fresh launch, or start a new one in its place —
+    /// acpx's `loadRuntimeSession` / `recoverRuntimeSessionLoadFailure`.
+    ///
+    /// The agent is asked the way it says it can be (``ACPAgent/reconnectSession``). If
+    /// it cannot take the session back, a new one is started only when that loses
+    /// nothing worth keeping (``ReconnectFallback``); otherwise the failure is surfaced
+    /// rather than silently swapping the conversation for an empty one under the same
+    /// id. A session imported from another client must stay the *same* session, so it
+    /// is never replaced — acpx's `sameSessionOnly`.
+    private func takeBackOrStartOver(
+        _ handle: ACPAgent, sessionId: String, cwd: String, specs: [MCPServerSpec], command: String
+    ) async throws -> ACPSession {
+        do {
+            return try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs)
+        } catch {
+            let record = findRecord(sessionId)
+            if record?.importedFrom != nil {
+                throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error))
+            }
+            let unsupported = error is SessionReconnectUnsupported
+            guard unsupported
+                || ReconnectFallback.shouldStartFresh(
+                    after: error, sessionHasAgentMessages: record?.hasAgentMessages ?? false)
+            else { throw error }
+            // Falling back is a `session/new`, and a `session/new` carries the
+            // session's options as `_meta` — acpx builds every `createSession` from
+            // the options its client was made with, which on a reconnect come from the
+            // record. `session/load` and `session/resume` carry no `_meta` upstream.
+            let response = try await handle.connection.newSession(
+                NewSessionRequest(
+                    cwd: cwd, mcpServers: specs,
+                    meta: SessionMeta.build(
+                        options: record?.acpx?.sessionOptions, agentCommand: command)))
+            return ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
+        }
+    }
+
+    /// Why a reconnect failed, in the words acpx's refusal uses: the agent's own message
+    /// rather than a description that repeats its code.
+    private func reconnectReason(_ error: Error) -> String {
+        if let acp = error as? JSONRPCErrorBody { return acp.message }
+        return error.localizedDescription
     }
 
     /// Re-apply the selections the record remembers, so reconnecting does not silently
