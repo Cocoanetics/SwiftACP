@@ -113,15 +113,46 @@ import Testing
 
     /// The cap is on the turn's total, not on any single attachment.
     @Test func oversizedAttachmentsAreRefusedInAggregate() throws {
+        // Each a little over half the budget: one fits, the pair does not.
+        let encoded = PromptAttachment.maxRequestBytes / 2 + 16 * 1024
         let half = PromptAttachment(
             mimeType: "image/png",
-            data: Data(repeating: 0x41, count: PromptAttachment.maxTotalBytes / 2 + 1)
-                .base64EncodedString())
+            data: Data(repeating: 0x41, count: encoded / 4 * 3).base64EncodedString())
         #expect(throws: Never.self) {
             _ = try PromptAttachment.promptBlocks(text: "one", attachments: [half])
         }
         #expect(throws: PromptAttachmentError.self) {
             _ = try PromptAttachment.promptBlocks(text: "two", attachments: [half, half])
+        }
+    }
+
+    /// The budget is spent on the *encoded* request, not on the bytes it decodes to.
+    /// An image decoding to 3 MiB is exactly 4 MiB of base64 — the whole transport
+    /// ceiling, with nothing left for the prompt and envelope around it — so it has
+    /// to be refused even though its decoded size sounds modest.
+    @Test func anAttachmentFillingTheTransportBudgetIsRefused() {
+        let attachment = PromptAttachment(
+            mimeType: "image/png",
+            data: Data(repeating: 0x41, count: PromptAttachment.maxRequestBytes / 4 * 3)
+                .base64EncodedString())
+        #expect(throws: PromptAttachmentError.self) {
+            _ = try PromptAttachment.promptBlocks(text: "hi", attachments: [attachment])
+        }
+    }
+
+    /// Prompt text shares the budget with the attachments.
+    @Test func longPromptTextCountsAgainstTheBudget() throws {
+        let attachment = PromptAttachment(
+            mimeType: "image/png",
+            data: Data(repeating: 0x41, count: PromptAttachment.maxRequestBytes / 2)
+                .base64EncodedString())
+        #expect(throws: Never.self) {
+            _ = try PromptAttachment.promptBlocks(text: "short", attachments: [attachment])
+        }
+        #expect(throws: PromptAttachmentError.self) {
+            _ = try PromptAttachment.promptBlocks(
+                text: String(repeating: "x", count: PromptAttachment.maxRequestBytes / 2),
+                attachments: [attachment])
         }
     }
 

@@ -101,13 +101,22 @@ extension PromptAttachment {
     /// validates: an `image/bmp` sails through both and fails at the model instead.
     public static let supportedMimeTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 
-    /// Ceiling on the decoded bytes of one turn's attachments.
+    /// Ceiling on the whole `runPrompt` request as it travels.
     ///
-    /// Our own guard, not a transport limit: the daemon's TCP/Bonjour transport is
-    /// newline-framed and imposes no maximum, but base64 inflates by ~4/3, so this
-    /// keeps a turn's request under the 4 MB `maxMessageSize` that SwiftMCP's
-    /// HTTP-SSE transport does enforce — while staying far above any screenshot.
-    public static let maxTotalBytes = 3 * 1024 * 1024
+    /// The daemon's own TCP/Bonjour transport is newline-framed and caps nothing, but
+    /// a turn should be servable over either transport, so this is the 4 MiB
+    /// `maxMessageSize` that SwiftMCP's HTTP-SSE transport does enforce.
+    ///
+    /// Measured against the *encoded* payload, not the bytes it decodes to: base64
+    /// inflates by 4/3, so a decoded ceiling of 3 MiB is exactly 4 MiB on the wire
+    /// and leaves nothing for the request around it.
+    public static let maxRequestBytes = 4 * 1024 * 1024
+
+    /// Slack held back from ``maxRequestBytes`` for the JSON-RPC envelope we cannot
+    /// measure here — method name, session id, field names, quoting — and for any
+    /// escaping the prompt text picks up on the way into JSON. Base64 needs none: its
+    /// alphabet survives JSON quoting byte for byte.
+    static let envelopeReserve = 8 * 1024
 
     /// Validate `attachments` and turn the turn's `text` + images into ACP content
     /// blocks, in that order (text first, as npm acpx's `toPromptInput` does).
@@ -120,7 +129,9 @@ extension PromptAttachment {
         var blocks: [ContentBlock] = []
         if !text.isEmpty { blocks.append(.text(text)) }
 
-        var totalBytes = 0
+        // Size the request the way the transport will: the base64 as sent, plus the
+        // text it travels with, plus slack for the envelope around them.
+        var requestBytes = text.utf8.count + envelopeReserve
         for (index, attachment) in (attachments ?? []).enumerated() {
             guard supportedMimeTypes.contains(attachment.mimeType.lowercased()) else {
                 throw PromptAttachmentError.unsupportedMimeType(
@@ -131,9 +142,10 @@ extension PromptAttachment {
             guard let decoded = Data(base64Encoded: attachment.data), !decoded.isEmpty else {
                 throw PromptAttachmentError.invalidBase64(index: index)
             }
-            totalBytes += decoded.count
-            guard totalBytes <= maxTotalBytes else {
-                throw PromptAttachmentError.tooLarge(bytes: totalBytes, limit: maxTotalBytes)
+            requestBytes += attachment.data.utf8.count + attachment.mimeType.utf8.count
+            guard requestBytes <= maxRequestBytes else {
+                throw PromptAttachmentError.tooLarge(
+                    requestBytes: requestBytes, limit: maxRequestBytes)
             }
             blocks.append(
                 .image(ImageContent(data: attachment.data, mimeType: attachment.mimeType)))
@@ -148,7 +160,7 @@ extension PromptAttachment {
 public enum PromptAttachmentError: LocalizedError, Equatable {
     case unsupportedMimeType(index: Int, mimeType: String)
     case invalidBase64(index: Int)
-    case tooLarge(bytes: Int, limit: Int)
+    case tooLarge(requestBytes: Int, limit: Int)
     case emptyPrompt
     /// The agent's `initialize` did not advertise `promptCapabilities.image`.
     case imagesUnsupported(agent: String)
@@ -165,10 +177,10 @@ public enum PromptAttachmentError: LocalizedError, Equatable {
                 """
         case .invalidBase64(let index):
             return "attachments[\(index)]: data must be non-empty, unwrapped base64"
-        case .tooLarge(let bytes, let limit):
+        case .tooLarge(let requestBytes, let limit):
             return """
-                attachments exceed the per-turn limit: \(bytes) bytes decoded, \
-                limit \(limit)
+                prompt and attachments exceed the per-turn limit: \(requestBytes) bytes \
+                encoded, limit \(limit)
                 """
         case .emptyPrompt:
             return "prompt must have text, attachments, or both"
