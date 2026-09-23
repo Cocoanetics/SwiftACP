@@ -66,6 +66,10 @@ public enum SessionEngine {
                 configOptions: response.configOptions, models: response.models, to: &acpx)
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
             acpx.mcpServers = sessionMcpServers
+            // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
+            // spawn: the daemon reconnects later and must advertise the same, or the
+            // restriction would silently lapse on the very turns it exists to cover.
+            acpx.clientCapabilities = capabilities.persistedIfRestricted
             record.acpx = acpx
 
             // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
