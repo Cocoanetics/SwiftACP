@@ -13,6 +13,17 @@ enum ExitCodes {
     static let interrupted: Int32 = 130
 }
 
+/// The exit code for a failure's output code — acpx's `exitCodeForOutputErrorCode`.
+func exitCode(forOutputCode code: String) -> Int32 {
+    switch code {
+    case "USAGE": return ExitCodes.usage
+    case "TIMEOUT": return ExitCodes.timeout
+    case "NO_SESSION": return ExitCodes.noSession
+    case "PERMISSION_DENIED", "PERMISSION_PROMPT_UNAVAILABLE": return ExitCodes.permissionDenied
+    default: return ExitCodes.error
+    }
+}
+
 /// An operational failure (non-usage). Printed as `<message>` to stderr, exit 1
 /// by default. Mirrors acpx's thrown `Error` → top-level handler.
 struct CLIError: Error {

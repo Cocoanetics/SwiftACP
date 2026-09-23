@@ -40,8 +40,13 @@ public final class ACPAgent: Sendable {
     public let cwd: String
     public let connection: ACPAgentConnection
     /// The agent subprocess transport: JSONFoundation's swift-subprocess child stdio
-    /// transport, framed as one newline-terminated JSON line per message (ACP framing).
-    public let transport: StdioTransport<LineFraming>
+    /// transport, framed as one newline-terminated JSON line per message (ACP framing),
+    /// with every line shown to ``rawWire`` on its way through.
+    public let transport: StdioTransport<TappedFraming<LineFraming>>
+    /// Every message body exchanged with the agent, as raw bytes in both directions —
+    /// from the `initialize` handshake on when `launch` was given `onRawWire`.
+    /// Re-point it with ``RawWireTap/set(_:)``.
+    public let rawWire: RawWireTap
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
 
@@ -55,12 +60,14 @@ public final class ACPAgent: Sendable {
 
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
-        transport: StdioTransport<LineFraming>, initializeResult: InitializeResponse
+        transport: StdioTransport<TappedFraming<LineFraming>>, rawWire: RawWireTap,
+        initializeResult: InitializeResponse
     ) {
         self.name = name
         self.cwd = cwd
         self.connection = connection
         self.transport = transport
+        self.rawWire = rawWire
         self.initializeResult = initializeResult
     }
 
@@ -77,7 +84,8 @@ public final class ACPAgent: Sendable {
         authPolicy: String = "skip",
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
-        onClientRequest: (@Sendable (String) -> Void)? = nil
+        onClientRequest: (@Sendable (String) -> Void)? = nil,
+        onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
         // Build the agent's environment exactly like acpx: inherit the parent
         // environment, promote `ACPX_AUTH_*`, and inject configured `auth`
@@ -94,7 +102,10 @@ public final class ACPAgent: Sendable {
             for: spec, agentCommand: AgentRegistry.command(for: name, overrides: overrides) ?? name) {
             throw failure
         }
-        let transport = StdioTransport(endpoint: .childProcess(spec), framing: LineFraming())
+        // Tapped from the start, so an observer given here sees the handshake too.
+        let rawWire = RawWireTap(onRawWire)
+        let transport = StdioTransport(
+            endpoint: .childProcess(spec), framing: TappedFraming(LineFraming(), tap: rawWire))
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.
@@ -107,7 +118,7 @@ public final class ACPAgent: Sendable {
                 authCredentials: authCredentials, authPolicy: authPolicy)
             return ACPAgent(
                 name: name, cwd: cwd, connection: connection,
-                transport: transport, initializeResult: info)
+                transport: transport, rawWire: rawWire, initializeResult: info)
         } catch {
             transport.close()
             throw error
@@ -130,7 +141,8 @@ public final class ACPAgent: Sendable {
         authPolicy: String = "skip",
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
-        onClientRequest: (@Sendable (String) -> Void)? = nil
+        onClientRequest: (@Sendable (String) -> Void)? = nil,
+        onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
         try await launch(
             agent: name, cwd: cwd,
@@ -138,7 +150,8 @@ public final class ACPAgent: Sendable {
                 permission: permission, nonInteractivePermissions: nonInteractivePermissions),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest)
+            inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest,
+            onRawWire: onRawWire)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.

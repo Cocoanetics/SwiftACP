@@ -1,5 +1,7 @@
+import ACPXCore
 import Foundation
 import JSONFoundation
+import JSONRPCPeer
 import SwiftACP
 
 // A faithful port of acpx's `src/cli/output/output.ts` text + quiet rendering:
@@ -24,6 +26,9 @@ struct RenderOptions: Sendable {
     var format: OutputFormat = .text
     /// Replace read-like tools' output with `[read output suppressed]`.
     var suppressReads = false
+    /// JSON mode prints the ACP exchange itself, as acpx does — fed through
+    /// ``OutputRenderer/acpMessage(_:_:)`` — rather than the decoded updates.
+    var streamsWire = false
 }
 
 /// Renders a turn's `SessionUpdate`s. One instance per turn; access is serial
@@ -46,6 +51,10 @@ final class OutputRenderer: @unchecked Sendable {
     // Quiet-mode buffer
     private var quietChunks: [String] = []
 
+    // JSON wire-mode state
+    private var sanitizer: JSONMessageSanitizer
+    private var shownErrors = AcpErrorTracker()
+
     init(
         options: RenderOptions,
         out: @escaping @Sendable (String) -> Void = Console.out,
@@ -56,6 +65,42 @@ final class OutputRenderer: @unchecked Sendable {
         self.out = out
         self.err = err
         self.useColor = color ?? (isatty(fileno(stdout)) != 0)
+        self.sanitizer = JSONMessageSanitizer(suppressReads: options.suppressReads)
+    }
+
+    /// JSON mode printing the exchange: every other entry point stays silent in it.
+    var streamsWireJSON: Bool { options.format == .json && options.streamsWire }
+
+    // MARK: JSON wire mode
+
+    /// One message body as it crossed the wire: printed, in JSON wire mode, the way
+    /// acpx's json formatter prints it — `JSON.stringify` of the parsed message, read
+    /// output suppressed under `--suppress-reads` — and remembered if it carries an
+    /// error. A body that is not JSON never reached the client as a message either.
+    func acpMessage(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+        guard streamsWireJSON, let message = WireJSON(parsing: body) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        shownErrors.observe(message, direction: direction)
+        out(sanitizer.sanitize(message, direction: direction).stringified + "\n")
+    }
+
+    /// Whether the stream has already shown the failure described by `failureText`:
+    /// acpx then prints nothing more for it.
+    func showedFailure(_ failureText: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return shownErrors.match(failureText: failureText) != nil
+    }
+
+    /// Report a failure the stream did not show, as the JSON-RPC error line acpx's
+    /// top-level handler prints (session id `unknown`: it has no session to name).
+    func jsonFailure(outputCode: String, detailCode: String? = nil, origin: String = "cli", message: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        out(JSONErrorLine.make(
+            outputCode: outputCode, detailCode: detailCode, origin: origin, message: message,
+            sessionId: "unknown") + "\n")
     }
 
     // MARK: Entry points
@@ -64,7 +109,7 @@ final class OutputRenderer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         switch options.format {
-        case .json: out(encodeLineJSON(update) + "\n")
+        case .json: if !options.streamsWire { out(encodeLineJSON(update) + "\n") }
         case .quiet: renderQuiet(update)
         case .text: renderText(update)
         }
@@ -75,7 +120,8 @@ final class OutputRenderer: @unchecked Sendable {
         defer { lock.unlock() }
         switch options.format {
         case .json:
-            out(encodeLineJSON(["stopReason": stopReason.rawValue]) + "\n")
+            // The exchange already ended with the prompt's response.
+            if !options.streamsWire { out(encodeLineJSON(["stopReason": stopReason.rawValue]) + "\n") }
         case .quiet:
             flushQuiet()
         case .text:
@@ -122,7 +168,8 @@ final class OutputRenderer: @unchecked Sendable {
         let isPermissionNotice = operation.method == ClientOperation.requestPermission
         switch options.format {
         case .json:
-            out(encodeLineJSON(operation) + "\n")
+            // On the wire this is the request and the client's answer, already printed.
+            if !options.streamsWire { out(encodeLineJSON(operation) + "\n") }
         case .quiet:
             guard isPermissionNotice else { return }
             let oneLine = normalizeLineEndings(operation.summary).replacingOccurrences(of: "\n", with: " ")
