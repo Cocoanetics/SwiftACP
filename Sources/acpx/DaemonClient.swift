@@ -159,14 +159,30 @@ enum DaemonClient {
             await proxy.setLogNotificationHandler(PromptLogRenderer(renderer, stopReason: stopReason))
         }
         defer { Task { await proxy.disconnect() } }
+        return try await runPrompt(
+            on: proxy, stopReason: stopReason, sessionId: sessionId, blocks: blocks, wait: wait,
+            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions)
+    }
 
+    /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
+    static func runPrompt(
+        on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, blocks: [PromptBlock],
+        wait: Bool, permissionMode: String, nonInteractivePermissions: String
+    ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
         // The permission mode travels with every turn, as acpx sends it with every
         // prompt: the daemon applies it to this turn only.
-        _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
-            sessionId: sessionId, text: "", blocks: blocks, wait: wait,
-            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions)
+        do {
+            _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
+                sessionId: sessionId, text: "", blocks: blocks, wait: wait,
+                permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions)
+        } catch is DecodingError {
+            // The turn succeeded; only its ignored text did not decode. SwiftMCP's typed
+            // client turns a plain-text result into a JSON string by wrapping it in
+            // quotes unescaped, so a reply holding a newline or a quote — nearly every
+            // reply — fails there. A failed call arrives as `MCPServerProxyError`, not this.
+        }
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
         return DaemonTurn(
