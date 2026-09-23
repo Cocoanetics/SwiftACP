@@ -37,7 +37,7 @@ enum ExecCommand {
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
         let mcpServers = try context.config.mcpServerSpecs()
-        let meta = SessionLifecycle.claudeMeta(agent: agent, flags: flags)
+        let meta = SessionLifecycle.sessionMeta(agent: agent, flags: flags)
         let renderer = OutputRenderer(options: renderOptions(flags))
         let onClientRequest = clientOperationObserver(renderer)
 
