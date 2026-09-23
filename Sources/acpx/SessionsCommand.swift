@@ -5,41 +5,29 @@ import SwiftACP
 
 /// `acpx [<agent>] sessions [<sub>]` — list/inspect/manage local sessions.
 enum SessionsCommand {
-    static let subcommands: Set<String> = [
-        "list", "new", "ensure", "close", "show", "history", "read", "export", "import", "prune"
-    ]
-
     static func run(_ context: CommandContext) throws -> Int32 {
-        let sub = context.positionals.first.flatMap { subcommands.contains($0) ? $0 : nil }
-        // Bare `sessions` runs list; a recognized sub strips that token.
-        let rest = sub == nil ? context.positionals : Array(context.positionals.dropFirst())
-        let ctx = CommandContext(
-            explicitAgent: context.explicitAgent, positionals: rest, rawArgs: context.rawArgs,
-            config: context.config)
-
-        switch sub ?? "list" {
-        case "list": return try list(ctx)
-        case "show": return try show(ctx)
-        case "history": return try history(ctx, defaultLimit: DEFAULT_HISTORY_LIMIT, tail: false)
-        case "read": return try history(ctx, defaultLimit: 0, tail: true)
-        case "close": return try close(ctx)
-        case "prune": return try prune(ctx)
-        case "new": return try SessionLifecycle.new(ctx)
-        case "ensure": return try SessionLifecycle.ensure(ctx)
+        // Bare `sessions` lists, as acpx's `sessions` action does.
+        switch context.path.dropFirst().first ?? "list" {
+        case "list": return try list(context)
+        case "show": return try show(context)
+        case "history": return try history(context, defaultLimit: DEFAULT_HISTORY_LIMIT, tail: false)
+        case "read": return try history(context, defaultLimit: 0, tail: true)
+        case "close": return try close(context)
+        case "prune": return try prune(context)
+        case "new": return try SessionLifecycle.new(context)
+        case "ensure": return try SessionLifecycle.ensure(context)
         case "export": throw CLIError("sessions export: not yet implemented")
         case "import": throw CLIError("sessions import: not yet implemented")
-        default: throw UsageError("unknown command '\(sub ?? "")'")
+        case "watch": throw CLIError("sessions watch: not yet implemented")
+        case let other: throw InvalidArgumentError("unknown command '\(other)'")
         }
     }
 
     // MARK: list
 
     private static func list(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec("local"), OptionSpec("cursor", takesValue: true, value: "cursor"),
-            OptionSpec("filter-cwd", takesValue: true, value: "dir")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let filterCwd = scan.string("filter-cwd").map {
             URL(fileURLWithPath: $0, relativeTo: URL(fileURLWithPath: agent.cwd)).standardizedFileURL.path
@@ -76,8 +64,8 @@ enum SessionsCommand {
     // MARK: show
 
     private static func show(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let record = try findScopedSessionOrThrow(context, flags, name: context.positionals.first)
         switch flags.format {
         case "json":
@@ -117,10 +105,8 @@ enum SessionsCommand {
     // MARK: history / read
 
     private static func history(_ context: CommandContext, defaultLimit: Int, tail: Bool) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec(tail ? "tail" : "limit", takesValue: true, value: "count")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let limit: Int
         if tail {
             limit = try scan.parsed("tail", parseHistoryLimit) ?? 0
@@ -163,8 +149,8 @@ enum SessionsCommand {
     // MARK: close
 
     private static func close(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try context.positionals.first.map(parseSessionName)
         guard var record = SessionStore.findSession(
@@ -207,12 +193,8 @@ enum SessionsCommand {
     // MARK: prune
 
     private static func prune(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec("dry-run"), OptionSpec("include-history"),
-            OptionSpec("before", takesValue: true, value: "date"),
-            OptionSpec("older-than", takesValue: true, value: "days")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let dryRun = scan.flag("dry-run")
         let includeHistory = scan.flag("include-history")
@@ -306,7 +288,7 @@ private nonisolated(unsafe) let pruneISO: ISO8601DateFormatter = {
 
 private func isoString(_ date: Date) -> String { pruneISO.string(from: date) }
 
-private func parseBeforeDate(_ value: String) throws -> Date {
+func parseBeforeDate(_ value: String) throws -> Date {
     if let date = pruneISO.date(from: value) { return date }
     let plain = ISO8601DateFormatter()
     plain.timeZone = TimeZone(identifier: "UTC")

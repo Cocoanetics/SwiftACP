@@ -5,13 +5,12 @@ import JSONFoundation
 /// `acpx config [show|init]` — inspect and initialize configuration.
 enum ConfigCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([])
-        let flags = try context.globalFlags(scan)
-        let sub = context.positionals.first ?? "show"
-        switch sub {
-        case "show": return show(context.config, format: flags.format)
+        let scan = context.options
+        let flags = try context.globalFlags()
+        // Bare `config` shows, as acpx's `config` action does.
+        switch context.path.dropFirst().first ?? "show" {
         case "init": return try initConfig(format: flags.format)
-        default: throw UsageError("unknown command '\(sub)'")
+        default: return show(context.config, format: flags.format)
         }
     }
 

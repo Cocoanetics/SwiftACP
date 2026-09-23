@@ -212,6 +212,7 @@ enum HelpCatalog {
         HelpSubcommand("show [name]", "Show session metadata for current cwd"),
         HelpSubcommand("history [options] [name]", "Show recent session history entries"),
         HelpSubcommand("read [options] [name]", "Read full session history"),
+        HelpSubcommand("watch [options]", "Replay and follow session events without affecting the active turn"),
         HelpSubcommand("export [options] [name]", "Export a portable session archive"),
         HelpSubcommand("import [options] <archive-path>", "Import a portable session archive"),
         HelpSubcommand("prune [options]", "Delete closed sessions and free disk space")
@@ -260,6 +261,13 @@ enum HelpCatalog {
             return HelpScreen(
                 usagePath: path, description: "Read full session history", arguments: [nameArg],
                 options: [HelpOption("--tail <count>", "Show only the last N entries instead of all history")])
+        case "watch":
+            return HelpScreen(
+                usagePath: path, description: "Replay and follow session events without affecting the active turn",
+                options: [
+                    HelpOption("-s, --name <name>", "Session name"),
+                    HelpOption("--cursor <cursor>", "Resume after a session watch cursor")
+                ])
         case "export":
             return HelpScreen(
                 usagePath: path, description: "Export a portable session archive", arguments: [nameArg],

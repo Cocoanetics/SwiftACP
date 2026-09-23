@@ -24,6 +24,9 @@ enum TopLevelFailure {
             message = cliError.message
             commandExitCode = cliError.code
             outputCode = outputCodeForExitCode(cliError.code)
+        case let invalid as InvalidArgumentError:
+            outputCode = "USAGE"
+            message = invalid.message
         case let launch as AgentLaunchError:
             detailCode = launch.detailCode
         default:
@@ -50,6 +53,24 @@ enum TopLevelFailure {
             }
         }
         return commandExitCode ?? exitCode(forOutputCode: outputCode)
+    }
+
+    /// A parse failure as commander and acpx report it. commander prints `error:
+    /// <message>` and the failing command's help to stderr — nothing under
+    /// `--json-strict`. A subcommand's failure then exits 1. The root's also reaches
+    /// acpx's handler, which reports commander's message again in the requested format,
+    /// as `USAGE`, and exits 2.
+    static func reportParseFailure(
+        _ error: UsageError, arguments: [String],
+        out: (String) -> Void = { Console.out($0) }, err: (String) -> Void = { Console.errLine($0) },
+        errText: (String) -> Void = { Console.err($0) }
+    ) -> Int32 {
+        if !LeadingFlags.jsonStrict(arguments) {
+            err("error: \(error.message)")
+            if let usage = error.usage { errText("\n" + usage) }
+        }
+        guard error.scope == .root else { return ExitCodes.error }
+        return report(InvalidArgumentError("error: \(error.message)"), arguments: arguments, out: out, err: err)
     }
 
     /// The format acpx reports a top-level failure in: what the arguments ask for

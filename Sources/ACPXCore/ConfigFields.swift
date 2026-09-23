@@ -16,9 +16,6 @@ enum ConfigFields {
         func has(_ key: String) -> Bool { root.hasMember(key) }
     }
 
-    /// Node's largest `setTimeout` delay (`MAX_TIMER_DELAY_MS`).
-    static let maxTimerDelayMs = 2_147_483_647
-
     static func isUnset(_ value: WireJSON?) -> Bool { value == nil || value == .null }
 
     /// The string, when the value is one.
@@ -51,12 +48,8 @@ enum ConfigFields {
         return milliseconds
     }
 
-    /// `toTimerMilliseconds`: zero stays zero where allowed; anything else is at least
-    /// 1 ms, rounded half up as `Math.round` rounds, and within the timer maximum.
     static func timerMilliseconds(_ seconds: Double, allowZero: Bool) -> Int? {
-        if allowZero && seconds == 0 { return 0 }
-        let milliseconds = max(1, (seconds * 1000 + 0.5).rounded(.down))
-        return milliseconds <= Double(maxTimerDelayMs) ? Int(milliseconds) : nil
+        JavaScriptNumber.timerMilliseconds(seconds, allowZero: allowZero)
     }
 
     static func queueMaxDepth(_ value: WireJSON?, _ path: String) throws -> Int? {

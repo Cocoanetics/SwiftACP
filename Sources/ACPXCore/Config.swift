@@ -299,12 +299,4 @@ public enum ConfigLoader {
         return file
     }
 
-    /// Normalize a raw `--mcp-config` value: blank (or the bare `--` terminator)
-    /// counts as "not given", matching npm acpx's `resolveMcpConfigPath`.
-    public static func explicitMcpConfigPath(_ rawValue: String?) -> String? {
-        guard let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !trimmed.isEmpty, trimmed != "--"
-        else { return nil }
-        return trimmed
-    }
 }

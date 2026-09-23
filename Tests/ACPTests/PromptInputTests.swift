@@ -79,12 +79,12 @@ struct PromptInputTests {
     /// Valid JSON array, invalid contents: an error naming the index, rather than
     /// silently sending the JSON as prose.
     @Test func aJSONArrayOfNonBlocksIsAnError() {
-        #expect(throws: UsageError.self) { _ = try parse("[1, 2, 3]") }
-        #expect(throws: UsageError.self) { _ = try parse("[{\"text\":\"no type field\"}]") }
+        #expect(throws: InvalidArgumentError.self) { _ = try parse("[1, 2, 3]") }
+        #expect(throws: InvalidArgumentError.self) { _ = try parse("[{\"text\":\"no type field\"}]") }
     }
 
     @Test func invalidBlocksReportTheOffendingIndex() {
-        let error = #expect(throws: UsageError.self) {
+        let error = #expect(throws: InvalidArgumentError.self) {
             _ = try parse("""
                 [{"type":"text","text":"ok"},{"type":"image","mimeType":"image/bmp","data":"aGk="}]
                 """)
@@ -94,7 +94,7 @@ struct PromptInputTests {
 
     /// The guidance a caller needs when they reach for a PDF, surfaced by the CLI.
     @Test func aBinaryResourceIsRefusedWithGuidance() {
-        let error = #expect(throws: UsageError.self) {
+        let error = #expect(throws: InvalidArgumentError.self) {
             _ = try parse("""
                 [{"type":"resource","uri":"file:///tmp/spec.pdf","mimeType":"application/pdf"}]
                 """)

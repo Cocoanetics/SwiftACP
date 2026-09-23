@@ -97,24 +97,63 @@ enum LeadingFlags {
         return value
     }
 
-    /// `detectAgentToken`: the first word that is not a flag, and where it is — none
-    /// when `--` or a flag the scan does not know comes first.
-    static func command(_ arguments: [String]) -> (token: String, index: Int)? {
+    /// What `detectAgentToken` finds: the first word that is not a flag and where it is
+    /// (none when `--` or a flag the scan does not know comes first), and whether an
+    /// `--agent` came before it.
+    struct CommandToken {
+        var token: String?
+        var index: Int?
+        var hasAgentOverride = false
+    }
+
+    /// `detectAgentToken`.
+    static func command(_ arguments: [String]) -> CommandToken {
+        var scan = CommandToken()
         var index = 0
         while index < arguments.count {
             let token = arguments[index]
-            if token == "--" { return nil }
-            if !token.hasPrefix("-") || token == "-" { return (token, index) }
+            if token == "--" { return scan }
+            if !token.hasPrefix("-") || token == "-" {
+                scan.token = token
+                scan.index = index
+                return scan
+            }
+            if token == "--agent" || token.hasPrefix("--agent=") { scan.hasAgentOverride = true }
             if token == "--agent" || valueFlags.contains(token) || token == "--file" {
                 index += 2
-            } else if booleanFlags.contains(token) || token.hasPrefix("--json-strict=")
+            } else if token.hasPrefix("--agent=") || booleanFlags.contains(token) || token.hasPrefix("--json-strict=")
                 || (valueFlags.union(["--file"])).contains(where: { inlineValue(token, $0) != nil }) {
                 index += 1
             } else {
-                return nil
+                return scan
             }
         }
-        return nil
+        return scan
+    }
+
+    /// `isTopLevelVersionRequest`, which acpx checks before loading any config: `-V` or
+    /// `--version` among the leading flags.
+    static func isVersionRequest(_ arguments: [String]) -> Bool {
+        var index = 0
+        while index < arguments.count {
+            let token = arguments[index]
+            if token == "--version" || token == "-V" { return true }
+            if !token.hasPrefix("-") || token == "-" || token == "--" { return false }
+            if valueFlags.contains(token) {
+                index += 2
+            } else if booleanFlags.contains(token) || valueFlags.contains(where: { inlineValue(token, $0) != nil }) {
+                index += 1
+            } else {
+                return false
+            }
+        }
+        return false
+    }
+
+    /// `detectJsonStrict`: `--json-strict` among the leading flags. commander's own output
+    /// — help, and its error messages — is then suppressed.
+    static func jsonStrict(_ arguments: [String]) -> Bool {
+        scan(arguments).contains { $0.token == "--json-strict" || $0.token.hasPrefix("--json-strict=") }
     }
 
     /// `compare`'s own output and directory options (`scanCompareArgs`).
@@ -127,8 +166,9 @@ enum LeadingFlags {
     /// `scanCompareArgs` over the words after `compare`, when that is the command; the
     /// scan runs to `--` or the end, stepping over each option's value.
     static func compareOptions(_ arguments: [String]) -> CompareOptions? {
-        guard let command = command(arguments), command.token == "compare" else { return nil }
-        let rest = Array(arguments[(command.index + 1)...])
+        let command = command(arguments)
+        guard command.token == "compare", let at = command.index else { return nil }
+        let rest = Array(arguments[(at + 1)...])
         var options = CompareOptions()
         var index = 0
         while index < rest.count {

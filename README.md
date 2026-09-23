@@ -97,18 +97,23 @@ approved to keep a turn running.
 ## The `acpx` CLI and `acpxd` daemon (macOS)
 
 The same package ships a headless CLI and a session daemon built on the library — a
-byte-faithful Swift clone of [`openclaw/acpx`](https://github.com/openclaw/acpx) 0.11.0.
+byte-faithful Swift clone of [`openclaw/acpx`](https://github.com/openclaw/acpx) 0.19.1.
 They're **macOS-only** (Bonjour service advertisement, POSIX signals) and are gated
 behind `#if os(macOS)` in `Package.swift`, so the `SwiftACP` library itself stays
 nio-free and keeps building on Linux and Windows.
 
 ```sh
 swift run acpx claude "explain what this project does"
-swift run acpx codex --approve-reads "find and fix the flaky test"
-git diff | swift run acpx claude -q "review this diff"
-swift run acpx chat codex          # interactive multi-turn session
-swift run acpx agents              # list known agents + resolved launch commands
+swift run acpx --approve-reads codex "find and fix the flaky test"
+git diff | swift run acpx --format quiet claude -f - "review this diff"
+swift run acpx codex sessions new --name backend   # a named session for this directory
+swift run acpx codex -s backend "fix the API"      # a turn in it
+swift run acpx config show                         # the resolved config
 ```
+
+As in acpx, the global options (`--approve-reads`, `--format`, `--cwd`, …) go before
+the agent or command; after it, each command takes only its own. Everything after an
+agent's first prompt word is prompt text.
 
 `acpxd` is the session daemon: an MCP server (Bonjour + local TCP) holding live ACP
 sessions, with an optional outward HTTP+SSE transport.

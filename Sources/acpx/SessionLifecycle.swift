@@ -7,11 +7,8 @@ import SwiftACP
 /// the agent directly via ACP (no daemon), matching acpx's `createSession`.
 enum SessionLifecycle {
     static func new(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec("name", short: "s", takesValue: true, value: "name"),
-            OptionSpec("resume-session", takesValue: true, value: "id")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("name", parseSessionName)
 
@@ -35,11 +32,8 @@ enum SessionLifecycle {
     }
 
     static func ensure(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([
-            OptionSpec("name", short: "s", takesValue: true, value: "name"),
-            OptionSpec("resume-session", takesValue: true, value: "id")
-        ])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("name", parseSessionName)
 

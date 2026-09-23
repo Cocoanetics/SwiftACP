@@ -8,8 +8,8 @@ enum ControlCommand {
     // MARK: cancel
 
     static func cancel(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("session", parseSessionName)
         let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
@@ -41,13 +41,12 @@ enum ControlCommand {
     // MARK: set-mode
 
     static func setMode(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("session", parseSessionName)
-        guard let modeId = try context.positionals.first.map({ try parseNonEmptyValue("Mode", $0) }) else {
-            throw UsageError("missing required argument 'mode'")
-        }
+        // The parse has checked `<mode>` is there and not blank.
+        let modeId = try parseNonEmptyValue("Mode", context.positionals[0])
         let record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
         let sessionId = record.acpSessionId
 
@@ -88,12 +87,10 @@ enum ControlCommand {
     // MARK: set <key> <value>
 
     static func set(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
-        let flags = try context.globalFlags(scan)
+        let scan = context.options
+        let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        guard context.positionals.count >= 2 else {
-            throw UsageError("missing required argument 'value'")
-        }
+        // The parse has checked `<key>` and `<value>` are there and not blank.
         let key = try parseNonEmptyValue("Config option key", context.positionals[0])
         let value = try parseNonEmptyValue("Config option value", context.positionals[1])
         let name = try scan.parsed("session", parseSessionName)
