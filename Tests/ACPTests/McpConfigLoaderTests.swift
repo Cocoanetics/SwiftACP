@@ -129,16 +129,6 @@ import Testing
         #expect((error as Error).localizedDescription == "MCP config file not found: /tmp/nope.json")
     }
 
-    /// A blank value (or the bare `--` terminator) counts as "not given", the way
-    /// npm acpx's `resolveMcpConfigPath` treats it — not as a path to load.
-    @Test func blankFlagValueCountsAsNotGiven() {
-        #expect(ConfigLoader.explicitMcpConfigPath(nil) == nil)
-        #expect(ConfigLoader.explicitMcpConfigPath("") == nil)
-        #expect(ConfigLoader.explicitMcpConfigPath("   ") == nil)
-        #expect(ConfigLoader.explicitMcpConfigPath("--") == nil)
-        #expect(ConfigLoader.explicitMcpConfigPath("  run/mcp.json ") == "run/mcp.json")
-    }
-
     // MARK: - Helpers
 
     private func makeProjectDir() throws -> String {

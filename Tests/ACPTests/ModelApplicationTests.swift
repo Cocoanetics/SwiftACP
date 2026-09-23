@@ -34,19 +34,23 @@ struct ModelApplicationTests {
     /// acpx collects `--config-option`; the scanner's default last-wins would
     /// silently drop every selection but the final one.
     @Test func repeatedOptionsKeepEveryOccurrenceInOrder() throws {
-        let scan = try ArgScanner.scan(
-            ["--config-option", "a=1", "--config-option=b=2", "hi"],
-            options: [OptionSpec("config-option", takesValue: true, repeats: true)])
-        #expect(scan.strings("config-option") == ["a=1", "b=2"])
-        #expect(scan.positionals == ["hi"])
+        let (options, arguments) = try Self.exec(["--config-option", "a=1", "--config-option=b=2", "hi"])
+        #expect(options.strings("config-option") == ["a=1", "b=2"])
+        #expect(arguments == ["hi"])
     }
 
     @Test func nonRepeatableOptionsStillTakeTheLastValue() throws {
-        let scan = try ArgScanner.scan(
-            ["--file", "one", "--file", "two"],
-            options: [OptionSpec("file", short: "f", takesValue: true)])
-        #expect(scan.string("file") == "two")
-        #expect(scan.strings("file").isEmpty)
+        let (options, _) = try Self.exec(["--file", "one", "--file", "two"])
+        #expect(options.string("file") == "two")
+        #expect(options.strings("file").isEmpty)
+    }
+
+    /// `acpx exec <args>`, parsed: the options given to `exec`, and its arguments.
+    private static func exec(_ args: [String]) throws -> (ScannedArgs, [String]) {
+        guard case .run(let levels, let arguments) = try Commander.parse(
+            ["exec"] + args, root: CommandTree.acpx(agents: []))
+        else { throw CancellationError() }
+        return (levels.last?.options ?? ScannedArgs(), arguments)
     }
 
     // MARK: - Validating a requested model

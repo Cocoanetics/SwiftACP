@@ -29,17 +29,17 @@ enum PromptInputResolver {
             }
             var blocks = try parse(source)
             if !appended.isEmpty { blocks.append(.text(appended)) }
-            guard !blocks.isEmpty else { throw UsageError("Prompt from --file is empty") }
+            guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from --file is empty") }
             return blocks
         }
 
         if !appended.isEmpty { return [.text(appended)] }
 
         guard isatty(fileno(stdin)) == 0 else {
-            throw UsageError("Prompt is required (pass as argument, --file, or pipe via stdin)")
+            throw InvalidArgumentError("Prompt is required (pass as argument, --file, or pipe via stdin)")
         }
         let blocks = try parse(readStdin())
-        guard !blocks.isEmpty else { throw UsageError("Prompt from stdin is empty") }
+        guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from stdin is empty") }
         return blocks
     }
 
@@ -69,7 +69,7 @@ enum PromptInputResolver {
                   let elementData = try? JSONSerialization.data(withJSONObject: object),
                   let block = try? decoder.decode(PromptBlock.self, from: elementData)
             else {
-                throw UsageError(
+                throw InvalidArgumentError(
                     "prompt[\(index)]: must be an ACP content block object with a string type")
             }
             return block
@@ -81,7 +81,7 @@ enum PromptInputResolver {
         do {
             _ = try PromptBlock.contentBlocks(text: "", blocks: blocks, requestLimit: nil)
         } catch let error as PromptBlockError {
-            throw UsageError(error.errorDescription ?? "\(error)")
+            throw InvalidArgumentError(error.errorDescription ?? "\(error)")
         }
         return blocks
     }

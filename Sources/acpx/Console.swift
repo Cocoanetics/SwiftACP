@@ -5,13 +5,40 @@ import Foundation
 enum Console {
     private static let lock = NSLock()
 
+    /// Output captured instead of written, while bound (``capture``): how a test runs the
+    /// whole CLI and compares what it printed.
+    final class Capture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stdout = ""
+        private var stderr = ""
+
+        var out: String { lock.withLock { stdout } }
+        var err: String { lock.withLock { stderr } }
+
+        fileprivate func write(_ text: String, toStandardError: Bool) {
+            lock.withLock {
+                if toStandardError { stderr += text } else { stdout += text }
+            }
+        }
+    }
+
+    @TaskLocal static var capture: Capture?
+
     static func out(_ text: String) {
+        if let capture {
+            capture.write(text, toStandardError: false)
+            return
+        }
         lock.lock()
         defer { lock.unlock() }
         FileHandle.standardOutput.write(Data(text.utf8))
     }
 
     static func err(_ text: String) {
+        if let capture {
+            capture.write(text, toStandardError: true)
+            return
+        }
         lock.lock()
         defer { lock.unlock() }
         FileHandle.standardError.write(Data(text.utf8))

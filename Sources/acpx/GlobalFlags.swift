@@ -42,35 +42,41 @@ struct AgentInvocation {
 }
 
 enum Flags {
-    /// The global option specs added by `addGlobalFlags`.
+    /// The global options `addGlobalFlags` puts on the root, with their parsers.
+    /// `--no-fs` and `--no-terminal` exist only in that form.
     static let globalSpecs: [OptionSpec] = [
         OptionSpec("agent", takesValue: true, value: "command"),
         OptionSpec("cwd", takesValue: true, value: "dir"),
-        OptionSpec("auth-policy", takesValue: true, value: "policy"),
+        OptionSpec("auth-policy", takesValue: true, value: "policy", validate: { _ = try parseAuthPolicy($0) }),
         OptionSpec("approve-all"),
         OptionSpec("approve-reads"),
         OptionSpec("deny-all"),
-        OptionSpec("non-interactive-permissions", takesValue: true, value: "policy"),
+        OptionSpec(
+            "non-interactive-permissions", takesValue: true, value: "policy",
+            validate: { _ = try parseNonInteractivePermissionPolicy($0) }),
         OptionSpec("permission-policy", takesValue: true, value: "json-or-file"),
         OptionSpec("policy", takesValue: true, value: "json-or-file"),
-        OptionSpec("format", takesValue: true, value: "fmt"),
+        OptionSpec("format", takesValue: true, value: "fmt", validate: { _ = try parseOutputFormat($0) }),
         OptionSpec("suppress-reads"),
         OptionSpec("model", takesValue: true, value: "id"),
-        OptionSpec("allowed-tools", takesValue: true, value: "list"),
-        OptionSpec("max-turns", takesValue: true, value: "count"),
-        OptionSpec("system-prompt", takesValue: true, value: "text"),
-        OptionSpec("append-system-prompt", takesValue: true, value: "text"),
-        OptionSpec("prompt-retries", takesValue: true, value: "count"),
+        OptionSpec("allowed-tools", takesValue: true, value: "list", validate: { _ = try parseAllowedTools($0) }),
+        OptionSpec("max-turns", takesValue: true, value: "count", validate: { _ = try parseMaxTurns($0) }),
+        OptionSpec(
+            "system-prompt", takesValue: true, value: "text",
+            validate: { _ = try parseNonEmptyValue("System prompt", $0) }),
+        OptionSpec(
+            "append-system-prompt", takesValue: true, value: "text",
+            validate: { _ = try parseNonEmptyValue("Append system prompt", $0) }),
+        OptionSpec(
+            "prompt-retries", takesValue: true, value: "count", validate: { _ = try parsePromptRetries($0) }),
         OptionSpec("json-strict"),
-        OptionSpec("fs", negatable: true),
-        OptionSpec("terminal", negatable: true),
-        OptionSpec("timeout", takesValue: true, value: "seconds"),
-        OptionSpec("ttl", takesValue: true, value: "seconds"),
-        // Consumed by `Router.dispatch` when loading config (it must be known before
-        // any flag resolution); listed here so it scans as a known global option.
+        OptionSpec("no-fs"),
+        OptionSpec("no-terminal"),
+        OptionSpec("timeout", takesValue: true, value: "seconds", validate: { _ = try parseTimeoutSeconds($0) }),
+        OptionSpec("ttl", takesValue: true, value: "seconds", validate: { _ = try parseTtlSeconds($0) }),
+        // Read before the parse too (``LeadingFlags``): the config it names is loaded first.
         OptionSpec("mcp-config", takesValue: true, value: "path"),
-        OptionSpec("verbose"),
-        OptionSpec("help", short: "h")
+        OptionSpec("verbose")
     ]
 
     static func resolveGlobalFlags(_ args: ScannedArgs, config: ResolvedAcpxConfig) throws -> GlobalFlags {
@@ -79,10 +85,10 @@ enum Flags {
         let jsonStrict = args.flag("json-strict")
         let verbose = args.flag("verbose")
         if jsonStrict && format != "json" {
-            throw UsageError("--json-strict requires --format json")
+            throw InvalidArgumentError("--json-strict requires --format json")
         }
         if jsonStrict && verbose {
-            throw UsageError("--json-strict cannot be combined with --verbose")
+            throw InvalidArgumentError("--json-strict cannot be combined with --verbose")
         }
 
         let permissionPolicy = try resolvePermissionPolicyOption(args)
@@ -97,8 +103,8 @@ enum Flags {
             permissionPolicy: permissionPolicy,
             jsonStrict: jsonStrict,
             suppressReads: args.flag("suppress-reads"),
-            fs: args.boolean("fs"),
-            terminal: args.boolean("terminal"),
+            fs: args.flag("no-fs") ? false : nil,
+            terminal: args.flag("no-terminal") ? false : nil,
             timeoutMs: try args.parsed("timeout", parseTimeoutSeconds) ?? config.timeoutMs,
             ttlMs: try args.parsed("ttl", parseTtlSeconds) ?? config.ttlMs,
             verbose: verbose,
@@ -118,7 +124,7 @@ enum Flags {
     static func resolvePermissionMode(_ flags: GlobalFlags, default defaultMode: String) throws -> String {
         let count = [flags.approveAll, flags.approveReads, flags.denyAll].count(where: { $0 })
         if count > 1 {
-            throw UsageError("Use only one permission mode: --approve-all, --approve-reads, or --deny-all")
+            throw InvalidArgumentError("Use only one permission mode: --approve-all, --approve-reads, or --deny-all")
         }
         if flags.approveAll { return "approve-all" }
         if flags.approveReads { return "approve-reads" }
@@ -133,7 +139,7 @@ enum Flags {
         // validated outside commander, so bare and `EXIT_CODES.USAGE`.
         let override = try flags.agent.map { try nonEmptyRuntimeValue("Agent command", $0) }
         if let override, !override.isEmpty, explicitAgentName != nil {
-            throw UsageError("Do not combine positional agent with --agent override")
+            throw InvalidArgumentError("Do not combine positional agent with --agent override")
         }
         let agentName = explicitAgentName ?? config.defaultAgent
         let agentCommand: String
@@ -152,7 +158,7 @@ enum Flags {
         let primary = args.string("permission-policy")
         let alias = args.string("policy")
         if let primary, let alias, primary != alias {
-            throw UsageError("Use only one permission policy flag: --permission-policy or --policy")
+            throw InvalidArgumentError("Use only one permission policy flag: --permission-policy or --policy")
         }
         return primary ?? alias
     }
@@ -163,7 +169,7 @@ enum Flags {
             try parseNonEmptyValue("Append system prompt", $0)
         }
         if replace != nil && append != nil {
-            throw UsageError("Use only one of --system-prompt or --append-system-prompt")
+            throw InvalidArgumentError("Use only one of --system-prompt or --append-system-prompt")
         }
         if let replace { return .replace(replace) }
         if let append { return .append(append) }
@@ -195,30 +201,49 @@ func parseNonInteractivePermissionPolicy(_ value: String) throws -> String {
     return value
 }
 
+// The numbers are JavaScript's (`Number(value)`), and the trimming its `trim()`.
+
 func parseTimeoutSeconds(_ value: String) throws -> Int {
-    guard let n = Double(value), n.isFinite, n > 0 else {
+    let seconds = JavaScriptNumber.parse(value)
+    guard seconds.isFinite, seconds > 0 else {
         throw UsageError("Timeout must be a positive number of seconds")
     }
-    return Int((n * 1000).rounded())
+    guard let milliseconds = JavaScriptNumber.timerMilliseconds(seconds, allowZero: false) else {
+        throw UsageError("Timeout exceeds the maximum supported timer delay")
+    }
+    return milliseconds
 }
 
 func parseTtlSeconds(_ value: String) throws -> Int {
-    guard let n = Double(value), n.isFinite, n >= 0 else {
+    let seconds = JavaScriptNumber.parse(value)
+    guard seconds.isFinite, seconds >= 0 else {
         throw UsageError("TTL must be a non-negative number of seconds")
     }
-    return Int((n * 1000).rounded())
+    guard let milliseconds = JavaScriptNumber.timerMilliseconds(seconds, allowZero: true) else {
+        throw UsageError("TTL exceeds the maximum supported timer delay")
+    }
+    return milliseconds
 }
 
 func parseSessionName(_ value: String) throws -> String {
-    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    let trimmed = value.javaScriptTrimmed
     guard !trimmed.isEmpty else { throw UsageError("Session name must not be empty") }
     return trimmed
 }
 
 func parseNonEmptyValue(_ label: String, _ value: String) throws -> String {
-    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    let trimmed = value.javaScriptTrimmed
     guard !trimmed.isEmpty else { throw UsageError("\(label) must not be empty") }
     return trimmed
+}
+
+/// A positive (or, with `allowZero`, non-negative) integer, as `Number.isInteger` has it.
+private func parseCount(_ value: String, allowZero: Bool = false, _ message: String) throws -> Int {
+    let number = JavaScriptNumber.parse(value)
+    guard JavaScriptNumber.isInteger(number), allowZero ? number >= 0 : number > 0 else {
+        throw UsageError(message)
+    }
+    return Int(exactly: number) ?? Int.max
 }
 
 extension GlobalFlags {
@@ -239,29 +264,24 @@ func parseSessionConfigOptionAssignment(
     guard let separator = value.firstIndex(of: "="), separator != value.startIndex,
         value.index(after: separator) != value.endIndex
     else { throw malformed }
-    let configId = value[..<separator].trimmingCharacters(in: .whitespaces)
-    let optionValue = value[value.index(after: separator)...].trimmingCharacters(in: .whitespaces)
+    let configId = String(value[..<separator]).javaScriptTrimmed
+    let optionValue = String(value[value.index(after: separator)...]).javaScriptTrimmed
     guard !configId.isEmpty, !optionValue.isEmpty else { throw malformed }
     return ModelApplication.ConfigOptionAssignment(configId: configId, value: optionValue)
 }
 
 func parseHistoryLimit(_ value: String) throws -> Int {
-    guard let n = Int(value), n > 0 else { throw UsageError("Limit must be a positive integer") }
-    return n
+    try parseCount(value, "Limit must be a positive integer")
 }
 
 func parseDaysOlderThan(_ value: String) throws -> Int {
-    guard let n = Int(value), n > 0 else {
-        throw UsageError("--older-than must be a positive integer number of days")
-    }
-    return n
+    try parseCount(value, "--older-than must be a positive integer number of days")
 }
 
 func parseAllowedTools(_ value: String) throws -> [String] {
-    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    let trimmed = value.javaScriptTrimmed
     if trimmed.isEmpty { return [] }
-    let parts = value.split(separator: ",", omittingEmptySubsequences: false)
-        .map { $0.trimmingCharacters(in: .whitespaces) }
+    let parts = trimmed.split(separator: ",", omittingEmptySubsequences: false).map { String($0).javaScriptTrimmed }
     if parts.contains(where: \.isEmpty) {
         throw UsageError("Allowed tools must be a comma-separated list without empty entries")
     }
@@ -269,15 +289,11 @@ func parseAllowedTools(_ value: String) throws -> [String] {
 }
 
 func parseMaxTurns(_ value: String) throws -> Int {
-    guard let n = Int(value), n > 0 else { throw UsageError("Max turns must be a positive integer") }
-    return n
+    try parseCount(value, "Max turns must be a positive integer")
 }
 
 func parsePromptRetries(_ value: String) throws -> Int {
-    guard let n = Int(value), n >= 0 else {
-        throw UsageError("Prompt retries must be a non-negative integer")
-    }
-    return n
+    try parseCount(value, allowZero: true, "Prompt retries must be a non-negative integer")
 }
 
 extension GlobalFlags {
@@ -298,7 +314,7 @@ extension GlobalFlags {
 /// A value acpx validates outside commander: rejected with a bare message and
 /// `EXIT_CODES.USAGE`, with no `error:` prefix and no help screen.
 func nonEmptyRuntimeValue(_ label: String, _ value: String) throws -> String {
-    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    let trimmed = value.javaScriptTrimmed
     guard !trimmed.isEmpty else {
         throw CLIError("\(label) must not be empty", code: ExitCodes.usage)
     }

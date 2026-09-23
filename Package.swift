@@ -60,7 +60,7 @@ var targets: [Target] = [
 
 #if os(macOS)
 products += [
-    // The headless CLI — a faithful clone of openclaw/acpx 0.11.0.
+    // The headless CLI — a faithful clone of openclaw/acpx 0.19.1.
     .executable(name: "acpx", targets: ["acpx"]),
     // The session daemon: an MCP server (Bonjour + local TCP) holding live ACP sessions.
     .executable(name: "acpxd", targets: ["acpxd"]),
@@ -126,7 +126,7 @@ targets += [
         exclude: [
             "Fixtures/mock-agent.py", "Fixtures/model-agent.py", "Fixtures/write-agent.py",
             "Fixtures/image-probe.png", "Fixtures/wirejson-node.json", "Fixtures/v8-json-errors.json",
-            "Fixtures/acpx-config-errors.json"
+            "Fixtures/acpx-config-errors.json", "Fixtures/acpx-argv-parse.json"
         ]
     )
 ]
