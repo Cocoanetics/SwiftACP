@@ -202,18 +202,39 @@ public final class ACPAgent: Sendable {
     }
 
     /// Resume a previously created session by id (requires `loadSession` support).
+    ///
+    /// The agent replays the session's history as `session/update`s, and may go on
+    /// after it answers, so this returns once they have stopped for a moment — acpx's
+    /// `loadSessionWithOptions` waits the same way (80 ms without one, at most 5 s;
+    /// longer fails the load).
+    ///
+    /// - Parameter suppressReplayUpdates: neither deliver nor show (``rawWire``) the
+    ///   `session/update`s that arrive meanwhile: the caller already has that history.
+    ///   acpx does this when it reconnects a session for a turn or a control.
     public func loadSession(
         id: SessionId,
         cwd: String? = nil,
         mcpServers: [MCPServerSpec] = [],
         additionalDirectories: [String]? = nil,
-        meta: JSONValue? = nil
+        meta: JSONValue? = nil,
+        suppressReplayUpdates: Bool = false
     ) async throws -> ACPSession {
-        let response = try await connection.loadSession(
-            LoadSessionRequest(
-                sessionId: id, cwd: cwd ?? self.cwd, mcpServers: mcpServers,
-                additionalDirectories: additionalDirectories, meta: meta))
-        return ACPSession(id: id, agent: self, modes: response.modes)
+        let suppressed = await connection.applySessionUpdateSuppression(suppressReplayUpdates)
+        let hidden = rawWire.applySessionUpdateSuppression(suppressReplayUpdates)
+        do {
+            let response = try await connection.loadSession(
+                LoadSessionRequest(
+                    sessionId: id, cwd: cwd ?? self.cwd, mcpServers: mcpServers,
+                    additionalDirectories: additionalDirectories, meta: meta))
+            try await connection.waitForSessionUpdateDrain()
+            await connection.restoreSessionUpdateSuppression(suppressed)
+            rawWire.restoreSessionUpdateSuppression(hidden)
+            return ACPSession(id: id, agent: self, modes: response.modes)
+        } catch {
+            await connection.restoreSessionUpdateSuppression(suppressed)
+            rawWire.restoreSessionUpdateSuppression(hidden)
+            throw error
+        }
     }
 
     /// Resume a previously created session (`session/resume`).
@@ -237,9 +258,13 @@ public final class ACPAgent: Sendable {
     /// and one that does not answer unknown methods would hang the caller. acpx makes
     /// the same decision (`supportsResumeSession` / `supportsLoadSession`) and then
     /// starts a new session instead.
+    ///
+    /// - Parameter suppressReplayUpdates: passed to ``loadSession(id:cwd:mcpServers:additionalDirectories:meta:suppressReplayUpdates:)``;
+    ///   `session/resume` replays nothing.
     public func reconnectSession(
         id: SessionId, cwd: String? = nil, mcpServers: [MCPServerSpec] = [],
-        additionalDirectories: [String]? = nil, meta: JSONValue? = nil
+        additionalDirectories: [String]? = nil, meta: JSONValue? = nil,
+        suppressReplayUpdates: Bool = false
     ) async throws -> ACPSession {
         if agentCapabilities?.sessionCapabilities?.supportsResume == true {
             return try await resumeSession(
@@ -251,7 +276,8 @@ public final class ACPAgent: Sendable {
         }
         return try await loadSession(
             id: id, cwd: cwd, mcpServers: mcpServers,
-            additionalDirectories: additionalDirectories, meta: meta)
+            additionalDirectories: additionalDirectories, meta: meta,
+            suppressReplayUpdates: suppressReplayUpdates)
     }
 
     /// Gracefully shut down the connection and terminate the subprocess.

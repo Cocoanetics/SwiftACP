@@ -12,29 +12,11 @@ enum TopLevelFailure {
         _ error: Error, arguments: [String],
         out: (String) -> Void = { Console.out($0) }, err: (String) -> Void = { Console.errLine($0) }
     ) -> Int32 {
-        var outputCode = "RUNTIME"
-        var detailCode: String?
-        var message = error.localizedDescription
-        var commandExitCode: Int32?
-        switch error {
-        case let noSession as NoSessionError:
-            outputCode = "NO_SESSION"
-            message = noSession.message
-        case let cliError as CLIError:
-            message = cliError.message
-            commandExitCode = cliError.code
-            outputCode = outputCodeForExitCode(cliError.code)
-        case let invalid as InvalidArgumentError:
-            outputCode = "USAGE"
-            message = invalid.message
-        case let launch as AgentLaunchError:
-            detailCode = launch.detailCode
-        default:
-            break
-        }
-        // `resolveOutputErrorCode`: a runtime failure saying the session is gone.
-        if outputCode == "RUNTIME", ReconnectFallback.isResourceNotFound(error) { outputCode = "NO_SESSION" }
-
+        // acpx's `isOutputAlreadyEmitted`: the output shows it already; only the exit
+        // code is left to give.
+        if let shown = error as? FailureAlreadyShown { return Failure(shown.underlying).processExitCode }
+        let failure = Failure(error)
+        let (outputCode, detailCode, message) = (failure.outputCode, failure.detailCode, failure.message)
         switch requestedFormat(arguments) {
         case "json":
             out(JSONErrorLine.make(
@@ -52,7 +34,39 @@ enum TopLevelFailure {
                 err(hint)
             }
         }
-        return commandExitCode ?? exitCode(forOutputCode: outputCode)
+        return failure.processExitCode
+    }
+
+    /// A failure as acpx's `normalizeOutputError` sees it at the top level.
+    private struct Failure {
+        var outputCode = "RUNTIME"
+        var detailCode: String?
+        var message: String
+        var commandExitCode: Int32?
+
+        init(_ error: Error) {
+            message = error.localizedDescription
+            switch error {
+            case let noSession as NoSessionError:
+                outputCode = "NO_SESSION"
+                message = noSession.message
+            case let cliError as CLIError:
+                message = cliError.message
+                commandExitCode = cliError.code
+                outputCode = outputCodeForExitCode(cliError.code)
+            case let invalid as InvalidArgumentError:
+                outputCode = "USAGE"
+                message = invalid.message
+            case let launch as AgentLaunchError:
+                detailCode = launch.detailCode
+            default:
+                break
+            }
+            // `resolveOutputErrorCode`: a runtime failure saying the session is gone.
+            if outputCode == "RUNTIME", ReconnectFallback.isResourceNotFound(error) { outputCode = "NO_SESSION" }
+        }
+
+        var processExitCode: Int32 { commandExitCode ?? exitCode(forOutputCode: outputCode) }
     }
 
     /// A parse failure as commander and acpx report it. commander prints `error:
@@ -96,4 +110,11 @@ enum TopLevelFailure {
         default: return "RUNTIME"
         }
     }
+}
+
+/// acpx's `outputAlreadyEmitted`: a failure the output already shows — the agent's
+/// error response in the `--format json` stream. The top level prints nothing more
+/// for it, and exits as `underlying` says.
+struct FailureAlreadyShown: Error {
+    let underlying: Error
 }

@@ -34,6 +34,10 @@ def session_update(session_id, update):
 # How `session/load` behaves: gone (default) | ok | internal | unsupported.
 LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
 
+# A `session/load` it takes back first replays the session's history as updates, as
+# real adapters do, and sends one more straight after answering, as some do.
+LOAD_REPLAY = bool(os.environ.get("MOCK_LOAD_REPLAY"))
+
 # After this many answered prompts, this process drops its sessions: later prompts
 # fail the way an agent answers for a session it no longer has, while the client
 # still holds the connection. A relaunched process remembers again. 0 = never.
@@ -165,7 +169,16 @@ def main():
             # load a session: it no longer has it. `ok` takes it back; `internal`
             # fails the way an agent's own bug would.
             if LOAD_MODE == "ok":
+                loaded = message.get("params", {}).get("sessionId", SESSION_ID)
+                if LOAD_REPLAY:
+                    session_update(loaded, {"sessionUpdate": "user_message_chunk",
+                                            "content": {"type": "text", "text": "replayed question"}})
+                    session_update(loaded, {"sessionUpdate": "agent_message_chunk",
+                                            "content": {"type": "text", "text": "replayed answer"}})
                 respond(req_id, {})
+                if LOAD_REPLAY:
+                    session_update(loaded, {"sessionUpdate": "agent_message_chunk",
+                                            "content": {"type": "text", "text": "replayed late"}})
             elif LOAD_MODE == "internal":
                 send({"jsonrpc": "2.0", "id": req_id,
                       "error": {"code": -32603, "message": "Internal error"}})

@@ -147,11 +147,19 @@ struct AcpErrorPayload: Equatable {
 /// one is already on screen, so nothing more is printed for it: the agent's latest
 /// error response always counts; a refusal the client sent counts when the failure
 /// says the same thing.
+///
+/// Each attempt at the prompt starts afresh — acpx resets the tracker just before it
+/// sends `session/prompt` — so an error from connecting the agent does not stand in
+/// for how the turn failed.
 struct AcpErrorTracker {
     private var latestInbound: AcpErrorPayload?
     private var outbound: [AcpErrorPayload] = []
 
     mutating func observe(_ message: WireJSON, direction: JSONRPCPeer.WireDirection) {
+        if direction == .outbound, message["method"]?.stringValue == "session/prompt", message.hasMember("id") {
+            latestInbound = nil
+            outbound.removeAll()
+        }
         guard let error = AcpErrorPayload.extract(from: message) else { return }
         if direction == .inbound {
             latestInbound = error

@@ -37,8 +37,8 @@ extension ACPXDaemonBackend {
     /// written here.
     ///
     /// A turn also passes `onConnectOutput`, which gets what connecting a new agent put
-    /// on the wire once it is connected (see ``ConnectOutputBuffer``). An agent already
-    /// held has nothing to show.
+    /// on the wire once it is connected — or once connecting it failed (see
+    /// ``ConnectOutputBuffer``). An agent already held has nothing to show.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, onReplacement: ReplacementHandler? = nil,
@@ -74,11 +74,23 @@ extension ACPXDaemonBackend {
         let selections = record?.acpx
         let command = launchCommand(for: agentCommand, config: config)
         let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
-        let handle = try await ACPAgent.launch(
-            agent: command, cwd: cwd, permission: .approveAll,
-            capabilities: capabilities,
-            authCredentials: config.auth, authPolicy: config.authPolicy,
-            inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)
+        // What connecting shows goes out once it is over, however it went: acpx flushes
+        // its buffer when connecting fails too, so the agent's refusal is on screen.
+        let showConnectOutput = { (fellBack: Bool) in
+            guard let connectOutput, let onConnectOutput else { return }
+            await onConnectOutput(connectOutput.flush(fellBack: fellBack))
+        }
+        let handle: ACPAgent
+        do {
+            handle = try await ACPAgent.launch(
+                agent: command, cwd: cwd, permission: .approveAll,
+                capabilities: capabilities,
+                authCredentials: config.auth, authPolicy: config.authPolicy,
+                inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)
+        } catch {
+            await showConnectOutput(false)
+            throw error
+        }
         let session: ACPSession
         let fellBack: Bool
         do {
@@ -97,6 +109,8 @@ extension ACPXDaemonBackend {
                 }
             }
         } catch {
+            handle.rawWire.set(nil)
+            await showConnectOutput(false)
             // Nothing will hold this agent: don't leave its process running.
             await handle.close()
             throw error
@@ -104,10 +118,8 @@ extension ACPXDaemonBackend {
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         await restoreSelections(selections, on: entry)
-        if let connectOutput, let onConnectOutput {
-            handle.rawWire.set(nil)
-            await onConnectOutput(connectOutput.flush(fellBack: fellBack))
-        }
+        handle.rawWire.set(nil)
+        await showConnectOutput(fellBack)
         return entry
     }
 
@@ -149,7 +161,11 @@ extension ACPXDaemonBackend {
         command: String, sameSessionOnly: Bool
     ) async throws -> (session: ACPSession, replacement: NewSessionResponse?) {
         do {
-            return (try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs), nil)
+            // The history a `session/load` replays is the record's already: acpx neither
+            // shows nor records it when it reconnects.
+            let session = try await handle.reconnectSession(
+                id: sessionId, cwd: cwd, mcpServers: specs, suppressReplayUpdates: true)
+            return (session, nil)
         } catch {
             let record = findRecord(recordId)
             switch ReconnectFallback.outcome(

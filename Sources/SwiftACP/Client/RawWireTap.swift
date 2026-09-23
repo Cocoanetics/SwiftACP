@@ -16,6 +16,10 @@ public final class RawWireTap: @unchecked Sendable {
 
     private let lock = NSLock()
     private var observer: Observer?
+    /// While on, the agent's `session/update` notifications are not shown: they replay
+    /// the history a `session/load` is restoring — acpx's
+    /// `suppressReplaySessionUpdateMessages`.
+    private var suppressingSessionUpdates = false
 
     public init(_ observer: Observer? = nil) {
         self.observer = observer
@@ -25,8 +29,33 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { self.observer = observer }
     }
 
+    /// Stop showing the agent's `session/update` notifications when `enabled`, and
+    /// return what was in force before, for ``restoreSessionUpdateSuppression(_:)``.
+    func applySessionUpdateSuppression(_ enabled: Bool) -> Bool {
+        lock.withLock {
+            let previous = suppressingSessionUpdates
+            suppressingSessionUpdates = previous || enabled
+            return previous
+        }
+    }
+
+    func restoreSessionUpdateSuppression(_ previous: Bool) {
+        lock.withLock { suppressingSessionUpdates = previous }
+    }
+
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        lock.withLock { observer }?(direction, body)
+        let (observer, suppressing) = lock.withLock { (observer, suppressingSessionUpdates) }
+        guard let observer else { return }
+        if suppressing, direction == .inbound, Self.isSessionUpdateNotification(body) { return }
+        observer(direction, body)
+    }
+
+    /// acpx's `isSessionUpdateNotification`: a `session/update` without an `id` member.
+    static func isSessionUpdateNotification(_ body: Data) -> Bool {
+        guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+            return false
+        }
+        return message["method"] as? String == "session/update" && message["id"] == nil
     }
 }
 

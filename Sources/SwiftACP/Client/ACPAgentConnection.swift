@@ -11,7 +11,7 @@ import JSONRPCPeer
 public actor ACPAgentConnection {
     private let rpc: JSONRPCPeer
     private var handlers: ACPClientHandlers
-    private var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
+    var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
     var eventSinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
@@ -44,6 +44,13 @@ public actor ACPAgentConnection {
 
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
+
+    /// While on, `session/update`s are not delivered: they replay the history a
+    /// `session/load` is restoring — acpx's `suppressSessionUpdates`.
+    var suppressingSessionUpdates = false
+    /// When the latest `session/update` arrived, delivered or not — what
+    /// ``waitForSessionUpdateDrain(idle:timeout:)`` watches go quiet.
+    var lastSessionUpdate: ContinuousClock.Instant?
 
     /// How each session's latest turn settled its permissions; reset when a turn
     /// starts. See ``permissionStats(for:)``.
@@ -476,18 +483,6 @@ public actor ACPAgentConnection {
     ) -> Bool {
         guard case .cancelled = response.outcome else { return false }
         return request.options.contains { $0.kind == .rejectOnce || $0.kind == .rejectAlways }
-    }
-
-    private func handleIncomingNotification(method: String, params: JSONValue?) async {
-        guard method == "session/update", let params,
-            let notification = try? params.decoded(SessionNotification.self)
-        else { return }
-        for sink in updateSinks.values {
-            sink.yield(notification)
-        }
-        for sink in eventSinks.values {
-            sink.yield(.update(notification))
-        }
     }
 }
 
