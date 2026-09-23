@@ -21,6 +21,12 @@ public actor ACPAgentConnection {
     /// permission requests (see ``CodexCompat``).
     public private(set) var initializeResult: InitializeResponse?
 
+    /// The capabilities advertised to the agent in `initialize`. A method the client did
+    /// not advertise is not served: acpx registers its `fs/*` and `terminal/*` handlers
+    /// only when the matching capability is on, so an agent that calls one anyway gets
+    /// method-not-found rather than the operation (`--no-fs`, `--no-terminal`).
+    public private(set) var advertisedCapabilities: ClientCapabilities?
+
     /// How far an agent's `fs/*` requests may reach. Confined to each session's own
     /// working directory by default; an embedder that mediates filesystem access itself
     /// can set ``FileSystemAccessScope/unrestricted``.
@@ -162,6 +168,7 @@ public actor ACPAgentConnection {
         capabilities: ClientCapabilities,
         clientInfo: Implementation? = nil
     ) async throws -> InitializeResponse {
+        advertisedCapabilities = capabilities
         let response: InitializeResponse = try await send(
             "initialize",
             InitializeRequest(clientCapabilities: capabilities, clientInfo: clientInfo))
@@ -261,9 +268,15 @@ public actor ACPAgentConnection {
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         switch method {
         case "fs/read_text_file":
+            guard advertisedCapabilities?.fs.readTextFile != false else {
+                return .failure(.methodNotFound(method))
+            }
             return await routeFileSystem(
                 method, params, access: .read, handlers.readTextFile)
         case "fs/write_text_file":
+            guard advertisedCapabilities?.fs.writeTextFile != false else {
+                return .failure(.methodNotFound(method))
+            }
             return await routeFileSystem(
                 method, params, access: .write, handlers.writeTextFile)
         case "session/request_permission":

@@ -108,6 +108,7 @@ public final class ACPAgent: Sendable {
         cwd: String = FileManager.default.currentDirectoryPath,
         permission: PermissionPolicy,
         clientInfo: Implementation = .acpx,
+        capabilities: ClientCapabilities = .headlessController,
         environment: [String: String]? = nil,
         authCredentials: [String: String] = [:],
         authPolicy: String = "skip",
@@ -117,7 +118,7 @@ public final class ACPAgent: Sendable {
     ) async throws -> ACPAgent {
         try await launch(
             agent: name, cwd: cwd, handlers: .standard(permission: permission),
-            clientInfo: clientInfo, environment: environment,
+            clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest)
     }

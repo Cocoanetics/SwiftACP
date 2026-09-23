@@ -73,6 +73,7 @@ enum CompareCommand {
             let outcome: PromptOutcome = try runBlocking {
                 let handle = try await ACPAgent.launch(
                     agent: agentCommand, cwd: cwd, permission: permission,
+                    capabilities: flags.clientCapabilities,
                     authCredentials: config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: false)
                 do {

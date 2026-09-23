@@ -34,13 +34,14 @@ public enum SessionEngine {
         sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
+        capabilities: ClientCapabilities = .headlessController,
         inheritStderr: Bool = false
     ) async throws -> SessionRecord {
         // Validate the session's own servers before paying for a spawn.
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
         let handle = try await ACPAgent.launch(
-            agent: agentCommand, cwd: cwd, permission: permission,
+            agent: agentCommand, cwd: cwd, permission: permission, capabilities: capabilities,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)
         do {
