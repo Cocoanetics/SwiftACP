@@ -80,6 +80,30 @@ public enum ModelSupport {
 
     /// Apply config-option models, falling back to the legacy `models` field, into
     /// a record's `acpx` block (`session/new` response).
+    /// A fresh session's advertised model state *replaces* the record's — acpx's
+    /// `applyReconnectedModelState` for a created session: config options it did not
+    /// report are dropped, a legacy model list with no model option drops the model
+    /// options, and with no models at all the advertised model state is cleared.
+    public static func applyFreshSessionModelState(
+        configOptions: [JSONValue]?, models: JSONValue?, to state: inout SessionAcpxState
+    ) {
+        if configOptions == nil { state.configOptions = nil }
+        applySessionModelState(configOptions: configOptions, models: models, to: &state)
+        let derived = modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
+        guard let derived else {
+            state.currentModelId = nil
+            state.availableModels = nil
+            state.modelControl = nil
+            return
+        }
+        if models != nil, derived.configId == nil, case .array(let options)? = state.configOptions {
+            state.configOptions = .array(options.filter { option in
+                guard case .object(let fields) = option else { return true }
+                return fields["category"] != .string("model") && fields["id"] != .string("model")
+            })
+        }
+    }
+
     public static func applySessionModelState(
         configOptions: [JSONValue]?, models: JSONValue?, to state: inout SessionAcpxState
     ) {

@@ -38,6 +38,22 @@ public actor TurnPersister {
         self.intervalNanos = intervalNanos
     }
 
+    /// Take on the session a reconnect replaced this one with (`current` is the record
+    /// as the reconnect left it): its ACP session id and what it advertised. Without
+    /// this the turn's saves would write the old identity back. Nothing else is taken —
+    /// the turn's own changes stay.
+    public func adoptReplacement(from current: SessionRecord) {
+        guard current.acpSessionId != record.acpSessionId else { return }
+        record.acpSessionId = current.acpSessionId
+        var acpx = record.acpx ?? SessionAcpxState()
+        acpx.configOptions = current.acpx?.configOptions
+        acpx.currentModelId = current.acpx?.currentModelId
+        acpx.availableModels = current.acpx?.availableModels
+        acpx.modelControl = current.acpx?.modelControl
+        record.acpx = acpx
+        dirty = true
+    }
+
     /// Record the user's prompt as one `User` message, then schedule a save.
     public func recordPrompt(_ text: String) {
         promptMessageId = ConversationModel.recordPromptSubmission(into: &record, prompt: text)

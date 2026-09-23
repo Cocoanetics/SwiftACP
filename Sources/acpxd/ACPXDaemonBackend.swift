@@ -113,11 +113,11 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        let acpSessionId = initial.acpSessionId
+        let recordId = initial.acpxRecordId
         // Take the session's turn slot so the check against the live connection
         // can't race a turn that is about to (re)connect it.
-        try await turnQueue.acquire(acpSessionId, wait: true)
-        defer { Task { await turnQueue.release(acpSessionId) } }
+        try await turnQueue.acquire(recordId, wait: true)
+        defer { Task { await turnQueue.release(recordId) } }
         // Re-read inside the slot: `evict` below (and any turn we queued behind) can
         // suspend us, so the write must build on the current record.
         guard var record = findRecord(sessionId) else {
@@ -126,12 +126,12 @@ actor ACPXDaemonBackend: ACPXBackend {
         // Compare what would go on the wire, so re-sending the same servers written
         // differently (omitted vs explicit `args`/`env`/`type`) is the no-op it looks
         // like, rather than a conflict.
-        if let entry = live[acpSessionId], entry.sessionSpecs != specs {
+        if let entry = live[recordId], entry.sessionSpecs != specs {
             guard restart else { throw DaemonError.mcpConfigConflict(sessionId) }
             // Safe here: this call holds the session's turn slot, so no turn is in
             // flight. Only the adapter process goes; the record — and the agent's
             // rollout behind it — stay, so the next turn reconnects with the new set.
-            await evict(acpSessionId)
+            await evict(recordId)
         }
         var acpx = record.acpx ?? SessionAcpxState()
         acpx.mcpServers = mcpServers
@@ -162,17 +162,19 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        let acpSessionId = initial.acpSessionId
-        try await turnQueue.acquire(acpSessionId, wait: true)
+        let recordId = initial.acpxRecordId
+        try await turnQueue.acquire(recordId, wait: true)
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
-        defer { Task { await turnQueue.release(acpSessionId) } }
-        guard var record = findRecord(sessionId) else {
+        defer { Task { await turnQueue.release(recordId) } }
+        guard let current = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let entry = try await ensure(
-            sessionId: record.acpSessionId, agentCommand: record.agentCommand, cwd: record.cwd,
-            mcpServers: record.acpx?.mcpServers, control: true)
+            recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
+            mcpServers: current.acpx?.mcpServers, control: true)
+        // Read after connecting: a reconnect may have moved the record to a new session.
+        var record = findRecord(recordId) ?? current
         let result = try await body(entry, &record)
         record.lastUsedAt = nowISO()
         do {
@@ -251,7 +253,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
-        await evict(initial.acpSessionId)
+        await evict(initial.acpxRecordId)
         // Re-read after the await: closing the agent suspends this actor, so another
         // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
         // here to unblock) may have persisted changes meanwhile. Writing the
@@ -264,9 +266,10 @@ actor ACPXDaemonBackend: ACPXBackend {
         return true
     }
 
-    /// Drop a live session and terminate its agent (so the next call relaunches).
-    func evict(_ sessionId: String) async {
-        guard let entry = live.removeValue(forKey: sessionId) else { return }
+    /// Drop a live session — by its acpx record id — and terminate its agent (so the
+    /// next call relaunches).
+    func evict(_ recordId: String) async {
+        guard let entry = live.removeValue(forKey: recordId) else { return }
         await entry.agent.close()
     }
 
@@ -281,11 +284,13 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Cancel an in-flight prompt for a session.
     ///
-    /// - Parameter sessionId: the ACP session id of the live session.
+    /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if the session isn't currently live.
     func cancelSession(sessionId: String) async throws -> Bool {
         // An agent that exited has no turn to cancel.
-        guard let entry = live[sessionId], await !entry.agent.connection.isClosed else { return false }
+        guard let record = findRecord(sessionId), let entry = live[record.acpxRecordId],
+            await !entry.agent.connection.isClosed
+        else { return false }
         try await entry.session.cancel()
         return true
     }
