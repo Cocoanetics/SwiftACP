@@ -179,16 +179,28 @@ public actor ACPAgentConnection {
         return response
     }
 
+    /// The root is registered *before* the request is sent: this actor is reentrant at
+    /// the `await`, and an agent handling `session/load` may issue `fs/*` for the very
+    /// session being loaded. Registering afterwards would refuse those as an unknown
+    /// session. A failed load restores whatever was there before.
     public func loadSession(_ request: LoadSessionRequest) async throws -> LoadSessionResponse {
-        let response: LoadSessionResponse = try await send("session/load", request)
-        sessionRoots[request.sessionId] = request.cwd
-        return response
+        let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
+        do {
+            return try await send("session/load", request)
+        } catch {
+            sessionRoots[request.sessionId] = previous
+            throw error
+        }
     }
 
     public func resumeSession(_ request: ResumeSessionRequest) async throws -> ResumeSessionResponse {
-        let response: ResumeSessionResponse = try await send("session/resume", request)
-        sessionRoots[request.sessionId] = request.cwd
-        return response
+        let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
+        do {
+            return try await send("session/resume", request)
+        } catch {
+            sessionRoots[request.sessionId] = previous
+            throw error
+        }
     }
 
     public func prompt(_ request: PromptRequest) async throws -> PromptResponse {

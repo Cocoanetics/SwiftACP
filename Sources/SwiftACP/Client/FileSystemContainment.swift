@@ -36,9 +36,13 @@ enum FileSystemContainment {
 
     /// The resolved path to hand the handler, or the JSON-RPC error to answer with.
     ///
-    /// A read must name an existing regular file; a write need not exist yet, so its
-    /// deepest existing ancestor is resolved and the missing components re-appended —
-    /// where the file *would* land still has to be inside the root.
+    /// Only containment is decided here. Whether the object exists, and whether it is a
+    /// regular file, is settled by ``LocalFileSystem`` on the open descriptor — a path
+    /// checked here and opened later can be swapped in between.
+    ///
+    /// A write need not exist yet, so its deepest existing ancestor is resolved and the
+    /// missing components re-appended: where the file *would* land still has to be
+    /// inside the root.
     static func resolve(path: String, under root: String, for access: Access) throws -> String {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true).resolvingSymlinksInPath()
         // `isAbsolutePath` rather than a leading "/" so a Windows drive path is not
@@ -52,19 +56,24 @@ enum FileSystemContainment {
             throw JSONRPCError.invalidParams(
                 "Path is outside the session's working directory: \(path)")
         }
-        if access == .read {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.path)
-            else {
-                throw JSONRPCError.serverError(
-                    code: resourceNotFoundCode, message: "Resource not found: \(path)",
-                    data: .string(URL(fileURLWithPath: resolved.path).absoluteString))
-            }
-            // A socket, fifo or device is not something to hand an agent as text.
-            guard attributes[.type] as? FileAttributeType == .typeRegular else {
-                throw JSONRPCError.invalidParams("Not a regular file: \(path)")
-            }
-        }
         return resolved.path
+    }
+
+    /// The errors the default handler answers with once it has the file open. Checking
+    /// the *descriptor* rather than the path is what makes them race-free: between a
+    /// path check and an open, the object can be replaced.
+    static func resourceNotFound(_ path: String) -> JSONRPCError {
+        JSONRPCError.serverError(
+            code: resourceNotFoundCode, message: "Resource not found: \(path)",
+            data: .string(URL(fileURLWithPath: path).absoluteString))
+    }
+
+    static func notARegularFile(_ path: String) -> JSONRPCError {
+        JSONRPCError.invalidParams("Not a regular file: \(path)")
+    }
+
+    static func symlinkRefused(_ path: String) -> JSONRPCError {
+        JSONRPCError.invalidParams("Refusing to follow a symlink: \(path)")
     }
 
     /// Resolve symlinks across the part of the path that exists, then re-append what

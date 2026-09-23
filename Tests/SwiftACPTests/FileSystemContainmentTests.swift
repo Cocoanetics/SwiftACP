@@ -82,15 +82,31 @@ struct FileSystemContainmentTests {
         }
     }
 
+    // MARK: What the open decides
+
+    /// Existence and file type are settled on the descriptor, not on the path: between
+    /// a path check and an open, the object can be replaced. acpx's `fs-safe` opens
+    /// `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` for the same reason.
     @Test func aMissingFileReadsAsResourceNotFound() throws {
         let (root, _) = try makeWorkspace()
         do {
-            _ = try FileSystemContainment.resolve(
-                path: root + "/absent.txt", under: root, for: .read)
+            _ = try LocalFileSystem.read(
+                ReadTextFileRequest(sessionId: "s", path: root + "/absent.txt"))
             Issue.record("expected a resource-not-found error")
         } catch let error as JSONRPCErrorBody {
             #expect(error.code == FileSystemContainment.resourceNotFoundCode)
         }
+    }
+
+    @Test func aSymlinkSwappedInAfterContainmentFailsTheOpen() throws {
+        let (root, outside) = try makeWorkspace()
+        // `link-out` is inside the root but points out of it. Containment resolves paths
+        // before the handler sees them, so this only arises when the object changes
+        // after the check — the no-follow open is what refuses it.
+        #expect(throws: (any Error).self) {
+            try LocalFileSystem.read(ReadTextFileRequest(sessionId: "s", path: root + "/link-out"))
+        }
+        #expect(FileManager.default.contents(atPath: outside) != nil)
     }
 
     // `mkfifo` is POSIX-only; Windows has no equivalent to exercise here.
@@ -99,8 +115,10 @@ struct FileSystemContainmentTests {
         let (root, _) = try makeWorkspace()
         let fifo = root + "/pipe"
         #expect(mkfifo(fifo, 0o600) == 0)
+        // `O_NONBLOCK` keeps the open from hanging on a reader-less fifo; `fstat` on the
+        // descriptor is what rejects it.
         #expect(throws: (any Error).self) {
-            try FileSystemContainment.resolve(path: fifo, under: root, for: .read)
+            try LocalFileSystem.read(ReadTextFileRequest(sessionId: "s", path: fifo))
         }
     }
     #endif
@@ -174,6 +192,18 @@ struct FileSystemContainmentTests {
         let refused = try await runRead(ReadProbeAgent(path: outside), cwd: root)
         #expect(refused.hasPrefix("error:"))
         #expect(refused.contains("outside the session's working directory"))
+    }
+
+    /// A symlink *inside* the workspace pointing at a file inside it keeps working:
+    /// containment hands the handler the canonical path, so the no-follow open sees the
+    /// real file rather than the link. acpx calls this preserving contained aliases.
+    @Test func aContainedAliasStillReadsEndToEnd() async throws {
+        let (root, _) = try makeWorkspace()
+        try FileManager.default.createSymbolicLink(
+            atPath: root + "/alias.txt", withDestinationPath: root + "/inside.txt")
+
+        let text = try await runRead(ReadProbeAgent(path: root + "/alias.txt"), cwd: root)
+        #expect(text == "read:inside")
     }
 
     @Test func unrestrictedAccessRestoresTheOldBehaviour() async throws {
