@@ -33,6 +33,15 @@ private func dispatch(_ arguments: [String]) -> Int32 {
     do {
         return try Router.dispatch(arguments)
     } catch let error as UsageError {
+        // commander prints the message, a blank line and the full help screen,
+        // all to stderr, and exits 1 — not `EXIT_CODES.USAGE`, which acpx keeps
+        // for runtime errors carrying a `USAGE` output code.
+        Console.errLine("error: \(error.message)")
+        if let usage = error.usage { Console.err("\n" + usage) }
+        guard error.scope == .root else { return ExitCodes.error }
+        // A global option is rejected twice upstream: commander writes the
+        // message and the root help, then *throws* instead of exiting, so acpx's
+        // own top-level handler prints the same message again and exits USAGE.
         Console.errLine("error: \(error.message)")
         return ExitCodes.usage
     } catch let error as NoSessionError {

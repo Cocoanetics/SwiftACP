@@ -44,37 +44,38 @@ struct AgentInvocation {
 enum Flags {
     /// The global option specs added by `addGlobalFlags`.
     static let globalSpecs: [OptionSpec] = [
-        OptionSpec("agent", takesValue: true),
-        OptionSpec("cwd", takesValue: true),
-        OptionSpec("auth-policy", takesValue: true),
+        OptionSpec("agent", takesValue: true, value: "command"),
+        OptionSpec("cwd", takesValue: true, value: "dir"),
+        OptionSpec("auth-policy", takesValue: true, value: "policy"),
         OptionSpec("approve-all"),
         OptionSpec("approve-reads"),
         OptionSpec("deny-all"),
-        OptionSpec("non-interactive-permissions", takesValue: true),
-        OptionSpec("permission-policy", takesValue: true),
-        OptionSpec("policy", takesValue: true),
-        OptionSpec("format", takesValue: true),
+        OptionSpec("non-interactive-permissions", takesValue: true, value: "policy"),
+        OptionSpec("permission-policy", takesValue: true, value: "json-or-file"),
+        OptionSpec("policy", takesValue: true, value: "json-or-file"),
+        OptionSpec("format", takesValue: true, value: "fmt"),
         OptionSpec("suppress-reads"),
-        OptionSpec("model", takesValue: true),
-        OptionSpec("allowed-tools", takesValue: true),
-        OptionSpec("max-turns", takesValue: true),
-        OptionSpec("system-prompt", takesValue: true),
-        OptionSpec("append-system-prompt", takesValue: true),
-        OptionSpec("prompt-retries", takesValue: true),
+        OptionSpec("model", takesValue: true, value: "id"),
+        OptionSpec("allowed-tools", takesValue: true, value: "list"),
+        OptionSpec("max-turns", takesValue: true, value: "count"),
+        OptionSpec("system-prompt", takesValue: true, value: "text"),
+        OptionSpec("append-system-prompt", takesValue: true, value: "text"),
+        OptionSpec("prompt-retries", takesValue: true, value: "count"),
         OptionSpec("json-strict"),
         OptionSpec("fs", negatable: true),
         OptionSpec("terminal", negatable: true),
-        OptionSpec("timeout", takesValue: true),
-        OptionSpec("ttl", takesValue: true),
+        OptionSpec("timeout", takesValue: true, value: "seconds"),
+        OptionSpec("ttl", takesValue: true, value: "seconds"),
         // Consumed by `Router.dispatch` when loading config (it must be known before
         // any flag resolution); listed here so it scans as a known global option.
-        OptionSpec("mcp-config", takesValue: true),
+        OptionSpec("mcp-config", takesValue: true, value: "path"),
         OptionSpec("verbose"),
         OptionSpec("help", short: "h")
     ]
 
     static func resolveGlobalFlags(_ args: ScannedArgs, config: ResolvedAcpxConfig) throws -> GlobalFlags {
-        let format = try parseOutputFormat(args.string("format") ?? config.format)
+        let format = try args.parsed("format", parseOutputFormat)
+            ?? parseOutputFormat(config.format)
         let jsonStrict = args.flag("json-strict")
         let verbose = args.flag("verbose")
         if jsonStrict && format != "json" {
@@ -89,23 +90,26 @@ enum Flags {
         return GlobalFlags(
             agent: args.string("agent"),
             cwd: args.string("cwd") ?? physicalCWD(),
-            authPolicy: try args.string("auth-policy").map(parseAuthPolicy) ?? config.authPolicy,
-            nonInteractivePermissions: try args.string("non-interactive-permissions")
-                .map(parseNonInteractivePermissionPolicy) ?? config.nonInteractivePermissions,
+            authPolicy: try args.parsed("auth-policy", parseAuthPolicy) ?? config.authPolicy,
+            nonInteractivePermissions: try args.parsed(
+                "non-interactive-permissions", parseNonInteractivePermissionPolicy)
+                ?? config.nonInteractivePermissions,
             permissionPolicy: permissionPolicy,
             jsonStrict: jsonStrict,
             suppressReads: args.flag("suppress-reads"),
             fs: args.boolean("fs"),
             terminal: args.boolean("terminal"),
-            timeoutMs: try args.string("timeout").map(parseTimeoutSeconds) ?? config.timeoutMs,
-            ttlMs: try args.string("ttl").map(parseTtlSeconds) ?? config.ttlMs,
+            timeoutMs: try args.parsed("timeout", parseTimeoutSeconds) ?? config.timeoutMs,
+            ttlMs: try args.parsed("ttl", parseTtlSeconds) ?? config.ttlMs,
             verbose: verbose,
             format: format,
-            model: try args.string("model").map { try parseNonEmptyValue("Model", $0) },
-            allowedTools: try args.string("allowed-tools").map(parseAllowedTools),
-            maxTurns: try args.string("max-turns").map(parseMaxTurns),
+            // Not a commander parser upstream — acpx validates the model later, so a
+            // blank one prints bare (no `error:`, no help) and exits 2.
+            model: try args.string("model").map { try nonEmptyRuntimeValue("Model", $0) },
+            allowedTools: try args.parsed("allowed-tools", parseAllowedTools),
+            maxTurns: try args.parsed("max-turns", parseMaxTurns),
             systemPrompt: try resolveSystemPrompt(args),
-            promptRetries: try args.string("prompt-retries").map(parsePromptRetries),
+            promptRetries: try args.parsed("prompt-retries", parsePromptRetries),
             approveAll: args.flag("approve-all"),
             approveReads: args.flag("approve-reads"),
             denyAll: args.flag("deny-all"))
@@ -125,7 +129,9 @@ enum Flags {
     static func resolveAgentInvocation(
         _ explicitAgentName: String?, _ flags: GlobalFlags, config: ResolvedAcpxConfig
     ) throws -> AgentInvocation {
-        let override = flags.agent?.trimmingCharacters(in: .whitespaces)
+        // An explicit but blank `--agent` is a rejection upstream, not "no override":
+        // validated outside commander, so bare and `EXIT_CODES.USAGE`.
+        let override = try flags.agent.map { try nonEmptyRuntimeValue("Agent command", $0) }
         if let override, !override.isEmpty, explicitAgentName != nil {
             throw UsageError("Do not combine positional agent with --agent override")
         }
@@ -279,4 +285,14 @@ extension GlobalFlags {
         if terminal == false { capabilities.terminal = false }
         return capabilities
     }
+}
+
+/// A value acpx validates outside commander: rejected with a bare message and
+/// `EXIT_CODES.USAGE`, with no `error:` prefix and no help screen.
+func nonEmptyRuntimeValue(_ label: String, _ value: String) throws -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else {
+        throw CLIError("\(label) must not be empty", code: ExitCodes.usage)
+    }
+    return trimmed
 }

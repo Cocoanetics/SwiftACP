@@ -14,13 +14,13 @@ import SwiftACP
 enum PromptCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let scan = try context.scan([
-            OptionSpec("session", short: "s", takesValue: true),
-            OptionSpec("file", short: "f", takesValue: true),
+            OptionSpec("session", short: "s", takesValue: true, value: "name"),
+            OptionSpec("file", short: "f", takesValue: true, value: "path"),
             OptionSpec("wait", negatable: true)
         ])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.string("session").map(parseSessionName)
+        let name = try scan.parsed("session", parseSessionName)
         let promptBlocks = try PromptInputResolver.resolve(
             words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
         // Absent `--no-wait`, a turn for a session that's already running one queues

@@ -8,10 +8,10 @@ enum ControlCommand {
     // MARK: cancel
 
     static func cancel(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true)])
+        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.string("session").map(parseSessionName)
+        let name = try scan.parsed("session", parseSessionName)
         let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
         let record = SessionStore.findSessionByDirectoryWalk(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd)
@@ -41,10 +41,10 @@ enum ControlCommand {
     // MARK: set-mode
 
     static func setMode(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true)])
+        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.string("session").map(parseSessionName)
+        let name = try scan.parsed("session", parseSessionName)
         guard let modeId = try context.positionals.first.map({ try parseNonEmptyValue("Mode", $0) }) else {
             throw UsageError("missing required argument 'mode'")
         }
@@ -88,7 +88,7 @@ enum ControlCommand {
     // MARK: set <key> <value>
 
     static func set(_ context: CommandContext) throws -> Int32 {
-        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true)])
+        let scan = try context.scan([OptionSpec("session", short: "s", takesValue: true, value: "name")])
         let flags = try context.globalFlags(scan)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         guard context.positionals.count >= 2 else {
@@ -96,7 +96,7 @@ enum ControlCommand {
         }
         let key = try parseNonEmptyValue("Config option key", context.positionals[0])
         let value = try parseNonEmptyValue("Config option value", context.positionals[1])
-        let name = try scan.string("session").map(parseSessionName)
+        let name = try scan.parsed("session", parseSessionName)
 
         let record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
         // Mirror acpx's `handleSetConfigOption`: the `model` key drives
