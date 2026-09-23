@@ -90,7 +90,9 @@ enum Router {
         if routing.flag("help") || routing.positionals.first == "help" {
             var helpPath = routing.positionals
             if helpPath.first == "help" { helpPath.removeFirst() }
-            Console.out(HelpRouter.render(path: helpPath, knownAgents: knownAgents, cwd: cwd))
+            Console.out(HelpRouter.render(
+                path: helpPath, knownAgents: knownAgents, cwd: cwd,
+                configAgents: Array(config.agents.keys)))
             return ExitCodes.success
         }
 
@@ -136,7 +138,7 @@ enum Router {
         // subcommand's own path (`sessions list`), so a nested screen is reached.
         return try attachingUsage(
             path: (explicitAgent.map { [$0] } ?? []) + positionals,
-            knownAgents: knownAgents, cwd: cwd
+            knownAgents: knownAgents, cwd: cwd, configAgents: Array(config.agents.keys)
         ) {
             try run(command, context)
         }
@@ -146,14 +148,16 @@ enum Router {
     /// (commander's `showHelpAfterError()`). An error that already carries one
     /// keeps it — the inner command resolved a more specific path.
     private static func attachingUsage(
-        path: [String], knownAgents: Set<String>, cwd: String, _ body: () throws -> Int32
+        path: [String], knownAgents: Set<String>, cwd: String, configAgents: [String],
+        _ body: () throws -> Int32
     ) rethrows -> Int32 {
         do {
             return try body()
         } catch var error as UsageError {
             if error.usage == nil {
                 let screen = error.scope == .root ? [] : path
-                error.usage = HelpRouter.render(path: screen, knownAgents: knownAgents, cwd: cwd)
+                error.usage = HelpRouter.render(
+                    path: screen, knownAgents: knownAgents, cwd: cwd, configAgents: configAgents)
             }
             throw error
         }

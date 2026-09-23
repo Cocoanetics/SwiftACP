@@ -22,8 +22,19 @@ enum HelpCatalog {
 
     // MARK: Root
 
-    static func root(cwd: String) -> HelpScreen {
-        var subs: [HelpSubcommand] = AgentRegistry.orderedNames.map {
+    /// acpx registers a command per agent — the built-ins, then the ones config
+    /// adds — so `configAgents` join the `Commands:` block after them.
+    ///
+    /// Upstream lists the configured ones in *file* order (its merge is a JS
+    /// object spread, which keeps insertion order). Nothing in our decode path
+    /// preserves that: `ResolvedAcpxConfig.agents`, `ACPXConfigFile.agents` and
+    /// `JSONFoundation.JSONDictionary` are all `Dictionary`, and Foundation's
+    /// `allKeys` is not document order — nor even stable across runs. Sorted is
+    /// the deterministic stand-in; see issue #47.
+    static func root(cwd: String, configAgents: [String] = []) -> HelpScreen {
+        let builtIn = AgentRegistry.orderedNames
+        let extra = configAgents.filter { !builtIn.contains($0) }.sorted()
+        var subs: [HelpSubcommand] = (builtIn + extra).map {
             HelpSubcommand("\($0) [options] [prompt...]", "Use \($0) agent")
         }
         subs += [
@@ -382,11 +393,16 @@ enum HelpCatalog {
 /// Maps an argv positional path to the `HelpScreen` commander would show for
 /// `--help` at that point in the tree, then renders it.
 enum HelpRouter {
-    static func render(path: [String], knownAgents: Set<String>, cwd: String) -> String {
-        HelpRenderer.render(screen(path: path, knownAgents: knownAgents, cwd: cwd))
+    static func render(
+        path: [String], knownAgents: Set<String>, cwd: String, configAgents: [String] = []
+    ) -> String {
+        HelpRenderer.render(
+            screen(path: path, knownAgents: knownAgents, cwd: cwd, configAgents: configAgents))
     }
 
-    static func screen(path: [String], knownAgents: Set<String>, cwd: String) -> HelpScreen {
+    static func screen(
+        path: [String], knownAgents: Set<String>, cwd: String, configAgents: [String] = []
+    ) -> HelpScreen {
         var path = path
 
         // Optional leading agent name selects the per-agent subtree.
@@ -401,7 +417,9 @@ enum HelpRouter {
             return HelpCatalog.agentSubcommand(agent, command) ?? HelpCatalog.agent(agent)
         }
 
-        guard let command = path.first else { return HelpCatalog.root(cwd: cwd) }
+        guard let command = path.first else {
+            return HelpCatalog.root(cwd: cwd, configAgents: configAgents)
+        }
         switch command {
         case "sessions":
             if path.count >= 2, let child = HelpCatalog.sessionsChild(path[1], prefix: "sessions") { return child }
@@ -412,6 +430,7 @@ enum HelpRouter {
         default:
             break
         }
-        return HelpCatalog.topSubcommand(command) ?? HelpCatalog.root(cwd: cwd)
+        return HelpCatalog.topSubcommand(command)
+            ?? HelpCatalog.root(cwd: cwd, configAgents: configAgents)
     }
 }
