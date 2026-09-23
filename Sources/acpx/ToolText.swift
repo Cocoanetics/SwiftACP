@@ -158,7 +158,13 @@ enum ToolText {
     // MARK: Read-like classification (read-suppression.ts)
 
     static func isReadLike(title: String?, kind: ToolKind?) -> Bool {
-        if kind?.rawValue.trimmingCharacters(in: .whitespaces).lowercased() == "read" { return true }
+        isReadLike(title: title, kindName: kind?.rawValue)
+    }
+
+    /// The same test on the kind as it appeared on the wire, which json mode reads
+    /// without decoding the update.
+    static func isReadLike(title: String?, kindName: String?) -> Bool {
+        if kindName?.trimmingCharacters(in: .whitespaces).lowercased() == "read" { return true }
         // The leading *word* must be the action, not merely contain it. Splitting on the
         // colon alone left the whole title as the head, and a substring test then read
         // "Spreadsheet update" or "overwrite readme.md" as reads and hid their output —
