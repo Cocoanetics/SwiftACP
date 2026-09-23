@@ -285,6 +285,22 @@ private let javaScriptWhitespace = CharacterSet(
 ).union(CharacterSet(charactersIn: "\u{2000}"..."\u{200A}"))
 
 extension WireJSON {
+    /// A JSONFoundation value, to print as `JSON.stringify` would. `JSONValue` keeps no
+    /// member order, so an object's keys go in sorted order.
+    public init(_ value: JSONValue) {
+        switch value {
+        case .null: self = .null
+        case .bool(let flag): self = .bool(flag)
+        case .integer(let number): self = .number(Double(number))
+        case .unsignedInteger(let number): self = .number(Double(number))
+        case .double(let number): self = .number(number)
+        case .string(let text): self = .text(text)
+        case .array(let items): self = .array(items.map(WireJSON.init))
+        case .object(let members):
+            self = .object(members.keys.sorted().map { key in Member(key, WireJSON(members[key] ?? .null)) })
+        }
+    }
+
     /// The value as JSONFoundation's `JSONValue` — object member order is lost. A number
     /// too large for a double (`1e400`) parses to infinity, as in `JSON.parse`, and
     /// becomes `null`, which is how `JSON.stringify` sends it on.
