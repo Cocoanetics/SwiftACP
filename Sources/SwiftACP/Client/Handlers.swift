@@ -1,4 +1,14 @@
 import Foundation
+
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Bionic)
+import Bionic
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import JSONFoundation
 
 /// Callbacks the agent may invoke on the client during a turn.
@@ -108,42 +118,8 @@ public enum PermissionPolicy: Sendable {
 /// The default implementation of the `fs/*` client methods: real reads/writes
 /// against the local disk, honouring the optional `line`/`limit` window.
 public enum LocalFileSystem {
-    /// `O_NOFOLLOW` where the platform has it, as acpx's `fs-safe` does
-    /// (`resolveReadOpenFlags`: `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, disabled on
-    /// Windows). The final component must be the file itself, not a link to one — a
-    /// symlink swapped in after the path was validated fails the open instead of
-    /// redirecting the read.
-    private static var noFollow: Int32 {
-        #if os(Windows)
-        return 0
-        #else
-        return O_NOFOLLOW | O_NONBLOCK
-        #endif
-    }
-
     public static func read(_ request: ReadTextFileRequest) throws -> ReadTextFileResponse {
-        let descriptor = open(request.path, O_RDONLY | noFollow)
-        guard descriptor >= 0 else {
-            switch errno {
-            case ENOENT: throw FileSystemContainment.resourceNotFound(request.path)
-            case ELOOP: throw FileSystemContainment.symlinkRefused(request.path)
-            default:
-                throw JSONRPCError.invalidParams(
-                    "Cannot read \(request.path): \(String(cString: strerror(errno)))")
-            }
-        }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        // The type check belongs on the descriptor: a path stat'd first could be a
-        // different object by the time it is opened.
-        var status = stat()
-        guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG else {
-            throw FileSystemContainment.notARegularFile(request.path)
-        }
-        let data = try handle.readToEnd() ?? Data()
-        guard let contents = String(data: data, encoding: .utf8) else {
-            throw JSONRPCError.invalidParams("Not UTF-8 text: \(request.path)")
-        }
+        let contents = try contents(ofFileAt: request.path)
         guard request.line != nil || request.limit != nil else {
             return ReadTextFileResponse(content: contents)
         }
@@ -163,21 +139,73 @@ public enum LocalFileSystem {
         let url = URL(fileURLWithPath: request.path)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Same reasoning as `read`: the final component is opened no-follow, so a
-        // symlink planted after the path was contained cannot redirect the write.
-        let descriptor = open(request.path, O_WRONLY | O_CREAT | O_TRUNC | noFollow, 0o644)
+        try write(request.content, toFileAt: request.path)
+        return WriteTextFileResponse()
+    }
+
+    #if os(Windows)
+    // Windows has no `O_NOFOLLOW`, and acpx's `fs-safe` disables it there for the same
+    // reason (`resolveReadOpenFlags`: `process.platform !== "win32"`). Containment still
+    // applies; the open simply cannot add the no-follow guarantee.
+    private static func contents(ofFileAt path: String) throws -> String {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+            throw FileSystemContainment.resourceNotFound(path)
+        }
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw FileSystemContainment.notARegularFile(path)
+        }
+        return try String(contentsOfFile: path, encoding: .utf8)
+    }
+
+    private static func write(_ text: String, toFileAt path: String) throws {
+        try text.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+    #else
+    /// acpx's `fs-safe` opens `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`; the final component
+    /// must be the file itself, so an object swapped in after containment resolved the
+    /// path fails the open instead of redirecting it. `O_NONBLOCK` keeps a reader-less
+    /// fifo from hanging, and the type is decided on the descriptor.
+    private static func contents(ofFileAt path: String) throws -> String {
+        let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard descriptor >= 0 else {
-            if errno == ELOOP { throw FileSystemContainment.symlinkRefused(request.path) }
-            throw JSONRPCError.invalidParams(
-                "Cannot write \(request.path): \(String(cString: strerror(errno)))")
+            switch errno {
+            case ENOENT: throw FileSystemContainment.resourceNotFound(path)
+            case ELOOP: throw FileSystemContainment.symlinkRefused(path)
+            default:
+                throw JSONRPCError.invalidParams(
+                    "Cannot read \(path): \(String(cString: strerror(errno)))")
+            }
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
-        var status = stat()
-        guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG else {
-            throw FileSystemContainment.notARegularFile(request.path)
+        try requireRegularFile(descriptor, path)
+        let data = try handle.readToEnd() ?? Data()
+        guard let contents = String(data: data, encoding: .utf8) else {
+            throw JSONRPCError.invalidParams("Not UTF-8 text: \(path)")
         }
-        try handle.write(contentsOf: Data(request.content.utf8))
-        return WriteTextFileResponse()
+        return contents
     }
+
+    private static func write(_ text: String, toFileAt path: String) throws {
+        let descriptor = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, mode_t(0o644))
+        guard descriptor >= 0 else {
+            if errno == ELOOP { throw FileSystemContainment.symlinkRefused(path) }
+            throw JSONRPCError.invalidParams(
+                "Cannot write \(path): \(String(cString: strerror(errno)))")
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        try requireRegularFile(descriptor, path)
+        try handle.write(contentsOf: Data(text.utf8))
+    }
+
+    /// Checked on the descriptor, not the path: `st_mode` is `UInt16` on Darwin and
+    /// `UInt32` on Linux, so both sides are widened before masking.
+    private static func requireRegularFile(_ descriptor: Int32, _ path: String) throws {
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+            UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFREG)
+        else { throw FileSystemContainment.notARegularFile(path) }
+    }
+    #endif
 }
