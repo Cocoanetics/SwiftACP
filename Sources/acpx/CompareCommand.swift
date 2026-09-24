@@ -16,6 +16,17 @@ enum CompareCommand {
         var wallMs: Int
         var finalMessage: String
         var error: String?
+        /// acpx's `permission_requests` and `permission_denied` (denied or cancelled).
+        var permissionRequests = 0
+        var permissionDenied = 0
+    }
+
+    /// What one agent's run came to: the turn, if it finished, and the permissions it
+    /// needed either way — acpx's `onPermissionStats` capture.
+    private struct Ran {
+        var outcome: PromptOutcome?
+        var permissions = PermissionStats()
+        var error: Error?
     }
 
     static func run(_ context: CommandContext) throws -> Int32 {
@@ -33,6 +44,7 @@ enum CompareCommand {
             throw InvalidArgumentError("Do not combine compare with --agent; pass agent names")
         }
         let format = scan.flag("json") ? "json" : flags.format
+        let permissionRules = try flags.permissionRules()
 
         let promptFile = scan.string("file") ?? scan.string("prompt-file")
         let (agents, promptText) = try splitArgs(context.positionals, promptFile: promptFile)
@@ -44,7 +56,8 @@ enum CompareCommand {
 
         var rows: [Row] = []
         for agentName in agents {
-            rows.append(try runAgent(agentName, prompt: prompt, flags: flags, config: context.config))
+            rows.append(try runAgent(
+                agentName, prompt: prompt, flags: flags, config: context.config, permissionRules: permissionRules))
         }
         printRows(rows, format: format)
 
@@ -67,7 +80,7 @@ enum CompareCommand {
 
     private static func runAgent(
         _ agentName: String, prompt: [ContentBlock], flags: GlobalFlags,
-        config: ResolvedAcpxConfig
+        config: ResolvedAcpxConfig, permissionRules: PermissionRules?
     ) throws -> Row {
         let invocation = try Flags.resolveAgentInvocation(agentName, flags, config: config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: config)
@@ -76,34 +89,57 @@ enum CompareCommand {
         let agentArgv = invocation.agentArgv
         let cwd = invocation.cwd
         let start = Date()
-        do {
-            let outcome: PromptOutcome = try runBlocking {
-                let handle = try await ACPAgent.launch(
+        let ran: Ran = try runBlocking {
+            let handle: ACPAgent
+            do {
+                // acpx's `runOnce` takes the invocation's connection options, the
+                // non-interactive policy among them.
+                handle = try await ACPAgent.launch(
                     agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission,
+                    nonInteractivePermissions: flags.nonInteractivePolicy, permissionRules: permissionRules,
                     capabilities: flags.clientCapabilities,
                     authCredentials: config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: false)
-                do {
-                    let session = try await handle.newSession(mcpServers: mcpServers)
-                    let result = try await session.run(prompt)
-                    await handle.close()
-                    return result
-                } catch {
-                    await handle.close()
-                    throw error
-                }
+            } catch {
+                return Ran(error: error)
             }
-            let wallMs = Int(Date().timeIntervalSince(start) * 1000)
-            let status = outcome.stopReason == .cancelled ? "cancelled" : "ok"
-            return Row(
-                agent: agentName, status: status, stopReason: outcome.stopReason.rawValue,
-                wallMs: wallMs, finalMessage: truncate(collapse(outcome.text), previewChars), error: nil)
-        } catch {
-            let wallMs = Int(Date().timeIntervalSince(start) * 1000)
-            return Row(
-                agent: agentName, status: "error", stopReason: nil, wallMs: wallMs,
-                finalMessage: "", error: truncate(collapse(error.localizedDescription), previewChars))
+            var ran = Ran()
+            var sessionId: SessionId?
+            do {
+                let session = try await handle.newSession(mcpServers: mcpServers)
+                sessionId = session.id
+                ran.outcome = try await session.run(prompt)
+            } catch {
+                ran.error = error
+            }
+            if let sessionId { ran.permissions = await handle.connection.permissionStats(for: sessionId) }
+            await handle.close()
+            return ran
         }
+        return row(agentName, ran, wallMs: Int(Date().timeIntervalSince(start) * 1000))
+    }
+
+    /// acpx's `buildSuccessRow` / `buildErrorRow`. A turn that needed a permission
+    /// question nobody could be asked fails as acpx's `runOnce` fails it — an error
+    /// row, `permission_denied` — keeping what the agent said.
+    private static func row(_ agentName: String, _ ran: Ran, wallMs: Int) -> Row {
+        let stats = ran.permissions
+        var row = Row(
+            agent: agentName, status: "ok", stopReason: nil, wallMs: wallMs,
+            finalMessage: truncate(collapse(ran.outcome?.text ?? ""), previewChars), error: nil,
+            permissionRequests: stats.requested, permissionDenied: stats.denied + stats.cancelled)
+        if let error = ran.error {
+            row.status = "error"
+            row.error = truncate(collapse(error.localizedDescription), previewChars)
+        } else if stats.promptUnavailable {
+            row.status = "permission_denied"
+            row.error = PermissionPromptUnavailableError().description
+        } else if let outcome = ran.outcome {
+            row.stopReason = outcome.stopReason.rawValue
+            row.status = outcome.stopReason == .cancelled ? "cancelled"
+                : stats.denied + stats.cancelled > 0 ? "permission_denied" : "ok"
+        }
+        return row
     }
 
     // MARK: Output
@@ -123,8 +159,8 @@ enum CompareCommand {
                     ("total_tokens", .null),
                     ("final_message", .string(row.finalMessage)),
                     ("error", row.error.map(JSONValue.string) ?? .null),
-                    ("permission_requests", .integer(0)),
-                    ("permission_denied", .integer(0))
+                    ("permission_requests", .integer(row.permissionRequests)),
+                    ("permission_denied", .integer(row.permissionDenied))
                 ])
             }).compact() + "\n")
         case "quiet":
@@ -140,9 +176,9 @@ enum CompareCommand {
             "stop_reason", "final_message", "error"
         ]
         let body = rows.map { row in
-            [row.agent, row.status, String(row.wallMs), "-", "-", "-", "0/0",
-             row.stopReason ?? "-", row.finalMessage.isEmpty ? "-" : collapse(row.finalMessage),
-             row.error ?? "-"]
+            [row.agent, row.status, String(row.wallMs), "-", "-", "-",
+             "\(row.permissionDenied)/\(row.permissionRequests)", row.stopReason ?? "-",
+             row.finalMessage.isEmpty ? "-" : collapse(row.finalMessage), row.error ?? "-"]
         }
         var widths = headers.map(\.count)
         for cells in body {

@@ -323,3 +323,15 @@ func nonEmptyRuntimeValue(_ label: String, _ value: String) throws -> String {
     }
     return trimmed
 }
+
+extension GlobalFlags {
+    /// acpx's `resolvePermissionPolicyFromFlags`: the `--permission-policy` rules, or a
+    /// usage error saying why they do not read.
+    func permissionRules() throws -> PermissionRules? {
+        do {
+            return try PermissionRulesLoader.load(permissionPolicy, cwd: cwd)
+        } catch let invalid as PermissionRulesLoader.Invalid {
+            throw InvalidArgumentError("Invalid permission policy: \(invalid.message)")
+        }
+    }
+}

@@ -29,6 +29,7 @@ public enum SessionEngine {
         cwd: String,
         name: String?,
         permission: PermissionPolicy,
+        permissionRules: PermissionRules? = nil,
         authCredentials: [String: String],
         authPolicy: String,
         mcpServers: [MCPServerSpec] = [],
@@ -42,7 +43,8 @@ public enum SessionEngine {
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
         let handle = try await ACPAgent.launch(
-            agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission, capabilities: capabilities,
+            agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission, permissionRules: permissionRules,
+            capabilities: capabilities,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)
         do {
