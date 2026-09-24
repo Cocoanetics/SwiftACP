@@ -31,7 +31,7 @@ extension ACPAgentConnection {
                 // Asking can take long; a connection that ended meanwhile has released its
                 // terminals, and a command started now would outlive it. acpx rechecks its
                 // control authority here and answers `Request cancelled`.
-                guard !terminalsShutDown, !isClosed else { return .failure(Self.requestCancelled) }
+                guard !terminalsShutDown, !isClosed, !Task.isCancelled else { return .failure(Self.requestCancelled) }
                 return .success(try JSONValue(encoding: try await terminals.createTerminal(request)))
             case "terminal/output":
                 let request: TerminalOutputRequest = try decode(params, for: method)

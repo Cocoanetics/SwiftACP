@@ -45,6 +45,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Internal (not private) so the prompt turns in `ACPXDaemonBackend+Prompt.swift`
     /// can take a session's slot.
     let turnQueue = SessionTurnQueue()
+    /// The turn each session runs, by record: see ``TurnControl``.
+    var turns: [String: TurnControl] = [:]
+    /// For tests: run as a turn's prompt is about to be written, once a cancel can no
+    /// longer keep it from going out.
+    var promptGoingOut: (@Sendable (_ recordId: String) async -> Void)?
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -373,16 +378,4 @@ actor ACPXDaemonBackend: ACPXBackend {
             .contains { text.contains($0) }
     }
 
-    /// Cancel an in-flight prompt for a session.
-    ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
-    /// - Returns: `false` if the session isn't currently live.
-    func cancelSession(sessionId: String) async throws -> Bool {
-        // An agent that exited has no turn to cancel.
-        guard let record = findRecord(sessionId), let entry = live[record.acpxRecordId],
-            await !entry.agent.connection.isClosed
-        else { return false }
-        try await entry.session.cancel()
-        return true
-    }
 }

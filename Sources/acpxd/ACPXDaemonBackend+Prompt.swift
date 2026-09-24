@@ -78,6 +78,10 @@ extension ACPXDaemonBackend {
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
         defer { Task { await turnQueue.release(recordId) } }
+        // The turn runs from here: from now on a cancel is its (``cancelSession(sessionId:)``).
+        let control = TurnControl()
+        turns[recordId] = control
+        defer { turns[recordId] = nil }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
@@ -106,7 +110,8 @@ extension ACPXDaemonBackend {
         let errors = TurnErrorWatch()
         let requestedModel = model?.javaScriptTrimmed
         let turn = Turn(
-            recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers, blocks: content,
+            id: control.id, recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
+            blocks: content,
             model: requestedModel?.isEmpty == false ? requestedModel : nil, permissions: permissions,
             terminalOutputCeiling: ceiling, persister: persister, eventBuffer: eventBuffer,
             streamWire: streamWire, errors: errors)
@@ -118,6 +123,8 @@ extension ACPXDaemonBackend {
 
     /// One turn's settings, as ``attemptPrompt(_:)`` needs them.
     struct Turn {
+        /// Its ``TurnControl``'s.
+        let id: UUID
         let recordId: String
         let agentCommand: String
         let cwd: String
@@ -208,6 +215,8 @@ extension ACPXDaemonBackend {
         // Nothing an earlier attempt showed says how this one fails — not even when it
         // fails to connect at all.
         errors.reset()
+        // Until this attempt's prompt goes out, a cancel waits for it.
+        turns[recordId]?.prompt = nil
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
@@ -246,9 +255,16 @@ extension ACPXDaemonBackend {
             wireFeed.observe(direction, body)
             promptResult.observe(direction, body)
         }
-        entry.agent.rawWire.onDelivery { body, delivery in
+        // The note that the prompt went out comes from the writer's thread; it reaches
+        // this actor as the turn goes on, and is dropped once the turn has ended.
+        let turnId = turn.id
+        entry.agent.rawWire.onDelivery { [self] body, delivery in
             guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
-            if delivery == .writing { wrote.mark() } else { wrote.unmark() }
+            guard delivery == .writing else { return wrote.unmark() }
+            wrote.mark()
+            Task {
+                await self.promptWritten(recordId: recordId, turn: turnId, to: connection, sessionId: boundSessionId)
+            }
         }
         defer {
             entry.agent.rawWire.set(nil)
@@ -272,7 +288,12 @@ extension ACPXDaemonBackend {
             if let model = turn.model {
                 try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
             }
-            let response = try await entry.session.prompt(blocks)
+            // A cancel asked before the prompt went out ends the turn so, the prompt
+            // unsent, as acpx's attempt stops at its aborted turn (`runPromptWithRetries`)
+            // — the user's message kept. One asked from here on waits for it to go out.
+            let unsent = turns[recordId]?.cancelPending == true
+            if !unsent { await promptGoingOut?(recordId) }
+            let response = unsent ? PromptResponse(stopReason: .cancelled) : try await entry.session.prompt(blocks)
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
             let fullText = await consumer.value
@@ -288,7 +309,7 @@ extension ACPXDaemonBackend {
             // Demote the stop reason to a streamed event: emit it last, after every
             // update, so a client reconstructing the turn sees it in order. It carries
             // how the turn's permissions went, which decides the CLI's exit code.
-            let permissionStats = await connection.permissionStats(for: boundSessionId)
+            let permissionStats = unsent ? PermissionStats() : await connection.permissionStats(for: boundSessionId)
             await clientSession?.sendLogNotification(
                 LogMessage(
                     level: .info, logger: sessionId,

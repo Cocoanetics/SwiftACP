@@ -51,6 +51,13 @@ EXIT_AFTER_PROMPTS = int(os.environ.get("MOCK_EXIT_AFTER_PROMPTS", "0"))
 # mid-turn, after the prompt reached it. 0 = never.
 EXIT_ON_PROMPT = int(os.environ.get("MOCK_EXIT_ON_PROMPT", "0"))
 
+# A FIFO a `session/load` reads to its end before it is answered: a test knows the
+# agent is loading once it can open the FIFO to write, and lets it go by closing it.
+LOAD_GATE = os.environ.get("MOCK_LOAD_GATE")
+
+# A prompt is held until `session/cancel` comes, then answered `cancelled`.
+HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
+
 # Each process names its sessions after itself, so a replacement session is
 # distinguishable from the one it replaced. Off: every session is mock-session-1.
 SESSION_ID = ("mock-session-%d" % os.getpid()) if os.environ.get("MOCK_SESSION_ID_PER_PROCESS") \
@@ -168,6 +175,7 @@ def main():
         with open(argv_log, "a", encoding="utf-8") as output:
             output.write(json.dumps(sys.argv[1:]) + "\n")
     prompts_answered = 0
+    held_prompt = None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -209,6 +217,9 @@ def main():
             # `gone` (the default) is the usual reason a fresh agent process cannot
             # load a session: it no longer has it. `ok` takes it back; `internal`
             # fails the way an agent's own bug would.
+            if LOAD_GATE:
+                with open(LOAD_GATE) as gate:
+                    gate.read()
             if LOAD_MODE == "ok":
                 loaded = message.get("params", {}).get("sessionId", SESSION_ID)
                 if LOAD_REPLAY:
@@ -237,6 +248,9 @@ def main():
             if EXIT_ON_PROMPT and prompts_answered + 1 >= EXIT_ON_PROMPT:
                 os._exit(0)
             prompts_answered += 1
+            if HOLD_UNTIL_CANCEL:
+                held_prompt = req_id
+                continue
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:
                 sys.stdout.flush()
@@ -263,7 +277,9 @@ def main():
         elif method == "session/set_model":
             respond(req_id, {})
         elif method == "session/cancel":
-            pass  # notification, nothing to do
+            if held_prompt is not None:
+                respond(held_prompt, {"stopReason": "cancelled"})
+                held_prompt = None
         elif req_id is not None:
             # Unknown request: report method-not-found.
             send({"jsonrpc": "2.0", "id": req_id,

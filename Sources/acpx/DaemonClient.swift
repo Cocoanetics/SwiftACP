@@ -311,11 +311,17 @@ enum DaemonClient {
 
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
-    /// is reachable (or the session isn't live) there is nothing to cancel.
-    static func cancelSession(sessionId: String) async -> Bool {
-        (try? await withClient(spawnIfNeeded: false) {
-            try await $0.cancelSession(sessionId: sessionId)
-        }) ?? false
+    /// is reachable (or the session isn't live) there is nothing to cancel. A daemon
+    /// that could not send the cancel throws why.
+    static func cancelSession(sessionId: String) async throws -> Bool {
+        do {
+            return try await withClient(spawnIfNeeded: false) {
+                try await $0.cancelSession(sessionId: sessionId)
+            }
+        } catch is DaemonUnavailable {
+            // acpx with no queue owner: nothing holds the turn.
+            return false
+        }
     }
 
     /// Connect to the daemon (spawning if needed) and run `body` with the generated,

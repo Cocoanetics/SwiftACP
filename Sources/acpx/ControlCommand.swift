@@ -15,11 +15,12 @@ enum ControlCommand {
         let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
         let record = SessionStore.findSessionByDirectoryWalk(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd)
-        // An in-flight prompt is held by the daemon, so route the cancel there. If
-        // no daemon is reachable (or the session isn't live) there's nothing to cancel.
+        // An in-flight prompt is held by the daemon, so route the cancel there. If no
+        // daemon is reachable (or the session isn't live) there's nothing to cancel; a
+        // cancel the daemon could not send fails, as acpx's owner reports one.
         var cancelled = false
         if let record {
-            cancelled = try runBlocking { await DaemonClient.cancelSession(sessionId: record.acpSessionId) }
+            cancelled = try runBlocking { try await DaemonClient.cancelSession(sessionId: record.acpSessionId) }
         }
         printCancel(sessionId: record?.acpxRecordId ?? "", cancelled: cancelled, format: flags.format)
         return ExitCodes.success

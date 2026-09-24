@@ -15,7 +15,7 @@ extension ACPAgentConnection {
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         let sessionId = decodedSessionId(params)
         publish(.inboundRequest(InboundRequest(method: method, sessionId: sessionId)))
-        let result = await handleIncomingRequest(method: method, params: params)
+        let result = await servingUnlessCancelled(method, params, sessionId: sessionId)
         if case .failure(let error) = result {
             publish(.inboundRequest(InboundRequest(
                 method: method, sessionId: sessionId, failure: InboundRequest.summary(of: error))))
