@@ -100,7 +100,7 @@ enum ControlCommand {
         // session/set_model (legacy control) or the model config option
         // (config_option control); other keys get the config-id compatibility
         // aliases applied + validated against the session's advertised options.
-        let operation = resolveSetOperation(key: key, agentCommand: agent.agentCommand, record: record)
+        let operation = resolveSetOperation(key: key, agentCommand: agent.agentCommand)
         let sessionId = record.acpSessionId
 
         // Route through acpxd — the single manager that holds the live agent and owns
@@ -178,21 +178,18 @@ enum ControlCommand {
 
     // MARK: set routing (ported from acpx handleSetConfigOption / handleSetModel)
 
-    private enum SetOperation {
+    enum SetOperation: Equatable {
         case model
         case configOption(String)
     }
 
-    /// Decide whether `set <key> <value>` drives session/set_model or
-    /// session/set_config_option. acpx routes the `model` key to session/set_model
-    /// for legacy-control agents (codex) and to the `model` config option for
-    /// config_option agents (claude); other keys pass through `resolveCompatibleConfigId`.
-    private static func resolveSetOperation(
-        key: String, agentCommand: String, record: SessionRecord
-    ) -> SetOperation {
-        if key == "model" {
-            return record.acpx?.modelControl == "legacy_set_model" ? .model : .configOption("model")
-        }
+    /// Decide whether `set <key> <value>` is a model selection or a config option. acpx's
+    /// `handleSetConfigOption` hands the `model` key to `handleSetModel` whatever the
+    /// agent is: `setSessionModel` then uses the control the session advertises — its
+    /// model config option (claude) or `session/set_model` (codex) — and refuses when it
+    /// advertises neither. Other keys pass through `resolveCompatibleConfigId`.
+    static func resolveSetOperation(key: String, agentCommand: String) -> SetOperation {
+        if key == "model" { return .model }
         return .configOption(resolveCompatibleConfigId(agentCommand: agentCommand, configId: key))
     }
 

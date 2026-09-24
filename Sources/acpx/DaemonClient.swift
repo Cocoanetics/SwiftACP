@@ -221,6 +221,12 @@ enum DaemonClient {
             stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions)
     }
 
+    /// A control the daemon ran for this CLI failed, for the reason in `message`.
+    struct DaemonControlFailure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     /// Set a session's mode on the live agent via the daemon (which persists it).
     static func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
         try await withClient { try await $0.setMode(sessionId: sessionId, modeId: modeId) }
@@ -284,7 +290,18 @@ enum DaemonClient {
     ) async throws -> T {
         let proxy = try await connect(spawnIfNeeded: spawnIfNeeded)
         defer { Task { await proxy.disconnect() } }
-        return try await body(ACPXDaemon.Client(proxy: proxy))
+        do {
+            return try await body(ACPXDaemon.Client(proxy: proxy))
+        } catch {
+            throw controlFailure(error)
+        }
+    }
+
+    /// The daemon's own error, said as acpx says it — without the MCP client's `Tool
+    /// call failed: `, since the control ran where acpx runs it, not in a tool.
+    static func controlFailure(_ error: Error) -> Error {
+        guard case MCPServerProxyError.toolError(let message) = error else { return error }
+        return DaemonControlFailure(message: message)
     }
 
     /// Launch a detached `acpxd`. Returns the launch error if the process couldn't

@@ -30,7 +30,7 @@ public enum ModelApplication {
 
     /// A requested model the agent can't be asked for: it advertises no model
     /// control at all, or not that model.
-    public struct UnsupportedError: Error, CustomStringConvertible {
+    public struct UnsupportedError: LocalizedError, CustomStringConvertible {
         public enum Reason: String, Sendable {
             case missingCapability = "missing-capability"
             case unadvertisedModel = "unadvertised-model"
@@ -48,7 +48,21 @@ public enum ModelApplication {
         }
 
         public var description: String { message }
-        public var localizedDescription: String { message }
+        public var errorDescription: String? { message }
+    }
+
+    /// What applying a requested model came to — acpx's `{ applied, response }`.
+    public struct Application: Sendable {
+        /// Whether the session is on the requested model now: it was asked for it, or
+        /// was on it already. `false` when none was requested or none is advertised.
+        public var applied: Bool
+        /// The agent's reply, when the model went by its config option.
+        public var response: SetSessionConfigOptionResponse?
+
+        public init(applied: Bool, response: SetSessionConfigOptionResponse? = nil) {
+            self.applied = applied
+            self.response = response
+        }
     }
 
     /// One `<configId>=<value>` selection to put on a session.
@@ -110,17 +124,34 @@ public enum ModelApplication {
         agentCommand: String?,
         onWarning: ((String) -> Void)? = nil
     ) async throws -> SetSessionConfigOptionResponse? {
-        let requested = requestedModel?.trimmingCharacters(in: .whitespaces) ?? ""
-        guard !requested.isEmpty else { return nil }
+        try await applyRequestedModel(
+            connection: connection, sessionId: sessionId, requestedModel: requestedModel, models: models,
+            agentCommand: agentCommand, onWarning: onWarning
+        ).response
+    }
+
+    /// ``applyRequestedModelIfAdvertised(connection:sessionId:requestedModel:models:agentCommand:onWarning:)``
+    /// with whether the model was applied, as acpx's function returns it.
+    public static func applyRequestedModel(
+        connection: ACPAgentConnection,
+        sessionId: SessionId,
+        requestedModel: String?,
+        models: ModelSupport.ModelState?,
+        agentCommand: String?,
+        onWarning: ((String) -> Void)? = nil
+    ) async throws -> Application {
+        let requested = requestedModel?.javaScriptTrimmed ?? ""
+        guard !requested.isEmpty else { return Application(applied: false) }
         if let warning = try assertRequestedModelSupported(
             requestedModel: requested, models: models, agentCommand: agentCommand, context: .apply) {
             onWarning?(warning)
         }
-        guard let models else { return nil }
-        guard models.currentModelId != requested else { return nil }
-        return try await setModel(
+        guard let models else { return Application(applied: false) }
+        guard models.currentModelId != requested else { return Application(applied: true) }
+        let response = try await setModel(
             connection: connection, sessionId: sessionId, modelId: requested,
             models: models, agentCommand: agentCommand)
+        return Application(applied: true, response: response)
     }
 
     /// Select `modelId`, through whichever control the agent advertises.

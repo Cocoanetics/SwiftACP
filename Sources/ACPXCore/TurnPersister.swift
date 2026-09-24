@@ -52,10 +52,10 @@ public actor TurnPersister {
         flush()
     }
 
-    /// Take the agent's own session id, as a reconnect's `session/load` or
-    /// `session/resume` named it, onto the record the turn saves.
-    public func adoptAgentSessionId(_ id: String) {
-        record.reconcileAgentSessionId(id)
+    /// Apply a change a reconnect made — the agent's own session id it named, the model
+    /// its replay put back — to the record the turn saves.
+    public func adopt(_ change: @Sendable (inout SessionRecord) -> Void) {
+        change(&record)
         dirty = true
         flush()
     }

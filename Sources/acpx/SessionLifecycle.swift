@@ -121,7 +121,8 @@ enum SessionLifecycle {
                     sessionMcpServers: config.sessionMcpServers,
                     meta: meta, sessionOptions: options,
                     capabilities: flags.clientCapabilities,
-                    inheritStderr: flags.verbose)
+                    inheritStderr: flags.verbose,
+                    onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })
             } catch {
                 throw CLIError(error.localizedDescription)
             }

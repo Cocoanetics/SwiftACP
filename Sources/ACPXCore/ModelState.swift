@@ -91,9 +91,7 @@ public enum ModelSupport {
         applySessionModelState(configOptions: configOptions, models: models, to: &state)
         let derived = modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
         guard let derived else {
-            state.currentModelId = nil
-            state.availableModels = nil
-            state.modelControl = nil
+            clearAdvertisedModelState(&state)
             return
         }
         if models != nil, derived.configId == nil, case .array(let options)? = state.configOptions {
@@ -112,12 +110,133 @@ public enum ModelSupport {
         }
         let derived =
             modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
-        if let derivedModels = derived {
-            let models = derivedModels
-            state.currentModelId = models.currentModelId
-            state.availableModels = models.availableModels.map(\.modelId)
-            state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
+        if let derived { applyAdvertisedModelState(derived, to: &state) }
+    }
+
+    /// acpx's `applyAdvertisedModelState`: the session's current model, the models it
+    /// offers and their names, and which control sets it.
+    public static func applyAdvertisedModelState(_ models: ModelState, to state: inout SessionAcpxState) {
+        state.currentModelId = models.currentModelId
+        state.availableModels = models.availableModels.map(\.modelId)
+        state.availableModelNames = Dictionary(
+            models.availableModels.map { ($0.modelId, $0.name) }, uniquingKeysWith: { _, last in last })
+        state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
+    }
+
+    /// acpx's `advertisedModelState`: the model state a record's `acpx` block keeps —
+    /// from its config options, else, unless those are what sets the model, from its
+    /// legacy model list.
+    public static func advertisedModelState(_ state: SessionAcpxState?) -> ModelState? {
+        guard let state else { return nil }
+        var options: [JSONValue]?
+        if case .array(let configOptions)? = state.configOptions { options = configOptions }
+        if let fromOptions = modelState(fromConfigOptions: options) { return fromOptions }
+        guard state.modelControl != "config_option", let available = state.availableModels else { return nil }
+        return ModelState(
+            configId: nil, currentModelId: state.currentModelId ?? "",
+            availableModels: available.map { ($0, state.availableModelNames?[$0] ?? $0) })
+    }
+
+    /// acpx's `applyModelSelection`: what selecting `modelId` leaves in the record — the
+    /// options the agent reported back, with only the saved selections reconciled to
+    /// them; the model pinned in `session_options`, and current; and no saved selection
+    /// for the model's own option.
+    public static func applyModelSelection(
+        _ modelId: String, response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
+    ) {
+        let modelConfigId = advertisedModelState(state)?.configId
+        applyAcceptedConfigOptions(response, to: &state)
+        var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
+        options.model = modelId
+        state.sessionOptions = options
+        state.currentModelId = modelState(fromConfigOptions: response?.configOptions)?.currentModelId ?? modelId
+        if let configId = modelConfigId ?? advertisedModelState(state)?.configId {
+            state.desiredConfigOptions?.removeValue(forKey: configId)
+            if state.desiredConfigOptions?.isEmpty == true { state.desiredConfigOptions = nil }
         }
+    }
+
+    /// acpx's `applyConfigOptionSelection`: what setting option `configId` to `value`
+    /// leaves in the record. The model's own option is a model selection — pinned, as
+    /// ``applyModelSelection(_:response:to:)`` pins it; any other is saved as a
+    /// selection to restore, with the options the agent reported back.
+    public static func applyConfigOptionSelection(
+        _ configId: String, value: String, response: SetSessionConfigOptionResponse,
+        to state: inout SessionAcpxState
+    ) {
+        let modelConfigId = advertisedModelState(state)?.configId
+        if configId == modelConfigId || configId == modelState(fromConfigOptions: response.configOptions)?.configId {
+            applyModelSelection(value, response: response, to: &state)
+            return
+        }
+        var desired = state.desiredConfigOptions ?? [:]
+        desired[configId] = value
+        state.desiredConfigOptions = desired
+        applyAcceptedConfigOptions(response, to: &state)
+    }
+
+    /// acpx's `applyAcceptedConfigOptions`: the options a control's reply reported
+    /// replace the record's, and saved selections follow what they now say — a reply
+    /// can change sibling options — keeping only those still reported.
+    static func applyAcceptedConfigOptions(
+        _ response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
+    ) {
+        guard let reported = response?.configOptions else { return }
+        applyConfigOptionsModelState(reported, to: &state)
+        guard let desired = state.desiredConfigOptions else { return }
+        var kept: [String: String] = [:]
+        for case .object(let option) in reported {
+            if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
+               desired[id] != nil {
+                kept[id] = value
+            }
+        }
+        state.desiredConfigOptions = kept.isEmpty ? nil : kept
+    }
+
+    /// acpx's `clearAdvertisedModelState`.
+    static func clearAdvertisedModelState(_ state: inout SessionAcpxState) {
+        state.currentModelId = nil
+        state.availableModels = nil
+        state.availableModelNames = nil
+        state.modelControl = nil
+    }
+
+    /// acpx's `applyConfigOptionsModelState`: the config options the agent reported
+    /// replace the record's, with the model state they carry. When they carry none, a
+    /// legacy model control is kept, and any other model state is cleared.
+    public static func applyConfigOptionsModelState(_ configOptions: [JSONValue], to state: inout SessionAcpxState) {
+        var previousOptions: [JSONValue]?
+        if case .array(let options)? = state.configOptions { previousOptions = options }
+        let preservesLegacyControl = state.modelControl == "legacy_set_model"
+            || (state.modelControl == nil && modelState(fromConfigOptions: previousOptions) == nil
+                && state.availableModels != nil)
+        state.configOptions = .array(configOptions)
+        if let models = modelState(fromConfigOptions: configOptions) {
+            applyAdvertisedModelState(models, to: &state)
+        } else if preservesLegacyControl {
+            state.modelControl = "legacy_set_model"
+        } else {
+            clearAdvertisedModelState(&state)
+        }
+    }
+
+    /// acpx's `applyInitialModelSelection`: what applying the requested model to a new
+    /// session leaves in its record. The advertised model state is taken from the
+    /// agent's reply to the model's config option when there was one, else from what
+    /// `session/new` advertised; a model that was applied is the current one.
+    public static func applyInitialModelSelection(
+        _ application: ModelApplication.Application, requestedModel: String?, originalModels: ModelState?,
+        to state: inout SessionAcpxState
+    ) {
+        let replied = application.response?.configOptions
+        if let replied { applyConfigOptionsModelState(replied, to: &state) }
+        if let models = application.response != nil ? modelState(fromConfigOptions: replied) : originalModels {
+            applyAdvertisedModelState(models, to: &state)
+        }
+        guard application.applied else { return }
+        let current = modelState(fromConfigOptions: replied)?.currentModelId ?? requestedModel
+        state.currentModelId = current.flatMap { $0.javaScriptTrimmed.isEmpty ? nil : $0.javaScriptTrimmed }
     }
 }
 
