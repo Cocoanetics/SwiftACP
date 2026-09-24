@@ -83,7 +83,10 @@ struct TerminalOutputTests {
     // MARK: - Wire shapes
 
     /// The schema's `number`, rounded as `Math.round` rounds it.
-    @Test(arguments: [(2.6, 3), (2.5, 3), (-2.5, -2), (5.0, 5), (0.4, 0)])
+    @Test(arguments: [
+        (2.6, 3), (2.5, 3), (-2.5, -2), (-2.6, -3), (5.0, 5), (0.4, 0), (-0.5, 0),
+        (0.49999999999999994, 0), (4_503_599_627_370_497, 4_503_599_627_370_497)
+    ])
     func fractionalLimitsAreRounded(limit: Double, expected: Int) throws {
         let json = #"{"sessionId":"s","command":"c","outputByteLimit":\#(limit)}"#
         let request = try JSONDecoder().decode(CreateTerminalRequest.self, from: Data(json.utf8))

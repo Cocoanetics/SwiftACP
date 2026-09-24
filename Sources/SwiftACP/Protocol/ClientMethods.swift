@@ -95,10 +95,13 @@ public struct CreateTerminalRequest: Codable, Sendable {
             .map { Self.javaScriptRounded($0) }
     }
 
-    /// `Math.round`, saturated into `Int`'s range.
+    /// `Math.round` — the nearest integer, a half rounding up — saturated into `Int`'s
+    /// range. The floor and the exact remainder, never `value + 0.5`, which rounds on
+    /// its own (0.49999999999999994, 2⁵² + 1).
     static func javaScriptRounded(_ value: Double) -> Int {
         guard !value.isNaN else { return 0 }
-        let rounded = (value + 0.5).rounded(.down)
+        let floor = value.rounded(.down)
+        let rounded = value - floor >= 0.5 ? floor + 1 : floor
         if rounded >= Double(Int.max) { return Int.max }
         if rounded <= Double(Int.min) { return Int.min }
         return Int(rounded)
