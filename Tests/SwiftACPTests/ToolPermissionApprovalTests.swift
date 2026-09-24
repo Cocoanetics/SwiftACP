@@ -147,7 +147,8 @@ struct ToolPermissionApprovalTests {
         for (typed, expected) in [("y\n", "allow"), ("yes\n", "allow"), ("n\n", "reject"), ("\n", "reject")] {
             let terminal = TerminalPermissionPromptTests.Terminal()
             terminal.type(typed)
-            let approval = ToolPermissionApproval(policy: .approveReads, nonInteractive: .fail, terminal: terminal.prompt)
+            let approval = ToolPermissionApproval(
+                policy: .approveReads, nonInteractive: .fail, terminal: terminal.prompt)
             let response = try await approval.resolve(Self.request())
             #expect(Self.selected(response) == expected, "\(typed)")
             await terminal.waitFor("(y/N) ")
