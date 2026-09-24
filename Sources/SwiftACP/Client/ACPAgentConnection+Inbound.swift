@@ -38,7 +38,13 @@ extension ACPAgentConnection {
     /// serving — closed, or cancelling the session — while the request was in flight.
     static let requestCancelled = JSONRPCErrorBody(code: -32800, message: "Request cancelled")
 
-    /// The ACP SDK's `RequestError.invalidParams()` for params its schema rejects. acpx
-    /// also sends the schema's issues in `data`; those are not reproduced.
+    /// The ACP SDK's `RequestError.invalidParams(error.format())` for params its schema
+    /// rejects: zod's `format()` of the issues as `data`.
+    static func invalidParams(issues: JSONValue) -> JSONRPCErrorBody {
+        JSONRPCErrorBody(code: -32602, message: "Invalid params", data: issues)
+    }
+
+    /// `Invalid params` without issues, for params the schema takes that still cannot be
+    /// read.
     static let invalidParams = JSONRPCErrorBody(code: -32602, message: "Invalid params")
 }
