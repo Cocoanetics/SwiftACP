@@ -9,7 +9,7 @@ import JSONRPCPeer
 /// notifications out to any number of subscribers. Most callers use the
 /// higher-level ``ACPAgent``/``ACPSession`` wrappers instead.
 public actor ACPAgentConnection {
-    private let rpc: JSONRPCPeer
+    let rpc: JSONRPCPeer
     var handlers: ACPClientHandlers
     var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
@@ -50,7 +50,13 @@ public actor ACPAgentConnection {
     var sessionRootsBeingCreated: [UUID: String] = [:]
 
     /// Sessions with a `session/prompt` in flight.
-    private var promptingSessionIds: Set<SessionId> = []
+    var promptingSessionIds: Set<SessionId> = []
+    /// The `session/cancel` of each session's prompt in flight, sent once however often
+    /// the turn is cancelled (see ``cancel(sessionId:)``).
+    var cancelSends: [SessionId: Task<Void, any Error>] = [:]
+    /// The agent's requests of each session's prompt in flight still being served,
+    /// answered as cancelled when the turn is.
+    var turnRequests: [SessionId: [UUID: TurnRequest]] = [:]
 
     /// Sessions whose `session/update`s are not delivered — their `session/load` is
     /// replaying history the caller has — with how many loads asked. acpx's
@@ -72,10 +78,10 @@ public actor ACPAgentConnection {
     public func permissionStats(for sessionId: SessionId) -> PermissionStats {
         turnPermissionStats[sessionId] ?? PermissionStats()
     }
-    /// Sessions whose in-flight turn this client is cancelling (`session/cancel`
-    /// sent, prompt not yet returned). A permission request answered meanwhile is
-    /// still resolved as usual, but a refusal isn't explained — the caller is ending
-    /// the turn itself. Mirrors acpx's `cancellingSessionIds`.
+    /// Sessions whose in-flight turn this client is cancelling (`session/cancel` asked
+    /// for, prompt not yet returned): the agent's requests of it are answered as
+    /// cancelled, and a refusal isn't explained — the caller is ending the turn itself.
+    /// Mirrors acpx's `cancellingSessionIds`.
     var cancellingSessionIds: Set<SessionId> = []
 
     public init(transport: JSONRPCMessageTransport, handlers: ACPClientHandlers = ACPClientHandlers()) {
@@ -344,6 +350,7 @@ public actor ACPAgentConnection {
         defer {
             promptingSessionIds.remove(request.sessionId)
             cancellingSessionIds.remove(request.sessionId)
+            cancelSends[request.sessionId] = nil
         }
         // The turn is not over until the agent's requests from it are answered: one it
         // sent without awaiting would otherwise be counted against the next turn.
@@ -383,21 +390,6 @@ public actor ACPAgentConnection {
             return value
         } catch {
             await inboundRequests.waitUntilIdle(sessionId)
-            throw error
-        }
-    }
-
-    /// `session/cancel` is a notification — fire and forget.
-    public func cancel(sessionId: SessionId) async throws {
-        let params = try JSONValue(encoding: CancelNotification(sessionId: sessionId))
-        // Only a turn in flight can be "cancelling" (a stray cancel with no prompt
-        // running has nothing to suppress); undone if the notification never left.
-        let cancelling = promptingSessionIds.contains(sessionId)
-        if cancelling { cancellingSessionIds.insert(sessionId) }
-        do {
-            try await rpc.sendNotification(method: "session/cancel", params: params)
-        } catch {
-            if cancelling { cancellingSessionIds.remove(sessionId) }
             throw error
         }
     }

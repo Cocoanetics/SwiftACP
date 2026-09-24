@@ -30,7 +30,9 @@ extension ACPAgentConnection {
             promptUnavailable = true
         }
         // Every answer is counted, whichever way it was reached — acpx's
-        // `finishPermissionRequest` classifies the response that actually went back.
+        // `finishPermissionRequest` classifies the response that actually went back. One
+        // the turn's cancel answered first was counted as cancelled then.
+        guard !Task.isCancelled else { return response }
         turnPermissionStats[request.sessionId, default: PermissionStats()]
             .record(PermissionStats.classify(request, response))
         if promptUnavailable { turnPermissionStats[request.sessionId]?.promptUnavailable = true }
