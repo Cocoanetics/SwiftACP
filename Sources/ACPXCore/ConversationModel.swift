@@ -107,9 +107,7 @@ public enum ConversationModel {
         guard fields.contains(where: { $0 != nil }) else { return false }
         record.cumulativeTokenUsage = tokens
         if let userId = promptMessageId ?? lastUserMessageId(record) {
-            var requests = record.requestTokenUsage ?? [:]
-            requests[userId] = tokens
-            record.requestTokenUsage = requests
+            setRequestUsage(tokens, for: userId, in: &record)
         }
         // acpx stamps the conversation and trims it here too, so a usage-only write
         // leaves the record as current as any other update would.
@@ -162,14 +160,20 @@ public enum ConversationModel {
         if let usage = tokenUsage(from: update) {
             record.cumulativeTokenUsage = usage
             if let userId = lastUserMessageId(record) {
-                var requests = record.requestTokenUsage ?? [:]
-                requests[userId] = usage
-                record.requestTokenUsage = requests
+                setRequestUsage(usage, for: userId, in: &record)
             }
         }
         if let cost = usageCost(from: update) {
             record.cumulativeCost = cost
         }
+    }
+
+    /// `request_token_usage[id] = usage`, as acpx's object takes it: an entry it lacks
+    /// comes last (``SessionRecord/requestUsageAddedSinceRead``), one it has keeps its place.
+    private static func setRequestUsage(_ usage: SessionTokenUsage, for id: String, in record: inout SessionRecord) {
+        var requests = record.requestTokenUsage ?? [:]
+        if requests.updateValue(usage, forKey: id) == nil { record.requestUsageAddedSinceRead.append(id) }
+        record.requestTokenUsage = requests
     }
 
     /// The token breakdown under `_meta.usage`, accepting both snake_case and

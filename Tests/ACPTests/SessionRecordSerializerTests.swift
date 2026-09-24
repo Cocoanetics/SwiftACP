@@ -1,5 +1,6 @@
 @testable import ACPXCore
 import Foundation
+import JSONFoundation
 import SwiftACP
 import Testing
 
@@ -137,6 +138,60 @@ struct SessionRecordSerializerTests {
             var record = try #require(SessionStore.loadRecord("r"))
             ConversationModel.trimForRuntime(&record)
             #expect(record.requestTokenUsage?.keys.sorted() == Array(keys.dropFirst()).sorted())
+        }
+    }
+
+    /// Past 100 turns of usage, the entries added first go, however their ids sort and
+    /// though their messages are gone, and the file lists the rest in the order they came,
+    /// as acpx's object holds them (#117 review).
+    @Test func usageAddedGoesInTheOrderItCame() async throws {
+        let ids = (0...100).reversed().map { String(format: "u%03d", $0) }
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [])
+            var record = try #require(SessionStore.loadRecord("r"))
+            for id in ids {
+                ConversationModel.recordResponseUsage(into: &record, PromptUsage(inputTokens: 1), promptMessageId: id)
+            }
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            guard case .object(let usage)? = written["request_token_usage"] else { throw POSIXError(.EINVAL) }
+            #expect(usage.map { String(decoding: $0.key, as: UTF16.self) } == Array(ids.dropFirst()))
+        }
+    }
+
+    /// What the agent sent within a message — a tool's input and output — keeps its stored
+    /// order while unchanged, and once changed, the order it has, items and all: acpx
+    /// replaced it whole (#117 review).
+    @Test func aChangedToolPayloadKeepsItsOwnOrder() async throws {
+        let payload = #"{"z":0,"edits":[{"old":"a","new":"b"}]}"#
+        let message = #"{"Agent":{"content":[{"ToolUse":{"id":"t","name":"edit","raw_input":"{}","input":"#
+            + payload + #","is_input_complete":true,"thought_signature":null}},{"ToolUse":{"id":"u","#
+            + #""name":"edit","raw_input":"{}","input":"# + payload + #","is_input_complete":true,"#
+            + #""thought_signature":null}}],"tool_results":{"t":{"tool_use_id":"t","tool_name":"edit","#
+            + #""is_error":false,"content":{"Text":""},"output":"# + payload + "}}}}"
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [message])
+            var record = try #require(SessionStore.loadRecord("r"))
+            guard case .agent(var agent) = record.messages.first, case .toolUse(var tool)? = agent.content.first
+            else { throw POSIXError(.EINVAL) }
+            let changed = JSONValue.object([
+                "z": .integer(1), "edits": .array([.object(["old": .string("c"), "new": .string("d")])])
+            ])
+            tool.input = changed
+            agent.content[0] = .toolUse(tool)
+            agent.toolResults["t"]?.output = changed
+            record.messages[0] = .agent(agent)
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            guard case .array(let messages)? = written["messages"],
+                case .array(let content)? = messages.first?["Agent"]?["content"]
+            else { throw POSIXError(.EINVAL) }
+            let replaced = #"{"edits":[{"new":"d","old":"c"}],"z":1}"#
+            #expect(content.first?["ToolUse"]?["input"]?.stringified == replaced)
+            #expect(messages.first?["Agent"]?["tool_results"]?["t"]?["output"]?.stringified == replaced)
+            #expect(content.last?["ToolUse"]?["input"]?.stringified == payload)
         }
     }
 

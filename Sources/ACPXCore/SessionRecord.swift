@@ -90,6 +90,10 @@ public struct SessionRecord: Codable, Sendable {
     /// the oldest first (``ConversationModel``): what sits at a message's place in
     /// ``parsedByAcpx``, less these, is that message as it was read. Never written.
     public var messagesTrimmedSinceRead = 0
+    /// The ids of the ``requestTokenUsage`` entries added since the record was read, in
+    /// the order ``ConversationModel`` added them: acpx's object holds its entries in the
+    /// order it got them, those it read first. Never written.
+    var requestUsageAddedSinceRead: [String] = []
 
     public struct ImportedFrom: Codable, Sendable {
         public var recordId: String

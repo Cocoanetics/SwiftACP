@@ -13,22 +13,26 @@ extension ConversationModel {
             let order = requestUsageOrder(record)
             let kept = Set(usage.keys.sorted { (order($0), $0) < (order($1), $1) }.suffix(maxRuntimeRequestTokenUsage))
             record.requestTokenUsage = usage.filter { kept.contains($0.key) }
+            record.requestUsageAddedSinceRead.removeAll { !kept.contains($0) }
         }
     }
 
-    /// Where each `request_token_usage` entry comes in the order acpx added them, which it
-    /// keeps the last of: those the record was read with, in their order, then one a turn
-    /// since, under the turn's user message id — any whose message is gone before those
-    /// whose message is not.
-    private static func requestUsageOrder(_ record: SessionRecord) -> (String) -> Int {
+    /// Where each `request_token_usage` entry comes in acpx's object, which holds them in
+    /// the order it got them and keeps the last of them: those the record was read with,
+    /// in their order, then those added since, in theirs
+    /// (``SessionRecord/requestUsageAddedSinceRead``). One the model did not add comes
+    /// between, by its turn's user message, and first where that is gone.
+    static func requestUsageOrder(_ record: SessionRecord) -> (String) -> Int {
         var read: [String: Int] = [:]
         if case .object(let members)? = record.parsedByAcpx?["request_token_usage"] {
             for member in members { read[String(decoding: member.key, as: UTF16.self)] = read.count }
         }
         var turns: [String: Int] = [:]
         for case .user(let user) in record.messages where turns[user.id] == nil { turns[user.id] = turns.count }
-        let (readCount, gone) = (read.count, read.count)
-        return { id in read[id] ?? turns[id].map { readCount + 1 + $0 } ?? gone }
+        var added: [String: Int] = [:]
+        for (index, id) in record.requestUsageAddedSinceRead.enumerated() { added[id] = index }
+        let (other, since) = (read.count, read.count + 1 + turns.count)
+        return { id in added[id].map { since + $0 } ?? read[id] ?? turns[id].map { other + 1 + $0 } ?? other }
     }
 
     private static func trimMessage(_ message: SessionMessage) -> SessionMessage {

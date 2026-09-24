@@ -24,7 +24,7 @@ enum SessionRecordSerializer {
         }
         let built = parsed
             .mapping("messages") { $0.mappingItems(MessageOrder.built) }
-            .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: parsed["messages"]) }
+            .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: record) }
         var document = forDisk(built, storedAcpx: raw["acpx"])
         if let stored = record.parsedByAcpx {
             let read = forDisk(stored, storedAcpx: nil)
@@ -81,22 +81,27 @@ enum SessionRecordSerializer {
     ///
     /// An array that changed pairs its items with the stored ones only where an item is
     /// what was stored at its place: in the messages (lined up by ``MessageOrder/aligned(_:trimmed:)``)
-    /// and the lists within them, which only grow. Anywhere else a changed array was
-    /// replaced whole, as acpx replaces `config_options`, and keeps the order it has.
+    /// and the lists of their content, which only grow. Anywhere else a changed array was
+    /// replaced whole, as acpx replaces `config_options`, and keeps the order it has — as
+    /// does what the agent sent within a message, a tool's input or output, once it
+    /// changed: acpx replaces that whole too.
     ///
     /// Only the order changes: whatever is taken from `stored` is equal to what it
     /// stands in for.
     static func inStoredOrder(
-        _ value: WireJSON, stored: WireJSON, topLevel: Bool = false, pairingItems: Bool = false
+        _ value: WireJSON, stored: WireJSON, topLevel: Bool = false, inMessages: Bool = false
     ) -> WireJSON {
         switch (value, stored) {
         case (.object(let members), .object(let storedMembers)):
             if !topLevel, sameValue(value, stored) { return stored }
             let storedValues = Dictionary(storedMembers.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
             let changed = members.map { member in
-                let pairing = pairingItems || (topLevel && member.key == Array("messages".utf16))
-                let kept = storedValues[member.key].map {
-                    inStoredOrder(member.value, stored: $0, pairingItems: pairing)
+                let kept = storedValues[member.key].map { storedValue in
+                    if inMessages, agentPayloads.contains(member.key) {
+                        return sameValue(member.value, storedValue) ? storedValue : member.value
+                    }
+                    let inMessages = inMessages || (topLevel && member.key == Array("messages".utf16))
+                    return inStoredOrder(member.value, stored: storedValue, inMessages: inMessages)
                 }
                 return WireJSON.Member(key: member.key, value: kept ?? member.value)
             }
@@ -108,14 +113,18 @@ enum SessionRecordSerializer {
             return .object(kept + changed.filter { storedValues[$0.key] == nil })
         case (.array(let items), .array(let storedItems)):
             if sameValue(value, stored) { return stored }
-            guard pairingItems else { return value }
+            guard inMessages else { return value }
             return .array(items.enumerated().map { index, item in
-                index < storedItems.count ? inStoredOrder(item, stored: storedItems[index], pairingItems: true) : item
+                index < storedItems.count ? inStoredOrder(item, stored: storedItems[index], inMessages: true) : item
             })
         default:
             return value
         }
     }
+
+    /// The members of a message that hold what the agent sent: a tool use's input and a
+    /// tool result's output.
+    private static let agentPayloads: Set<[UInt16]> = [Array("input".utf16), Array("output".utf16)]
 
     /// Whether `a` and `b` are the same JSON value, whatever order their objects list
     /// their members in.
@@ -190,8 +199,11 @@ enum MessageOrder {
     /// `upsertToolResult`'s results, in the order the agent's tool uses came in: acpx adds
     /// each tool's result with its first update, which also adds its tool use.
     private static func toolResults(_ results: WireJSON, in content: WireJSON?) -> WireJSON {
-        let ids = items(of: content).compactMap { $0["ToolUse"]?["id"] }
-        return sorted(results, by: ids, unknownFirst: false)
+        var position: [[UInt16]: Int] = [:]
+        for case .string(let id)? in items(of: content).map({ $0["ToolUse"]?["id"] }) where position[id] == nil {
+            position[id] = position.count
+        }
+        return sorted(results) { position[$0] ?? Int.max }
             .mappingMembers { $0.ordered(["tool_use_id", "tool_name", "is_error", "content", "output"]) }
     }
 
@@ -202,10 +214,11 @@ enum MessageOrder {
         .array(Array(items(of: stored).dropFirst(trimmed)))
     }
 
-    /// `request_token_usage` in the order acpx added its entries: one a turn, under the id
-    /// of the turn's user message — the oldest, whose message is gone, first.
-    static func requestTokenUsage(_ usage: WireJSON, of messages: WireJSON?) -> WireJSON {
-        sorted(usage, by: items(of: messages).compactMap { $0["User"]?["id"] }, unknownFirst: true)
+    /// `request_token_usage` in the order acpx's object holds its entries: the order it
+    /// got them in (``ConversationModel/requestUsageOrder(_:)``).
+    static func requestTokenUsage(_ usage: WireJSON, of record: SessionRecord) -> WireJSON {
+        let order = ConversationModel.requestUsageOrder(record)
+        return sorted(usage) { order(String(decoding: $0, as: UTF16.self)) }
     }
 
     private static func items(of array: WireJSON?) -> [WireJSON] {
@@ -213,15 +226,12 @@ enum MessageOrder {
         return items
     }
 
-    /// `object`'s members in the order their names come in `names`, and those whose names
-    /// do not come there first or last, as they were.
-    private static func sorted(_ object: WireJSON, by names: [WireJSON], unknownFirst: Bool) -> WireJSON {
+    /// `object`'s members by the place `position` gives each name, those given the same
+    /// place as they were.
+    private static func sorted(_ object: WireJSON, by position: ([UInt16]) -> Int) -> WireJSON {
         guard case .object(let members) = object else { return object }
-        var position: [[UInt16]: Int] = [:]
-        for case .string(let name) in names where position[name] == nil { position[name] = position.count }
-        let unknown = unknownFirst ? -1 : Int.max
         return .object(members.enumerated().sorted { lhs, rhs in
-            let (left, right) = (position[lhs.element.key] ?? unknown, position[rhs.element.key] ?? unknown)
+            let (left, right) = (position(lhs.element.key), position(rhs.element.key))
             return left != right ? left < right : lhs.offset < rhs.offset
         }.map(\.element))
     }
