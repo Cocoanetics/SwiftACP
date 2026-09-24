@@ -377,7 +377,30 @@ public struct SessionAcpxState: Codable, Sendable {
         public var allowedTools: [String]?
         public var maxTurns: Int?
         public var systemPrompt: JSONValue? // string | {append}
+        /// Environment variables the session's agent is started with, over this
+        /// process's — acpx's `session_options.env` (0.14.0). Names keep their case.
+        public var env: [String: String]?
         public init() {}
+
+        enum CodingKeys: String, CodingKey {
+            case model, allowedTools, maxTurns, systemPrompt, env
+        }
+
+        /// Each option read on its own, one that does not read left out; `env` keeps its
+        /// string entries and is dropped when none is left — acpx's `storedEnvRecord`.
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            model = (try? container.decodeIfPresent(String.self, forKey: .model)) ?? nil
+            allowedTools = (try? container.decodeIfPresent([String].self, forKey: .allowedTools)) ?? nil
+            maxTurns = (try? container.decodeIfPresent(Int.self, forKey: .maxTurns)) ?? nil
+            systemPrompt = (try? container.decodeIfPresent(JSONValue.self, forKey: .systemPrompt)) ?? nil
+            let stored = (try? container.decodeIfPresent([String: JSONValue].self, forKey: .env)) ?? nil
+            let strings = (stored ?? [:]).compactMapValues { value -> String? in
+                if case .string(let text) = value { return text }
+                return nil
+            }
+            env = strings.isEmpty ? nil : strings
+        }
     }
 
     public init() {}
