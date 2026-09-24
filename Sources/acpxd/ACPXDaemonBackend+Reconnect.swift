@@ -135,7 +135,7 @@ extension ACPXDaemonBackend {
         }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
-        await restoreSelections(selections, on: entry)
+        await restoreSelections(selections, on: entry, agentCommand: command)
         handle.rawWire.set(nil)
         await showConnectOutput(fellBack)
         // Taken back unless a new session had to replace it.
@@ -231,7 +231,7 @@ extension ACPXDaemonBackend {
     /// Each is best-effort: an agent that no longer offers a saved choice must not fail
     /// the turn that triggered the reconnect, and the record keeps the user's intent
     /// either way.
-    func restoreSelections(_ selections: SessionAcpxState?, on entry: Live) async {
+    func restoreSelections(_ selections: SessionAcpxState?, on entry: Live, agentCommand: String) async {
         guard let acpx = selections else { return }
         let desiredOptions = acpx.desiredConfigOptions ?? [:]
         // The record keeps the agent's advertised options verbatim; the model's option
@@ -240,7 +240,15 @@ extension ACPXDaemonBackend {
         if case .array(let options)? = acpx.configOptions { advertised = options }
         let modelConfigId = ModelSupport.modelState(fromConfigOptions: advertised)?.configId
 
-        if let modelConfigId, let modelValue = desiredOptions[modelConfigId] {
+        if let pinned = acpx.sessionOptions?.model?.javaScriptTrimmed, !pinned.isEmpty {
+            // acpx replays the session's pinned model — `session_options.model`, what
+            // `--model` asked for — through the control the session advertises,
+            // resolving an alias as `--model` does, even when unchanged
+            // (`replayDesiredModel`).
+            _ = try? await ModelApplication.setModel(
+                connection: entry.agent.connection, sessionId: entry.session.id, modelId: pinned,
+                models: ModelSupport.advertisedModelState(acpx), agentCommand: agentCommand)
+        } else if let modelConfigId, let modelValue = desiredOptions[modelConfigId] {
             await apply(configId: modelConfigId, value: modelValue, on: entry)
         } else if let modelId = acpx.currentModelId, acpx.modelControl != "config_option" {
             try? await entry.agent.connection.setModel(

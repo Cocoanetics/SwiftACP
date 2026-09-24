@@ -1,4 +1,5 @@
 @testable import ACPXCore
+@testable import acpxd
 import Foundation
 import JSONFoundation
 import SwiftACP
@@ -12,11 +13,14 @@ import Testing
     private struct Created {
         var record: SessionRecord?
         var requests: [String]
+        /// What the agent received for a daemon turn after the creation, when asked for.
+        var turn: [String] = []
     }
 
     /// Creates a session on the model fixture with `model` requested, returning the
-    /// record it wrote and the session requests the agent received.
-    private func create(legacy: Bool = false, model: String?) async throws -> Created {
+    /// record it wrote and the session requests the agent received — and, with
+    /// `thenPrompt`, what a daemon turn on it sent next.
+    private func create(legacy: Bool = false, model: String?, thenPrompt: Bool = false) async throws -> Created {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
@@ -38,6 +42,11 @@ import Testing
                 throw error
             }
             created.requests = Self.requests(log)
+            if thenPrompt, let record = created.record {
+                _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                    .runPrompt(sessionId: record.acpxRecordId, text: "hi")
+                created.turn = Array(Self.requests(log).dropFirst(created.requests.count))
+            }
             return created
         }
     }
@@ -113,6 +122,17 @@ import Testing
             Cannot apply --model "bogus": the ACP agent did not advertise that model. \
             Available models: m1, m2.
             """)
+    }
+
+    /// The fixture cannot load a session, so the turn's reconnect starts a new one — on
+    /// the agent's default model — and puts the pinned model back on it first, as acpx's
+    /// `replayDesiredModel` does, through the control the session advertises.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aReconnectPutsThePinnedModelBack() async throws {
+        let options = try await create(model: "m2", thenPrompt: true)
+        #expect(options.turn == ["session/new", "session/set_config_option model=m2", "session/prompt"])
+        let legacy = try await create(legacy: true, model: "m2", thenPrompt: true)
+        #expect(legacy.turn == ["session/new", "session/set_model m2", "session/prompt"])
     }
 
     /// Model ids are the keys of `available_model_names`, and go to disk as they are.

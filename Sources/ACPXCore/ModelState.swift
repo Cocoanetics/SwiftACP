@@ -123,6 +123,20 @@ public enum ModelSupport {
         state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
     }
 
+    /// acpx's `advertisedModelState`: the model state a record's `acpx` block keeps —
+    /// from its config options, else, unless those are what sets the model, from its
+    /// legacy model list.
+    public static func advertisedModelState(_ state: SessionAcpxState?) -> ModelState? {
+        guard let state else { return nil }
+        var options: [JSONValue]?
+        if case .array(let configOptions)? = state.configOptions { options = configOptions }
+        if let fromOptions = modelState(fromConfigOptions: options) { return fromOptions }
+        guard state.modelControl != "config_option", let available = state.availableModels else { return nil }
+        return ModelState(
+            configId: nil, currentModelId: state.currentModelId ?? "",
+            availableModels: available.map { ($0, state.availableModelNames?[$0] ?? $0) })
+    }
+
     /// acpx's `clearAdvertisedModelState`.
     static func clearAdvertisedModelState(_ state: inout SessionAcpxState) {
         state.currentModelId = nil
