@@ -434,6 +434,14 @@ enum ChildSpawn {
     }()
 }
 
+extension TerminalExitStatus {
+    /// Node's name for signal `number` — `SIGTERM` — as a child's `(code, signal)` gives
+    /// it, or `nil` for one without a name.
+    public static func signalName(_ number: Int32) -> String? {
+        ChildSpawn.signalNames[number]
+    }
+}
+
 /// libuv's names for the errors a spawn reports.
 private let errnoNames: [Int32: String] = [
     ENOENT: "ENOENT", EACCES: "EACCES", ENOTDIR: "ENOTDIR", EISDIR: "EISDIR", ENOEXEC: "ENOEXEC",
