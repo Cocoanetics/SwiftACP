@@ -121,6 +121,16 @@ struct SessionRecordSerializerTests {
                     let kept = try messages.dropFirst(trimmed).map { try #require(WireJSON(parsing: Data($0.utf8))) }
                     #expect(written["messages"] == .array(kept), "\(messages.first ?? "") less \(trimmed)")
                 }
+                // None of them kept: a message of the same shape now in the last one's place
+                // is written as acpx builds one, not in that message's stored order.
+                try Self.storeRecord(messages: messages)
+                var record = try #require(SessionStore.loadRecord("r"))
+                record.messages = [.agent(SessionAgentMessage(content: [.text("z")]))]
+                try SessionStore.writeRecord(record)
+                let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+                let built = try #require(
+                    WireJSON(parsing: Data(#"[{"Agent":{"content":[{"Text":"z"}],"tool_results":{}}}]"#.utf8)))
+                #expect(written["messages"] == built, "\(messages.first ?? "") all replaced")
             }
         }
     }
