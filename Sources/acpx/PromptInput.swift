@@ -40,13 +40,13 @@ enum PromptInputResolver {
         }
     }
 
-    /// The blocks as the ACP content a caller talking to the agent itself sends. A block
-    /// acpx takes that SwiftACP's content types cannot hold — a field of an unexpected
-    /// type, say — is refused by its index.
+    /// The blocks as the ACP content a caller talking to the agent itself sends. An
+    /// unpaired surrogate, which acpx passes on escaped, goes as U+FFFD: no Swift string
+    /// holds one.
     static func contentBlocks(_ blocks: [WireJSON]) throws -> [ContentBlock] {
         try blocks.enumerated().map { index, block in
             do {
-                return try JSONDecoder().decode(ContentBlock.self, from: Data(block.stringified.utf8))
+                return try JSONDecoder().decode(ContentBlock.self, from: data(block))
             } catch {
                 throw InvalidArgumentError("prompt[\(index)] cannot be sent as an ACP content block: \(error)")
             }
@@ -55,7 +55,12 @@ enum PromptInputResolver {
 
     /// The blocks as JSON values, for the daemon's `runPrompt`.
     static func jsonValues(_ blocks: [WireJSON]) throws -> [JSONValue] {
-        try blocks.map { try JSONDecoder().decode(JSONValue.self, from: Data($0.stringified.utf8)) }
+        try blocks.map { try JSONDecoder().decode(JSONValue.self, from: data($0)) }
+    }
+
+    /// A block as JSON text Foundation reads.
+    private static func data(_ block: WireJSON) -> Data {
+        Data(block.replacingLoneSurrogates().stringified.utf8)
     }
 
     /// Node's `fs.readFile(path.resolve(cwd, file), "utf8")`: the file's bytes as UTF-8,

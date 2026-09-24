@@ -116,6 +116,18 @@ struct PromptInputTests {
         #expect(outcome("[]").isEmpty)
     }
 
+    /// `JSON.parse` takes an escaped unpaired surrogate, and so does acpx, which passes it
+    /// on. A Swift string cannot hold one, so it goes as U+FFFD rather than failing the
+    /// prompt (#114 review).
+    @Test func anUnpairedSurrogateGoesAsAReplacementCharacter() throws {
+        let blocks = try PromptContent.parse(#"[{"type":"text","text":"a\ud800b","_meta":{"k":"\udc00"}}]"#)
+        let content = try PromptInputResolver.contentBlocks(blocks)
+        guard case .text(let text)? = content.first else { Issue.record("no text block"); return }
+        #expect(text.text == "a\u{FFFD}b")
+        #expect(text.meta?["k"] == .string("\u{FFFD}"))
+        #expect(try PromptInputResolver.jsonValues(blocks).count == 1)
+    }
+
     // MARK: - Reading a file
 
     private func file(_ contents: Data) throws -> (directory: String, name: String) {
