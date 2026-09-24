@@ -198,7 +198,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             var unchanged = findRecord(recordId) ?? current
             // An agent whose connection is gone is ended first, as a turn's is: it can be
             // running still, and its pid would be kept.
-            if ACPAgentConnection.isConnectionClosed(error) { await entry.agent.close() }
+            if ACPAgentConnection.endedTheConnection(error) { await entry.agent.close() }
             unchanged.applyLifecycle(entry.agent.lifecycle)
             do {
                 try SessionStore.writeRecord(unchanged)

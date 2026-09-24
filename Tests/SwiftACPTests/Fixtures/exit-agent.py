@@ -15,6 +15,8 @@
   running.
 - `EXIT_AGENT_CLOSE_STDIN_ARMED=<path>`: while that file exists, the next prompt removes it
   and closes its stdin before answering, and the agent keeps running.
+- `EXIT_AGENT_OVERSIZE=prompt|set_mode` writes a line longer than 64 MiB, acpx's default
+  message limit, at that request instead of answering it, and keeps running.
 - `EXIT_AGENT_STRAY=1` writes lines that are no message before answering a prompt: JSON
   values that are no object, a batch, a stray object, and text that is no JSON.
 - `EXIT_AGENT_LINE_BYTES=N` answers `initialize` with a line of N bytes, LF excluded.
@@ -71,6 +73,15 @@ def initialize_result(req_id):
     send(answer)
 
 
+def oversize():
+    """A line past the message limit — whose writing blocks once the reader stops — then
+    running on until ended."""
+    sys.stdout.write('{"pad":"' + "a" * (64 * 1024 * 1024) + '"}\n')
+    sys.stdout.flush()
+    time.sleep(30)
+    os._exit(0)
+
+
 def start_child():
     child = os.environ.get("EXIT_AGENT_CHILD")
     if child:
@@ -111,6 +122,8 @@ def main():
                 die()
             if os.environ.get("EXIT_AGENT_HOLD") == "1":
                 continue
+            if os.environ.get("EXIT_AGENT_OVERSIZE") == "prompt":
+                oversize()
             if os.environ.get("EXIT_AGENT_CLOSE_STDOUT") in ("1", "prompt"):
                 os.close(1)
                 time.sleep(30)
@@ -134,6 +147,8 @@ def main():
         elif method == "session/set_mode":
             if ON == "set_mode":
                 die()
+            if os.environ.get("EXIT_AGENT_OVERSIZE") == "set_mode":
+                oversize()
             if os.environ.get("EXIT_AGENT_CLOSE_STDOUT") == "set_mode":
                 os.close(1)
                 time.sleep(30)

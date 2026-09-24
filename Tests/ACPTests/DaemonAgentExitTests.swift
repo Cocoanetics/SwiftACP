@@ -95,6 +95,30 @@ extension DaemonToolsTests {
         }
     }
 
+    /// An agent that passed the message limit, which ended its connection, is ended
+    /// before its end is recorded though it runs on, in a turn and in a control alike:
+    /// the record keeps no pid for it (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func anAgentPastTheMessageLimitKeepsNoPid() async throws {
+        for at in ["prompt", "set_mode"] {
+            let command = try Self.exitAgent("EXIT_AGENT_OVERSIZE=\(at)")
+            try await withIsolatedStore {
+                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+                let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+                await #expect(throws: AcpMessageLimitError.self) {
+                    if at == "prompt" {
+                        try await prompt(daemon, id, text: "hi", client: CallingClient())
+                    } else {
+                        _ = try await daemon.setMode(sessionId: id, modeId: "plan")
+                    }
+                }
+                let record = try #require(SessionStore.loadRecord(id))
+                #expect(record.pid == nil, "\(at)")
+                #expect(record.lastAgentDisconnectReason == "connection_close", "\(at)")
+            }
+        }
+    }
+
     /// Closing an agent is what its end is put down to, however fast it exits once its
     /// stdin ends: the transport is closed before the stdin is (#113 review).
     @Test(.enabled(if: mockPythonAvailable))

@@ -136,6 +136,14 @@ public actor ACPAgentConnection {
         (error as? JSONRPCPeerError) == .closed || error is AgentDisconnectedError
     }
 
+    /// Whether `error` came of the connection ending: it closed
+    /// (``isConnectionClosed(_:)``), or the agent passed the message limit, which ends it
+    /// (``AcpMessageLimitError``). The agent can still be running then, until what ends
+    /// it — `ACPAgent.close()` awaits that — is done.
+    public static func endedTheConnection(_ error: Error) -> Bool {
+        isConnectionClosed(error) || error is AcpMessageLimitError
+    }
+
     /// Forget that the connection ended, as if its end had been read but not yet
     /// recorded: lets a test reproduce a caller racing the agent's exit.
     func forgetClosedForTesting() {
