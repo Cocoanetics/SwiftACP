@@ -24,10 +24,14 @@ public struct ClientOperation: Codable, Sendable, Hashable {
     /// The session the operation concerns, when it concerns one. Not part of acpx's
     /// shape; it lets a session-scoped consumer filter a shared connection's events.
     public var sessionId: SessionId?
+    /// A permission request a policy escalated with nobody to ask — acpx's
+    /// `onPermissionEscalation`, which text output shows with its details.
+    public var escalation: PermissionEscalation?
 
     public init(
         method: String, status: ClientOperationStatus, summary: String, details: String? = nil,
-        timestamp: String = ClientOperation.isoNow(), sessionId: SessionId? = nil
+        timestamp: String = ClientOperation.isoNow(), sessionId: SessionId? = nil,
+        escalation: PermissionEscalation? = nil
     ) {
         self.method = method
         self.status = status
@@ -35,6 +39,7 @@ public struct ClientOperation: Codable, Sendable, Hashable {
         self.details = details
         self.timestamp = timestamp
         self.sessionId = sessionId
+        self.escalation = escalation
     }
 
     /// The method a permission notice is reported under.

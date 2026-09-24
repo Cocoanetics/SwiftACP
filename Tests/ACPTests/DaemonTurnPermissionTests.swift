@@ -41,6 +41,26 @@ extension DaemonToolsTests {
         }
     }
 
+    /// The turn's permission policy comes ahead of its mode, as acpx's queue owner
+    /// applies the one sent with each prompt (#97).
+    @Test(.enabled(if: mockPythonAvailable))
+    func theTurnsPolicyComesBeforeItsMode() async throws {
+        let command = "/usr/bin/env MOCK_TOOL_PERMISSION=1 " + (try writeAgentCommand())
+        let cwd = try freshCwd()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: cwd)
+            #expect(try await daemon.runPrompt(
+                sessionId: id, text: "go", permissionMode: "deny-all",
+                permissionPolicy: PermissionRules(autoApprove: ["edit"])) == "outcome:allow")
+            #expect(try await daemon.runPrompt(
+                sessionId: id, text: "go", permissionMode: "approve-all",
+                permissionPolicy: PermissionRules(escalate: ["edit"])) == "outcome:reject")
+            #expect(try await daemon.runPrompt(sessionId: id, text: "go", permissionMode: "approve-all")
+                == "outcome:allow")
+        }
+    }
+
     /// `--deny-all` refuses the turn's reads too, in acpx's words; any other mode
     /// serves them (#91).
     @Test(.enabled(if: mockPythonAvailable))

@@ -146,6 +146,7 @@ struct WriteGateTests {
         var stats: PermissionStats
         var received: [String]
         var failures: [String]
+        var operations: [ClientOperation] = []
     }
 
     /// Drive one turn of `agent` over a loopback, with the client answering through
@@ -175,8 +176,8 @@ struct WriteGateTests {
                     if let failure = request.failure { run.failures.append(failure) } else {
                         run.received.append(request.method)
                     }
-                case .clientOperation:
-                    break
+                case .clientOperation(let operation):
+                    run.operations.append(operation)
                 }
             }
             return run

@@ -51,6 +51,9 @@ extension ACPAgentConnection {
                 .addingACPXMetadata(["permissionNotice": .string(notice)])
         }
         let response = try await handler(CodexCompat.preferPermissionRefusal(request, agentName: agentName))
+        if let escalation = response.permissionEscalation {
+            announce(escalation.message, sessionId: request.sessionId, escalation: escalation)
+        }
         guard let notice = CodexCompat.permissionNotice(
             request: request, response: response, agentName: agentName),
             !cancellingSessionIds.contains(request.sessionId),
@@ -62,10 +65,10 @@ extension ACPAgentConnection {
 
     /// Report a permission notice to the event subscriptions, ahead of anything the
     /// agent sends in reaction to the answer.
-    private func announce(_ notice: String, sessionId: SessionId) {
+    private func announce(_ notice: String, sessionId: SessionId, escalation: PermissionEscalation? = nil) {
         let operation = ClientOperation(
             method: ClientOperation.requestPermission, status: .completed, summary: notice,
-            sessionId: sessionId)
+            sessionId: sessionId, escalation: escalation)
         for sink in eventSinks.values {
             sink.yield(.clientOperation(operation))
         }

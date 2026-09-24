@@ -33,6 +33,7 @@ enum CompareCommand {
             throw InvalidArgumentError("Do not combine compare with --agent; pass agent names")
         }
         let format = scan.flag("json") ? "json" : flags.format
+        let permissionRules = try flags.permissionRules()
 
         let promptFile = scan.string("file") ?? scan.string("prompt-file")
         let (agents, promptText) = try splitArgs(context.positionals, promptFile: promptFile)
@@ -44,7 +45,8 @@ enum CompareCommand {
 
         var rows: [Row] = []
         for agentName in agents {
-            rows.append(try runAgent(agentName, prompt: prompt, flags: flags, config: context.config))
+            rows.append(try runAgent(
+                agentName, prompt: prompt, flags: flags, config: context.config, permissionRules: permissionRules))
         }
         printRows(rows, format: format)
 
@@ -67,7 +69,7 @@ enum CompareCommand {
 
     private static func runAgent(
         _ agentName: String, prompt: [ContentBlock], flags: GlobalFlags,
-        config: ResolvedAcpxConfig
+        config: ResolvedAcpxConfig, permissionRules: PermissionRules?
     ) throws -> Row {
         let invocation = try Flags.resolveAgentInvocation(agentName, flags, config: config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: config)
@@ -80,6 +82,7 @@ enum CompareCommand {
             let outcome: PromptOutcome = try runBlocking {
                 let handle = try await ACPAgent.launch(
                     agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission,
+                    permissionRules: permissionRules,
                     capabilities: flags.clientCapabilities,
                     authCredentials: config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: false)

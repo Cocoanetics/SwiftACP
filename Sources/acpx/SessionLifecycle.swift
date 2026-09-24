@@ -94,6 +94,7 @@ enum SessionLifecycle {
         agent: AgentInvocation, name: String?, flags: GlobalFlags, config: ResolvedAcpxConfig
     ) throws -> SessionRecord {
         let permission = try permissionPolicy(flags, config: config)
+        let permissionRules = try flags.permissionRules()
         let meta = sessionMeta(agent: agent, flags: flags)
         let options = sessionOptions(flags)
         return try runBlocking {
@@ -102,7 +103,7 @@ enum SessionLifecycle {
                 // persisted so the daemon replays it on every reconnect.
                 return try await SessionEngine.createSession(
                     agentCommand: agent.agentCommand, agentArgv: agent.agentArgv, cwd: agent.cwd, name: name,
-                    permission: permission, authCredentials: config.auth,
+                    permission: permission, permissionRules: permissionRules, authCredentials: config.auth,
                     authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
                     sessionMcpServers: config.sessionMcpServers,
                     meta: meta, sessionOptions: options,
