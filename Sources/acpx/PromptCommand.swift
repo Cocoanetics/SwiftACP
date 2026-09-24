@@ -62,9 +62,10 @@ enum PromptCommand {
             }
         }
         renderer.finish(stopReason: turn.stopReason)
+        let permissions = turn.permissions ?? PermissionStats()
+        if permissions.promptUnavailable { renderer.permissionPromptUnavailable(sessionId: record.acpxRecordId) }
         return permissionExitCode(
-            turn.permissions ?? PermissionStats(), quiet: flags.format == "quiet",
-            queueDetail: "QUEUE_RUNTIME_PROMPT_FAILED")
+            permissions, quiet: flags.format == "quiet", queueDetail: "QUEUE_RUNTIME_PROMPT_FAILED")
     }
 
     /// How a failed turn reaches the top level. When the JSON stream already shows how

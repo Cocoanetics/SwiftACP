@@ -61,10 +61,11 @@ enum ExecCommand {
                 renderer.finish(stopReason: outcome.stopReason)
                 let permissions = await handle.connection.permissionStats(for: response.sessionId)
                 await handle.close()
-                if renderer.streamsWireJSON, permissions.promptUnavailable {
+                if permissions.promptUnavailable, flags.format != "quiet",
+                    !renderer.showedFailure(FileSystemPermissionError.promptUnavailable.description) {
                     // acpx rethrows this after the turn; its top-level handler reports it
                     // unless the stream already shows the client's refusal saying the same.
-                    return reportJSONFailure(PromptUnavailable(), renderer: renderer)
+                    return reportFailure(PromptUnavailable(), renderer: renderer, format: flags.format)
                 }
                 return permissionExitCode(permissions, quiet: flags.format == "quiet")
             } catch {

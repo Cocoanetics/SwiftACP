@@ -189,7 +189,12 @@ def main():
                 "authMethods": [],
             })
         elif method == "session/new":
-            respond(req_id, {"sessionId": SESSION_ID})
+            # MOCK_NEW_META / MOCK_LOAD_META: the `_meta` (JSON) of the replies that
+            # open a session, where an agent names its own session id.
+            result = {"sessionId": SESSION_ID}
+            if os.environ.get("MOCK_NEW_META"):
+                result["_meta"] = json.loads(os.environ["MOCK_NEW_META"])
+            respond(req_id, result)
         elif method == "session/load" and LOAD_MODE != "unsupported":
             # `gone` (the default) is the usual reason a fresh agent process cannot
             # load a session: it no longer has it. `ok` takes it back; `internal`
@@ -201,7 +206,8 @@ def main():
                                             "content": {"type": "text", "text": "replayed question"}})
                     session_update(loaded, {"sessionUpdate": "agent_message_chunk",
                                             "content": {"type": "text", "text": "replayed answer"}})
-                respond(req_id, {})
+                respond(req_id, {"_meta": json.loads(os.environ["MOCK_LOAD_META"])}
+                        if os.environ.get("MOCK_LOAD_META") else {})
                 if LOAD_REPLAY:
                     session_update(loaded, {"sessionUpdate": "agent_message_chunk",
                                             "content": {"type": "text", "text": "replayed late"}})

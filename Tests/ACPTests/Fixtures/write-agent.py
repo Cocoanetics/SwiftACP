@@ -4,6 +4,10 @@
 It writes `<cwd>/written.txt` and answers the turn with what the client said: `ok`,
 or `error:<data.details or message>`. That makes a turn's permission mode observable
 from the daemon's aggregate reply, without an MCP session to catch log events.
+
+With `MOCK_READ` set it reads `<cwd>/notes.txt` instead, and answers `ok:<content>`
+or the error. With `MOCK_TOOL_PERMISSION` set it asks permission for an edit tool,
+and answers `outcome:<selected option, or cancelled>`.
 """
 import json
 import os
@@ -42,13 +46,28 @@ for line in sys.stdin:
               "result": {"sessionId": message["params"].get("sessionId", "write-session")}})
     elif method == "session/prompt":
         pending = (req_id, message["params"]["sessionId"])
-        send({"jsonrpc": "2.0", "id": "write", "method": "fs/write_text_file", "params": {
-            "sessionId": pending[1], "path": os.path.join(cwd, "written.txt"), "content": "hi"}})
+        if os.environ.get("MOCK_TOOL_PERMISSION"):
+            send({"jsonrpc": "2.0", "id": "write", "method": "session/request_permission", "params": {
+                "sessionId": pending[1],
+                "toolCall": {"toolCallId": "t1", "title": "Edit notes.txt", "kind": "edit"},
+                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                            {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]}})
+        elif os.environ.get("MOCK_READ"):
+            send({"jsonrpc": "2.0", "id": "write", "method": "fs/read_text_file", "params": {
+                "sessionId": pending[1], "path": os.path.join(cwd, "notes.txt")}})
+        else:
+            send({"jsonrpc": "2.0", "id": "write", "method": "fs/write_text_file", "params": {
+                "sessionId": pending[1], "path": os.path.join(cwd, "written.txt"), "content": "hi"}})
     elif req_id == "write" and method is None:
         error = message.get("error")
         if error:
             details = (error.get("data") or {}).get("details") or error.get("message")
             say(pending[1], "error:" + details)
+        elif os.environ.get("MOCK_TOOL_PERMISSION"):
+            outcome = message["result"]["outcome"]
+            say(pending[1], "outcome:" + outcome.get("optionId", outcome["outcome"]))
+        elif os.environ.get("MOCK_READ"):
+            say(pending[1], "ok:" + message["result"]["content"])
         else:
             say(pending[1], "ok")
         send({"jsonrpc": "2.0", "id": pending[0], "result": {"stopReason": "end_turn"}})

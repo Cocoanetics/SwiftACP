@@ -34,12 +34,12 @@ struct RenderOptions: Sendable {
 /// Renders a turn's `SessionUpdate`s. One instance per turn; access is serial
 /// (the run loop invokes it from a single task), guarded for `@Sendable` use.
 final class OutputRenderer: @unchecked Sendable {
-    private let options: RenderOptions
-    private let lock = NSLock()
+    let options: RenderOptions
+    let lock = NSLock()
     /// Where the transcript (stdout) and the quiet-mode notices (stderr) go — the
     /// console by default; tests capture them.
-    private let out: @Sendable (String) -> Void
-    private let err: @Sendable (String) -> Void
+    let out: @Sendable (String) -> Void
+    let err: @Sendable (String) -> Void
     private let useColor: Bool
 
     // Text-mode state
@@ -49,11 +49,11 @@ final class OutputRenderer: @unchecked Sendable {
     private var atLineStart = true
 
     // Quiet-mode buffer
-    private var quietChunks: [String] = []
+    var quietChunks: [String] = []
 
     // JSON wire-mode state
     private var sanitizer: JSONMessageSanitizer
-    private var shownErrors = AcpErrorTracker()
+    var shownErrors = AcpErrorTracker()
 
     init(
         options: RenderOptions,
@@ -114,32 +114,6 @@ final class OutputRenderer: @unchecked Sendable {
         clientOperation(method)
     }
 
-    /// A prompt attempt starts: the errors shown before it no longer say how it fails
-    /// (acpx resets its tracker as each attempt starts).
-    func promptAttemptStarts() {
-        lock.lock()
-        defer { lock.unlock() }
-        shownErrors.reset()
-    }
-
-    /// Whether the stream has already shown the failure described by `failureText`:
-    /// acpx then prints nothing more for it.
-    func showedFailure(_ failureText: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return shownErrors.match(failureText: failureText) != nil
-    }
-
-    /// Report a failure the stream did not show, as the JSON-RPC error line acpx's
-    /// top-level handler prints (session id `unknown`: it has no session to name).
-    func jsonFailure(outputCode: String, detailCode: String? = nil, origin: String = "cli", message: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        out(JSONErrorLine.make(
-            outputCode: outputCode, detailCode: detailCode, origin: origin, message: message,
-            sessionId: "unknown") + "\n")
-    }
-
     // MARK: Entry points
 
     func render(_ update: SessionUpdate) {
@@ -187,6 +161,15 @@ final class OutputRenderer: @unchecked Sendable {
     /// mode prints neither, and its JSON mode is the raw stream (see issue #50).
     func inboundRequest(_ request: InboundRequest) {
         if let failure = request.failure {
+            // The client's refusal, which the stream shows — noted as acpx's tracker
+            // notes an outbound error, so a failure repeating it is not printed again.
+            let refusal = WireJSON.object([
+                .init("error", .object([
+                    .init("code", .number(-32603)), .init("message", .text("Internal error")),
+                    .init("data", .object([.init("details", .text(failure))]))
+                ]))
+            ])
+            lock.withLock { shownErrors.observe(refusal, direction: .outbound) }
             renderError(code: "RUNTIME", failure)
         } else {
             clientOperation(request.method)
@@ -244,39 +227,6 @@ final class OutputRenderer: @unchecked Sendable {
         for hint in remediationHints(
             code: code, origin: origin, detailCode: detailCode, message: message, acpCode: acpCode) {
             writeLine(dim(hint))
-        }
-    }
-
-    /// Report a failed turn the way acpx's formatters report its queue owner's error
-    /// (`emitQueueOwnerError`): text and JSON output add nothing when the stream already
-    /// shows it; quiet output always prints its one line — after what the agent had
-    /// said, which a failure flushes.
-    func turnFailed(_ event: TurnFailedEvent) {
-        let acp = event.acp.flatMap(AcpErrorPayload.init)
-        switch options.format {
-        case .text:
-            guard !event.shown else { return }
-            renderError(
-                code: event.outputCode, event.message, acpCode: acp.flatMap { Int(exactly: $0.code) },
-                detailCode: event.detailCode, origin: event.origin ?? "runtime")
-        case .quiet:
-            lock.lock()
-            defer { lock.unlock() }
-            let text = quietChunks.joined()
-            quietChunks = []
-            if !text.isEmpty { out(text.hasSuffix("\n") ? text : text + "\n") }
-            let qualifier = event.detailCode.map { "\(event.outputCode) \($0)" } ?? event.outputCode
-            let line = (acp?.details ?? event.message)
-                .replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ")
-                .replacingOccurrences(of: "\n", with: " ")
-            err("[acpx] error: \(qualifier) \(line)\n")
-        case .json:
-            guard !event.shown else { return }
-            lock.lock()
-            defer { lock.unlock() }
-            out(JSONErrorLine.make(
-                outputCode: event.outputCode, detailCode: event.detailCode, origin: event.origin ?? "runtime",
-                message: event.message, sessionId: event.sessionId, acp: acp) + "\n")
         }
     }
 

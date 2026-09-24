@@ -114,7 +114,8 @@ import Testing
 
             for stored in ["[]", #"[""]"#, "[1]"] {
                 let json = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","#
-                    + #""agent_command":"x","agent_argv":\#(stored),"cwd":"/","created_at":"t","last_used_at":"t"}"#
+                    + #""agent_command":"x","agent_argv":\#(stored),"cwd":"/","created_at":"t","last_used_at":"t","#
+                    + #""last_seq":0,"messages":[],"updated_at":"t"}"#
                 try Data(json.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
                 let loaded = try #require(SessionStore.loadRecord("r"), "\(stored)")
                 #expect(loaded.agentArgv == nil, "\(stored)")

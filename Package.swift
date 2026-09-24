@@ -126,7 +126,8 @@ targets += [
         exclude: [
             "Fixtures/mock-agent.py", "Fixtures/model-agent.py", "Fixtures/write-agent.py",
             "Fixtures/image-probe.png", "Fixtures/wirejson-node.json", "Fixtures/v8-json-errors.json",
-            "Fixtures/acpx-config-errors.json", "Fixtures/acpx-argv-parse.json"
+            "Fixtures/acpx-config-errors.json", "Fixtures/acpx-argv-parse.json",
+            "Fixtures/acpx-record-parse.json"
         ]
     )
 ]
