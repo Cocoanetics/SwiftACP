@@ -59,6 +59,15 @@ LOAD_GATE = os.environ.get("MOCK_LOAD_GATE")
 # A prompt is held until `session/cancel` comes, then answered `cancelled`.
 HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
 
+# A FIFO. A prompt opens a terminal that reads it, asks for the terminal's exit without
+# awaiting the answer, and then answers: the turn has a request of the client open past
+# its answer, until the FIFO is written.
+HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
+
+# A FIFO, with MOCK_HOLD_TERMINAL. Once the prompt is answered, the agent reads it to its
+# end, then asks a permission question; answered, it writes MOCK_HOLD_TERMINAL itself.
+ASK_AFTER_ANSWER = os.environ.get("MOCK_ASK_AFTER_ANSWER")
+
 # Each process names its sessions after itself, so a replacement session is
 # distinguishable from the one it replaced. Off: every session is mock-session-1.
 SESSION_ID = ("mock-session-%d" % os.getpid()) if os.environ.get("MOCK_SESSION_ID_PER_PROCESS") \
@@ -184,6 +193,7 @@ def main():
             output.write(json.dumps(sys.argv[1:]) + "\n")
     prompts_answered = 0
     held_prompt = None
+    terminal_prompt, terminal_session = None, None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -196,6 +206,29 @@ def main():
         method = message.get("method")
         req_id = message.get("id")
         log_request(message)
+
+        # The answers to the agent's own requests (MOCK_HOLD_TERMINAL).
+        if method is None and req_id == "mock-terminal-create":
+            send({"jsonrpc": "2.0", "id": "mock-terminal-wait", "method": "terminal/wait_for_exit", "params": {
+                "sessionId": terminal_session, "terminalId": message.get("result", {}).get("terminalId")}})
+            respond(terminal_prompt, {"stopReason": "end_turn"})
+            if ASK_AFTER_ANSWER:
+                with open(ASK_AFTER_ANSWER, encoding="utf-8") as gate:
+                    gate.read()
+                send({"jsonrpc": "2.0", "id": "mock-ask", "method": "session/request_permission", "params": {
+                    "sessionId": terminal_session,
+                    "toolCall": {"toolCallId": "call-ask", "title": "a question after the answer"},
+                    "options": [
+                        {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                        {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                    ]}})
+            continue
+        if method is None and req_id == "mock-ask":
+            with open(HOLD_TERMINAL, "w", encoding="utf-8") as fifo:
+                fifo.write("done\n")
+            continue
+        if method is None and str(req_id).startswith("mock-"):
+            continue
 
         if method == "initialize":
             respond(req_id, {
@@ -258,6 +291,12 @@ def main():
             prompts_answered += 1
             if HOLD_UNTIL_CANCEL:
                 held_prompt = req_id
+                continue
+            if HOLD_TERMINAL:
+                terminal_prompt = req_id
+                terminal_session = message.get("params", {}).get("sessionId")
+                send({"jsonrpc": "2.0", "id": "mock-terminal-create", "method": "terminal/create", "params": {
+                    "sessionId": terminal_session, "command": "/bin/cat", "args": [HOLD_TERMINAL]}})
                 continue
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:

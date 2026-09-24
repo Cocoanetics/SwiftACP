@@ -249,16 +249,20 @@ extension ACPXDaemonBackend {
         let wireFeed = TurnWireFeed(
             streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
         // The prompt's result as it crossed the wire: its usage and cost go to the
-        // client with the turn's end, in the shape the agent sent them.
+        // client with the turn's end, in the shape the agent sent them. Its arrival marks
+        // the turn answered at once, from the reader's thread — before the connection has
+        // even handed it on — as acpx's client clears its active prompt at the answer.
         let promptResult = PromptResultCapture()
-        entry.agent.rawWire.set { direction, body in
+        let turnId = turn.id
+        entry.agent.rawWire.set { [self] direction, body in
             errors.observe(direction, body)
             wireFeed.observe(direction, body)
-            promptResult.observe(direction, body)
+            if promptResult.observe(direction, body) {
+                Task { await self.promptAnswered(recordId: recordId, turn: turnId) }
+            }
         }
         // The note that the prompt went out comes from the writer's thread; it reaches
         // this actor as the turn goes on, and is dropped once the turn has ended.
-        let turnId = turn.id
         entry.agent.rawWire.onDelivery { [self] body, delivery in
             guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
             guard delivery == .writing else { return wrote.unmark() }
@@ -281,12 +285,13 @@ extension ACPXDaemonBackend {
         // finishes the stream, so the consumer task completes having sent every
         // event — in order — and built the agent's message content for the turn.
         let (subscriptionId, stream) = await connection.makeEventSubscription()
-        let announceEnd = Self.announcingTheEnd(
-            on: connection, of: boundSessionId, as: sessionId, to: clientSession, with: promptResult)
+        let announceAnswer = Self.announcingTheAnswer(as: sessionId, to: clientSession) { [self] in
+            await self.promptAnswered(recordId: recordId, turn: turnId)
+        }
         let consumer = Task {
             await Self.relay(
                 stream, of: boundSessionId, as: sessionId, into: persister, to: clientSession,
-                onAnswered: announceEnd)
+                onAnswered: announceAnswer)
         }
         do {
             if let model = turn.model {
@@ -305,14 +310,10 @@ extension ACPXDaemonBackend {
             // Final checkpoint: stamp timestamps and flush the completed turn —
             // including any wire lines still buffered for the event log.
             await persister.finish()
-            // A prompt never sent has no answer to mark the turn's end at: it goes now.
-            if !sent {
-                await clientSession?.sendLogNotification(
-                    LogMessage(
-                        level: .info, logger: sessionId,
-                        data: toJSONValue(TurnEndedEvent(
-                            stopReason: response.stopReason.rawValue, permissions: PermissionStats()))))
-            }
+            // The turn's end goes last, its permissions read only now that it is over.
+            let permissions = sent ? await connection.permissionStats(for: boundSessionId) : PermissionStats()
+            await Self.announceTheEnd(
+                of: response, permissions: permissions, result: promptResult, as: sessionId, to: clientSession)
             return fullText
         } catch {
             await connection.endSubscription(subscriptionId)

@@ -69,9 +69,14 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
             await stopReason.fail(failed)
             return
         }
-        // The turn's end, which the daemon sends at the prompt's answer: acpx's formatters
-        // mark the turn done there, and render what the agent sends after it as it comes
-        // — quiet output none of its text.
+        // The prompt's answer: acpx's formatters mark the turn done there, and render
+        // what the agent sends after it as it comes — quiet output none of its text.
+        if let answered = try? message.data.decoded(TurnAnsweredEvent.self) {
+            renderer.finish(stopReason: StopReason(rawValue: answered.answeredStopReason) ?? .endTurn)
+            return
+        }
+        // The turn's end: how it went, its permissions read once it was over. Marked done
+        // here when there was no answer to mark it at — or no daemon that announces one.
         if let ended = try? message.data.decoded(TurnEndedEvent.self) {
             await stopReason.set(ended)
             renderer.finish(stopReason: StopReason(rawValue: ended.stopReason) ?? .endTurn)

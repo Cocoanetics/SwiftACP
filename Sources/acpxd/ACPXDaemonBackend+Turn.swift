@@ -75,22 +75,36 @@ extension ACPXDaemonBackend {
         return fullText
     }
 
-    /// What tells the calling client the turn ended, at the prompt's answer: in order
-    /// with the updates before it — acpx's formatters mark the turn done there — and
-    /// before what the agent sends after it. It carries how the turn's permissions went,
-    /// which decides the CLI's exit code, and the answer's usage and cost.
-    static func announcingTheEnd(
-        on connection: ACPAgentConnection, of boundSessionId: SessionId, as sessionId: String,
-        to clientSession: Session?, with promptResult: PromptResultCapture
+    /// Tell the calling client the turn ended, once it is over: after every update, with
+    /// how its permissions went — which decides the CLI's exit code, read once the agent's
+    /// requests from the turn are answered and its updates have gone quiet, as acpx reads
+    /// them for its result (`toPromptResult`) — and the answer's usage and cost.
+    static func announceTheEnd(
+        of response: PromptResponse, permissions: PermissionStats, result: PromptResultCapture,
+        as sessionId: String, to clientSession: Session?
+    ) async {
+        await clientSession?.sendLogNotification(
+            LogMessage(
+                level: .info, logger: sessionId,
+                data: toJSONValue(TurnEndedEvent(
+                    stopReason: response.stopReason.rawValue, permissions: permissions,
+                    usage: result.usage, cost: result.cost))))
+    }
+
+    /// What tells the calling client the prompt was answered: in order with the updates
+    /// before it — acpx's formatters mark the turn done there — and before what the agent
+    /// sends after it. The turn is marked answered first (`markAnswered`), so a cancel
+    /// from the moment the client learns of it has nothing to send. How the turn went —
+    /// its permissions among it, which may still be asked — comes with its end.
+    static func announcingTheAnswer(
+        as sessionId: String, to clientSession: Session?, markAnswered: @escaping @Sendable () async -> Void
     ) -> @Sendable (PromptResponse) async -> Void {
         { response in
-            let permissions = await connection.permissionStats(for: boundSessionId)
+            await markAnswered()
             await clientSession?.sendLogNotification(
                 LogMessage(
                     level: .info, logger: sessionId,
-                    data: toJSONValue(TurnEndedEvent(
-                        stopReason: response.stopReason.rawValue, permissions: permissions,
-                        usage: promptResult.usage, cost: promptResult.cost))))
+                    data: toJSONValue(TurnAnsweredEvent(answeredStopReason: response.stopReason.rawValue))))
         }
     }
 }
