@@ -102,6 +102,20 @@ import Testing
         }
     }
 
+    /// A `max_turns` beyond what the model's `Int` holds, which acpx accepts, does not
+    /// cost the other session options: they still read.
+    @Test func sessionOptionsSurviveAnOverflowingMaxTurns() async throws {
+        let overflowing = try Self.fixtureCase("acpx max turns beyond Int")
+        #expect(overflowing.parsed?.contains(#""max_turns":100000000000000000000"#) == true)
+        try await withIsolatedStore {
+            try Self.store(overflowing.raw, cwd: try Self.workingDirectory())
+            let options = try #require(SessionStore.loadRecord("rec-1")?.acpx?.sessionOptions)
+            #expect(options.model == "opus")
+            #expect(options.allowedTools == ["read"])
+            #expect(options.maxTurns == 9_007_199_254_740_992)
+        }
+    }
+
     /// A record prints as it was when it was read — the read that selected it — not as
     /// the file says by the time it is printed.
     @Test func aRecordPrintsAsItWasRead() async throws {

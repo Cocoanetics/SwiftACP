@@ -267,7 +267,7 @@ public enum SessionRecordParser {
             "cumulative_cost": parsed["cumulative_cost"],
             "request_token_usage": parsed["request_token_usage"],
             // A block that does not read at all may have held restrictions: it fails closed.
-            "acpx": parsed["acpx"].map { withOwnFields($0, from: raw["acpx"]) }
+            "acpx": parsed["acpx"].map { withOwnFields(withModelIntegers($0), from: raw["acpx"]) }
                 ?? (raw["acpx"] == nil ? nil : unreadableAcpxState)
         ]
         return .object(members.compactMap { member in
@@ -294,6 +294,15 @@ public enum SessionRecordParser {
     static func modelInteger(_ value: WireJSON?) -> WireJSON? {
         guard case .number(let number)? = value, isInteger(number), abs(number) >= 9.2e18 else { return value }
         return .number((number < 0 ? -1 : 1) * 9_007_199_254_740_992)
+    }
+
+    /// acpx's reading of the `acpx` block, with a `session_options.max_turns` beyond the
+    /// model's `Int` brought within it (``modelInteger(_:)``), so the block's other
+    /// options still read.
+    static func withModelIntegers(_ state: WireJSON) -> WireJSON {
+        guard let options = state["session_options"], let turns = options["max_turns"] else { return state }
+        return state.replacing(
+            "session_options", with: options.replacing("max_turns", with: modelInteger(turns) ?? turns))
     }
 
     /// The `acpx` fields acpx reads (`SessionAcpxState`).
