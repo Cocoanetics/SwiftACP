@@ -16,8 +16,8 @@ enum SessionsCommand {
         case "prune": return try prune(context)
         case "new": return try SessionLifecycle.new(context)
         case "ensure": return try SessionLifecycle.ensure(context)
-        case "export": throw CLIError("sessions export: not yet implemented")
-        case "import": throw CLIError("sessions import: not yet implemented")
+        case "export": return try export(context)
+        case "import": return try importArchive(context)
         case "watch": throw CLIError("sessions watch: not yet implemented")
         case let other: throw InvalidArgumentError("unknown command '\(other)'")
         }

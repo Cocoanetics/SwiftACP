@@ -4,8 +4,13 @@ import Foundation
 /// On-disk locations, matching acpx 0.11.0 exactly (`src/session/event-log.ts`,
 /// `repository.ts`, `index.ts`, `cli/queue/paths.ts`).
 public enum ACPXPaths {
-    public static var home: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+    /// The home directory as Node's `os.homedir()` gives it, which acpx's paths start
+    /// from: `HOME` when it is set, else the user's own. (Foundation's ignores `HOME`.)
+    public static var home: URL { home(in: ProcessInfo.processInfo.environment) }
+
+    static func home(in environment: [String: String]) -> URL {
+        guard let home = environment["HOME"] else { return FileManager.default.homeDirectoryForCurrentUser }
+        return URL(fileURLWithPath: resolve(home, base: FileManager.default.currentDirectoryPath), isDirectory: true)
     }
 
     /// The acpx state directory. Defaults to `~/.acpx`; redirectable via the
@@ -55,6 +60,11 @@ public enum ACPXPaths {
     /// `~/.acpx/sessions/<id>.stream.<segment>.ndjson`
     public static func sessionStreamSegmentPath(_ recordId: String, segment: Int) -> URL {
         sessionsDir.appendingPathComponent("\(safeSessionId(recordId)).stream.\(segment).ndjson")
+    }
+
+    /// `~/.acpx/sessions/<id>.stream.lock`, which acpx's queue owner holds while it runs.
+    public static func sessionStreamLockPath(_ recordId: String) -> URL {
+        sessionsDir.appendingPathComponent("\(safeSessionId(recordId)).stream.lock")
     }
 
     /// `~/.acpx/queues`
