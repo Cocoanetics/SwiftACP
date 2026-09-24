@@ -87,7 +87,8 @@ extension ACPXDaemonBackend {
         // lands on the record — acpx takes the desired mode, model and options at the
         // start of `connectAndLoadSession` for the same reason.
         let selections = record?.acpx
-        let command = launchCommand(for: agentCommand, config: config)
+        let launch = config.agentLaunch(for: agentCommand)
+        let command = launch.command
         let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
         // What connecting shows goes out once it is over, however it went: acpx flushes
         // its buffer when connecting fails too, so the agent's refusal is on screen.
@@ -97,8 +98,10 @@ extension ACPXDaemonBackend {
         }
         let handle: ACPAgent
         do {
+            // The argv the session recorded (`agent_argv`) launches it as it was launched;
+            // without one, its command line is split.
             handle = try await ACPAgent.launch(
-                agent: command, cwd: cwd, permission: .approveAll,
+                agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, permission: .approveAll,
                 capabilities: capabilities,
                 authCredentials: config.auth, authPolicy: config.authPolicy,
                 inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)

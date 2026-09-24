@@ -25,6 +25,28 @@ extension ACPAgentConnection {
         }
     }
 
+    /// `session/load` as acpx's `loadSessionWithOptions` sends it: the request, then the
+    /// replay drain. With `suppressReplayUpdates`, the session's updates meanwhile are
+    /// neither delivered nor shown on `rawWire` — the caller has that history already.
+    public func loadSession(
+        _ request: LoadSessionRequest, suppressReplayUpdates: Bool, rawWire: RawWireTap? = nil
+    ) async throws -> LoadSessionResponse {
+        let id = request.sessionId
+        if suppressReplayUpdates {
+            beginSuppressingReplay(of: id)
+            rawWire?.beginSuppressingReplay(of: id)
+        }
+        defer {
+            if suppressReplayUpdates {
+                endSuppressingReplay(of: id)
+                rawWire?.endSuppressingReplay(of: id)
+            }
+        }
+        let response = try await loadSession(request)
+        try await waitForSessionUpdateDrain(sessionId: id)
+        return response
+    }
+
     /// Stop delivering `sessionId`'s `session/update`s until the matching
     /// ``endSuppressingReplay(of:)``: its `session/load` replays history the caller
     /// has. Other sessions' updates go on as usual.

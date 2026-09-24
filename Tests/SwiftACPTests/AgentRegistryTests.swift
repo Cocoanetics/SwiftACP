@@ -55,25 +55,25 @@ struct AgentRegistryTests {
 
     // MARK: - launch wiring
 
-    @Test func launchLeavesNonCodexEnvironmentUntouched() {
+    @Test func launchLeavesNonCodexEnvironmentUntouched() throws {
         // The CODEX_PATH injection is gated on the codex key.
-        let spec = AgentRegistry.launch(for: "claude", environment: ["A": "B"])
+        let spec = try AgentRegistry.launch(for: "claude", environment: ["A": "B"])
         #expect(spec.environment?["CODEX_PATH"] == nil)
         #expect(spec.environment?["A"] == "B")
     }
 
-    @Test func launchPreservesCallerCodexPath() {
+    @Test func launchPreservesCallerCodexPath() throws {
         // Exercising the real codex launch path: an explicit CODEX_PATH survives.
-        let spec = AgentRegistry.launch(
+        let spec = try AgentRegistry.launch(
             for: "codex", environment: ["CODEX_PATH": "/pinned/codex", "PATH": "/usr/bin"])
         #expect(spec.environment?["CODEX_PATH"] == "/pinned/codex")
     }
 
-    @Test func launchInjectsSystemCodexForCodexAgent() {
+    @Test func launchInjectsSystemCodexForCodexAgent() throws {
         // Integration check of the launch → injection wiring for the absent case.
         // Skips on machines without a system codex so it stays green in minimal CI.
         guard let systemCodex = AgentRegistry.which("codex") else { return }
-        let spec = AgentRegistry.launch(
+        let spec = try AgentRegistry.launch(
             for: "codex", environment: ["PATH": ProcessInfo.processInfo.environment["PATH"] ?? ""])
         #expect(spec.environment?["CODEX_PATH"] == systemCodex)
     }
@@ -128,5 +128,15 @@ struct AgentRegistryTests {
     @Test func factoryDroidAliasesResolve() {
         #expect(AgentRegistry.aliases["factory-droid"] == "droid")
         #expect(AgentRegistry.aliases["factorydroid"] == "droid")
+    }
+
+    /// An explicit argv wins over an installed adapter binary: it is launched as given.
+    @Test func anExplicitArgvIsLaunchedEvenWhereTheAdapterIsInstalled() throws {
+        let installed = try AgentRegistry.launch(for: "codex", locate: { "/opt/bin/\($0)" })
+        #expect(installed.executable.hasPrefix("/opt/bin/"))
+        let given = try AgentRegistry.launch(
+            for: "codex", argv: ["/usr/bin/custom", "--flag", "a b"], locate: { "/opt/bin/\($0)" })
+        #expect(given.executable == "/usr/bin/custom")
+        #expect(given.arguments == ["--flag", "a b"])
     }
 }

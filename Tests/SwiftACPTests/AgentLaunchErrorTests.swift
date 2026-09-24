@@ -58,6 +58,23 @@ struct AgentLaunchErrorTests {
                     + qualified)
     }
 
+    /// Given an argv, a failed launch names the caller's own command, as acpx names
+    /// `options.agentCommand` — never the built-in command its name would expand to,
+    /// which was not what failed.
+    @Test func aFailedArgvLaunchNamesTheCallersCommand() async throws {
+        let error = await #expect(throws: AgentLaunchError.self) {
+            _ = try await ACPAgent.launch(
+                agent: "codex", argv: ["/nonexistent/adapter", "--acp"], cwd: workingDirectory,
+                permission: .approveAll, inheritStderr: false)
+        }
+        #expect(error?.agentCommand == "codex")
+        #expect(error?.missingPath == "/nonexistent/adapter")
+        #expect(error?.errorDescription == "Failed to spawn agent command: codex. " + qualified)
+        // Without an argv the name still expands to the command it launches.
+        #expect(ACPAgent.failureName(agent: "codex", argv: nil, overrides: [:])
+            == AgentRegistry.command(for: "codex"))
+    }
+
     @Test func aBareNameIsLookedUpOnTheChildsOwnPath() throws {
         // Not on the child's PATH even though it exists elsewhere on this machine.
         let missing = ProcessLaunch(

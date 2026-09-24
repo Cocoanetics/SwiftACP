@@ -18,6 +18,17 @@ func mockCommand() -> String? {
     return "'\(python)' '\(fixture.path)'"
 }
 
+/// The mock agent as an argv — interpreter and script — for launches that are not
+/// split from a command line.
+func mockArgv() -> [String]? {
+    guard let python = AgentRegistry.which("python3") else { return nil }
+    let fixture = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/mock-agent.py")
+    guard FileManager.default.fileExists(atPath: fixture.path) else { return nil }
+    return [python, fixture.path]
+}
+
 /// Serializes ``withIsolatedStore`` bodies across the whole process. swift-testing
 /// runs different suites in parallel, but every store / daemon-lock test redirects
 /// the single process-wide ``ACPXPaths/baseDir``; without this gate two suites would
