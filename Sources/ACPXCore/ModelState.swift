@@ -124,6 +124,7 @@ public enum ModelSupport {
     ) {
         let modelConfigId = advertisedModelState(state)?.configId
         applyAcceptedConfigOptions(response, to: &state)
+        if let modelConfigId { noteAccepted(modelConfigId, value: modelId, unreportedBy: response, in: &state) }
         var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
         options.model = modelId
         state.sessionOptions = options
@@ -151,6 +152,28 @@ public enum ModelSupport {
         desired[configId] = value
         state.desiredConfigOptions = desired
         applyAcceptedConfigOptions(response, to: &state)
+        noteAccepted(configId, value: value, unreportedBy: response, in: &state)
+    }
+
+    /// A reply that does not report the options — `{}`, as SwiftACP's own agent bridge
+    /// answers — leaves the record's as they were, but with the option just set at the
+    /// value it was set to: the agent accepted it, as acpx takes the model a
+    /// `session/set_model` reply leaves current to be the one asked for. Otherwise a
+    /// later `--model` for the old value would be skipped as already current. (acpx
+    /// reads the missing list as no options at all, clearing the model state with it,
+    /// and fails outright on saved selections.)
+    private static func noteAccepted(
+        _ configId: String, value: String, unreportedBy response: SetSessionConfigOptionResponse?,
+        in state: inout SessionAcpxState
+    ) {
+        guard response?.configOptions == nil, case .array(var options)? = state.configOptions else { return }
+        for (index, option) in options.enumerated() {
+            guard case .object(var fields) = option, case .string(let id)? = fields["id"], id == configId
+            else { continue }
+            fields["currentValue"] = .string(value)
+            options[index] = .object(fields)
+        }
+        state.configOptions = .array(options)
     }
 
     /// acpx's `applyAcceptedConfigOptions`: the options a control's reply reported

@@ -15,7 +15,8 @@ that list instead, read at launch, so a test can change what a later launch offe
 `MODEL_AGENT_LOAD=1` makes it take sessions back with `session/load`, answering with
 what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
 names a file: while it exists, the next model request removes it and the agent exits
-without answering.
+without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_option` with
+`{}`, reporting no options back.
 """
 import json
 import os
@@ -31,6 +32,7 @@ else:
     MODELS = os.environ.get("MODEL_AGENT_MODELS", "m1,m2").split(",")
 NAMES = {"m1": "One", "m2": "Two"}
 EXIT_ON_MODEL = os.environ.get("MODEL_AGENT_EXIT_ON_MODEL")
+EMPTY_REPLIES = os.environ.get("MODEL_AGENT_EMPTY_REPLIES") == "1"
 
 
 def config_options():
@@ -102,7 +104,7 @@ def main():
             if params.get("configId") in CURRENT:
                 CURRENT[params["configId"]] = params.get("value")
             send({"jsonrpc": "2.0", "id": req_id,
-                  "result": {} if LEGACY else {"configOptions": config_options()}})
+                  "result": {} if LEGACY or EMPTY_REPLIES else {"configOptions": config_options()}})
         elif method == "session/set_mode":
             send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         elif method == "session/set_model":

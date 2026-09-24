@@ -92,4 +92,21 @@ extension DaemonToolsTests {
             #expect(SessionStore.loadRecord(id)?.acpx?.sessionOptions?.model == "m1")
         }
     }
+
+    /// An agent that answers the model's option with `{}` reports no options back; the
+    /// model it took is still the current one, so a later turn asking for the old model
+    /// asks for it rather than skipping it as current (#105 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aModelAcceptedWithoutReportedOptionsIsCurrent() async throws {
+        try await withIsolatedStore {
+            let (id, log) = try await pinnedSession(load: true, environment: "MODEL_AGENT_EMPTY_REPLIES=1 ")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await daemon.runPrompt(sessionId: id, text: "first", model: "m2")
+            try "".write(to: log, atomically: true, encoding: .utf8)
+
+            _ = try await daemon.runPrompt(sessionId: id, text: "second", model: "m1")
+            #expect(try Self.modelAgentRequests(log) == ["session/set_config_option model=m1", "session/prompt"])
+            #expect(ModelSupport.advertisedModelState(SessionStore.loadRecord(id)?.acpx)?.currentModelId == "m1")
+        }
+    }
 }
