@@ -36,14 +36,14 @@ extension ACPXDaemonBackend {
         sessionId rawSessionId: String, text: String,
         blocks: [PromptBlock]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool = false
+        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
         // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(
-            mode: permissionMode, nonInteractive: nonInteractivePermissions)
+            mode: permissionMode, nonInteractive: nonInteractivePermissions, rules: permissionPolicy)
         // Validate before queueing: a malformed block should fail at once, not after
         // waiting out someone else's turn. The daemon's transport has a ceiling, so
         // the request size is capped here (a direct client has nothing in the way).
@@ -313,7 +313,8 @@ struct TurnPermissions: Sendable {
     ///   - mode: `approve-all`, `approve-reads` or `deny-all`. `nil` — a caller that
     ///     predates the parameter — keeps the old behaviour of approving everything.
     ///   - nonInteractive: `deny` (the default) or `fail`.
-    init(mode: String?, nonInteractive: String?) throws {
+    ///   - rules: the turn's per-tool permission policy, which comes before `mode`.
+    init(mode: String?, nonInteractive: String?, rules: PermissionRules? = nil) throws {
         let policy: PermissionPolicy
         if let mode {
             guard let parsed = PermissionPolicy(acpxMode: mode) else {
@@ -336,7 +337,7 @@ struct TurnPermissions: Sendable {
         // acpx's detached queue owner, it never asks — a write needing confirmation is
         // refused, or refused as unanswerable under `fail`.
         handlers = .standard(
-            permission: policy, nonInteractivePermissions: unanswerable, terminal: .none)
+            permission: policy, nonInteractivePermissions: unanswerable, terminal: .none, rules: rules)
     }
 }
 

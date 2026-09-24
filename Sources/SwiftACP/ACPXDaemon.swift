@@ -221,6 +221,9 @@ public actor ACPXDaemon {
     ///   - streamWire: also stream every ACP message of the turn as a
     ///     ``WireMessageEvent``, as acpx's `--format json` prints them. The messages of
     ///     connecting the agent for the turn are streamed either way.
+    ///   - permissionPolicy: per-tool rules that approve, deny or escalate this turn's
+    ///     permission requests ahead of `permissionMode` — acpx's
+    ///     `--permission-policy`. See ``PermissionRules``.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -228,12 +231,12 @@ public actor ACPXDaemon {
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool? = nil
+        streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil
     ) async throws -> String {
         try await backend.runPrompt(
             sessionId: sessionId, text: text, blocks: blocks, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-            streamWire: streamWire ?? false)
+            streamWire: streamWire ?? false, permissionPolicy: permissionPolicy)
     }
 
     /// Cancel an in-flight prompt for a session.

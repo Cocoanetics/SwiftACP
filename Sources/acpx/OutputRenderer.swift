@@ -114,6 +114,19 @@ final class OutputRenderer: @unchecked Sendable {
         clientOperation(method)
     }
 
+    /// acpx's `onPermissionEscalation` details, one per line.
+    static func escalationDetails(_ escalation: PermissionEscalation) -> String {
+        [
+            "sessionId: \(escalation.sessionId)",
+            "toolCallId: \(escalation.toolCallId)",
+            escalation.toolName.map { "toolName: \($0)" },
+            "toolTitle: \(escalation.toolTitle)",
+            escalation.toolInput.map { "toolInput: \(ToolText.summarizeInput($0) ?? "(structured input)")" },
+            escalation.toolKind.map { "toolKind: \($0)" },
+            escalation.matchedRule.map { "matchedRule: \($0)" }
+        ].compactMap { $0 }.joined(separator: "\n")
+    }
+
     // MARK: Entry points
 
     func render(_ update: SessionUpdate) {
@@ -191,7 +204,8 @@ final class OutputRenderer: @unchecked Sendable {
             // On the wire this is the request and the client's answer, already printed.
             if !options.streamsWire { out(encodeLineJSON(operation) + "\n") }
         case .quiet:
-            guard isPermissionNotice else { return }
+            // acpx's quiet formatter prints nothing for an escalation.
+            guard isPermissionNotice, operation.escalation == nil else { return }
             let oneLine = normalizeLineEndings(operation.summary).replacingOccurrences(of: "\n", with: " ")
             err("[acpx] permission: \(oneLine)\n")
         case .text:
@@ -199,6 +213,9 @@ final class OutputRenderer: @unchecked Sendable {
             beginSection()
             if isPermissionNotice {
                 writeLine("\(bold("[permission]")) \(operation.summary)")
+                if let escalation = operation.escalation {
+                    writeLine(indentBlock(Self.escalationDetails(escalation), "  "))
+                }
                 return
             }
             writeLine("\(bold("[client]")) \(operation.summary) (\(colorStatus(operation.status)))")

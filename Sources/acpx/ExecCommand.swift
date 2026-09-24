@@ -10,6 +10,7 @@ enum ExecCommand {
         let flags = try context.globalFlags()
 
         if context.config.disableExec { return refuseDisabledExec(flags) }
+        let permissionRules = try flags.permissionRules()
 
         let configOptions = try scan.parsedAll("config-option", parseSessionConfigOptionAssignment)
         let prompt = try PromptBlock.contentBlocks(
@@ -38,7 +39,7 @@ enum ExecCommand {
             do {
                 handle = try await ACPAgent.launch(
                     agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd, permission: permission,
-                    nonInteractivePermissions: flags.nonInteractivePolicy,
+                    nonInteractivePermissions: flags.nonInteractivePolicy, permissionRules: permissionRules,
                     capabilities: flags.clientCapabilities,
                     authCredentials: context.config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: flags.verbose, onClientRequest: onClientRequest, onRawWire: onRawWire)
