@@ -223,7 +223,7 @@ struct TerminalManagerTests {
     /// an agent reads the output right after waiting — even when reading has fallen as
     /// far behind as it can: not started until the exit needs it.
     @Test func theExitIsReportedWithTheOutputBeforeItIn() async throws {
-        let process = try TerminalProcess.spawn(
+        let process = try ChildProcess.spawn(
             command: "printf", arguments: ["everything"], cwd: try workspace(), environment: nil)
         let output = TerminalOutput(limit: 100)
         let seenAtExit: String = await withCheckedContinuation { continuation in
@@ -241,7 +241,7 @@ struct TerminalManagerTests {
     /// more. (`yes` fills the pipe before the command exits, and a reader slower than
     /// `yes` keeps it from ever running dry.)
     @Test func aBackgroundWriterDoesNotHoldUpTheExit() async throws {
-        let process = try TerminalProcess.spawn(
+        let process = try ChildProcess.spawn(
             command: "sh", arguments: ["-c", "yes & sleep 0.2; exit 0"], cwd: try workspace(), environment: nil)
         // The sleep only bounds a hang, so the test fails rather than never ending.
         let reported = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -446,7 +446,7 @@ struct TerminalManagerTests {
         let (listing, ways) = ("/dev/fd", [false])
         #endif
         for withoutCloseFrom in ways {
-            let process = try TerminalProcess.spawn(
+            let process = try ChildProcess.spawn(
                 command: "ls", arguments: [listing], cwd: try workspace(), environment: nil,
                 withoutCloseFrom: withoutCloseFrom)
             let output = TerminalOutput(limit: 4096)
