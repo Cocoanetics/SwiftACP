@@ -180,14 +180,18 @@ public enum TerminalOutputLimit {
         guard let raw = environment["ACPX_TERMINAL_MAX_OUTPUT_BYTES"] else { return nil }
         let trimmed = javaScriptTrimmed(raw)
         guard !trimmed.isEmpty else { return nil }
-        guard trimmed.unicodeScalars.allSatisfy({ ("0"..."9").contains($0) }) else {
-            throw TerminalOutputCeilingError()
-        }
-        let digits = trimmed.drop { $0 == "0" }
-        guard digits.count <= 16, let bytes = Int(digits.isEmpty ? "0" : String(digits)),
-            bytes <= maxSafeInteger
-        else { throw TerminalOutputCeilingError() }
+        guard let bytes = nonNegativeSafeInteger(trimmed) else { throw TerminalOutputCeilingError() }
         return bytes == 0 ? nil : bytes
+    }
+
+    /// `text` as a count acpx accepts in a setting: decimal digits (`/^\d+$/`) naming a
+    /// safe integer (`Number.isSafeInteger`), leading zeros and all; `nil` otherwise.
+    static func nonNegativeSafeInteger(_ text: String) -> Int? {
+        guard !text.isEmpty, text.unicodeScalars.allSatisfy({ ("0"..."9").contains($0) }) else { return nil }
+        let digits = text.drop { $0 == "0" }
+        guard digits.count <= 16, let value = Int(digits.isEmpty ? "0" : String(digits)), value <= maxSafeInteger
+        else { return nil }
+        return value
     }
 
     /// A ceiling given as a count rather than read from the environment — `0` is none —

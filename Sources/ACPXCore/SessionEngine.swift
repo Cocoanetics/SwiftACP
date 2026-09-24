@@ -91,14 +91,20 @@ public enum SessionEngine {
             record.acpx = acpx
 
             // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
-            // (a graceful connection close, not a kill).
+            // (a graceful connection close, not a kill), and records how it went — the
+            // connection closing, seen before the process exits.
             await handle.close()
-            record.pid = nil
-            record.agentStartedAt = started
-            record.lastAgentExitCode = .null
-            record.lastAgentExitSignal = .null
-            record.lastAgentExitAt = nowISO()
-            record.lastAgentDisconnectReason = "connection_close"
+            if let lifecycle = handle.lifecycle {
+                record.applyLifecycle(lifecycle)
+            } else {
+                // Where the agent cannot be watched, what closing it records in acpx.
+                record.pid = nil
+                record.agentStartedAt = started
+                record.lastAgentExitCode = .null
+                record.lastAgentExitSignal = .null
+                record.lastAgentExitAt = nowISO()
+                record.lastAgentDisconnectReason = AgentDisconnectReason.connectionClose.rawValue
+            }
 
             try SessionStore.writeRecord(record)
             return record

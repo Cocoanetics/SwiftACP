@@ -25,7 +25,7 @@ extension TerminalManagerTests {
         // from there, as in Node. (Changing this process's directory would race the
         // tests running beside this one.)
         let relativeSub = Self.relativePath(from: FileManager.default.currentDirectoryPath, to: root + "/sub")
-        let process = try TerminalProcess.spawn(
+        let process = try ChildProcess.spawn(
             command: "tool", arguments: [], cwd: relativeSub, environment: ["PATH": "bin"])
         let output = TerminalOutput(limit: 4096)
         let text: String = await withCheckedContinuation { continuation in
