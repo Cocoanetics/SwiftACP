@@ -49,9 +49,9 @@ public actor ACPAgentConnection {
     /// replaying history the caller has — with how many loads asked. acpx's
     /// `suppressSessionUpdates`, kept per session: one connection can hold several.
     var replaySuppressed: [SessionId: Int] = [:]
-    /// When each session's latest `session/update` arrived, delivered or not, in
-    /// `DispatchTime` nanoseconds: what the replay drain watches go quiet.
-    var lastSessionUpdate: [SessionId: UInt64] = [:]
+    /// Each session's `session/update`s as they are read and as they are handled: what
+    /// the replay drain watches go quiet (see ``SessionUpdateLedger``).
+    nonisolated let sessionUpdates = SessionUpdateLedger()
     /// Sessions a `session/load` is in progress for, with the loads of each waiting
     /// their turn (see ``loadSession(_:suppressReplayUpdates:rawWire:)``).
     var loadWaiters: [SessionId: [CheckedContinuation<Void, Never>]] = [:]
@@ -141,10 +141,14 @@ public actor ACPAgentConnection {
         // Runs inline as each message is read, in order: an agent request is counted
         // here, before the peer hands it to its own task, so a turn that ends after
         // reading it is sure to wait for it.
-        await rpc.setWireLog { [wireObserver, inboundRequests] direction, message in
+        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates] direction, message in
             if direction == .inbound, case .request(let request) = message,
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
                 inboundRequests.arrived(sessionId)
+            }
+            if direction == .inbound, case .notification(let note) = message, note.method == "session/update",
+                let sessionId = InboundRequestLedger.sessionId(of: note.params) {
+                sessionUpdates.arrived(sessionId)
             }
             if let observer = wireObserver.current, let line = try? message.encodedString() {
                 observer(line)

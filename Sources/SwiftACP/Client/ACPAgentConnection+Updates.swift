@@ -12,10 +12,10 @@ extension ACPAgentConnection {
     /// A notification from the agent: a `session/update` goes to every subscription,
     /// unless a replay is being kept from them.
     func handleIncomingNotification(method: String, params: JSONValue?) async {
-        guard method == "session/update", let params,
-            let notification = try? params.decoded(SessionNotification.self)
-        else { return }
-        lastSessionUpdate[notification.sessionId] = DispatchTime.now().uptimeNanoseconds
+        guard method == "session/update" else { return }
+        let sessionId = InboundRequestLedger.sessionId(of: params)
+        defer { if let sessionId { sessionUpdates.finished(sessionId) } }
+        guard let params, let notification = try? params.decoded(SessionNotification.self) else { return }
         if replaySuppressed[notification.sessionId] != nil { return }
         for sink in updateSinks.values {
             sink.yield(notification)
@@ -89,8 +89,9 @@ extension ACPAgentConnection {
     }
 
     /// Wait until no `session/update` for `sessionId` has arrived for
-    /// `idleMilliseconds` — the history an agent replays for its `session/load` has
-    /// stopped — as acpx's `waitForSessionUpdateDrain` does after every load. Throws
+    /// `idleMilliseconds`, and every one that has has been handled — the history an
+    /// agent replays for its `session/load` has stopped — as acpx's
+    /// `waitForSessionUpdateDrain` does after every load. Throws
     /// ``SessionReplayDrainTimeout`` when that has not happened within
     /// `timeoutMilliseconds`. Other sessions' updates do not count.
     public func waitForSessionUpdateDrain(
@@ -102,14 +103,23 @@ extension ACPAgentConnection {
         let start = DispatchTime.now().uptimeNanoseconds
         let deadline = start + UInt64(timeoutMs) * 1_000_000
         while true {
-            let quietAt = max(start, lastSessionUpdate[sessionId] ?? start) + idle
+            let (lastArrival, pending) = sessionUpdates.state(of: sessionId)
+            let quietAt = max(start, lastArrival ?? start) + idle
             guard quietAt <= deadline else {
                 // Updates only move it later: this wait can no longer end in time.
                 try await Self.sleep(until: deadline)
                 throw SessionReplayDrainTimeout(timeoutMilliseconds: timeoutMs)
             }
-            if DispatchTime.now().uptimeNanoseconds >= quietAt { return }
-            try await Self.sleep(until: quietAt)
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now < quietAt {
+                try await Self.sleep(until: quietAt)
+                continue
+            }
+            if !pending { return }
+            // One that arrived before the quiet began is still waiting for this actor:
+            // let it be handled, while the replay is still kept back, then look again.
+            guard now < deadline else { throw SessionReplayDrainTimeout(timeoutMilliseconds: timeoutMs) }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
     }
 

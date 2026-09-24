@@ -205,6 +205,22 @@ struct ReplaySuppressionTests {
         await client.close()
     }
 
+    /// An update that has been read but not yet handled holds the drain: ending the
+    /// suppression then would deliver it after all. Once it is handled, the drain ends.
+    @Test func theDrainWaitsForEveryUpdateReadToBeHandled() async throws {
+        let (client, server) = try await connect(ReplayingAgent())
+        defer { server.cancel() }
+        client.sessionUpdates.arrived("replay-session")
+        await #expect(throws: SessionReplayDrainTimeout.self) {
+            try await client.waitForSessionUpdateDrain(
+                sessionId: "replay-session", idleMilliseconds: 20, timeoutMilliseconds: 200)
+        }
+        client.sessionUpdates.finished("replay-session")
+        try await client.waitForSessionUpdateDrain(
+            sessionId: "replay-session", idleMilliseconds: 20, timeoutMilliseconds: 200)
+        await client.close()
+    }
+
     /// While suppressing a session, the tap hides that session's `session/update`
     /// notifications from the agent and nothing else — acpx's
     /// `isSessionUpdateNotification` needs a `session/update` without an `id`.
