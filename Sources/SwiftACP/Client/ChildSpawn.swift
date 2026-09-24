@@ -151,8 +151,9 @@ enum ChildSpawn {
     /// Where the spawn itself cannot change into `cwd` — glibc before 2.29, without
     /// `posix_spawn_file_actions_addchdir_np` — the child does: it starts as a shell that
     /// changes into `cwd` and becomes `executable`, in the same process. The directory
-    /// is looked at first, so one the child could not change into fails the spawn as
-    /// the spawn's own `chdir` would. `executable`'s `argv[0]` becomes its path.
+    /// and the program are looked at first, so what the child could not change into or
+    /// run fails the spawn as the spawn's own `chdir` and `execve` would, instead of
+    /// ending the shell with 126 or 127. `executable`'s `argv[0]` becomes its path.
     private static func changingDirectory(
         _ executable: String, argv: [String], cwd: String
     ) throws -> (program: String, argv: [String]) {
@@ -160,7 +161,36 @@ enum ChildSpawn {
         guard stat(cwd, &status) == 0 else { throw SpawnError(code: errno) }
         guard UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFDIR) else { throw SpawnError(code: ENOTDIR) }
         guard access(cwd, X_OK) == 0 else { throw SpawnError(code: EACCES) }
+        let failure = runnability(of: executable, from: cwd)
+        guard failure == 0 else { throw SpawnError(code: failure) }
         return ("/bin/sh", ["/bin/sh", "-c", #"cd -- "$0" && exec "$@""#, cwd, executable] + argv.dropFirst())
+    }
+
+    /// What `execve` from `cwd` would make of `program`, short of running it: its
+    /// ``executability(of:)``, and for a script its interpreter's, as Linux follows
+    /// interpreters — up to five deep, a `#!` line naming none `ENOEXEC`. What the file
+    /// holds otherwise is left to `execve`.
+    private static func runnability(of program: String, from cwd: String, depth: Int = 0) -> Int32 {
+        let path = program.hasPrefix("/") ? program : "\(cwd)/\(program)"
+        let failure = executability(of: path)
+        guard failure == 0, let line = scriptLine(of: path) else { return failure }
+        guard depth < 5 else { return ELOOP }
+        let name = line.drop { $0 == 0x20 || $0 == 0x09 }.prefix { $0 != 0x20 && $0 != 0x09 && $0 != 0 }
+        guard !name.isEmpty else { return ENOEXEC }
+        return runnability(of: String(decoding: name, as: UTF8.self), from: cwd, depth: depth + 1)
+    }
+
+    /// The `#!` line of the script at `path` as Linux's `binfmt_script` reads it — what
+    /// follows `#!` within the file's first 256 bytes, to the end of the line, trailing
+    /// blanks dropped — or `nil` for a file that is no script or cannot be read.
+    private static func scriptLine(of path: String) -> [UInt8]? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        let head = [UInt8]((try? handle.read(upToCount: 256)) ?? Data())
+        guard head.starts(with: [0x23, 0x21]) else { return nil }
+        var line = head.dropFirst(2).prefix { $0 != 0x0A }
+        while let last = line.last, last == 0x20 || last == 0x09 { line = line.dropLast() }
+        return Array(line)
     }
 
     #if canImport(Darwin)

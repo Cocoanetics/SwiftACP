@@ -45,6 +45,49 @@ struct ChildSpawnTests {
         }
     }
 
+    /// What cannot run fails the spawn with the error `execve` gives, however the child
+    /// gets into its directory — also where it changes into it itself, through a shell
+    /// that would start and end with 126 or 127 instead (#113 review). A script runs
+    /// either way when its interpreter can.
+    @Test func whatCannotRunFailsTheSpawnEitherWay() async throws {
+        let directory = try Self.workspace()
+        let files = FileManager.default
+        try files.createDirectory(atPath: directory + "/folder", withIntermediateDirectories: false)
+        for (name, text, mode) in [
+            ("plain", "echo plain\n", 0o644), ("orphan", "#!/nonexistent/interpreter\n", 0o755),
+            ("runs", "#!/bin/sh\necho ran\n", 0o755)
+        ] {
+            files.createFile(
+                atPath: "\(directory)/\(name)", contents: Data(text.utf8), attributes: [.posixPermissions: mode])
+        }
+        for withoutChangeDirectory in [false, true] {
+            for (command, code) in [
+                ("./missing", ENOENT), ("./plain", EACCES), ("./folder", EACCES), ("./orphan", ENOENT),
+                ("./plain/below", ENOTDIR)
+            ] {
+                #expect(
+                    throws: ChildProcess.SpawnError(code: code),
+                    "\(command), withoutChangeDirectory: \(withoutChangeDirectory)"
+                ) {
+                    _ = try ChildProcess.spawn(
+                        command: command, arguments: [], cwd: directory, environment: nil,
+                        withoutChangeDirectory: withoutChangeDirectory)
+                }
+            }
+            let process = try ChildProcess.spawn(
+                command: "./runs", arguments: [], cwd: directory, environment: nil,
+                withoutChangeDirectory: withoutChangeDirectory)
+            let output = TerminalOutput(limit: 4096)
+            let printed: String = await withCheckedContinuation { continuation in
+                process.start(onOutput: { output.append($0) }, onExit: { _ in
+                    continuation.resume(returning: output.read().text)
+                })
+            }
+            process.stopReading()
+            #expect(printed == "ran\n", "withoutChangeDirectory: \(withoutChangeDirectory)")
+        }
+    }
+
     /// A NUL anywhere in what a child is started with fails the spawn, as Node refuses
     /// it, instead of running what comes before it; an agent's launch fails as acpx's
     /// `AgentSpawnError` has it (#113 review).
