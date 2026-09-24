@@ -76,10 +76,10 @@ public struct PermissionRules: Codable, Sendable, Equatable {
         return request.toolCall.title.flatMap { titleHead($0.trimmedLikeJavaScript) }
     }
 
-    /// The title up to its first `:` or whitespace, trimmed; `nil` when that is empty.
+    /// acpx's `title.split(/[:\s]/, 1)[0]?.trim()`: the title up to its first `:` or
+    /// whitespace, trimmed; `nil` when that is empty.
     static func titleHead(_ title: String) -> String? {
-        let head = title.split(maxSplits: 1, omittingEmptySubsequences: false) { $0 == ":" || $0.isWhitespace }
-            .first.map { String($0).trimmedLikeJavaScript } ?? ""
+        let head = title.javaScriptHead.trimmedLikeJavaScript
         return head.isEmpty ? nil : head
     }
 }
@@ -130,6 +130,17 @@ extension RequestPermissionResponse {
 }
 
 extension String {
+    /// `split(/[:\s]/, 1)[0]`: the text up to its first `:` or JavaScript whitespace —
+    /// all of it without one. JavaScript's `\s`, `trim`'s set, is not Swift's
+    /// `isWhitespace`: it has U+FEFF and not U+0085, so a title splits where acpx splits
+    /// it.
+    public var javaScriptHead: String {
+        guard let end = unicodeScalars.firstIndex(where: { scalar in
+            scalar == ":" || TerminalOutputLimit.isJavaScriptWhitespace(scalar)
+        }) else { return self }
+        return String(unicodeScalars[..<end])
+    }
+
     /// `String.prototype.trim`: JavaScript's whitespace and line terminators.
     var trimmedLikeJavaScript: String {
         trimmingCharacters(in: CharacterSet(

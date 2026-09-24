@@ -291,7 +291,7 @@ final class OutputRenderer: @unchecked Sendable {
             renderTool(
                 id: update.toolCallId, title: update.title, status: update.status, kind: update.kind,
                 locations: update.locations, rawInput: update.rawInput, rawOutput: update.rawOutput,
-                content: update.content)
+                content: update.content, clearing: update.nullMembers)
         case .plan(let entries):
             beginSection()
             writeLine(bold("[plan]"))
@@ -308,7 +308,7 @@ final class OutputRenderer: @unchecked Sendable {
     private func renderTool(
         id: String, title: String?, status: ToolCallStatus?, kind: ToolKind?,
         locations: [ToolCallLocation]?, rawInput: JSONValue?, rawOutput: JSONValue?,
-        content: [ToolCallContent]?
+        content: [ToolCallContent]?, clearing nulled: Set<String> = []
     ) {
         let state = toolStates[id] ?? {
             let created = ToolRenderState(id: id)
@@ -316,13 +316,15 @@ final class OutputRenderer: @unchecked Sendable {
             return created
         }()
 
-        if let title, !title.trimmingCharacters(in: .whitespaces).isEmpty { state.title = title }
-        if let status { state.status = status }
-        if let kind { state.kind = kind }
-        if let locations { state.locations = locations }
-        if let rawInput { state.rawInput = rawInput }
-        if let rawOutput { state.rawOutput = rawOutput }
-        if let content { state.content = content }
+        // acpx's `mergeToolTitle` / `mergeToolPayloadState`: a title that is not blank,
+        // and each other member that was sent — `null` clearing it.
+        if let title, !title.javaScriptTrimmed.isEmpty { state.title = title }
+        if status != nil || nulled.contains("status") { state.status = status }
+        if kind != nil || nulled.contains("kind") { state.kind = kind }
+        if locations != nil || nulled.contains("locations") { state.locations = locations }
+        if rawInput != nil || nulled.contains("rawInput") { state.rawInput = rawInput }
+        if rawOutput != nil || nulled.contains("rawOutput") { state.rawOutput = rawOutput }
+        if content != nil || nulled.contains("content") { state.content = content }
 
         let isFinal = state.status == .completed || state.status == .failed
         if isFinal {

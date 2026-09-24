@@ -35,12 +35,13 @@ struct OutputRendererTests {
     /// Render `render` against a fresh renderer in `format`, returning what reached
     /// stdout and stderr. Color is off so the assertions see plain text.
     static func capture(
-        _ format: OutputFormat, _ render: (OutputRenderer) -> Void
+        _ format: OutputFormat, suppressReads: Bool = false, _ render: (OutputRenderer) -> Void
     ) -> (out: String, err: String) {
         let out = Capture()
         let err = Capture()
-        let renderer = OutputRenderer(
-            options: RenderOptions(format: format), out: out.write, err: err.write, color: false)
+        var options = RenderOptions(format: format)
+        options.suppressReads = suppressReads
+        let renderer = OutputRenderer(options: options, out: out.write, err: err.write, color: false)
         render(renderer)
         return (out.text, err.text)
     }

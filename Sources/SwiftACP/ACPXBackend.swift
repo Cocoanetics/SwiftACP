@@ -38,7 +38,7 @@ public protocol ACPXBackend: Sendable {
         agentCommand: String?, olderThanDays: Int?, includeHistory: Bool, dryRun: Bool
     ) async -> PruneResult
     func runPrompt(
-        sessionId: String, text: String, blocks: [PromptBlock]?, wait: Bool,
+        sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
         permissionMode: String?, nonInteractivePermissions: String?, streamWire: Bool,
         permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, model: String?
     ) async throws -> String
