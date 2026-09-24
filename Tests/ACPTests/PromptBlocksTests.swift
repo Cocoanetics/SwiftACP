@@ -275,12 +275,16 @@ import Testing
                 .object([
                     "type": .string("resource_link"), "uri": .string("file:///tmp/a.pdf"), "name": .string("a.pdf"),
                     "title": .null, "_meta": .object(["k": .integer(1)])
-                ])
+                ]),
+                .object(["type": .string("text"), "text": .string("t"), "_meta": .null, "x-custom": .bool(true)])
             ])
             let blocks = try promptBlocks(log)
             #expect(blocks.first?["mimeType"] as? String == "image/bmp")
-            #expect(blocks.last?["title"] is NSNull)
-            #expect((blocks.last?["_meta"] as? [String: Any])?["k"] as? Int == 1)
+            #expect(blocks[1]["title"] is NSNull)
+            #expect((blocks[1]["_meta"] as? [String: Any])?["k"] as? Int == 1)
+            // What a block's type does not hold goes on too (#114 review).
+            #expect(blocks.last?["_meta"] is NSNull)
+            #expect(blocks.last?["x-custom"] as? Bool == true)
         }
     }
 
