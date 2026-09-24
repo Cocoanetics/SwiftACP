@@ -153,6 +153,18 @@ struct ModelApplicationTests {
         #expect(!ModelApplication.supportsLegacyClaudeCodeModelMetadata(nil))
     }
 
+    /// A configured agent's command line carries its args — acpx's `command` plus each
+    /// `quoteCommandArg`, or `renderArgvIdentity` — so an entry launching the adapter
+    /// through `npx` is still Claude's (#95 review).
+    @Test(arguments: [
+        #"{"command":"npx","args":["-y","@agentclientprotocol/claude-agent-acp"]}"#,
+        #"{"argv":["npx","-y","@agentclientprotocol/claude-agent-acp"]}"#
+    ])
+    func aConfiguredAgentIsKnownByItsArgs(entry: String) throws {
+        let agent = try ConfigFields.agent(try WireJSON.parse(entry), name: "claude", "config.json")
+        #expect(ModelApplication.supportsLegacyClaudeCodeModelMetadata(agent.command))
+    }
+
     // MARK: - Carrying advertised state across responses
 
     @Test func advertisedStateFollowsTheLatestConfigOptions() {
