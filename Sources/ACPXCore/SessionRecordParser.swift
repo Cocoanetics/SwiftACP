@@ -251,11 +251,17 @@ public enum SessionRecordParser {
         if case .number(let version)? = parsed["protocolVersion"], isInteger(version) {
             protocolVersion = parsed["protocolVersion"]
         }
+        let counts = ["segment_count", "max_segment_bytes", "max_segments"]
         let normalized: [String: WireJSON?] = [
             "name": parsed["name"],
             "agent_session_id": parsed["agentSessionId"],
-            "event_log": parsed["eventLog"],
-            "protocol_version": protocolVersion,
+            "last_seq": modelInteger(raw["last_seq"]),
+            "pid": modelInteger(raw["pid"]),
+            "last_agent_exit_code": modelInteger(raw["last_agent_exit_code"]),
+            "event_log": parsed["eventLog"].map { log in
+                counts.reduce(log) { $0.replacing($1, with: modelInteger($0[$1]) ?? .null) }
+            },
+            "protocol_version": modelInteger(protocolVersion),
             "agent_capabilities": parsed["agentCapabilities"],
             "cumulative_token_usage": parsed["cumulative_token_usage"],
             "cumulative_cost": parsed["cumulative_cost"],
@@ -281,6 +287,14 @@ public enum SessionRecordParser {
             ("read_text_file", .bool(false)), ("write_text_file", .bool(false)), ("terminal", .bool(false))
         ]))
     ])
+
+    /// An integer beyond what the model's `Int` holds — acpx takes any finite integral
+    /// number — read as the largest one a JavaScript number holds exactly, with its
+    /// sign, so the record still reads. The printed record keeps the stored value.
+    static func modelInteger(_ value: WireJSON?) -> WireJSON? {
+        guard case .number(let number)? = value, isInteger(number), abs(number) >= 9.2e18 else { return value }
+        return .number((number < 0 ? -1 : 1) * 9_007_199_254_740_992)
+    }
 
     /// The `acpx` fields acpx reads (`SessionAcpxState`).
     static let acpxStateKeys: Set<String> = [
