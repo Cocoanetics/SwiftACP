@@ -103,10 +103,10 @@ import Testing
         #expect(tracker.match(failureText: "The JSON-RPC connection is closed") == nil)
     }
 
-    /// Each attempt at the prompt starts afresh — acpx resets its tracker just before
-    /// it sends `session/prompt` — so an error from connecting the agent does not stand
-    /// in for how the turn failed.
-    @Test func thePromptStartsTheTrackerAfresh() throws {
+    /// Each attempt at the prompt starts afresh — acpx resets its tracker as the attempt
+    /// starts, before it checks and sends the prompt — so an error from connecting the
+    /// agent does not stand in for how the attempt fails.
+    @Test func eachPromptAttemptStartsTheTrackerAfresh() throws {
         var tracker = AcpErrorTracker()
         tracker.observe(
             try Self.json(#"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"Mode rejected"}}"#),
@@ -114,9 +114,13 @@ import Testing
         tracker.observe(
             try Self.json(#"{"jsonrpc":"2.0","id":"w1","error":{"code":-32603,"message":"refused"}}"#),
             direction: .outbound)
+        // Seeing the prompt go out is no reset: the attempt starts before it.
         tracker.observe(
             try Self.json(#"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{}}"#), direction: .outbound)
+        #expect(tracker.match(failureText: "anything at all")?.message == "Mode rejected")
+        tracker.reset()
         #expect(tracker.match(failureText: "refused") == nil)
+        #expect(tracker.match(failureText: "anything at all") == nil)
 
         tracker.observe(
             try Self.json(#"{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"Internal error"}}"#),

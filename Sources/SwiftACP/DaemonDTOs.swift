@@ -277,8 +277,6 @@ public enum PromptBlockError: LocalizedError, Equatable {
     case binaryResource(index: Int)
     case tooLarge(requestBytes: Int, limit: Int)
     case emptyPrompt
-    /// The agent's `initialize` did not advertise the capability this block needs.
-    case capabilityUnsupported(index: Int, capability: String, agent: String)
 
     public var errorDescription: String? {
         switch self {
@@ -311,11 +309,6 @@ public enum PromptBlockError: LocalizedError, Equatable {
                 """
         case .emptyPrompt:
             return "prompt must have text, blocks, or both"
-        case .capabilityUnsupported(let index, let capability, let agent):
-            return """
-                prompt[\(index)]: agent "\(agent)" does not advertise \
-                promptCapabilities.\(capability), so it cannot accept this block
-                """
         }
     }
 }
