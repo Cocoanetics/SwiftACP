@@ -42,6 +42,10 @@ struct AcpxdCommand: AsyncParsableCommand {
     // the body keeps that build green; the daemon then refuses to run if invoked.
     func run() async throws {
         #if Server
+        // The CLI that starts acpxd reads its stderr while it starts, then goes: a write
+        // after that must fail, not end the daemon — as Node, which runs acpx's queue
+        // owner, never lets SIGPIPE end it. Children start with it at its default.
+        signal(SIGPIPE, SIG_IGN)
         bootstrapACPXLogging()
         let log = Logger(label: "com.cocoanetics.acpx.acpxd")
 

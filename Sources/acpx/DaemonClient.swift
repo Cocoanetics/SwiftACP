@@ -99,10 +99,22 @@ struct DaemonUnavailable: Error {
     /// Why the daemon couldn't be reached (a spawn-launch failure, or a timeout),
     /// woven into the user-facing CLI error.
     let detail: String?
-    init(_ detail: String? = nil) { self.detail = detail }
+    /// Why the acpxd this CLI started ended before it could be reached, in acpx's words
+    /// for its queue owner (``DaemonStartup/failureMessage``): the whole message then.
+    let startupFailure: String?
+    init(_ detail: String? = nil) {
+        self.detail = detail
+        startupFailure = nil
+    }
+
+    init(startupFailure: String) {
+        detail = nil
+        self.startupFailure = startupFailure
+    }
 
     /// Actionable, user-facing message for the CLI's error output.
     var cliMessage: String {
+        if let startupFailure { return startupFailure }
         var message = "could not reach the acpxd daemon"
         if let detail { message += " (\(detail))" }
         return message
@@ -131,26 +143,40 @@ enum DaemonClient {
     /// `spawnIfNeeded` is true, launches `acpxd` and waits for it to record its port;
     /// otherwise throws if none is running. `configure` runs on the proxy before
     /// connecting (e.g. to install a log handler). Throws ``DaemonUnavailable``.
+    ///
+    /// - Parameter daemonExecutable: the `acpxd` to start; the one beside this CLI, or
+    ///   on `PATH`, when `nil`.
     static func connect(
-        spawnIfNeeded: Bool,
+        spawnIfNeeded: Bool, daemonExecutable: String? = nil,
         configure: @Sendable (MCPServerProxy) async -> Void = { _ in }
     ) async throws -> MCPServerProxy {
         if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
             return proxy
         }
         guard spawnIfNeeded else { throw DaemonUnavailable("no daemon is running") }
-        if let spawnError = spawnDaemon() {
+        let startup: DaemonStartup
+        do {
+            startup = try DaemonStartup.launch(daemonExecutable ?? daemonExecutablePath())
+        } catch {
             // Couldn't even launch acpxd — retrying is pointless.
-            throw DaemonUnavailable("launching acpxd failed: \(spawnError.localizedDescription)")
+            throw DaemonUnavailable("launching acpxd failed: \(error.localizedDescription)")
         }
-        // Wait for the freshly-spawned daemon to come up and record its port. A second
-        // acpxd that loses the singleton race exits on its own, so we still resolve to
-        // the one running manager.
+        // Once the daemon answers, what it writes is no longer kept.
+        defer { startup.stopCapture() }
+        // Wait for the freshly-spawned daemon to come up and record its port, as acpx
+        // waits for its queue owner: one that ended unsuccessfully meanwhile failed to
+        // start, and waiting on is pointless. One that lost the singleton race exits
+        // cleanly, so we still resolve to the one running manager.
         for _ in 0 ..< 60 {
             try? await Task.sleep(nanoseconds: 150_000_000)
             if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
                 return proxy
             }
+            if startup.failed { throw DaemonUnavailable(startupFailure: startup.failureMessage) }
+        }
+        // What it said, if anything, says more than that it could not be reached.
+        if startup.exit != nil || startup.wroteToStderr {
+            throw DaemonUnavailable(startupFailure: startup.failureMessage)
         }
         throw DaemonUnavailable("it did not become reachable within ~9s of being started")
     }
@@ -343,27 +369,6 @@ enum DaemonClient {
     static func controlFailure(_ error: Error) -> Error {
         guard case MCPServerProxyError.toolError(let message) = error else { return error }
         return DaemonControlFailure(message: message)
-    }
-
-    /// Launch a detached `acpxd`. Returns the launch error if the process couldn't
-    /// be started (e.g. the binary isn't found), or `nil` on success. A spawned
-    /// daemon that finds another already running exits via its singleton guard.
-    @discardableResult
-    static func spawnDaemon() -> Error? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: daemonExecutablePath())
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        // Detach into its own session so it survives this CLI process exiting.
-        process.environment = ProcessInfo.processInfo.environment
-        process.qualityOfService = .utility
-        do {
-            try process.run()
-            return nil
-        } catch {
-            return error
-        }
     }
 
     private static func daemonExecutablePath() -> String {
