@@ -59,13 +59,14 @@ public enum SessionStore {
         readRecord(at: ACPXPaths.sessionRecordPath(recordId), expecting: recordId)
     }
 
-    /// Atomic write (temp + rename), pretty JSON + trailing newline. Nothing else is
-    /// written: acpx dropped the shared index in 0.19.0, so a checkpoint can no longer
-    /// fail on a second write after the record itself is committed.
+    /// Atomic write (temp + rename) of the file acpx would write for the record
+    /// (``SessionRecordSerializer``). Nothing else is written: acpx dropped the shared
+    /// index in 0.19.0, so a checkpoint can no longer fail on a second write after the
+    /// record itself is committed.
     public static func writeRecord(_ record: SessionRecord) throws {
         try createSessionsDirectory()
         let url = ACPXPaths.sessionRecordPath(record.acpxRecordId)
-        try atomicWrite(encodeForDisk(record, using: recordDiskEncoder), to: url)
+        try atomicWrite(SessionRecordSerializer.data(for: record), to: url)
     }
 
     /// `~/.acpx/sessions`, owner-only — the records and event logs inside hold whole
@@ -303,12 +304,7 @@ public enum SessionStore {
     }
 }
 
-// MARK: - JSON + atomic write helpers
-
-/// Encodes a value with the given encoder and appends acpx's trailing newline.
-func encodeForDisk<T: Encodable>(_ value: T, using encoder: JSONEncoder) throws -> Data {
-    try encoder.encode(value) + Data("\n".utf8)
-}
+// MARK: - Atomic write helpers
 
 /// Write `data` to `url` so a concurrent reader — another CLI invocation, `acpxd`, or
 /// a real npm `acpx` sharing the same store — sees either the old file or the new one,

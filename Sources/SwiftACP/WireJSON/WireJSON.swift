@@ -36,7 +36,7 @@ public indirect enum WireJSON: Equatable, Sendable {
 
     /// Nesting beyond this is refused rather than risking the stack of the thread the
     /// wire is read on; no ACP message comes near it.
-    static let maxDepth = 512
+    public static let maxDepth = 512
 
     // MARK: - Printing (JSON.stringify)
 
@@ -113,7 +113,7 @@ public indirect enum WireJSON: Equatable, Sendable {
     /// A JavaScript object lists its array-index keys ("0", "1", … up to 2³² − 2)
     /// first, in ascending numeric order, then every other key in creation order —
     /// so `{"b":1,"2":0}` round-trips as `{"2":0,"b":1}`.
-    static func orderedForPrinting(_ members: [Member]) -> [Member] {
+    public static func orderedForPrinting(_ members: [Member]) -> [Member] {
         let indexed = members.compactMap { member in arrayIndex(member.key).map { ($0, member) } }
         guard !indexed.isEmpty else { return members }
         let rest = members.filter { arrayIndex($0.key) == nil }

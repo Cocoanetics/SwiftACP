@@ -36,6 +36,9 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Live sessions held open between prompts, keyed by ACP session id.
     var live: [String: Live] = [:]
+    /// Set once the daemon lets its agents go for good (``releaseAll()``): from then on
+    /// no agent is started or held.
+    var stopping = false
 
     /// Serializes prompt turns per session so concurrent CLI/MCP callers can't drive
     /// one agent — or persist one record — at the same time (see ``SessionTurnQueue``).
@@ -134,6 +137,8 @@ actor ACPXDaemonBackend: ACPXBackend {
             // flight. Only the adapter process goes; the record — and the agent's
             // rollout behind it — stay, so the next turn reconnects with the new set.
             await evict(recordId)
+            // Its agent is gone: the record keeps no pid for it, as `closeSession` keeps none.
+            record.pid = nil
         }
         var acpx = record.acpx ?? SessionAcpxState()
         acpx.mcpServers = mcpServers
@@ -183,7 +188,26 @@ actor ACPXDaemonBackend: ACPXBackend {
             terminalOutputCeiling: ceiling, replacing: replacing)
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
-        let result = try await body(entry, &record)
+        let result: T
+        do {
+            result = try await body(entry, &record)
+        } catch {
+            // The agent may have gone meanwhile. How it is doing is saved whatever the
+            // control came to, as acpx's controls save it on their way out — but nothing
+            // of the control that failed.
+            var unchanged = findRecord(recordId) ?? current
+            // An agent whose connection is gone is ended first, as a turn's is: it can be
+            // running still, and its pid would be kept.
+            if ACPAgentConnection.endedTheConnection(error) { await entry.agent.close() }
+            unchanged.applyLifecycle(entry.agent.lifecycle)
+            do {
+                try SessionStore.writeRecord(unchanged)
+            } catch let writeError {
+                log.warning("session record write failed after a failed control op: \(writeError)")
+            }
+            throw error
+        }
+        record.applyLifecycle(entry.agent.lifecycle)
         record.lastUsedAt = nowISO()
         do {
             // The control op already took effect on the live agent, so don't fail
@@ -319,6 +343,25 @@ actor ACPXDaemonBackend: ACPXBackend {
     func evict(_ recordId: String) async {
         guard let entry = live.removeValue(forKey: recordId) else { return }
         await entry.agent.close()
+    }
+
+    /// Let every held agent go the way acpx's queue owner does when it stops
+    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
+    /// into its record, best effort — no pid, and the connection it was closed on unless
+    /// it had ended before.
+    func releaseAll() async {
+        // Before anything is let go: a turn whose agent this closes must not start another.
+        stopping = true
+        while let recordId = live.keys.first {
+            guard let entry = live.removeValue(forKey: recordId) else { continue }
+            await entry.agent.close()
+            // A turn the close ends saves its record first.
+            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
+            defer { Task { await turnQueue.release(recordId) } }
+            guard var record = findRecord(recordId) else { continue }
+            record.applyLifecycle(entry.agent.lifecycle)
+            try? SessionStore.writeRecord(record)
+        }
     }
 
     /// Whether `error` indicates the agent no longer has the session (ACP has no

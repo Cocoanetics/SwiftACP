@@ -56,7 +56,7 @@ public enum ConversationModel {
         case .text(let value):
             return .text(trimRuntimeText(value.text, maxRuntimeAgentTextChars))
         case .image(let image):
-            return .image(SessionMessageImage(source: "", mimeType: image.mimeType))
+            return .image(SessionMessageImage(source: "", size: .null, mimeType: image.mimeType))
         case .audio(let audio):
             return .audio(SessionMessageAudio(source: "", mimeType: audio.mimeType))
         case .resourceLink(let link):
@@ -107,9 +107,7 @@ public enum ConversationModel {
         guard fields.contains(where: { $0 != nil }) else { return false }
         record.cumulativeTokenUsage = tokens
         if let userId = promptMessageId ?? lastUserMessageId(record) {
-            var requests = record.requestTokenUsage ?? [:]
-            requests[userId] = tokens
-            record.requestTokenUsage = requests
+            setRequestUsage(tokens, for: userId, in: &record)
         }
         // acpx stamps the conversation and trims it here too, so a usage-only write
         // leaves the record as current as any other update would.
@@ -162,14 +160,20 @@ public enum ConversationModel {
         if let usage = tokenUsage(from: update) {
             record.cumulativeTokenUsage = usage
             if let userId = lastUserMessageId(record) {
-                var requests = record.requestTokenUsage ?? [:]
-                requests[userId] = usage
-                record.requestTokenUsage = requests
+                setRequestUsage(usage, for: userId, in: &record)
             }
         }
         if let cost = usageCost(from: update) {
             record.cumulativeCost = cost
         }
+    }
+
+    /// `request_token_usage[id] = usage`, as acpx's object takes it: an entry it lacks
+    /// comes last (``SessionRecord/requestUsageAddedSinceRead``), one it has keeps its place.
+    private static func setRequestUsage(_ usage: SessionTokenUsage, for id: String, in record: inout SessionRecord) {
+        var requests = record.requestTokenUsage ?? [:]
+        if requests.updateValue(usage, forKey: id) == nil { record.requestUsageAddedSinceRead.append(id) }
+        record.requestTokenUsage = requests
     }
 
     /// The token breakdown under `_meta.usage`, accepting both snake_case and
@@ -268,7 +272,7 @@ public enum ConversationModel {
                     text: trimRuntimeText(existing + text, maxRuntimeThinkingChars),
                     signature: signature)
         } else {
-            agent.content.append(.thinking(text: text, signature: nil))
+            agent.content.append(.thinking(text: text, signature: .null))
         }
     }
 
@@ -378,66 +382,6 @@ public enum ConversationModel {
             output: output ?? existing?.output)
     }
 
-    // MARK: - Trimming (trimConversationForRuntime)
-
-    private static func trimForRuntime(_ record: inout SessionRecord) {
-        if record.messages.count > maxRuntimeMessages {
-            record.messages = Array(record.messages.suffix(maxRuntimeMessages))
-        }
-        record.messages = record.messages.map(trimMessage)
-        if let usage = record.requestTokenUsage, usage.count > maxRuntimeRequestTokenUsage {
-            // Keep the most recent entries (insertion order isn't preserved by a
-            // dictionary, so this just bounds growth, matching acpx's intent).
-            record.requestTokenUsage = Dictionary(
-                usage.suffix(maxRuntimeRequestTokenUsage)) { _, new in new }
-        }
-    }
-
-    private static func trimMessage(_ message: SessionMessage) -> SessionMessage {
-        switch message {
-        case .user(var user):
-            user.content = user.content.map { content in
-                if case .text(let text) = content {
-                    return .text(trimRuntimeText(text, maxRuntimeAgentTextChars))
-                }
-                return content
-            }
-            return .user(user)
-        case .agent(var agent):
-            agent.content = agent.content.map(trimAgentContent)
-            agent.toolResults = agent.toolResults.mapValues(trimToolResult)
-            return .agent(agent)
-        case .resume:
-            return message
-        }
-    }
-
-    private static func trimAgentContent(_ content: SessionAgentContent) -> SessionAgentContent {
-        switch content {
-        case .text(let text):
-            return .text(trimRuntimeText(text, maxRuntimeAgentTextChars))
-        case .thinking(let text, let signature):
-            return .thinking(text: trimRuntimeText(text, maxRuntimeThinkingChars), signature: signature)
-        case .toolUse(var tool):
-            tool.rawInput = trimRuntimeText(tool.rawInput, maxRuntimeToolIOChars)
-            return .toolUse(tool)
-        default:
-            return content
-        }
-    }
-
-    private static func trimToolResult(_ result: SessionToolResult) -> SessionToolResult {
-        var result = result
-        if case .object(var object) = result.content, case .string(let text)? = object["Text"] {
-            object["Text"] = .string(trimRuntimeText(text, maxRuntimeToolIOChars))
-            result.content = .object(object)
-        }
-        if case .string(let output)? = result.output {
-            result.output = .string(trimRuntimeText(output, maxRuntimeToolIOChars))
-        }
-        return result
-    }
-
     // MARK: - Helpers
 
     private static func nextUserMessageId() -> String { UUID().uuidString.lowercased() }
@@ -474,8 +418,7 @@ public enum ConversationModel {
     private static func toRawInput(_ value: JSONValue?) -> String {
         guard let value, value != .null else { return "{}" }
         if case .string(let text) = value { return trimRuntimeText(text, maxRuntimeToolIOChars) }
-        let json = (try? JSONEncoder().encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return trimRuntimeText(json, maxRuntimeToolIOChars)
+        return trimRuntimeText(javaScriptJSON(value) ?? "{}", maxRuntimeToolIOChars)
     }
 
     /// `toToolResultContent` — a tool's output as `{ "Text": <trimmed string> }`.
@@ -484,15 +427,15 @@ public enum ConversationModel {
         if case .string(let text) = value {
             return .object(["Text": .string(trimRuntimeText(text, maxRuntimeToolIOChars))])
         }
-        let json =
-            (try? JSONEncoder().encode(value)).map { String(decoding: $0, as: UTF8.self) }
-            ?? "[Unserializable value]"
+        let json = javaScriptJSON(value) ?? "[Unserializable value]"
         return .object(["Text": .string(trimRuntimeText(json, maxRuntimeToolIOChars))])
     }
 
-    /// `trimRuntimeText` — truncate to `maxChars`, appending an ellipsis.
-    static func trimRuntimeText(_ value: String, _ maxChars: Int) -> String {
-        guard value.count > maxChars else { return value }
-        return String(value.prefix(max(0, maxChars - 3))) + "..."
+    /// `JSON.stringify(value)`, with its escapes and number forms. The members come
+    /// sorted: the order the agent sent them in is gone once the value is a `JSONValue`.
+    private static func javaScriptJSON(_ value: JSONValue) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(value)).flatMap { WireJSON(parsing: $0) }?.stringified
     }
 }

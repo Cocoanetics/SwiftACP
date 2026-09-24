@@ -48,6 +48,8 @@ public actor ACPAgentConnection {
     var sessionRoots: [SessionId: String] = [:]
     /// The `cwd` of each `session/new` still waiting for its answer.
     var sessionRootsBeingCreated: [UUID: String] = [:]
+    /// Told each time a session is open (``setSessionOpenedObserver(_:)``).
+    private var sessionOpened: (@Sendable () -> Void)?
 
     /// Sessions with a `session/prompt` in flight.
     var promptingSessionIds: Set<SessionId> = []
@@ -137,7 +139,15 @@ public actor ACPAgentConnection {
     /// Whether `error` is this layer reporting the connection ended — a request sent
     /// after, or pending when, the agent exited or the connection was closed.
     public static func isConnectionClosed(_ error: Error) -> Bool {
-        (error as? JSONRPCPeerError) == .closed
+        (error as? JSONRPCPeerError) == .closed || error is AgentDisconnectedError
+    }
+
+    /// Whether `error` came of the connection ending: it closed
+    /// (``isConnectionClosed(_:)``), or the agent passed the message limit, which ends it
+    /// (``AcpMessageLimitError``). The agent can still be running then, until what ends
+    /// it — `ACPAgent.close()` awaits that — is done.
+    public static func endedTheConnection(_ error: Error) -> Bool {
+        isConnectionClosed(error) || error is AcpMessageLimitError
     }
 
     /// Forget that the connection ended, as if its end had been read but not yet
@@ -290,7 +300,15 @@ public actor ACPAgentConnection {
         defer { sessionRootsBeingCreated[creation] = nil }
         let response: NewSessionResponse = try await send("session/new", request)
         sessionRoots[response.sessionId] = request.cwd
+        sessionOpened?()
         return response
+    }
+
+    /// Run `observer` each time a session is open — `session/new`, `session/load` or
+    /// `session/resume` answered — however it was opened. ``ACPAgent`` notes the agent's
+    /// processes then, as acpx's `captureAgentDescendants` does.
+    public func setSessionOpenedObserver(_ observer: (@Sendable () -> Void)?) {
+        sessionOpened = observer
     }
 
     /// The root of `sessionId`: the one registered for it, else — for a session being
@@ -309,7 +327,9 @@ public actor ACPAgentConnection {
     public func loadSession(_ request: LoadSessionRequest) async throws -> LoadSessionResponse {
         let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
         do {
-            return try await send("session/load", request)
+            let response: LoadSessionResponse = try await send("session/load", request)
+            sessionOpened?()
+            return response
         } catch {
             sessionRoots[request.sessionId] = previous
             throw error
@@ -319,7 +339,9 @@ public actor ACPAgentConnection {
     public func resumeSession(_ request: ResumeSessionRequest) async throws -> ResumeSessionResponse {
         let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
         do {
-            return try await send("session/resume", request)
+            let response: ResumeSessionResponse = try await send("session/resume", request)
+            sessionOpened?()
+            return response
         } catch {
             sessionRoots[request.sessionId] = previous
             throw error

@@ -12,7 +12,7 @@ import Musl
 /// Runs the commands an agent asks the client for — acpx's `TerminalManager`.
 ///
 /// - `terminal/create` starts the command in its own session and process group (see
-///   ``TerminalProcess``), in the request's `cwd` or the manager's. Given no `args`,
+///   ``ChildProcess``), in the request's `cwd` or the manager's. Given no `args`,
 ///   a command that is not found as a program but reads like a shell command line
 ///   runs through `/bin/sh -c` instead.
 /// - Output from stdout and stderr is kept together up to the request's
@@ -135,25 +135,25 @@ public actor TerminalManager: ACPTerminalHandler {
 
     // MARK: - Starting
 
-    /// acpx's `spawnTerminalProcess`: the command as given, then — with no `args`, not
+    /// acpx's `spawnChildProcess`: the command as given, then — with no `args`, not
     /// found, not an existing path, and shell syntax or whitespace in it — the same
     /// line through `/bin/sh -c`. A failure is Node's `spawn <command> <code>`.
-    private static func start(_ request: CreateTerminalRequest, cwd: String) throws -> TerminalProcess {
+    private static func start(_ request: CreateTerminalRequest, cwd: String) throws -> ChildProcess {
         // What Node's `spawn` refuses before starting anything — after the approval, as
         // in acpx, so a command that was asked about is refused rather than cut short.
         try NodeSpawnArguments.validate(command: request.command, args: request.args ?? [], cwd: cwd, env: request.env)
         let environment = Self.environment(request.env)
         do {
-            return try TerminalProcess.spawn(
+            return try ChildProcess.spawn(
                 command: request.command, arguments: request.args ?? [], cwd: cwd, environment: environment)
-        } catch let error as TerminalProcess.SpawnError {
+        } catch let error as ChildProcess.SpawnError {
             guard request.args == nil, error.code == ENOENT, runsThroughShell(request.command, cwd: cwd) else {
                 throw TerminalError.spawnFailed(command: request.command, code: error.name)
             }
             do {
-                return try TerminalProcess.spawn(
+                return try ChildProcess.spawn(
                     command: "/bin/sh", arguments: ["-c", request.command], cwd: cwd, environment: environment)
-            } catch let error as TerminalProcess.SpawnError {
+            } catch let error as ChildProcess.SpawnError {
                 throw TerminalError.spawnFailed(command: "/bin/sh", code: error.name)
             }
         }
@@ -196,7 +196,7 @@ public actor TerminalManager: ACPTerminalHandler {
     /// command started just before it went.
     private func recordExit(of terminalId: String, status: Int32?) {
         guard let terminal = terminals[terminalId] else { return }
-        let status = TerminalProcess.exitStatus(status)
+        let status = ChildProcess.exitStatus(status)
         terminal.exitStatus = status
         terminal.descendants.rootExited()
         terminal.descendants.capture(rootIsRunning: false)
@@ -264,7 +264,7 @@ public actor TerminalManager: ACPTerminalHandler {
 
 /// One terminal's state, touched only on its ``TerminalManager``.
 private final class ManagedTerminal {
-    let process: TerminalProcess
+    let process: ChildProcess
     let output: TerminalOutput
     let descendants: ProcessDescendants
     /// Set as soon as the command has exited.
@@ -273,7 +273,7 @@ private final class ManagedTerminal {
     var exitResponse: WaitForTerminalExitResponse?
     var exitWaiters: [CheckedContinuation<WaitForTerminalExitResponse, Never>] = []
 
-    init(process: TerminalProcess, output: TerminalOutput) {
+    init(process: ChildProcess, output: TerminalOutput) {
         self.process = process
         self.output = output
         self.descendants = ProcessDescendants(root: process.pid)

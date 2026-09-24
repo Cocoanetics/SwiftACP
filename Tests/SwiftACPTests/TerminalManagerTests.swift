@@ -223,7 +223,7 @@ struct TerminalManagerTests {
     /// an agent reads the output right after waiting — even when reading has fallen as
     /// far behind as it can: not started until the exit needs it.
     @Test func theExitIsReportedWithTheOutputBeforeItIn() async throws {
-        let process = try TerminalProcess.spawn(
+        let process = try ChildProcess.spawn(
             command: "printf", arguments: ["everything"], cwd: try workspace(), environment: nil)
         let output = TerminalOutput(limit: 100)
         let seenAtExit: String = await withCheckedContinuation { continuation in
@@ -241,7 +241,7 @@ struct TerminalManagerTests {
     /// more. (`yes` fills the pipe before the command exits, and a reader slower than
     /// `yes` keeps it from ever running dry.)
     @Test func aBackgroundWriterDoesNotHoldUpTheExit() async throws {
-        let process = try TerminalProcess.spawn(
+        let process = try ChildProcess.spawn(
             command: "sh", arguments: ["-c", "yes & sleep 0.2; exit 0"], cwd: try workspace(), environment: nil)
         // The sleep only bounds a hang, so the test fails rather than never ending.
         let reported = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -432,8 +432,8 @@ struct TerminalManagerTests {
     }
 
     /// Only stdin, stdout and stderr reach the command — not a descriptor this process
-    /// holds without close-on-exec. On Linux also the way it is done without glibc
-    /// 2.34's `closefrom` action.
+    /// holds without close-on-exec. On Linux also the ways it is done without glibc
+    /// 2.34's `closefrom` action, and without 2.29's `addchdir`, where the child is forked.
     @Test func onlyTheStandardDescriptorsReachTheCommand() async throws {
         let file = open("/dev/null", O_RDONLY)
         // The lowest free descriptor from 200 on, without close-on-exec.
@@ -441,14 +441,14 @@ struct TerminalManagerTests {
         close(file)
         defer { close(held) }
         #if os(Linux)
-        let (listing, ways) = ("/proc/self/fd", [false, true])
+        let (listing, ways) = ("/proc/self/fd", [(false, false), (true, false), (false, true)])
         #else
-        let (listing, ways) = ("/dev/fd", [false])
+        let (listing, ways) = ("/dev/fd", [(false, false)])
         #endif
-        for withoutCloseFrom in ways {
-            let process = try TerminalProcess.spawn(
+        for (withoutCloseFrom, withoutChangeDirectory) in ways {
+            let process = try ChildProcess.spawn(
                 command: "ls", arguments: [listing], cwd: try workspace(), environment: nil,
-                withoutCloseFrom: withoutCloseFrom)
+                withoutCloseFrom: withoutCloseFrom, withoutChangeDirectory: withoutChangeDirectory)
             let output = TerminalOutput(limit: 4096)
             let listed: String = await withCheckedContinuation { continuation in
                 process.start(onOutput: { output.append($0) }, onExit: { _ in
@@ -458,7 +458,7 @@ struct TerminalManagerTests {
             process.stopReading()
             let descriptors = listed.split(separator: "\n").map(String.init)
             #expect(descriptors.contains("2"), "\(listed)")
-            #expect(!descriptors.contains(String(held)), "withoutCloseFrom: \(withoutCloseFrom)")
+            #expect(!descriptors.contains(String(held)), "\(withoutCloseFrom), \(withoutChangeDirectory)")
         }
     }
 
