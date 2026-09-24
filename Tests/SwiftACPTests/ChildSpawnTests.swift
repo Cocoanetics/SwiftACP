@@ -44,5 +44,27 @@ struct ChildSpawnTests {
             }
         }
     }
+
+    /// A NUL anywhere in what a child is started with fails the spawn, as Node refuses
+    /// it, instead of running what comes before it; an agent's launch fails as acpx's
+    /// `AgentSpawnError` has it (#113 review).
+    @Test func aNULFailsTheSpawn() async throws {
+        let directory = try Self.workspace()
+        let nul = "a\u{0}b"
+        for (command, arguments, environment) in [
+            ("echo" + nul, [String](), [String: String]?.none), ("echo", [nul], nil), ("echo", [], ["X": nul]),
+            ("echo", [], [nul: "x"])
+        ] {
+            #expect(throws: ChildProcess.SpawnError(code: EINVAL)) {
+                _ = try ChildProcess.spawn(
+                    command: command, arguments: arguments, cwd: directory, environment: environment)
+            }
+        }
+        let error = await #expect(throws: AgentLaunchError.self) {
+            _ = try await ACPAgent.launch(
+                agent: "echo", argv: ["echo", nul], cwd: directory, permission: .approveAll, inheritStderr: false)
+        }
+        #expect(error?.localizedDescription == "Failed to spawn agent command: echo")
+    }
 }
 #endif

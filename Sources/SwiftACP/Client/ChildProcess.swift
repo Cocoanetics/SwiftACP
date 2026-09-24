@@ -83,6 +83,10 @@ final class ChildProcess: @unchecked Sendable {
         withoutChangeDirectory: Bool = false
     ) throws -> ChildProcess {
         let variables = environment ?? ProcessInfo.processInfo.environment
+        // C ends a string at its first NUL, so one holding it would run as something
+        // else; Node refuses it outright (`ERR_INVALID_ARG_VALUE`), and so does this.
+        let strings = [command, cwd] + arguments + variables.flatMap { [$0.key, $0.value] }
+        guard !strings.contains(where: { $0.contains("\0") }) else { throw SpawnError(code: EINVAL) }
         let executable = try ChildSpawn.resolveExecutable(command, cwd: cwd, path: variables["PATH"])
         var opened: [Int32] = []
         func pipe(nonBlockingReadEnd: Bool = true) throws -> (read: Int32, write: Int32) {
