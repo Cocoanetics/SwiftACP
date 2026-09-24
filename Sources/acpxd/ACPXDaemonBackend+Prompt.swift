@@ -29,6 +29,8 @@ extension ACPXDaemonBackend {
     ///   - permissionMode: how this turn's permission requests and writes are
     ///     answered — see ``TurnPermissions``. `nil` approves everything.
     ///   - nonInteractivePermissions: `deny` (the default) or `fail`.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none —
+    ///     omitted, the daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -36,7 +38,7 @@ extension ACPXDaemonBackend {
         sessionId rawSessionId: String, text: String,
         blocks: [PromptBlock]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil
+        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -44,6 +46,7 @@ extension ACPXDaemonBackend {
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(
             mode: permissionMode, nonInteractive: nonInteractivePermissions, rules: permissionPolicy)
+        let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         // Validate before queueing: a malformed block should fail at once, not after
         // waiting out someone else's turn. The daemon's transport has a ceiling, so
         // the request size is capped here (a direct client has nothing in the way).
@@ -90,8 +93,8 @@ extension ACPXDaemonBackend {
         let errors = TurnErrorWatch()
         let turn = Turn(
             recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers, blocks: content,
-            permissions: permissions, persister: persister, eventBuffer: eventBuffer, streamWire: streamWire,
-            errors: errors)
+            permissions: permissions, terminalOutputCeiling: ceiling, persister: persister,
+            eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
             try await attemptWithRetry(turn, wasHeld: wasHeld)
@@ -106,6 +109,8 @@ extension ACPXDaemonBackend {
         let mcpServers: [McpServerConfig]?
         let blocks: [ContentBlock]
         let permissions: TurnPermissions
+        /// The caller's cap on terminal output, `nil` for none.
+        let terminalOutputCeiling: Int?
         let persister: TurnPersister
         let eventBuffer: WireBuffer
         let streamWire: Bool
@@ -189,8 +194,13 @@ extension ACPXDaemonBackend {
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
+        // This turn's permissions — acpx sends the mode with every prompt and the queue
+        // owner applies it to that turn — are the live agent's from before connecting
+        // on, as is its cap on terminal output. Turns are serialized per session, so no
+        // other turn can be reading them meanwhile.
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
+            handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
             onReplacement: { await persister.adoptReplacement($0) },
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
@@ -214,11 +224,6 @@ extension ACPXDaemonBackend {
         }
         defer { entry.agent.rawWire.set(nil) }
 
-        // This turn's permissions: acpx sends the mode with every prompt and the queue
-        // owner applies it to that turn, so the live agent's handlers are swapped per
-        // turn rather than fixed at launch. Turns are serialized per session, so no
-        // other turn can be reading them meanwhile.
-        await connection.setHandlers(permissions.handlers)
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
         await connection.setWireObserver { line in eventBuffer.append(line) }

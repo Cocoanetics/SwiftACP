@@ -32,6 +32,9 @@ enum PromptCommand {
         let record = try SessionLifecycle.applyExplicitMcpServers(
             to: try findRoutedSessionOrThrow(agent: agent, name: name), config: context.config)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
+        // Checked here, as acpx checks it building its client; the daemon applies it to
+        // this turn.
+        let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
 
         // JSON mode prints the turn's exchange as it crosses the wire, as acpx does.
         var options = renderOptions(flags)
@@ -52,7 +55,8 @@ enum PromptCommand {
                 return try await DaemonClient.runPrompt(
                     sessionId: sessionId, blocks: promptBlocks, wait: wait,
                     permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                    permissionPolicy: permissionRules, renderer: renderer)
+                    permissionPolicy: permissionRules, terminalOutputCeiling: terminalOutputCeiling,
+                    renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {

@@ -22,10 +22,11 @@ extension SessionAcpxState.PersistedCapabilities {
 }
 
 extension ClientCapabilities {
-    /// The persisted form, or `nil` when nothing was withheld — an unrestricted session
-    /// writes no `client_capabilities` at all, keeping the record as npm acpx shapes it.
+    /// The persisted form, or `nil` when nothing acpx advertises was withheld — an
+    /// unrestricted session writes no `client_capabilities` at all, keeping the record
+    /// as npm acpx shapes it.
     public var persistedIfRestricted: SessionAcpxState.PersistedCapabilities? {
-        let defaults = ClientCapabilities.headlessController
+        let defaults = ClientCapabilities.acpx
         guard fs.readTextFile != defaults.fs.readTextFile
             || fs.writeTextFile != defaults.fs.writeTextFile
             || terminal != defaults.terminal

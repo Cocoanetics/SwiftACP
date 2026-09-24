@@ -49,13 +49,18 @@ enum ControlCommand {
         let modeId = try parseNonEmptyValue("Mode", context.positionals[0])
         let record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
         let sessionId = record.acpSessionId
+        // Checked here, as acpx checks it building its client; the daemon caps terminal
+        // output by it while the agent answers.
+        let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
 
         // Route through acpxd — the single manager that holds the live agent and owns
         // its record — rather than launching a throwaway agent and writing the record
         // here (which would miss the live session and could clobber a concurrent turn).
         let result = try runBlocking {
             do {
-                return try await DaemonClient.setMode(sessionId: sessionId, modeId: modeId)
+                return try await DaemonClient.setMode(
+                    sessionId: sessionId, modeId: modeId, nonInteractivePermissions: flags.nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
@@ -102,6 +107,7 @@ enum ControlCommand {
         // aliases applied + validated against the session's advertised options.
         let operation = resolveSetOperation(key: key, agentCommand: agent.agentCommand)
         let sessionId = record.acpSessionId
+        let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
 
         // Route through acpxd — the single manager that holds the live agent and owns
         // its record — rather than launching a throwaway agent and writing the record
@@ -111,10 +117,15 @@ enum ControlCommand {
             do {
                 switch operation {
                 case .model:
-                    return try await DaemonClient.setModel(sessionId: sessionId, modelId: value)
+                    return try await DaemonClient.setModel(
+                        sessionId: sessionId, modelId: value,
+                        nonInteractivePermissions: flags.nonInteractivePermissions,
+                        terminalOutputCeiling: terminalOutputCeiling)
                 case .configOption(let configId):
                     return try await DaemonClient.setConfigOption(
-                        sessionId: sessionId, configId: configId, value: value)
+                        sessionId: sessionId, configId: configId, value: value,
+                        nonInteractivePermissions: flags.nonInteractivePermissions,
+                        terminalOutputCeiling: terminalOutputCeiling)
                 }
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
