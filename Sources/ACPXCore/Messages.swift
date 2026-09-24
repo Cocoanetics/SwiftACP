@@ -135,14 +135,29 @@ public enum SessionUserContent: Codable, Sendable {
 /// `RedactedThinking`/`ToolUse`); unrecognized shapes round-trip via `.other`.
 public enum SessionAgentContent: Codable, Sendable {
     case text(String)
-    case thinking(text: String, signature: String?)
+    /// `signature` is `string | null | absent`: acpx builds thinking with a `null` one,
+    /// and keeps whichever a record it read had.
+    case thinking(text: String, signature: Nullable<String>?)
     case redactedThinking(String)
     case toolUse(SessionToolUse)
     case other(JSONValue)
 
     struct Thinking: Codable, Sendable {
         var text: String
-        var signature: String?
+        var signature: Nullable<String>?
+
+        enum CodingKeys: String, CodingKey { case text, signature }
+
+        init(text: String, signature: Nullable<String>?) {
+            self.text = text
+            self.signature = signature
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            text = try c.decode(String.self, forKey: .text)
+            signature = c.contains(.signature) ? try c.decode(Nullable<String>.self, forKey: .signature) : nil
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -194,12 +209,25 @@ public enum SessionAgentContent: Codable, Sendable {
 /// — while still decoding a populated `source` from records acpx itself wrote.
 public struct SessionMessageImage: Codable, Sendable {
     public var source: String
-    public var size: Size?
+    /// `size | null | absent`: acpx builds an image with a `null` size, and keeps
+    /// whichever a record it read had.
+    public var size: Nullable<Size>?
     /// The image's MIME type, when known. An acpx extension: upstream records omit it.
     public var mimeType: String?
     public struct Size: Codable, Sendable {
         public var width: Double
         public var height: Double
+    }
+}
+
+extension SessionMessageImage {
+    enum CodingKeys: String, CodingKey { case source, size, mimeType }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decode(String.self, forKey: .source)
+        size = c.contains(.size) ? try c.decode(Nullable<Size>.self, forKey: .size) : nil
+        mimeType = try c.decodeIfPresent(String.self, forKey: .mimeType)
     }
 }
 

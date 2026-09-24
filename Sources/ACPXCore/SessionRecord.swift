@@ -65,7 +65,15 @@ public struct SessionRecord: Codable, Sendable {
     public var lastAgentDisconnectReason: String?
     public var protocolVersion: Int?
     public var agentCapabilities: JSONValue?
-    public var title: String?
+    /// The conversation's title: `null` on disk until the agent names one, as acpx's
+    /// `createSessionConversation` starts it.
+    public var title: String? {
+        get { storedTitle?.value }
+        set { storedTitle = newValue.map(Nullable.value) ?? .null }
+    }
+    /// `title` as written: absent only when the record was read without one, as acpx's
+    /// parser keeps it (`parseConversationTitle`).
+    private var storedTitle: Nullable<String>? = .null
     public var messages: [SessionMessage]
     public var updatedAt: String
     public var cumulativeTokenUsage: SessionTokenUsage?
@@ -157,7 +165,7 @@ public struct SessionRecord: Codable, Sendable {
             String.self, forKey: .lastAgentDisconnectReason)
         protocolVersion = try c.decodeIfPresent(Int.self, forKey: .protocolVersion)
         agentCapabilities = try c.decodeIfPresent(JSONValue.self, forKey: .agentCapabilities)
-        title = try c.decodeIfPresent(String.self, forKey: .title)
+        storedTitle = c.contains(.title) ? try c.decode(Nullable<String>.self, forKey: .title) : nil
         messages = try c.decodeIfPresent([SessionMessage].self, forKey: .messages) ?? []
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? lastUsedAt
         cumulativeTokenUsage = try c.decodeIfPresent(SessionTokenUsage.self, forKey: .cumulativeTokenUsage)
@@ -193,8 +201,7 @@ public struct SessionRecord: Codable, Sendable {
         try c.encodeIfPresent(lastAgentDisconnectReason, forKey: .lastAgentDisconnectReason)
         try c.encodeIfPresent(protocolVersion, forKey: .protocolVersion)
         try c.encodeIfPresent(agentCapabilities, forKey: .agentCapabilities)
-        // acpx always writes `title` (null when unset), via createSessionConversation.
-        if let title { try c.encode(title, forKey: .title) } else { try c.encodeNil(forKey: .title) }
+        try c.encodeIfPresent(storedTitle, forKey: .title)
         try c.encode(messages, forKey: .messages)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(cumulativeTokenUsage ?? SessionTokenUsage(), forKey: .cumulativeTokenUsage)
@@ -212,7 +219,15 @@ public struct SessionEventLog: Codable, Sendable {
     public var maxSegmentBytes: Int
     public var maxSegments: Int
     public var lastWriteAt: String?
-    public var lastWriteError: String?
+    /// The last write's error: `null` on disk when there was none, as acpx builds the
+    /// block (`defaultSessionEventLog`, and again on each write).
+    public var lastWriteError: String? {
+        get { storedLastWriteError?.value }
+        set { storedLastWriteError = newValue.map(Nullable.value) ?? .null }
+    }
+    /// `lastWriteError` as written: absent only when the block was read without one, as
+    /// acpx's `parseEventLog` keeps it, until the log is next written.
+    private var storedLastWriteError: Nullable<String>? = .null
 
     enum CodingKeys: String, CodingKey {
         case activePath, segmentCount, maxSegmentBytes, maxSegments, lastWriteAt, lastWriteError
@@ -223,7 +238,6 @@ public struct SessionEventLog: Codable, Sendable {
         self.segmentCount = DEFAULT_EVENT_MAX_SEGMENTS
         self.maxSegmentBytes = DEFAULT_EVENT_SEGMENT_MAX_BYTES
         self.maxSegments = DEFAULT_EVENT_MAX_SEGMENTS
-        self.lastWriteError = nil
     }
 
     public init(from decoder: Decoder) throws {
@@ -234,8 +248,8 @@ public struct SessionEventLog: Codable, Sendable {
             try c.decodeIfPresent(Int.self, forKey: .maxSegmentBytes) ?? DEFAULT_EVENT_SEGMENT_MAX_BYTES
         maxSegments = try c.decodeIfPresent(Int.self, forKey: .maxSegments) ?? DEFAULT_EVENT_MAX_SEGMENTS
         lastWriteAt = try c.decodeIfPresent(String.self, forKey: .lastWriteAt)
-        // `last_write_error` is `null` when no error — preserve as nil.
-        lastWriteError = try c.decodeIfPresent(String.self, forKey: .lastWriteError)
+        storedLastWriteError =
+            c.contains(.lastWriteError) ? try c.decode(Nullable<String>.self, forKey: .lastWriteError) : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -245,11 +259,6 @@ public struct SessionEventLog: Codable, Sendable {
         try c.encode(maxSegmentBytes, forKey: .maxSegmentBytes)
         try c.encode(maxSegments, forKey: .maxSegments)
         try c.encodeIfPresent(lastWriteAt, forKey: .lastWriteAt)
-        // acpx writes `last_write_error: null` explicitly.
-        if let lastWriteError {
-            try c.encode(lastWriteError, forKey: .lastWriteError)
-        } else {
-            try c.encodeNil(forKey: .lastWriteError)
-        }
+        try c.encodeIfPresent(storedLastWriteError, forKey: .lastWriteError)
     }
 }

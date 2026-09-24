@@ -25,8 +25,7 @@ import Testing
     /// Rewrite a record's file behind the store's back — what a real npm `acpx`, a second
     /// process, or a hand edit does. Nothing here updates any cached view.
     private func writeBehindTheStore(_ record: SessionRecord, to recordId: String) throws {
-        try encodeForDisk(record, using: recordDiskEncoder)
-            .write(to: ACPXPaths.sessionRecordPath(recordId))
+        try SessionRecordSerializer.data(for: record).write(to: ACPXPaths.sessionRecordPath(recordId))
     }
 
     @Test func anExternallyEditedRecordIsSeenImmediately() async throws {

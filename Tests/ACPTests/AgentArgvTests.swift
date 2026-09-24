@@ -109,7 +109,7 @@ import Testing
             record.agentArgv = ["x", "a b"]
             try SessionStore.writeRecord(record)
             let written = try String(contentsOf: ACPXPaths.sessionRecordPath("r"), encoding: .utf8)
-            #expect(written.contains(#""agent_argv" : ["#))
+            #expect(written.contains(#""agent_argv": ["#))
             #expect(SessionStore.loadRecord("r")?.agentArgv == ["x", "a b"])
 
             for stored in ["[]", #"[""]"#, "[1]"] {
