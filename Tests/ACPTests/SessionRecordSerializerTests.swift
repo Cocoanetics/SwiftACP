@@ -211,8 +211,9 @@ struct SessionRecordSerializerTests {
 
     /// The names of the models the agent advertises are in the order it advertises them,
     /// as acpx builds the map anew — a JavaScript object, index-like ids first — not in
-    /// the order the record was read with, even where the names are the same
-    /// (#117 review).
+    /// the order the record was read with, even where the names are the same. A record
+    /// written with no models advertised since it was read keeps the order it was read
+    /// with, as acpx does (#117 review).
     @Test func modelNamesFollowTheAdvertisedOrder() async throws {
         let acpx = #"{"available_models":["z","a"],"available_model_names":{"z":"Z","a":"A"}}"#
         try await withIsolatedStore {
@@ -232,6 +233,13 @@ struct SessionRecordSerializerTests {
                 let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
                 #expect(written["acpx"]?["available_model_names"]?.stringified == expected)
             }
+            let unadvertised = #"{"available_models":["a","z"],"available_model_names":{"z":"Z","a":"A"}}"#
+            try Self.storeRecord(messages: [], acpx: unadvertised)
+            var record = try #require(SessionStore.loadRecord("r"))
+            record.closed = true
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["available_model_names"]?.stringified == #"{"z":"Z","a":"A"}"#)
         }
     }
 

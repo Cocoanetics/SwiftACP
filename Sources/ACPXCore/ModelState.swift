@@ -99,6 +99,7 @@ public enum ModelSupport {
         state.availableModelNames = Dictionary(
             models.availableModels.map { ($0.modelId, $0.name) }, uniquingKeysWith: { _, last in last })
         state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
+        state.modelNamesAdvertised = true
     }
 
     /// acpx's `advertisedModelState`: the model state a record's `acpx` block keeps —
