@@ -24,7 +24,7 @@ extension ACPAgentConnection {
         guard let handler else { return .failure(Self.methodNotFound(method)) }
         var named: String?
         do {
-            var request: Request = try decode(params)
+            var request: Request = try decode(params, for: method)
             named = request.path
             if fileSystemAccess == .sessionRoot {
                 guard let root = sessionRoot(request.sessionId) else {

@@ -438,7 +438,7 @@ public actor ACPAgentConnection {
                 return .failure(Self.methodNotFound(method))
             }
             do {
-                let request: RequestPermissionRequest = try decode(params)
+                let request: RequestPermissionRequest = try decode(params, for: method)
                 let response = try await resolvePermission(request, with: handler)
                 return .success(try JSONValue(encoding: response))
             } catch let error as JSONRPCErrorBody {
@@ -451,28 +451,18 @@ public actor ACPAgentConnection {
         }
     }
 
-    /// Decode params, run a throwing handler, encode the response — or map a
-    /// missing handler to "method not found".
-    private func route<Request: Decodable & Sendable, Response: Encodable & Sendable>(
-        _ params: JSONValue?,
-        _ handler: (@Sendable (Request) async throws -> Response)?
-    ) async -> Result<JSONValue, JSONRPCErrorBody> {
-        guard let handler else { return .failure(.init(code: -32601, message: "Method not supported")) }
-        do {
-            let request: Request = try decode(params)
-            let response = try await handler(request)
-            return .success(try JSONValue(encoding: response))
-        } catch let error as JSONRPCErrorBody {
-            return .failure(error)
-        } catch {
-            return .failure(.internalError(error.localizedDescription))
+    /// The params of a request for `method` as `T`, read as acpx's client reads them
+    /// (``ClientRequestSchema``): refused with the ACP SDK's `Invalid params` and zod's
+    /// issues when a member the method requires is missing or does not fit, and with any
+    /// other member that does not fit read as absent.
+    func decode<T: Decodable>(_ params: JSONValue?, for method: String) throws -> T {
+        let schema = ClientRequestSchema.request(method)
+        if let issues = schema?.issues(in: params), !issues.isEmpty {
+            throw Self.invalidParams(issues: ClientRequestSchema.formatted(issues))
         }
-    }
-
-    /// The request's params as `T`, or the ACP SDK's `Invalid params` when they are
-    /// missing or do not fit.
-    func decode<T: Decodable>(_ params: JSONValue?) throws -> T {
-        guard let params, let decoded = try? params.decoded(T.self) else { throw Self.invalidParams }
+        guard let params, let decoded = try? (schema?.lenient(params) ?? params).decoded(T.self) else {
+            throw Self.invalidParams
+        }
         return decoded
     }
 }

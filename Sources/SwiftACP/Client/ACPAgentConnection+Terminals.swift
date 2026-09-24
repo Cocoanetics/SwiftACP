@@ -22,7 +22,7 @@ extension ACPAgentConnection {
         do {
             switch method {
             case "terminal/create":
-                var request: CreateTerminalRequest = try decode(params)
+                var request: CreateTerminalRequest = try decode(params, for: method)
                 // acpx runs a command in its client's cwd — the session's — unless told
                 // otherwise; a session this connection never opened has none, and the
                 // handler's own is used.
@@ -34,13 +34,17 @@ extension ACPAgentConnection {
                 guard !terminalsShutDown, !isClosed else { return .failure(Self.requestCancelled) }
                 return .success(try JSONValue(encoding: try await terminals.createTerminal(request)))
             case "terminal/output":
-                return .success(try JSONValue(encoding: try await terminals.terminalOutput(decode(params))))
+                let request: TerminalOutputRequest = try decode(params, for: method)
+                return .success(try JSONValue(encoding: try await terminals.terminalOutput(request)))
             case "terminal/wait_for_exit":
-                return .success(try JSONValue(encoding: try await terminals.waitForTerminalExit(decode(params))))
+                let request: WaitForTerminalExitRequest = try decode(params, for: method)
+                return .success(try JSONValue(encoding: try await terminals.waitForTerminalExit(request)))
             case "terminal/kill":
-                return .success(try JSONValue(encoding: try await terminals.killTerminal(decode(params))))
+                let request: KillTerminalRequest = try decode(params, for: method)
+                return .success(try JSONValue(encoding: try await terminals.killTerminal(request)))
             default:
-                return .success(try JSONValue(encoding: try await terminals.releaseTerminal(decode(params))))
+                let request: ReleaseTerminalRequest = try decode(params, for: method)
+                return .success(try JSONValue(encoding: try await terminals.releaseTerminal(request)))
             }
         } catch let error as JSONRPCErrorBody {
             return .failure(error)
