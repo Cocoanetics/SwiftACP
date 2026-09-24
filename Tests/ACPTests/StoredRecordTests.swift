@@ -70,6 +70,47 @@ import Testing
         }
     }
 
+    /// SwiftACP's own restrictions fail closed when they do not read: no client
+    /// capabilities rather than the defaults, and no MCP servers rather than the config
+    /// file's. The record itself is still read, as acpx reads it.
+    @Test func anUnreadableRestrictionFailsClosed() async throws {
+        let unreadable = try Self.fixtureCase("acpx own field unreadable")
+        try await withIsolatedStore {
+            try Self.store(unreadable.raw, cwd: try Self.workingDirectory())
+            let record = try #require(SessionStore.loadRecord("rec-1"))
+            #expect(record.acpx?.clientCapabilities
+                == .init(readTextFile: false, writeTextFile: false, terminal: false))
+            #expect(record.acpx?.mcpServers?.isEmpty == true)
+        }
+        let absent = try Self.fixtureCase("acpx empty")
+        try await withIsolatedStore {
+            try Self.store(absent.raw, cwd: try Self.workingDirectory())
+            let record = try #require(SessionStore.loadRecord("rec-1"))
+            #expect(record.acpx?.clientCapabilities == nil)
+            #expect(record.acpx?.mcpServers == nil)
+        }
+    }
+
+    /// A record prints as it was when it was read — the read that selected it — not as
+    /// the file says by the time it is printed.
+    @Test func aRecordPrintsAsItWasRead() async throws {
+        let full = try Self.fixtureCase("full record")
+        try await withIsolatedStore {
+            let cwd = try Self.workingDirectory()
+            try Self.store(full.raw, cwd: cwd)
+            let record = try #require(SessionStore.loadRecord("rec-1"))
+            try Self.store(full.raw.replacingOccurrences(of: #""alpha""#, with: #""beta""#), cwd: cwd)
+
+            let expected = try #require(full.parsed).replacingOccurrences(of: #""/work""#, with: #""\#(cwd)""#)
+            let capture = Console.Capture()
+            Console.$capture.withValue(capture) {
+                SessionsCommand.printSessionDetails(record, format: "json")
+                SessionsCommand.printSessions([record], format: "json")
+            }
+            #expect(capture.out == expected + "\n[" + expected + "]\n")
+        }
+    }
+
     @Test func aFileAcpxRejectsIsNoRecord() async throws {
         let rejected = try Self.fixtureCase("pid zero")
         #expect(rejected.parsed == nil)

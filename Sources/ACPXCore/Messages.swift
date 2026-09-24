@@ -384,8 +384,12 @@ public struct SessionAcpxState: Codable, Sendable {
 extension SessionAcpxState {
     /// Each field read on its own, and one that does not read left out rather than failing
     /// the record: acpx drops what it cannot read in this block and keeps the record
-    /// (`parseAcpxState`), and so does SwiftACP — its own `mcp_servers` and
-    /// `client_capabilities` included, which acpx never reads.
+    /// (`parseAcpxState`), and so does SwiftACP.
+    ///
+    /// SwiftACP's own `mcp_servers` and `client_capabilities`, which acpx never reads,
+    /// restrict a session, so one that does not read fails closed: no MCP servers rather
+    /// than the config file's, and no client capabilities rather than the defaults — a
+    /// session created under `--no-fs` must not get the filesystem back.
     public init(from decoder: Decoder) throws {
         self.init()
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -402,7 +406,16 @@ extension SessionAcpxState {
         availableCommands = field(.availableCommands)
         configOptions = field(.configOptions)
         sessionOptions = field(.sessionOptions)
-        mcpServers = field(.mcpServers)
-        clientCapabilities = field(.clientCapabilities)
+        // `try?` would make an absent field look like one that did not read.
+        do {
+            mcpServers = try container.decodeIfPresent([McpServerConfig].self, forKey: .mcpServers)
+        } catch {
+            mcpServers = []
+        }
+        do {
+            clientCapabilities = try container.decodeIfPresent(PersistedCapabilities.self, forKey: .clientCapabilities)
+        } catch {
+            clientCapabilities = PersistedCapabilities(readTextFile: false, writeTextFile: false, terminal: false)
+        }
     }
 }

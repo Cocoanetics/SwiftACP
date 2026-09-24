@@ -43,29 +43,20 @@ public enum SessionStore {
         -> SessionRecord? {
         guard let data = try? Data(contentsOf: url), let stored = WireJSON(parsing: data),
             let parsed = SessionRecordParser.parse(stored),
-            let record = try? recordDiskDecoder.decode(
+            var record = try? recordDiskDecoder.decode(
                 SessionRecord.self,
                 from: Data(SessionRecordParser.normalizedForModel(stored, parsed: parsed)
                     .replacingLoneSurrogates().stringified.utf8)),
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
         if let recordId, record.acpxRecordId != recordId { return nil }
+        record.parsedByAcpx = parsed
         return record
     }
 
     /// Lookup by exact record id reads that one file — no scan (acpx, `docs/sessions.md`).
     public static func loadRecord(_ recordId: String) -> SessionRecord? {
         readRecord(at: ACPXPaths.sessionRecordPath(recordId), expecting: recordId)
-    }
-
-    /// The record `recordId` names as acpx holds it in memory — ``SessionRecordParser``
-    /// on the stored file — which is what acpx prints for it in `--format json`.
-    public static func storedRecord(_ recordId: String) -> WireJSON? {
-        guard let data = try? Data(contentsOf: ACPXPaths.sessionRecordPath(recordId)),
-            let stored = WireJSON(parsing: data),
-            let parsed = SessionRecordParser.parse(stored), parsed["acpxRecordId"] == .text(recordId)
-        else { return nil }
-        return parsed
     }
 
     /// Atomic write (temp + rename), pretty JSON + trailing newline. Nothing else is
