@@ -346,11 +346,12 @@ public struct SessionAcpxState: Codable, Sendable {
     /// reason: npm acpx carries capabilities on the queue owner that *is* the session,
     /// while `acpxd` outlives any one connection and has to read them back.
     public var clientCapabilities: PersistedCapabilities?
-    /// Whether the models the agent advertises were applied since the record was read
-    /// (``ModelSupport/applyAdvertisedModelState(_:to:)``). acpx then builds
-    /// `available_model_names` anew, in their order; until then it keeps the order it
-    /// read. Never written.
-    var modelNamesAdvertised = false
+    /// The member order acpx gave each map of this block that it built anew since the
+    /// record was read, by the map's name in the record: `available_model_names` from the
+    /// models an agent advertised, `desired_config_options` from a control's reply —
+    /// JavaScript objects, built by insertion (``ModelSupport``). A map not here keeps the
+    /// order it was read with. Never written.
+    var rebuiltOrders: [String: [String]] = [:]
 
     enum CodingKeys: String, CodingKey {
         case resetOnNextEnsure, currentModeId, desiredModeId, desiredConfigOptions, currentModelId

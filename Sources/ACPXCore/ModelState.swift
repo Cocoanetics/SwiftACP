@@ -99,7 +99,7 @@ public enum ModelSupport {
         state.availableModelNames = Dictionary(
             models.availableModels.map { ($0.modelId, $0.name) }, uniquingKeysWith: { _, last in last })
         state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
-        state.modelNamesAdvertised = true
+        state.rebuiltOrders["available_model_names"] = WireJSON.propertyOrder(models.availableModels.map(\.modelId))
     }
 
     /// acpx's `advertisedModelState`: the model state a record's `acpx` block keeps —
@@ -132,7 +132,11 @@ public enum ModelSupport {
         state.currentModelId = modelState(fromConfigOptions: response?.configOptions)?.currentModelId ?? modelId
         if let configId = modelConfigId ?? advertisedModelState(state)?.configId {
             state.desiredConfigOptions?.removeValue(forKey: configId)
-            if state.desiredConfigOptions?.isEmpty == true { state.desiredConfigOptions = nil }
+            state.rebuiltOrders["desired_config_options"]?.removeAll { $0 == configId }
+            if state.desiredConfigOptions?.isEmpty == true {
+                state.desiredConfigOptions = nil
+                state.rebuiltOrders["desired_config_options"] = nil
+            }
         }
     }
 
@@ -152,6 +156,9 @@ public enum ModelSupport {
         var desired = state.desiredConfigOptions ?? [:]
         desired[configId] = value
         state.desiredConfigOptions = desired
+        if let order = state.rebuiltOrders["desired_config_options"] {
+            state.rebuiltOrders["desired_config_options"] = WireJSON.propertyOrder(order + [configId])
+        }
         applyAcceptedConfigOptions(response, to: &state)
         noteAccepted(configId, value: value, unreportedBy: response, in: &state)
     }
@@ -179,7 +186,8 @@ public enum ModelSupport {
 
     /// acpx's `applyAcceptedConfigOptions`: the options a control's reply reported
     /// replace the record's, and saved selections follow what they now say — a reply
-    /// can change sibling options — keeping only those still reported.
+    /// can change sibling options — keeping only those still reported, in the order the
+    /// reply lists them (`Object.fromEntries`).
     static func applyAcceptedConfigOptions(
         _ response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
     ) {
@@ -187,13 +195,16 @@ public enum ModelSupport {
         applyConfigOptionsModelState(reported, to: &state)
         guard let desired = state.desiredConfigOptions else { return }
         var kept: [String: String] = [:]
+        var order: [String] = []
         for case .object(let option) in reported {
             if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
                desired[id] != nil {
                 kept[id] = value
+                order.append(id)
             }
         }
         state.desiredConfigOptions = kept.isEmpty ? nil : kept
+        state.rebuiltOrders["desired_config_options"] = kept.isEmpty ? nil : WireJSON.propertyOrder(order)
     }
 
     /// acpx's `clearAdvertisedModelState`.
@@ -201,6 +212,7 @@ public enum ModelSupport {
         state.currentModelId = nil
         state.availableModels = nil
         state.availableModelNames = nil
+        state.rebuiltOrders["available_model_names"] = nil
         state.modelControl = nil
     }
 

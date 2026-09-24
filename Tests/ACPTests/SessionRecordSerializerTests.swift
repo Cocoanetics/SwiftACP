@@ -243,6 +243,37 @@ struct SessionRecordSerializerTests {
         }
     }
 
+    /// The saved selections a control's reply rebuilds are in the order the reply lists
+    /// its options, as acpx builds the map anew (`applyAcceptedConfigOptions`); with no
+    /// reply since the record was read, they keep the order it was read with
+    /// (#117 review).
+    @Test func savedSelectionsFollowTheReplysOrder() async throws {
+        func option(_ id: String, _ value: String) -> JSONValue {
+            .object(["id": .string(id), "name": .string(id), "type": .string("select"), "currentValue": .string(value),
+                     "options": .array([.object(["value": .string(value), "name": .string(value)])])])
+        }
+        let acpx = #"{"desired_config_options":{"b":"1","a":"2"}}"#
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [], acpx: acpx)
+            var record = try #require(SessionStore.loadRecord("r"))
+            var state = try #require(record.acpx)
+            let reply = SetSessionConfigOptionResponse(configOptions: [option("a", "2"), option("b", "3")])
+            ModelSupport.applyConfigOptionSelection("b", value: "3", response: reply, to: &state)
+            record.acpx = state
+            try SessionStore.writeRecord(record)
+            var written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["desired_config_options"]?.stringified == #"{"a":"2","b":"3"}"#)
+
+            try Self.storeRecord(messages: [], acpx: acpx)
+            record = try #require(SessionStore.loadRecord("r"))
+            record.closed = true
+            try SessionStore.writeRecord(record)
+            written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["desired_config_options"]?.stringified == #"{"b":"1","a":"2"}"#)
+        }
+    }
+
     /// A record `r` with these messages, as SwiftACP would have it on disk.
     private static func storeRecord(messages: [String], acpx: String? = nil, usage: String = "{}") throws {
         let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
