@@ -25,9 +25,11 @@ public struct ACPClientHandlers: Sendable {
     ///
     /// The connection hands over the request with its adapter-compatibility ranking
     /// applied (Codex's non-aborting refusal first — see ``CodexCompat``), and
-    /// explains a refusal that may end the turn on the way back.
+    /// explains a refusal that may end the turn on the way back. Throw
+    /// ``PermissionPromptUnavailableError`` for a request that needed a question no one
+    /// could be asked: it is answered `cancelled`, and the turn fails on it.
     public var requestPermission:
-        (@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)?
+        (@Sendable (RequestPermissionRequest) async throws -> RequestPermissionResponse)?
     /// Serve `fs/read_text_file`: return file content, honouring `line`/`limit`.
     public var readTextFile: (@Sendable (ReadTextFileRequest) async throws -> ReadTextFileResponse)?
     /// Serve `fs/write_text_file`: write the given content to the given path.
@@ -45,7 +47,7 @@ public struct ACPClientHandlers: Sendable {
     public var authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)?
 
     public init(
-        requestPermission: (@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)? = nil,
+        requestPermission: (@Sendable (RequestPermissionRequest) async throws -> RequestPermissionResponse)? = nil,
         readTextFile: (@Sendable (ReadTextFileRequest) async throws -> ReadTextFileResponse)? = nil,
         writeTextFile: (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)? = nil,
         authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)? = nil,
@@ -76,8 +78,10 @@ public struct ACPClientHandlers: Sendable {
         let approval = WriteApproval(
             policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmWrite,
             terminal: terminal)
+        let tools = ToolPermissionApproval(
+            policy: permission, nonInteractive: nonInteractivePermissions, terminal: terminal)
         return ACPClientHandlers(
-            requestPermission: { await permission.resolve($0) },
+            requestPermission: { try await tools.resolve($0) },
             readTextFile: { try LocalFileSystem.read($0) },
             writeTextFile: { try LocalFileSystem.write($0) },
             authorizeWrite: { try await approval.authorize($0) },
@@ -113,23 +117,12 @@ public enum PermissionPolicy: Sendable {
         }
     }
 
-    /// Tool kinds considered safe to auto-approve under `.approveReads`.
-    private static let safeKinds: Set<ToolKind> = [.read, .search]
-
+    /// Answer `request` the way ``ToolPermissionApproval`` does with no terminal to
+    /// ask on and the default ``NonInteractivePermissionPolicy/deny``: what would be
+    /// asked is refused.
     public func resolve(_ request: RequestPermissionRequest) async -> RequestPermissionResponse {
-        switch self {
-        case .custom(let resolver):
-            return await resolver(request)
-        case .approveAll:
-            return Self.approve(request)
-        case .denyAll:
-            return Self.reject(request)
-        case .approveReads:
-            if let kind = request.toolCall.kind, Self.safeKinds.contains(kind) {
-                return Self.approve(request)
-            }
-            return Self.reject(request)
-        }
+        (try? await ToolPermissionApproval(policy: self, nonInteractive: .deny, terminal: .none).resolve(request))
+            ?? .cancelled
     }
 
     /// Select an allow option (preferring "once"), falling back to the first

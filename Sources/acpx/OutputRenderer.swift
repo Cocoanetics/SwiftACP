@@ -102,6 +102,28 @@ final class OutputRenderer: @unchecked Sendable {
         clientOperation(method)
     }
 
+    /// A turn that needed a permission question nobody could be asked fails once over,
+    /// and acpx's queue owner reports it (`emitQueueOwnerError`): text output as an
+    /// `[error]` section, JSON output as its error line naming the session. Neither
+    /// prints when the stream already shows the client's refusal saying the same, as a
+    /// refused write's does. Quiet output is ``permissionExitCode(_:quiet:queueDetail:)``'s.
+    func permissionPromptUnavailable(sessionId: String) {
+        let message = FileSystemPermissionError.promptUnavailable.description
+        guard !showedFailure(message) else { return }
+        switch options.format {
+        case .text:
+            renderError(code: "PERMISSION_PROMPT_UNAVAILABLE", message, detailCode: "QUEUE_RUNTIME_PROMPT_FAILED")
+        case .json:
+            lock.withLock {
+                out(JSONErrorLine.make(
+                    outputCode: "PERMISSION_PROMPT_UNAVAILABLE", detailCode: "QUEUE_RUNTIME_PROMPT_FAILED",
+                    origin: "runtime", message: message, sessionId: sessionId) + "\n")
+            }
+        case .quiet:
+            break
+        }
+    }
+
     /// Whether the stream has already shown the failure described by `failureText`:
     /// acpx then prints nothing more for it.
     func showedFailure(_ failureText: String) -> Bool {
@@ -167,6 +189,15 @@ final class OutputRenderer: @unchecked Sendable {
     /// mode prints neither, and its JSON mode is the raw stream (see issue #50).
     func inboundRequest(_ request: InboundRequest) {
         if let failure = request.failure {
+            // The client's refusal, which the stream shows — noted as acpx's tracker
+            // notes an outbound error, so a failure repeating it is not printed again.
+            let refusal = WireJSON.object([
+                .init("error", .object([
+                    .init("code", .number(-32603)), .init("message", .text("Internal error")),
+                    .init("data", .object([.init("details", .text(failure))]))
+                ]))
+            ])
+            lock.withLock { shownErrors.observe(refusal, direction: .outbound) }
             renderError(code: "RUNTIME", failure)
         } else {
             clientOperation(request.method)
