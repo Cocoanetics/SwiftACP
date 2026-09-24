@@ -46,13 +46,7 @@ extension ACPXDaemonBackend {
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(
             mode: permissionMode, nonInteractive: nonInteractivePermissions, rules: permissionPolicy)
-        // The caller's cap on terminal output, else the daemon's own.
-        let ceiling: Int?
-        if let terminalOutputCeiling {
-            ceiling = try TerminalOutputLimit.ceiling(bytes: terminalOutputCeiling)
-        } else {
-            ceiling = try TerminalOutputLimit.ceiling()
-        }
+        let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         // Validate before queueing: a malformed block should fail at once, not after
         // waiting out someone else's turn. The daemon's transport has a ceiling, so
         // the request size is capped here (a direct client has nothing in the way).
@@ -202,6 +196,7 @@ extension ACPXDaemonBackend {
         // connecting put on the wire goes to the calling client first.
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
+            terminalOutputCeiling: turn.terminalOutputCeiling,
             onReplacement: { await persister.adoptReplacement($0) },
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
@@ -230,9 +225,6 @@ extension ACPXDaemonBackend {
         // turn rather than fixed at launch. Turns are serialized per session, so no
         // other turn can be reading them meanwhile.
         await connection.setHandlers(permissions.handlers)
-        // So is the cap on terminal output: acpx's queue owner reads the environment
-        // the CLI starting it passed on, and the daemon outlives any one CLI.
-        await entry.agent.setTerminalOutputCeiling(turn.terminalOutputCeiling)
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
         await connection.setWireObserver { line in eventBuffer.append(line) }

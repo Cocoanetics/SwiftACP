@@ -39,25 +39,30 @@ extension ACPXDaemonBackend {
     /// A turn also passes `onConnectOutput`, which gets what connecting a new agent put
     /// on the wire once it is connected — or once connecting it failed (see
     /// ``ConnectOutputBuffer``). An agent already held has nothing to show.
+    ///
+    /// `terminalOutputCeiling` caps the output of the terminals the agent creates from
+    /// here on, `nil` being no cap: the calling CLI's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`,
+    /// which acpx reads in the process that connects the session. It applies before
+    /// anything is asked of the agent — a replayed mode can start a command too.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, onReplacement: ReplacementHandler? = nil,
+        control: Bool = false, terminalOutputCeiling: Int? = nil, onReplacement: ReplacementHandler? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
-            control: control, onReplacement: onReplacement, onRecordChange: onRecordChange,
-            onConnectOutput: onConnectOutput
+            control: control, terminalOutputCeiling: terminalOutputCeiling, onReplacement: onReplacement,
+            onRecordChange: onRecordChange, onConnectOutput: onConnectOutput
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:onReplacement:onConnectOutput:)``,
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:terminalOutputCeiling:onReplacement:onRecordChange:onConnectOutput:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
     /// A session already held, or one a new session replaced, was not.
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, onReplacement: ReplacementHandler? = nil,
+        control: Bool = false, terminalOutputCeiling: Int? = nil, onReplacement: ReplacementHandler? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
@@ -67,6 +72,7 @@ extension ACPXDaemonBackend {
                 guard existing.sessionSpecs == sessionSpecs else {
                     throw DaemonError.mcpConfigConflict(recordId)
                 }
+                await existing.agent.setTerminalOutputCeiling(terminalOutputCeiling)
                 return (existing, false)
             }
             replacesExitedAgent = true
@@ -110,6 +116,7 @@ extension ACPXDaemonBackend {
             await showConnectOutput(false)
             throw error
         }
+        await handle.setTerminalOutputCeiling(terminalOutputCeiling)
         let session: ACPSession
         let fellBack: Bool
         var replacementModels: ModelSupport.ModelState?

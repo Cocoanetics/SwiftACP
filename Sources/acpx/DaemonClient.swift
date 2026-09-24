@@ -230,9 +230,16 @@ enum DaemonClient {
         var errorDescription: String? { message }
     }
 
-    /// Set a session's mode on the live agent via the daemon (which persists it).
-    static func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
-        try await withClient { try await $0.setMode(sessionId: sessionId, modeId: modeId) }
+    /// Set a session's mode on the live agent via the daemon (which persists it). The
+    /// daemon caps terminal output meanwhile by `terminalOutputCeiling`, as it does a
+    /// turn's — `0` for none, so its own never stands in.
+    static func setMode(
+        sessionId: String, modeId: String, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult {
+        try await withClient {
+            try await $0.setMode(
+                sessionId: sessionId, modeId: modeId, terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        }
     }
 
     /// Replace a session's own MCP servers via a *running* daemon (which persists them
@@ -249,18 +256,28 @@ enum DaemonClient {
         }
     }
 
-    /// Set a session's model on the live agent via the daemon (legacy set_model).
-    static func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
-        try await withClient { try await $0.setModel(sessionId: sessionId, modelId: modelId) }
+    /// Set a session's model on the live agent via the daemon (legacy set_model), with
+    /// terminal output capped as ``setMode(sessionId:modeId:terminalOutputCeiling:)`` caps it.
+    static func setModel(
+        sessionId: String, modelId: String, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult {
+        try await withClient {
+            try await $0.setModel(
+                sessionId: sessionId, modelId: modelId, terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        }
     }
 
     /// Set a session config option on the live agent via the daemon: the agent's
     /// advertised config options after the change, and whether the session had to be
-    /// taken back first.
-    static func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> SessionControlResult {
+    /// taken back first. Terminal output is capped as
+    /// ``setMode(sessionId:modeId:terminalOutputCeiling:)`` caps it.
+    static func setConfigOption(
+        sessionId: String, configId: String, value: String, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult {
         try await withClient {
-            try await $0.setConfigOption(sessionId: sessionId, configId: configId, value: value)
+            try await $0.setConfigOption(
+                sessionId: sessionId, configId: configId, value: value,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0)
         }
     }
 

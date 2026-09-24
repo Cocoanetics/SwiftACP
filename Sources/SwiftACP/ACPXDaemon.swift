@@ -126,10 +126,15 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
+    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
+    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
+    ///     `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
-        try await backend.setMode(sessionId: sessionId, modeId: modeId)
+    func setMode(
+        sessionId: String, modeId: String, terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        try await backend.setMode(sessionId: sessionId, modeId: modeId, terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -139,13 +144,18 @@ public actor ACPXDaemon {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
+    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
+    ///     `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> SessionControlResult {
-        try await backend.setConfigOption(sessionId: sessionId, configId: configId, value: value)
+    func setConfigOption(
+        sessionId: String, configId: String, value: String, terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        try await backend.setConfigOption(
+            sessionId: sessionId, configId: configId, value: value, terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Set a session's model on the live agent via the legacy `session/set_model`
@@ -155,10 +165,15 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
+    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
+    ///     `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
-        try await backend.setModel(sessionId: sessionId, modelId: modelId)
+    func setModel(
+        sessionId: String, modelId: String, terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        try await backend.setModel(sessionId: sessionId, modelId: modelId, terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Close a session: terminate its live agent (if held) and mark the record

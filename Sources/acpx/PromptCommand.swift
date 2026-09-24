@@ -81,13 +81,6 @@ enum PromptCommand {
         return FailureAlreadyShown(underlying: error)
     }
 
-    /// acpx builds a client for every turn and control — its terminal manager with it —
-    /// so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the command before any agent is
-    /// reached. The daemon holds the live agent here, so the CLI checks it first.
-    static func requireValidTerminalOutputCeiling() throws {
-        _ = try TerminalOutputLimit.ceiling()
-    }
-
     // MARK: - Routing + banner
 
     static func findRoutedSessionOrThrow(agent: AgentInvocation, name: String?) throws -> SessionRecord {

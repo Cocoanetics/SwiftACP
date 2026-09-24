@@ -10,7 +10,8 @@ or the error. With `MOCK_TOOL_PERMISSION` set it asks permission for an edit too
 and answers `outcome:<selected option, or cancelled>`. With `MOCK_TERMINAL` set to a
 JSON array — a command and its arguments — it runs that through the client's
 terminal, waits for it, reads its output, releases it, and answers
-`ran:<exit code>:<output>`, or the first error.
+`ran:<exit code>:<output>`, or the first error. A `session/set_mode` runs it too, before
+answering, and appends that line to `$MOCK_TERMINAL_LOG`.
 """
 import json
 import os
@@ -22,6 +23,9 @@ terminal = None
 exit_status = None
 output = None
 TERMINAL = os.environ.get("MOCK_TERMINAL")
+TERMINAL_LOG = os.environ.get("MOCK_TERMINAL_LOG")
+# What the terminal is run for: "prompt", or "set_mode".
+running_for = None
 
 
 def send(obj):
@@ -51,8 +55,17 @@ for line in sys.stdin:
         cwd = message["params"]["cwd"]
         send({"jsonrpc": "2.0", "id": req_id,
               "result": {"sessionId": message["params"].get("sessionId", "write-session")}})
+    elif method == "session/set_mode" and TERMINAL:
+        pending = (req_id, message["params"]["sessionId"])
+        running_for = "set_mode"
+        argv = json.loads(TERMINAL)
+        send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+            "sessionId": pending[1], "command": argv[0], "args": argv[1:]}})
+    elif method == "session/set_mode":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/prompt":
         pending = (req_id, message["params"]["sessionId"])
+        running_for = "prompt"
         if TERMINAL:
             argv = json.loads(TERMINAL)
             send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
@@ -83,10 +96,17 @@ for line in sys.stdin:
             output = message["result"]["output"]
         if error or following is None:
             if error:
-                say(pending[1], "error:" + ((error.get("data") or {}).get("details") or error.get("message")))
+                line = "error:" + ((error.get("data") or {}).get("details") or error.get("message"))
             else:
-                say(pending[1], "ran:%s:%s" % (exit_status["exitCode"], output))
-            send({"jsonrpc": "2.0", "id": pending[0], "result": {"stopReason": "end_turn"}})
+                line = "ran:%s:%s" % (exit_status["exitCode"], output)
+            if running_for == "set_mode":
+                if TERMINAL_LOG:
+                    with open(TERMINAL_LOG, "a") as log:
+                        log.write(line + "\n")
+                send({"jsonrpc": "2.0", "id": pending[0], "result": {}})
+            else:
+                say(pending[1], line)
+                send({"jsonrpc": "2.0", "id": pending[0], "result": {"stopReason": "end_turn"}})
         else:
             send({"jsonrpc": "2.0", "id": following[0], "method": following[1],
                   "params": {"sessionId": pending[1], "terminalId": terminal}})
