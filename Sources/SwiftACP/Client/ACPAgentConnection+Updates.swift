@@ -28,10 +28,16 @@ extension ACPAgentConnection {
     /// `session/load` as acpx's `loadSessionWithOptions` sends it: the request, then the
     /// replay drain. With `suppressReplayUpdates`, the session's updates meanwhile are
     /// neither delivered nor shown on `rawWire` — the caller has that history already.
+    ///
+    /// Loads of one session take turns, each waiting for the one before to finish its
+    /// drain. Which load a replayed update belongs to can only be told by when it
+    /// arrives, so an ordinary load overlapping one that suppresses would lose its own.
     public func loadSession(
         _ request: LoadSessionRequest, suppressReplayUpdates: Bool, rawWire: RawWireTap? = nil
     ) async throws -> LoadSessionResponse {
         let id = request.sessionId
+        await beginLoading(id)
+        defer { endLoading(id) }
         if suppressReplayUpdates {
             beginSuppressingReplay(of: id)
             rawWire?.beginSuppressingReplay(of: id)
@@ -45,6 +51,29 @@ extension ACPAgentConnection {
         let response = try await loadSession(request)
         try await waitForSessionUpdateDrain(sessionId: id)
         return response
+    }
+
+    /// Wait for any other load of `sessionId` to finish, then hold the session's turn
+    /// until ``endLoading(_:)``.
+    func beginLoading(_ sessionId: SessionId) async {
+        guard loadWaiters[sessionId] != nil else {
+            loadWaiters[sessionId] = []
+            return
+        }
+        await withCheckedContinuation { continuation in
+            loadWaiters[sessionId, default: []].append(continuation)
+        }
+    }
+
+    /// Hand the session's turn to the next load waiting for it, or give it up.
+    func endLoading(_ sessionId: SessionId) {
+        guard var waiting = loadWaiters[sessionId], !waiting.isEmpty else {
+            loadWaiters[sessionId] = nil
+            return
+        }
+        let next = waiting.removeFirst()
+        loadWaiters[sessionId] = waiting
+        next.resume()
     }
 
     /// Stop delivering `sessionId`'s `session/update`s until the matching

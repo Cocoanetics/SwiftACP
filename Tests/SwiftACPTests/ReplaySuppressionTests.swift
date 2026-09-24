@@ -16,6 +16,8 @@ struct ReplaySuppressionTests {
     struct ReplayingAgent: ACPAgentHandler {
         var trickle: Duration?
         var trickleCount = 0
+        /// Told each time a `session/load` reaches the agent.
+        var onLoad: (@Sendable () -> Void)?
 
         func initialize(_ request: InitializeRequest) async -> InitializeResponse {
             InitializeResponse(
@@ -30,6 +32,7 @@ struct ReplaySuppressionTests {
         func loadSession(
             _ request: LoadSessionRequest, session: ACPServerSession
         ) async throws -> LoadSessionResponse {
+            onLoad?()
             await session.update(.userMessageChunk(.text("earlier question")))
             await session.sendText("earlier answer")
             if let trickle {
@@ -176,6 +179,29 @@ struct ReplaySuppressionTests {
         await client.endSubscription(subscription)
 
         #expect(await delivered.value == ["earlier answer"])
+        await client.close()
+    }
+
+    /// Loads of one session take turns. An ordinary load that comes while another load
+    /// of the session keeps its replay back waits for it to finish, and gets its own
+    /// replay, which it would otherwise lose inside the other's suppression.
+    @Test func loadsOfOneSessionTakeTurns() async throws {
+        let (loads, loaded) = AsyncStream<Void>.makeStream()
+        let agent = ReplayingAgent(trickle: .milliseconds(5), trickleCount: 60, onLoad: { loaded.yield() })
+        let (client, server) = try await connect(agent)
+        defer { server.cancel() }
+        let (subscription, stream) = await client.makeSubscription()
+        let delivered = Task { await texts(stream) }
+        let request = LoadSessionRequest(sessionId: "replay-session", cwd: "/")
+
+        let suppressed = Task { try await client.loadSession(request, suppressReplayUpdates: true) }
+        var reached = loads.makeAsyncIterator()
+        _ = await reached.next()
+        _ = try await client.loadSession(request, suppressReplayUpdates: false)
+        _ = try await suppressed.value
+        await client.endSubscription(subscription)
+
+        #expect(await delivered.value.first == "earlier answer")
         await client.close()
     }
 

@@ -52,6 +52,9 @@ public actor ACPAgentConnection {
     /// When each session's latest `session/update` arrived, delivered or not, in
     /// `DispatchTime` nanoseconds: what the replay drain watches go quiet.
     var lastSessionUpdate: [SessionId: UInt64] = [:]
+    /// Sessions a `session/load` is in progress for, with the loads of each waiting
+    /// their turn (see ``loadSession(_:suppressReplayUpdates:rawWire:)``).
+    var loadWaiters: [SessionId: [CheckedContinuation<Void, Never>]] = [:]
 
     /// How each session's latest turn settled its permissions; reset when a turn
     /// starts. See ``permissionStats(for:)``.
