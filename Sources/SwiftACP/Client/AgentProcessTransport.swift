@@ -99,6 +99,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     }
 
     private func begin() {
+        writer.onFailure = { [self] in writeFailed() }
         _ = Task { [self, eventStream] in
             for await event in eventStream {
                 switch event {
@@ -277,6 +278,16 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         }
     }
 
+    /// A message could not be written: the agent closed its stdin. Unless the agent is
+    /// exiting — as it usually is — that ends the connection, and the agent with it.
+    private func writeFailed() {
+        Task {
+            if await waitForExit(timeout: .milliseconds(100)) { return }
+            recordDisconnect(.connectionClose)
+            _ = startTermination()
+        }
+    }
+
     /// The process exited and was reaped, after all it wrote was read. acpx's `exit`
     /// observer: the end is recorded, and the agent's leftovers are retired.
     private func exited(_ status: Int32?) {
@@ -403,6 +414,8 @@ private final class MessageWriter: @unchecked Sendable {
     private let available = DispatchSemaphore(value: 0)
     private var queue: [Data] = []
     private var finishing = false
+    /// Told, once, that a write failed. Set before ``start()``.
+    var onFailure: (@Sendable () -> Void)?
 
     init(process: ChildProcess, tap: RawWireTap) {
         self.process = process
@@ -446,9 +459,10 @@ private final class MessageWriter: @unchecked Sendable {
                 do {
                     try process.write(Array(next) + [0x0A])
                 } catch {
-                    // The agent closed its stdin (it exited): the exit, noticed on its
-                    // own, says what happened. What remains is not written.
+                    // The agent closed its stdin — mostly by exiting, which is noticed
+                    // on its own. What remains is not written.
                     failed = true
+                    onFailure?()
                 }
                 continue
             }

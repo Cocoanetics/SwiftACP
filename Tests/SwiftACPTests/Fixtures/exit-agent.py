@@ -9,6 +9,8 @@
   exits as `EXIT_AGENT_ON=prompt` does.
 - `EXIT_AGENT_ANSWER_THEN_EXIT=1` answers each prompt, then exits 0 at once.
 - `EXIT_AGENT_CLOSE_STDOUT=1` closes its stdout at a prompt and keeps running.
+- `EXIT_AGENT_CLOSE_STDIN=1` closes its stdin once it has answered `session/new`, and keeps
+  running.
 - `EXIT_AGENT_STRAY=1` writes lines that are no message before answering a prompt: JSON
   values that are no object, a batch, a stray object, and text that is no JSON.
 - `EXIT_AGENT_LINE_BYTES=N` answers `initialize` with a line of N bytes, LF excluded.
@@ -78,6 +80,10 @@ def main():
         elif method in ("session/new", "session/load"):
             result = {"sessionId": "exit-session"} if method == "session/new" else {}
             send({"jsonrpc": "2.0", "id": req_id, "result": result})
+            if os.environ.get("EXIT_AGENT_CLOSE_STDIN") == "1":
+                os.close(0)
+                time.sleep(30)
+                os._exit(0)
         elif method == "session/prompt":
             session_id = message["params"]["sessionId"]
             send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {

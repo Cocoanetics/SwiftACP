@@ -4,16 +4,28 @@ import Foundation
 import SwiftACP
 import Testing
 
+#if canImport(Glibc)
+import Glibc
+#endif
+
 /// What acpxd keeps of how its agent is doing, as acpx's queue owner keeps it (#87):
 /// closing a new session's agent is put down to the connection, a turn on a live agent
 /// records its pid, and an agent exiting mid-turn fails the turn in acpx's words and
 /// leaves its exit in the record.
 extension DaemonToolsTests {
+    /// SwiftACPTests' `exit-agent.py`, run with `environment`.
+    static func exitAgent(_ environment: String) throws -> String {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("SwiftACPTests/Fixtures/exit-agent.py")
+        return "/usr/bin/env \(environment) '\(python)' '\(fixture.path)'"
+    }
+
     @Test(.enabled(if: mockPythonAvailable))
     func aTurnTheAgentExitsInRecordsHowItEnded() async throws {
         let armed = NSTemporaryDirectory() + "exit-agent-armed-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: armed) }
-        let command = try AgentEndTests.command("EXIT_AGENT_ARMED='\(armed)' EXIT_AGENT_CODE=3")
+        let command = try Self.exitAgent("EXIT_AGENT_ARMED='\(armed)' EXIT_AGENT_CODE=3")
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
@@ -26,7 +38,7 @@ extension DaemonToolsTests {
             try await prompt(daemon, id, text: "first", client: CallingClient())
             let held = try #require(SessionStore.loadRecord(id))
             let pid = try #require(held.pid)
-            #expect(AgentEndTests.isRunning(pid_t(pid)))
+            #expect(kill(pid_t(pid), 0) == 0)
             #expect(held.lastAgentDisconnectReason == nil)
             #expect(held.lastAgentExitCode == nil)
             #expect(held.lastAgentExitAt == nil)

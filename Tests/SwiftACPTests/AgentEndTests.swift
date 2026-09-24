@@ -1,4 +1,3 @@
-@testable import ACPXCore
 import Foundation
 @testable import SwiftACP
 import Testing
@@ -96,6 +95,20 @@ import Glibc
             _ = try await session.prompt([.text("hi")])
         }
         #expect(error == AgentDisconnectedError(reason: .pipeClose, exitCode: nil, signal: nil))
+        await agent.close()
+    }
+
+    /// A message the agent can no longer be sent — it closed its stdin, but runs on —
+    /// ends the connection, rather than leaving its request waiting; nor does the write
+    /// raise `SIGPIPE` here.
+    @Test(.enabled(if: mockPythonAvailable))
+    func anAgentThatClosedItsStdinEndsTheConnection() async throws {
+        let agent = try await Self.launch("EXIT_AGENT_CLOSE_STDIN=1")
+        let session = try await agent.newSession()
+        let error = await #expect(throws: AgentDisconnectedError.self) {
+            _ = try await session.prompt([.text("hi")])
+        }
+        #expect(error == AgentDisconnectedError(reason: .connectionClose, exitCode: nil, signal: nil))
         await agent.close()
     }
 
