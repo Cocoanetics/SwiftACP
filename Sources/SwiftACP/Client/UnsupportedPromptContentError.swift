@@ -20,11 +20,13 @@ public struct UnsupportedPromptContentError: LocalizedError, Equatable {
         self.agent = agent
     }
 
+    /// The refused block's type: `image`, `audio` or `resource`.
+    public var blockType: String {
+        capability == PromptCapabilityRequirement.embeddedContext.rawValue ? "resource" : capability
+    }
+
+    /// acpx's `getUnsupportedPromptContentMessage`.
     public var errorDescription: String? {
-        let who = agent.map { "\"\($0)\"" } ?? "this agent"
-        return """
-            prompt[\(index)] needs promptCapabilities.\(capability), which \(who) does not \
-            advertise
-            """
+        "prompt[\(index)] \(blockType) content requires agentCapabilities.promptCapabilities.\(capability)"
     }
 }

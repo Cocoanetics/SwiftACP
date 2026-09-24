@@ -95,8 +95,14 @@ final class OutputRenderer: @unchecked Sendable {
             acpMessage(direction, Data(event.wireLine.utf8))
             return
         }
-        guard let message = WireJSON(parsing: Data(event.wireLine.utf8)),
-            let method = message["method"]?.stringValue,
+        guard let message = WireJSON(parsing: Data(event.wireLine.utf8)) else { return }
+        // An error response, either way, is shown as an error, as acpx's text formatter
+        // shows one (`parseJsonRpcErrorSummary`: its details, else its message).
+        if options.format == .text, !message.hasMember("method"), let error = AcpErrorPayload.extract(from: message) {
+            renderError(code: "RUNTIME", error.details ?? error.message)
+            return
+        }
+        guard let method = message["method"]?.stringValue,
             !["session/prompt", "session/cancel", "session/update"].contains(method)
         else { return }
         clientOperation(method)
@@ -211,17 +217,52 @@ final class OutputRenderer: @unchecked Sendable {
     /// Mirrors acpx's `onError`, which the wire-driven formatter emits on a
     /// JSON-RPC error response. The raw message is also surfaced on stderr by the
     /// command's `CLIError` handler.
-    func renderError(code: String, _ message: String, acpCode: Int? = nil, detailCode: String? = nil) {
+    func renderError(
+        code: String, _ message: String, acpCode: Int? = nil, detailCode: String? = nil, origin: String = "acp"
+    ) {
         lock.lock()
         defer { lock.unlock() }
         guard options.format == .text else { return }
         flushThoughtBuffer()
         beginSection()
         writeLine(ansi("[error] \(code): \(message)", "31"))
-        // The formatter renders the wire (acp-origin) error.
+        // The formatter renders a wire error as acp-origin.
         for hint in remediationHints(
-            code: code, origin: "acp", detailCode: detailCode, message: message, acpCode: acpCode) {
+            code: code, origin: origin, detailCode: detailCode, message: message, acpCode: acpCode) {
             writeLine(dim(hint))
+        }
+    }
+
+    /// Report a failed turn the way acpx's formatters report its queue owner's error
+    /// (`emitQueueOwnerError`): text and JSON output add nothing when the stream already
+    /// shows it; quiet output always prints its one line — after what the agent had
+    /// said, which a failure flushes.
+    func turnFailed(_ event: TurnFailedEvent) {
+        let acp = event.acp.flatMap(AcpErrorPayload.init)
+        switch options.format {
+        case .text:
+            guard !event.shown else { return }
+            renderError(
+                code: event.outputCode, event.message, acpCode: acp.flatMap { Int(exactly: $0.code) },
+                detailCode: event.detailCode, origin: event.origin ?? "runtime")
+        case .quiet:
+            lock.lock()
+            defer { lock.unlock() }
+            let text = quietChunks.joined()
+            quietChunks = []
+            if !text.isEmpty { out(text.hasSuffix("\n") ? text : text + "\n") }
+            let qualifier = event.detailCode.map { "\(event.outputCode) \($0)" } ?? event.outputCode
+            let line = (acp?.details ?? event.message)
+                .replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+            err("[acpx] error: \(qualifier) \(line)\n")
+        case .json:
+            guard !event.shown else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            out(JSONErrorLine.make(
+                outputCode: event.outputCode, detailCode: event.detailCode, origin: event.origin ?? "runtime",
+                message: event.message, sessionId: event.sessionId, acp: acp) + "\n")
         }
     }
 

@@ -93,7 +93,8 @@ enum ExecCommand {
         case "json":
             if !renderer.showedFailure(failure.message) {
                 renderer.jsonFailure(
-                    outputCode: failure.outputCode, detailCode: failure.detailCode, message: failure.message)
+                    outputCode: failure.outputCode, detailCode: failure.detailCode, origin: failure.origin,
+                    message: failure.message)
             }
         case "quiet":
             let qualifier = failure.detailCode.map { "\(failure.outputCode) \($0)" } ?? failure.outputCode
@@ -108,7 +109,7 @@ enum ExecCommand {
             } else {
                 err(failure.message)
                 for hint in remediationHints(
-                    code: failure.outputCode, origin: "cli", detailCode: failure.detailCode,
+                    code: failure.outputCode, origin: failure.origin, detailCode: failure.detailCode,
                     message: failure.message, acpCode: nil) {
                     err(hint)
                 }
@@ -126,6 +127,7 @@ enum ExecCommand {
     struct RunFailure {
         var outputCode = "RUNTIME"
         var detailCode: String?
+        var origin = "cli"
         var message: String
         /// The agent's `data.details`, when the failure is its error response and it
         /// gave some (acpx's `preferredAcpErrorDetails`).
@@ -140,8 +142,10 @@ enum ExecCommand {
                     let trimmed = details.trimmingCharacters(in: .whitespacesAndNewlines)
                     acpDetails = trimmed.isEmpty ? nil : trimmed
                 }
-            case let launch as AgentLaunchError:
-                detailCode = launch.detailCode
+            case let meta as OutputErrorMeta:
+                outputCode = meta.outputCode ?? outputCode
+                detailCode = meta.detailCode
+                origin = meta.origin ?? origin
             case let unsupported as ModelApplication.UnsupportedError:
                 message = unsupported.message
             case is PromptUnavailable:

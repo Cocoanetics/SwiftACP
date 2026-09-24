@@ -14,13 +14,15 @@ enum TopLevelFailure {
     ) -> Int32 {
         // acpx's `isOutputAlreadyEmitted`: the output shows it already; only the exit
         // code is left to give.
-        if let shown = error as? FailureAlreadyShown { return Failure(shown.underlying).processExitCode }
+        if let shown = error as? FailureAlreadyShown {
+            return shown.outputCode.map(exitCode(forOutputCode:)) ?? Failure(shown.underlying).processExitCode
+        }
         let failure = Failure(error)
         let (outputCode, detailCode, message) = (failure.outputCode, failure.detailCode, failure.message)
         switch requestedFormat(arguments) {
         case "json":
             out(JSONErrorLine.make(
-                outputCode: outputCode, detailCode: detailCode, origin: "cli", message: message,
+                outputCode: outputCode, detailCode: detailCode, origin: failure.origin, message: message,
                 sessionId: "unknown") + "\n")
         case "quiet":
             let qualifier = detailCode.map { "\(outputCode) \($0)" } ?? outputCode
@@ -30,7 +32,7 @@ enum TopLevelFailure {
         default:
             err(message)
             for hint in remediationHints(
-                code: outputCode, origin: "cli", detailCode: detailCode, message: message, acpCode: nil) {
+                code: outputCode, origin: failure.origin, detailCode: detailCode, message: message, acpCode: nil) {
                 err(hint)
             }
         }
@@ -41,6 +43,7 @@ enum TopLevelFailure {
     private struct Failure {
         var outputCode = "RUNTIME"
         var detailCode: String?
+        var origin = "cli"
         var message: String
         var commandExitCode: Int32?
 
@@ -57,8 +60,10 @@ enum TopLevelFailure {
             case let invalid as InvalidArgumentError:
                 outputCode = "USAGE"
                 message = invalid.message
-            case let launch as AgentLaunchError:
-                detailCode = launch.detailCode
+            case let meta as OutputErrorMeta:
+                outputCode = meta.outputCode ?? outputCode
+                detailCode = meta.detailCode
+                origin = meta.origin ?? origin
             default:
                 break
             }
@@ -117,4 +122,6 @@ enum TopLevelFailure {
 /// for it, and exits as `underlying` says.
 struct FailureAlreadyShown: Error {
     let underlying: Error
+    /// The output code the exit code follows, when the failure was already classified.
+    var outputCode: String?
 }
