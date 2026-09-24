@@ -96,13 +96,21 @@ enum ChildSpawn {
     ///     leads its own process group and has no controlling terminal.
     ///   - withoutCloseFrom: for tests, close inherited descriptors as on a glibc
     ///     without `closefrom` (Linux; ignored elsewhere).
-    ///   - withoutChangeDirectory: for tests, change into `cwd` as on a glibc without the
-    ///     `addchdir` spawn action (``changingDirectory(_:argv:cwd:)``).
+    ///   - withoutChangeDirectory: for tests, start it as on a glibc without the `addchdir`
+    ///     spawn action (Linux: ``forkingIntoDirectory(_:argv:cwd:environment:stdin:stdout:stderr:newSession:)``;
+    ///     ignored elsewhere).
     static func launch(
         _ executable: String, argv: [String], cwd: String, environment: [String],
         stdin: Input, stdout: Int32, stderr: Int32, newSession: Bool, withoutCloseFrom: Bool = false,
         withoutChangeDirectory: Bool = false
     ) throws -> pid_t {
+        #if !canImport(Darwin)
+        if withoutChangeDirectory || changeDirectory == nil {
+            return try forkingIntoDirectory(
+                executable, argv: argv, cwd: cwd, environment: environment, stdin: stdin, stdout: stdout,
+                stderr: stderr, newSession: newSession)
+        }
+        #endif
         #if canImport(Darwin)
         var actions: posix_spawn_file_actions_t?
         var attributes: posix_spawnattr_t?
@@ -121,8 +129,7 @@ enum ChildSpawn {
         }
         posix_spawn_file_actions_adddup2(&actions, stdout, 1)
         posix_spawn_file_actions_adddup2(&actions, stderr, 2)
-        let (program, arguments) = try !withoutChangeDirectory && addChangeDirectory(&actions, cwd)
-            ? (executable, argv) : changingDirectory(executable, argv: argv, cwd: cwd)
+        try addChangeDirectory(&actions, cwd)
         closeInheritedDescriptors(&actions, withoutCloseFrom: withoutCloseFrom)
 
         var noSignals = sigset_t()
@@ -139,58 +146,13 @@ enum ChildSpawn {
         guard result == 0 else { throw SpawnError(code: result) }
 
         var pid: pid_t = 0
-        let status = withCStrings(arguments) { argvPointers in
+        let status = withCStrings(argv) { argvPointers in
             withCStrings(environment) { environmentPointers in
-                posix_spawn(&pid, program, &actions, &attributes, argvPointers, environmentPointers)
+                posix_spawn(&pid, executable, &actions, &attributes, argvPointers, environmentPointers)
             }
         }
         guard status == 0 else { throw SpawnError(code: status) }
         return pid
-    }
-
-    /// Where the spawn itself cannot change into `cwd` — glibc before 2.29, without
-    /// `posix_spawn_file_actions_addchdir_np` — the child does: it starts as a shell that
-    /// changes into `cwd` and becomes `executable`, in the same process. The directory
-    /// and the program are looked at first, so what the child could not change into or
-    /// run fails the spawn as the spawn's own `chdir` and `execve` would, instead of
-    /// ending the shell with 126 or 127. `executable`'s `argv[0]` becomes its path.
-    private static func changingDirectory(
-        _ executable: String, argv: [String], cwd: String
-    ) throws -> (program: String, argv: [String]) {
-        var status = stat()
-        guard stat(cwd, &status) == 0 else { throw SpawnError(code: errno) }
-        guard UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFDIR) else { throw SpawnError(code: ENOTDIR) }
-        guard access(cwd, X_OK) == 0 else { throw SpawnError(code: EACCES) }
-        let failure = runnability(of: executable, from: cwd)
-        guard failure == 0 else { throw SpawnError(code: failure) }
-        return ("/bin/sh", ["/bin/sh", "-c", #"cd -- "$0" && exec "$@""#, cwd, executable] + argv.dropFirst())
-    }
-
-    /// What `execve` from `cwd` would make of `program`, short of running it: its
-    /// ``executability(of:)``, and for a script its interpreter's, as Linux follows
-    /// interpreters — up to five deep, a `#!` line naming none `ENOEXEC`. What the file
-    /// holds otherwise is left to `execve`.
-    private static func runnability(of program: String, from cwd: String, depth: Int = 0) -> Int32 {
-        let path = program.hasPrefix("/") ? program : "\(cwd)/\(program)"
-        let failure = executability(of: path)
-        guard failure == 0, let line = scriptLine(of: path) else { return failure }
-        guard depth < 5 else { return ELOOP }
-        let name = line.drop { $0 == 0x20 || $0 == 0x09 }.prefix { $0 != 0x20 && $0 != 0x09 && $0 != 0 }
-        guard !name.isEmpty else { return ENOEXEC }
-        return runnability(of: String(decoding: name, as: UTF8.self), from: cwd, depth: depth + 1)
-    }
-
-    /// The `#!` line of the script at `path` as Linux's `binfmt_script` reads it — what
-    /// follows `#!` within the file's first 256 bytes, to the end of the line, trailing
-    /// blanks dropped — or `nil` for a file that is no script or cannot be read.
-    private static func scriptLine(of path: String) -> [UInt8]? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        let head = [UInt8]((try? handle.read(upToCount: 256)) ?? Data())
-        guard head.starts(with: [0x23, 0x21]) else { return nil }
-        var line = head.dropFirst(2).prefix { $0 != 0x0A }
-        while let last = line.last, last == 0x20 || last == 0x09 { line = line.dropLast() }
-        return Array(line)
     }
 
     #if canImport(Darwin)
@@ -199,10 +161,9 @@ enum ChildSpawn {
     /// Darwin closes every descriptor the file actions did not set up.
     private static let closeOnExecDefault = Int32(POSIX_SPAWN_CLOEXEC_DEFAULT)
 
-    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t?, _ cwd: String) throws -> Bool {
+    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t?, _ cwd: String) throws {
         let result = posix_spawn_file_actions_addchdir_np(&actions, cwd)
         guard result == 0 else { throw SpawnError(code: result) }
-        return true
     }
 
     private static func closeInheritedDescriptors(
@@ -232,12 +193,12 @@ enum ChildSpawn {
         return unsafeBitCast(address, to: T.self)
     }
 
-    /// Whether the spawn changes into `cwd`: without the action, the child does.
-    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t, _ cwd: String) throws -> Bool {
-        guard let changeDirectory else { return false }
+    /// Where the action is missing, children are forked instead
+    /// (``forkingIntoDirectory(_:argv:cwd:environment:stdin:stdout:stderr:newSession:)``).
+    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t, _ cwd: String) throws {
+        guard let changeDirectory else { throw SpawnError(code: ENOSYS) }
         let result = cwd.withCString { changeDirectory(&actions, $0) }
         guard result == 0 else { throw SpawnError(code: result) }
-        return true
     }
 
     /// Nothing but the three standard descriptors reaches the child. Before glibc 2.34
@@ -250,9 +211,186 @@ enum ChildSpawn {
             _ = closeFrom(&actions, 3)
             return
         }
-        let open = (try? FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd")) ?? []
-        for descriptor in open.compactMap(Int32.init) where descriptor > 2 {
+        for descriptor in openDescriptors() {
             posix_spawn_file_actions_addclose(&actions, descriptor)
+        }
+    }
+
+    /// The descriptors this process has open besides the standard three.
+    private static func openDescriptors() -> [Int32] {
+        let open = (try? FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd")) ?? []
+        return open.compactMap(Int32.init).filter { $0 > 2 }
+    }
+
+    /// Start `executable` where the spawn itself cannot change into `cwd` — glibc before
+    /// 2.29, without `posix_spawn_file_actions_addchdir_np` — as libuv starts every child
+    /// on Linux (`uv__spawn_and_init_child_fork`): forked with its signals blocked, the
+    /// child does what the spawn's attributes and file actions would, changes into `cwd`
+    /// and execs, and whatever of that fails reaches this process as its errno, through
+    /// a pipe the exec closes. So what cannot run fails the spawn as `posix_spawn` fails
+    /// it — `ENOEXEC` included — and nothing but `executable` runs.
+    private static func forkingIntoDirectory(
+        _ executable: String, argv: [String], cwd: String, environment: [String],
+        stdin: Input, stdout: Int32, stderr: Int32, newSession: Bool
+    ) throws -> pid_t {
+        let failure = try makePipe(nonBlockingReadEnd: false)
+        defer { close(failure.read) }
+        let child = ForkedChild(
+            executable, argv: argv, cwd: cwd, environment: environment, stdin: stdin, stdout: stdout,
+            stderr: stderr, newSession: newSession, failure: failure.write,
+            inherited: openDescriptors().filter { $0 != failure.write })
+        defer { child.deallocate() }
+        // libuv's mask: every signal but those a failing program raises.
+        var blocked = sigset_t()
+        sigfillset(&blocked)
+        for kept in [SIGKILL, SIGSTOP, SIGTRAP, SIGSEGV, SIGBUS, SIGILL, SIGSYS, SIGABRT] { sigdelset(&blocked, kept) }
+        var previous = sigset_t()
+        pthread_sigmask(SIG_BLOCK, &blocked, &previous)
+        let pid = fork()
+        if pid == 0 { child.run() }
+        let forkFailure = errno
+        pthread_sigmask(SIG_SETMASK, &previous, nil)
+        close(failure.write)
+        guard pid > 0 else { throw SpawnError(code: forkFailure) }
+        guard let code = reportedErrno(failure.read) else { return pid }
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+        throw SpawnError(code: code)
+    }
+
+    /// The errno a forked child reported before it ended, or `nil` once it has exec'd
+    /// and the pipe has closed without one.
+    private static func reportedErrno(_ descriptor: Int32) -> Int32? {
+        var code: Int32 = 0
+        var received = 0
+        while received < 4 {
+            let count = withUnsafeMutableBytes(of: &code) { read(descriptor, $0.baseAddress! + received, 4 - received) }
+            if count > 0 {
+                received += count
+            } else if count < 0, errno == EINTR {
+                continue
+            } else {
+                break
+            }
+        }
+        return received == 4 ? code : nil
+    }
+
+    /// What a forked child runs on, made before the fork — C strings and descriptors —
+    /// so that between the fork and the exec it calls only async-signal-safe functions
+    /// and allocates nothing.
+    private struct ForkedChild {
+        let program: UnsafeMutablePointer<CChar>
+        let argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+        let environment: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+        let directory: UnsafeMutablePointer<CChar>
+        let null: UnsafeMutablePointer<CChar>
+        /// The pipe to read standard input from; `-1` for `/dev/null`.
+        let stdin: Int32
+        let stdout: Int32
+        let stderr: Int32
+        let newSession: Bool
+        /// Where a failure's errno goes: the write end of a pipe that closes on exec.
+        let failure: Int32
+        /// What to close: every descriptor open at the fork but the standard three and
+        /// `failure`.
+        let inherited: UnsafeMutableBufferPointer<Int32>
+        let noSignals: UnsafeMutablePointer<sigset_t>
+
+        init(
+            _ executable: String, argv: [String], cwd: String, environment: [String], stdin: Input,
+            stdout: Int32, stderr: Int32, newSession: Bool, failure: Int32, inherited: [Int32]
+        ) {
+            program = strdup(executable)
+            self.argv = Self.cStrings(argv)
+            self.environment = Self.cStrings(environment)
+            directory = strdup(cwd)
+            null = strdup("/dev/null")
+            switch stdin {
+            case .null: self.stdin = -1
+            case .pipe(let descriptor): self.stdin = descriptor
+            }
+            self.stdout = stdout
+            self.stderr = stderr
+            self.newSession = newSession
+            self.failure = failure
+            self.inherited = .allocate(capacity: inherited.count)
+            _ = self.inherited.initialize(from: inherited)
+            noSignals = .allocate(capacity: 1)
+            noSignals.initialize(to: sigset_t())
+            sigemptyset(noSignals)
+        }
+
+        private static func cStrings(_ strings: [String]) -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?> {
+            let pointers = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: strings.count + 1)
+            for (index, string) in strings.enumerated() { (pointers + index).initialize(to: strdup(string)) }
+            (pointers + strings.count).initialize(to: nil)
+            return pointers
+        }
+
+        func deallocate() {
+            for strings in [argv, environment] {
+                var index = 0
+                while let string = strings[index] {
+                    free(string)
+                    index += 1
+                }
+                strings.deallocate()
+            }
+            free(program)
+            free(directory)
+            free(null)
+            inherited.deallocate()
+            noSignals.deallocate()
+        }
+
+        /// The child's side, as libuv's `uv__process_child_init`: every signal at its
+        /// default disposition, a session of its own if asked, the standard descriptors,
+        /// the directory, nothing else open, no signal blocked — then the exec.
+        func run() -> Never {
+            var number: Int32 = 1
+            while number < 65 {
+                if number != SIGKILL, number != SIGSTOP { _ = signal(number, SIG_DFL) }
+                number += 1
+            }
+            if newSession, setsid() < 0 { fail() }
+            if stdin < 0 {
+                let descriptor = open(null, O_RDONLY)
+                if descriptor < 0 { fail() }
+                if descriptor != 0 {
+                    if dup2(descriptor, 0) < 0 { fail() }
+                    close(descriptor)
+                }
+            } else {
+                redirect(stdin, to: 0)
+            }
+            redirect(stdout, to: 1)
+            redirect(stderr, to: 2)
+            if chdir(directory) != 0 { fail() }
+            var index = 0
+            while index < inherited.count {
+                close(inherited[index])
+                index += 1
+            }
+            pthread_sigmask(SIG_SETMASK, noSignals, nil)
+            execve(program, argv, environment)
+            fail()
+        }
+
+        /// `descriptor` as `target`, open across the exec.
+        private func redirect(_ descriptor: Int32, to target: Int32) {
+            if descriptor == target {
+                if fcntl(target, F_SETFD, 0) < 0 { fail() }
+            } else if dup2(descriptor, target) < 0 {
+                fail()
+            }
+        }
+
+        /// Report `errno` to the parent and end.
+        private func fail() -> Never {
+            var code = errno
+            _ = write(failure, &code, 4)
+            _exit(127)
         }
     }
     #endif
