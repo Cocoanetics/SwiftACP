@@ -275,6 +275,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         Task {
             if await waitForExit(timeout: .milliseconds(100)) { return }
             recordDisconnect(.pipeClose)
+            // acpx's `handleAgentDisconnect`: an agent whose connection is gone is ended.
+            _ = startTermination()
         }
     }
 
@@ -375,31 +377,6 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
-    }
-}
-
-/// The agent's stderr as acpx keeps it for a startup failure (`captureStartupStderr`):
-/// each chunk decoded on its own, and only the last 8,192 characters (UTF-16 units)
-/// of it all.
-struct StderrTail {
-    static let limit = 8192
-    private var text: [UInt16] = []
-
-    mutating func append(_ bytes: [UInt8]) {
-        let chunk = String(decoding: bytes, as: UTF8.self)
-        guard !chunk.isEmpty else { return }
-        text += chunk.utf16
-        if text.count > Self.limit { text.removeFirst(text.count - Self.limit) }
-    }
-
-    /// acpx's `summarizeStartupStderr`: trimmed, each run of whitespace one space, at
-    /// most 8,192 characters; `nil` when there is nothing.
-    var summary: String? {
-        let joined = String(decoding: text, as: UTF16.self).trimmedLikeJavaScript
-        guard !joined.isEmpty else { return nil }
-        let collapsed = joined.unicodeScalars.split(whereSeparator: TerminalOutputLimit.isJavaScriptWhitespace)
-            .map { String(String.UnicodeScalarView($0)) }.joined(separator: " ")
-        return String(decoding: Array(collapsed.utf16.prefix(Self.limit)), as: UTF16.self)
     }
 }
 

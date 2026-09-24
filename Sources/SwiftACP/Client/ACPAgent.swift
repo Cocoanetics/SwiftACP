@@ -164,14 +164,17 @@ public final class ACPAgent: Sendable {
             // A command the agent started meanwhile goes with it: nothing else would
             // ever reach its terminal.
             await connection.shutDownTerminals()
-            await connection.close()
             #if os(macOS) || os(Linux)
             if let agent = transport as? AgentProcessTransport {
+                // Whether the agent went is settled before anything closes it: closing ends
+                // its stdin, and it would exit then, whatever the failure was.
                 let failure = await startupFailure(error, of: agent, agentCommand: agentCommand)
+                await connection.close()
                 await agent.terminate()
                 throw failure
             }
             #endif
+            await connection.close()
             transport.close()
             throw error
         }

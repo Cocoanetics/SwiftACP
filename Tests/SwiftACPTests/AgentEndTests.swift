@@ -1,4 +1,6 @@
+#if os(macOS) || os(Linux)
 import Foundation
+import JSONFoundation
 @testable import SwiftACP
 import Testing
 
@@ -95,7 +97,55 @@ import Glibc
             _ = try await session.prompt([.text("hi")])
         }
         #expect(error == AgentDisconnectedError(reason: .pipeClose, exitCode: nil, signal: nil))
+        // It is ended with its connection, closed or not (#113 review).
+        let transport = try #require(agent.transport as? AgentProcessTransport)
+        #expect(await transport.waitForExit(timeout: .seconds(5)))
         await agent.close()
+    }
+
+    /// The transport ends such an agent itself, whoever reads it — not only once a
+    /// JSON-RPC peer, seeing the end, closes it (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func theTransportEndsAnAgentWhoseStdoutClosed() async throws {
+        let launch = try AgentRegistry.launch(
+            for: Self.command("EXIT_AGENT_CLOSE_STDOUT=1"), cwd: NSTemporaryDirectory(),
+            environment: nil, inheritStderr: false)
+        let transport = try AgentProcessTransport.start(
+            launch, agentCommand: "exit-agent", maxMessageBytes: nil, tap: RawWireTap())
+        try transport.send(.request(id: 1, method: "session/prompt", params: .object([
+            "sessionId": .string("exit-session"), "prompt": .array([])
+        ])))
+        var ending: Error?
+        do {
+            for try await _ in transport.makeInboundStream() {}
+        } catch {
+            ending = error
+        }
+        #expect(ending as? AgentDisconnectedError
+            == AgentDisconnectedError(reason: .pipeClose, exitCode: nil, signal: nil))
+        #expect(await transport.waitForExit(timeout: .seconds(5)))
+        await transport.terminate()
+    }
+
+    /// A handshake the agent refuses fails with its error, not as a startup failure: it
+    /// is still running when it answers, and exits only once it is closed (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aHandshakeTheAgentRefusesKeepsItsError() async throws {
+        let error = await #expect(throws: JSONRPCErrorBody.self) {
+            _ = try await Self.launch("EXIT_AGENT_INIT_ERROR=1")
+        }
+        #expect(error?.message == "init refused")
+    }
+
+    /// So does one the client gives up on: no credential for the agent's sign-in, under
+    /// the `fail` policy.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aSignInRefusedByPolicyKeepsItsError() async throws {
+        await #expect(throws: AuthPolicyError.self) {
+            _ = try await ACPAgent.launch(
+                agent: Self.command("EXIT_AGENT_AUTH=1"), cwd: NSTemporaryDirectory(), permission: .approveAll,
+                authPolicy: "fail", inheritStderr: false)
+        }
     }
 
     /// A message the agent can no longer be sent — it closed its stdin, but runs on —
@@ -202,3 +252,4 @@ final class Lines: @unchecked Sendable {
 
     var all: [String] { lock.withLock { lines } }
 }
+#endif

@@ -14,6 +14,8 @@
 - `EXIT_AGENT_STRAY=1` writes lines that are no message before answering a prompt: JSON
   values that are no object, a batch, a stray object, and text that is no JSON.
 - `EXIT_AGENT_LINE_BYTES=N` answers `initialize` with a line of N bytes, LF excluded.
+- `EXIT_AGENT_INIT_ERROR=1` answers `initialize` with an error, and runs on.
+- `EXIT_AGENT_AUTH=1` advertises a sign-in method on `initialize`.
 - `EXIT_AGENT_STUBBORN=1` ignores `SIGTERM` and keeps running once its stdin ends.
 - `EXIT_AGENT_CHILD=<path>` starts `sleep 300` at `initialize`, ignoring `SIGTERM` like
   itself, and writes its pid to the path.
@@ -53,7 +55,11 @@ def die():
 def initialize_result(req_id):
     result = {"protocolVersion": 1, "agentInfo": {"name": "exit-agent", "version": "0.1.0"},
               "agentCapabilities": {"loadSession": True}, "authMethods": []}
+    if os.environ.get("EXIT_AGENT_AUTH") == "1":
+        result["authMethods"] = [{"id": "probe-login", "name": "Probe login"}]
     answer = {"jsonrpc": "2.0", "id": req_id, "result": result}
+    if os.environ.get("EXIT_AGENT_INIT_ERROR") == "1":
+        answer = {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": "init refused"}}
     if LINE_BYTES:
         result["pad"] = ""
         result["pad"] = "a" * (LINE_BYTES - len(json.dumps(answer)))
