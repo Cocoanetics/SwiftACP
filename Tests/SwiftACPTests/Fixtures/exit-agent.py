@@ -8,6 +8,7 @@
 - `EXIT_AGENT_ARMED=<path>`: while that file exists, the next prompt removes it and
   exits as `EXIT_AGENT_ON=prompt` does.
 - `EXIT_AGENT_ANSWER_THEN_EXIT=1` answers each prompt, then exits 0 at once.
+- `EXIT_AGENT_HOLD=1` never answers a prompt, once it has streamed `partial `.
 - `EXIT_AGENT_CLOSE_STDOUT=1` closes its stdout at a prompt and keeps running; `=set_mode`
   does so at `session/set_mode` instead.
 - `EXIT_AGENT_CLOSE_STDIN=1` closes its stdin once it has answered `session/new`, and keeps
@@ -102,6 +103,8 @@ def main():
                 if armed and os.path.exists(armed):
                     os.remove(armed)
                 die()
+            if os.environ.get("EXIT_AGENT_HOLD") == "1":
+                continue
             if os.environ.get("EXIT_AGENT_CLOSE_STDOUT") in ("1", "prompt"):
                 os.close(1)
                 time.sleep(30)

@@ -145,9 +145,10 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     /// Stop the transport: nothing more is sent, and the agent is ended in the
     /// background (see ``terminate()``, which a caller awaits to know it is over).
     /// Closing the connection is the first sign of the agent's end acpx sees when it
-    /// closes a client — the process is still running — so it is `connection_close`.
+    /// closes a client — the process is still running — so it is `connection_close`,
+    /// and never unexpected: acpx's `close()` marks its client closing first.
     func close() {
-        recordDisconnect(.connectionClose)
+        recordDisconnect(.connectionClose, closing: true)
         _ = startTermination()
     }
 
@@ -302,9 +303,11 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     }
 
     /// acpx's `recordAgentExit`: the first account of the agent's end wins, and the
-    /// requests still waiting fail with it.
-    private func recordDisconnect(_ reason: AgentDisconnectReason) {
+    /// requests still waiting fail with it. `closing` marks the end as the client's own
+    /// doing — from now on, whatever else is seen of it.
+    private func recordDisconnect(_ reason: AgentDisconnectReason, closing: Bool = false) {
         let recorded: AgentExit? = lock.withLock {
+            if closing { self.closing = true }
             guard lastExit == nil else { return nil }
             let exit = AgentExit(
                 exitCode: exitStatus?.exitCode, signal: exitStatus?.signal, exitedAt: Self.now(), reason: reason,

@@ -62,6 +62,26 @@ import Glibc
         await agent.close()
     }
 
+    /// Closing an agent mid-turn ends it as the client's doing, not unexpectedly: acpx's
+    /// `close()` marks its client closing before anything of the end is recorded (#113
+    /// review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func closingAnAgentMidTurnIsNoUnexpectedEnd() async throws {
+        let (streamed, streaming) = AsyncStream<Void>.makeStream()
+        let agent = try await Self.launch("EXIT_AGENT_HOLD=1") { direction, body in
+            if direction == .inbound, String(decoding: body, as: UTF8.self).contains("partial ") { streaming.yield() }
+        }
+        let session = try await agent.newSession()
+        let turn = Task { try await session.prompt([.text("hi")]) }
+        var updates = streamed.makeAsyncIterator()
+        _ = await updates.next()
+        await agent.close()
+        _ = await turn.result
+        let exit = try #require(agent.lifecycle?.lastExit)
+        #expect(exit.reason == .connectionClose)
+        #expect(!exit.unexpectedDuringPrompt)
+    }
+
     /// acpx's `AgentStartupError`: the exit, then the agent's stderr with its runs of
     /// whitespace made one space.
     @Test(.enabled(if: mockPythonAvailable))
