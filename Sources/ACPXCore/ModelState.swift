@@ -91,9 +91,7 @@ public enum ModelSupport {
         applySessionModelState(configOptions: configOptions, models: models, to: &state)
         let derived = modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
         guard let derived else {
-            state.currentModelId = nil
-            state.availableModels = nil
-            state.modelControl = nil
+            clearAdvertisedModelState(&state)
             return
         }
         if models != nil, derived.configId == nil, case .array(let options)? = state.configOptions {
@@ -112,12 +110,62 @@ public enum ModelSupport {
         }
         let derived =
             modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
-        if let derivedModels = derived {
-            let models = derivedModels
-            state.currentModelId = models.currentModelId
-            state.availableModels = models.availableModels.map(\.modelId)
-            state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
+        if let derived { applyAdvertisedModelState(derived, to: &state) }
+    }
+
+    /// acpx's `applyAdvertisedModelState`: the session's current model, the models it
+    /// offers and their names, and which control sets it.
+    public static func applyAdvertisedModelState(_ models: ModelState, to state: inout SessionAcpxState) {
+        state.currentModelId = models.currentModelId
+        state.availableModels = models.availableModels.map(\.modelId)
+        state.availableModelNames = Dictionary(
+            models.availableModels.map { ($0.modelId, $0.name) }, uniquingKeysWith: { _, last in last })
+        state.modelControl = models.configId != nil ? "config_option" : "legacy_set_model"
+    }
+
+    /// acpx's `clearAdvertisedModelState`.
+    static func clearAdvertisedModelState(_ state: inout SessionAcpxState) {
+        state.currentModelId = nil
+        state.availableModels = nil
+        state.availableModelNames = nil
+        state.modelControl = nil
+    }
+
+    /// acpx's `applyConfigOptionsModelState`: the config options the agent reported
+    /// replace the record's, with the model state they carry. When they carry none, a
+    /// legacy model control is kept, and any other model state is cleared.
+    public static func applyConfigOptionsModelState(_ configOptions: [JSONValue], to state: inout SessionAcpxState) {
+        var previousOptions: [JSONValue]?
+        if case .array(let options)? = state.configOptions { previousOptions = options }
+        let preservesLegacyControl = state.modelControl == "legacy_set_model"
+            || (state.modelControl == nil && modelState(fromConfigOptions: previousOptions) == nil
+                && state.availableModels != nil)
+        state.configOptions = .array(configOptions)
+        if let models = modelState(fromConfigOptions: configOptions) {
+            applyAdvertisedModelState(models, to: &state)
+        } else if preservesLegacyControl {
+            state.modelControl = "legacy_set_model"
+        } else {
+            clearAdvertisedModelState(&state)
         }
+    }
+
+    /// acpx's `applyInitialModelSelection`: what applying the requested model to a new
+    /// session leaves in its record. The advertised model state is taken from the
+    /// agent's reply to the model's config option when there was one, else from what
+    /// `session/new` advertised; a model that was applied is the current one.
+    public static func applyInitialModelSelection(
+        _ application: ModelApplication.Application, requestedModel: String?, originalModels: ModelState?,
+        to state: inout SessionAcpxState
+    ) {
+        let replied = application.response?.configOptions
+        if let replied { applyConfigOptionsModelState(replied, to: &state) }
+        if let models = application.response != nil ? modelState(fromConfigOptions: replied) : originalModels {
+            applyAdvertisedModelState(models, to: &state)
+        }
+        guard application.applied else { return }
+        let current = modelState(fromConfigOptions: replied)?.currentModelId ?? requestedModel
+        state.currentModelId = current.flatMap { $0.javaScriptTrimmed.isEmpty ? nil : $0.javaScriptTrimmed }
     }
 }
 

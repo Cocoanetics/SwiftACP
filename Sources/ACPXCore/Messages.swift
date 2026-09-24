@@ -298,6 +298,8 @@ public struct SessionAcpxState: Codable, Sendable {
     public var desiredConfigOptions: [String: String]?
     public var currentModelId: String?
     public var availableModels: [String]?
+    /// Each advertised model's display name, by model id — acpx's `available_model_names`.
+    public var availableModelNames: [String: String]?
     public var modelControl: String?
     public var availableCommands: [AvailableCommand]?
     public var configOptions: JSONValue?
@@ -402,6 +404,7 @@ extension SessionAcpxState {
         desiredConfigOptions = field(.desiredConfigOptions)
         currentModelId = field(.currentModelId)
         availableModels = field(.availableModels)
+        availableModelNames = field(.availableModelNames)
         modelControl = field(.modelControl)
         availableCommands = field(.availableCommands)
         configOptions = field(.configOptions)

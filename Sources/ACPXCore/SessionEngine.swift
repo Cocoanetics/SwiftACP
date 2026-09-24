@@ -36,7 +36,8 @@ public enum SessionEngine {
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .headlessController,
-        inheritStderr: Bool = false
+        inheritStderr: Bool = false,
+        onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
         // Validate the session's own servers before paying for a spawn.
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
@@ -48,6 +49,15 @@ public enum SessionEngine {
         do {
             let response = try await handle.connection.newSession(
                 NewSessionRequest(cwd: cwd, mcpServers: requestServers, meta: meta))
+            // acpx's `createFreshSessionState`: the requested model goes on the new
+            // session through whichever control it advertises — or, not advertised,
+            // fails the creation.
+            let advertised = ModelSupport.modelState(fromConfigOptions: response.configOptions)
+                ?? ModelSupport.modelState(fromLegacyModels: response.models)
+            let application = try await ModelApplication.applyRequestedModel(
+                connection: handle.connection, sessionId: response.sessionId,
+                requestedModel: sessionOptions?.model, models: advertised, agentCommand: agentCommand,
+                onWarning: onModelWarning)
             let started = nowISO()
             var record = SessionRecord(
                 acpxRecordId: response.sessionId, acpSessionId: response.sessionId,
@@ -66,6 +76,8 @@ public enum SessionEngine {
             var acpx = SessionAcpxState()
             ModelSupport.applySessionModelState(
                 configOptions: response.configOptions, models: response.models, to: &acpx)
+            ModelSupport.applyInitialModelSelection(
+                application, requestedModel: sessionOptions?.model, originalModels: advertised, to: &acpx)
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
             acpx.mcpServers = sessionMcpServers
             // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
