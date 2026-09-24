@@ -59,8 +59,7 @@ struct SessionRecordSerializerTests {
         "name with a lone surrogate": "a Swift string has no lone surrogate",
         "variants after a wrong-typed one": "the model holds one variant of a message's content",
         "acpx not an object": "SwiftACP keeps its restrictions at their tightest",
-        "acpx null": "SwiftACP keeps its restrictions at their tightest",
-        "acpx session options": "the model does not hold session_options.env yet (#108)"
+        "acpx null": "SwiftACP keeps its restrictions at their tightest"
     ]
 
     /// A record read into the model and written back is the file acpx writes for it,
@@ -72,7 +71,7 @@ struct SessionRecordSerializerTests {
             let sessionsDir = ACPXPaths.sessionsDir.path
             let stored = ACPXPaths.sessionsDir.appendingPathComponent("stored.json")
             let written = Self.cases.filter { $0.disk != nil && Self.beyondTheModel[$0.name] == nil }
-            #expect(written.count == 66)
+            #expect(written.count == 67)
             for testCase in written {
                 try Data(testCase.raw.utf8).write(to: stored)
                 let record = try #require(SessionStore.readRecord(at: stored), "\(testCase.name)")
