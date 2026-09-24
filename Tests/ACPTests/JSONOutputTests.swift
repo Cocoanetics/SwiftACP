@@ -75,6 +75,24 @@ import Testing
         }
     }
 
+    /// An agent that launches an argv — an `argv` entry, or a `command` with `args` — is
+    /// shown as that argv, as acpx's `toConfigDisplay` shows it (#74).
+    @Test func configShowListsAnArgvAgentAsItsArgv() async throws {
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            try Data(#"""
+                {"agents": {"vec": {"argv": ["python3", "/tmp/a.py", "a b"]},
+                            "old": {"command": "node", "args": ["/tmp/b.js", "x y"]},
+                            "plain": {"command": "npx my-agent"}}}
+                """#.utf8).write(to: ACPXPaths.globalConfigPath)
+            let document = ConfigCommand.document(try ConfigLoader.load(cwd: NSTemporaryDirectory()))
+            #expect(document["agents"]?.stringified == #"""
+                {"vec":{"argv":["python3","/tmp/a.py","a b"]},"old":{"argv":["node","/tmp/b.js","x y"]},\#
+                "plain":{"command":"npx my-agent"}}
+                """#)
+        }
+    }
+
     /// A member with no value is left out, as `JSON.stringify` leaves out `undefined`;
     /// an explicit `null` is printed. The order is the order given.
     @Test func membersKeepTheirOrderAndAnAbsentOneIsLeftOut() {

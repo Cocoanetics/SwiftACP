@@ -44,6 +44,9 @@ public struct SessionRecord: Codable, Sendable {
     public var acpSessionId: String
     public var agentSessionId: String?
     public var agentCommand: String
+    /// The exact argv the agent is launched with (`agent_argv`), when it has one: a
+    /// config agent's `argv`, or the built-in's. Without it, `agentCommand` is split.
+    public var agentArgv: [String]?
     public var cwd: String
     public var name: String?
     public var createdAt: String
@@ -86,7 +89,7 @@ public struct SessionRecord: Codable, Sendable {
     // camelCase property names; the disk encoder/decoder translate to/from
     // snake_case via key strategies (see Coders.swift).
     enum CodingKeys: String, CodingKey {
-        case schema, acpxRecordId, acpSessionId, agentSessionId, agentCommand, cwd, name
+        case schema, acpxRecordId, acpSessionId, agentSessionId, agentCommand, agentArgv, cwd, name
         case createdAt, lastUsedAt, lastSeq, lastRequestId, eventLog, closed, closedAt, pid
         case agentStartedAt, lastPromptAt, lastAgentExitCode, lastAgentExitSignal, lastAgentExitAt
         case lastAgentDisconnectReason, protocolVersion, agentCapabilities, title, messages
@@ -124,6 +127,10 @@ public struct SessionRecord: Codable, Sendable {
         acpSessionId = try c.decode(String.self, forKey: .acpSessionId)
         agentSessionId = try c.decodeIfPresent(String.self, forKey: .agentSessionId)
         agentCommand = try c.decode(String.self, forKey: .agentCommand)
+        // `parseOptionalAgentArgv`: strings, at least one, the first not empty.
+        agentArgv = (try? c.decodeIfPresent([String].self, forKey: .agentArgv)).flatMap { argv in
+            argv.first.map { !$0.isEmpty } == true ? argv : nil
+        }
         cwd = try c.decode(String.self, forKey: .cwd)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         createdAt = try c.decode(String.self, forKey: .createdAt)
@@ -167,6 +174,7 @@ public struct SessionRecord: Codable, Sendable {
         try c.encode(acpSessionId, forKey: .acpSessionId)
         try c.encodeIfPresent(agentSessionId, forKey: .agentSessionId)
         try c.encode(agentCommand, forKey: .agentCommand)
+        try c.encodeIfPresent(agentArgv, forKey: .agentArgv)
         try c.encode(cwd, forKey: .cwd)
         try c.encodeIfPresent(name, forKey: .name)
         try c.encode(createdAt, forKey: .createdAt)
