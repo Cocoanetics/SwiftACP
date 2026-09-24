@@ -19,9 +19,9 @@ public protocol ACPTerminalHandler: AnyObject, Sendable {
         -> WaitForTerminalExitResponse
     func killTerminal(_ request: KillTerminalRequest) async throws -> KillTerminalResponse
     func releaseTerminal(_ request: ReleaseTerminalRequest) async throws -> ReleaseTerminalResponse
-    /// Release every terminal still open: the connection has ended. A
-    /// ``createTerminal(_:)`` arriving once this has begun must be refused (throw
-    /// `CancellationError`), or its command would outlive the connection.
+    /// Release every terminal still open: the connection has ended. It may be called
+    /// more than once. A ``createTerminal(_:)`` arriving once this has begun must be
+    /// refused (throw `CancellationError`), or its command would outlive the connection.
     func shutdown() async
 }
 
@@ -33,7 +33,9 @@ public enum TerminalError: Error, Sendable, Equatable, LocalizedError, CustomStr
     /// No terminal has this id: it was never created, or it was released.
     case unknownTerminal(String)
     /// The command could not be started — Node's `spawn <command> <code>`, where the
-    /// code is the errno's name, such as `ENOENT`.
+    /// code is the errno's name, such as `ENOENT`. Node reports only `EACCES`,
+    /// `EAGAIN`, `EMFILE`, `ENFILE` and `ENOENT` that way, as the child's `error`
+    /// event; any other code its `spawn` throws at once, as `spawn <code>`.
     case spawnFailed(command: String, code: String)
     /// A value `spawn` refuses before starting anything — an empty command, or a NUL
     /// inside the command, an argument, the directory or a variable, which C would cut
@@ -44,10 +46,15 @@ public enum TerminalError: Error, Sendable, Equatable, LocalizedError, CustomStr
         switch self {
         case .permissionDenied: return "Permission denied for terminal/create"
         case .unknownTerminal(let id): return "Unknown terminal: \(id)"
-        case .spawnFailed(let command, let code): return "spawn \(command) \(code)"
+        case .spawnFailed(let command, let code):
+            return Self.reportedAsChildErrors.contains(code) ? "spawn \(command) \(code)" : "spawn \(code)"
         case .invalidSpawnArgument(let message): return message
         }
     }
+
+    /// The codes Node's `spawn` reports through the child's `error` event, naming the
+    /// command (`lib/internal/child_process.js`).
+    private static let reportedAsChildErrors: Set = ["EACCES", "EAGAIN", "EMFILE", "ENFILE", "ENOENT"]
 
     public var errorDescription: String? { description }
 }

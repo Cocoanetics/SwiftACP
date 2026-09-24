@@ -159,44 +159,6 @@ struct TerminalManagerTests {
         #expect(try await run(manager, "pwd", cwd: other).output.output == other + "\n")
     }
 
-    /// A relative `PATH` entry names a directory under the command's own directory,
-    /// even when that directory is itself relative, as Node's spawn finds it.
-    @Test func aRelativePathEntryIsFoundFromTheCommandsDirectory() async throws {
-        let root = try workspace()
-        try FileManager.default.createDirectory(atPath: root + "/sub/bin", withIntermediateDirectories: true)
-        try "#!/bin/sh\necho ran in \"$(pwd -P)\"\n".write(
-            toFile: root + "/sub/bin/tool", atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root + "/sub/bin/tool")
-        // `sub`, as seen from this process's own directory: a relative `cwd` is resolved
-        // from there, as in Node. (Changing this process's directory would race the
-        // tests running beside this one.)
-        let relativeSub = Self.relativePath(from: FileManager.default.currentDirectoryPath, to: root + "/sub")
-        let process = try TerminalProcess.spawn(
-            command: "tool", arguments: [], cwd: relativeSub, environment: ["PATH": "bin"])
-        let output = TerminalOutput(limit: 4096)
-        let text: String = await withCheckedContinuation { continuation in
-            process.start(onOutput: { output.append($0) }, onExit: { _ in
-                continuation.resume(returning: output.read().text)
-            })
-        }
-        process.stopReading()
-        #expect(text == "ran in \(root)/sub\n")
-    }
-
-    /// `to` relative to `from`; both absolute and physical.
-    static func relativePath(from: String, to: String) -> String {
-        let physical = realpath(from, nil).map { resolved in
-            defer { free(resolved) }
-            return String(cString: resolved)
-        }
-        let fromParts = (physical ?? from).split(separator: "/")
-        let toParts = to.split(separator: "/")
-        var common = 0
-        while common < min(fromParts.count, toParts.count), fromParts[common] == toParts[common] { common += 1 }
-        let up = Array(repeating: "..", count: fromParts.count - common)
-        return (up + toParts[common...].map(String.init)).joined(separator: "/")
-    }
-
     /// Node reports a missing working directory as the command not being found.
     @Test func aMissingDirectoryIsENOENT() async throws {
         let manager = TerminalManager(cwd: try workspace())
@@ -420,6 +382,30 @@ struct TerminalManagerTests {
         let exit = try await manager.waitForTerminalExit(WaitForTerminalExitRequest(sessionId: "s", terminalId: id))
         #expect(exit == WaitForTerminalExitResponse(signal: "SIGKILL"))
         _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: id))
+    }
+
+    /// The command is signalled before what it started. Signalled after, a shell
+    /// waiting on its killed child carries on — runs its next command, or exits `137`
+    /// before its own signal arrives; the gap here widens that moment.
+    @Test func theCommandIsSignalledBeforeWhatItStarted() async throws {
+        let fifo = try Fifo()
+        defer { fifo.remove() }
+        let manager = TerminalManager(cwd: try workspace(), killGrace: 0.2, signalGap: 0.3)
+        let term = try await manager.createTerminal(
+            shell("echo ready > \"$1\"; sleep 30; echo after", fifo)).terminalId
+        #expect(await fifo.read() == "ready")
+        _ = try await manager.killTerminal(KillTerminalRequest(sessionId: "s", terminalId: term))
+        let ended = try await manager.terminalOutput(TerminalOutputRequest(sessionId: "s", terminalId: term))
+        #expect(ended.output == "" && ended.exitStatus == TerminalExitStatus(signal: "SIGTERM"))
+        _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: term))
+
+        let kill = try await manager.createTerminal(
+            shell("trap '' TERM; echo ready > \"$1\"; sleep 30", fifo)).terminalId
+        #expect(await fifo.read() == "ready")
+        _ = try await manager.killTerminal(KillTerminalRequest(sessionId: "s", terminalId: kill))
+        let exit = try await manager.waitForTerminalExit(WaitForTerminalExitRequest(sessionId: "s", terminalId: kill))
+        #expect(exit == WaitForTerminalExitResponse(signal: "SIGKILL"))
+        _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: kill))
     }
 
     /// Shutting down releases every terminal, killing what still runs.

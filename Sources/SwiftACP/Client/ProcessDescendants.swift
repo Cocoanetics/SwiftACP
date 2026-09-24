@@ -190,10 +190,11 @@ final class ProcessDescendants {
         return clock.isAfterBirth(entry.birth)
     }
 
-    /// Signal every tracked process, from a fresh snapshot: a saved pid is never
-    /// signalled without its birth matching again.
-    func signal(_ signal: Int32, rootIsRunning: Bool) {
-        guard capture(rootIsRunning: rootIsRunning), !retired else { return }
+    /// Signal every process the snapshot just taken tracks: a saved pid is never
+    /// signalled without its birth matching again, so a ``capture(rootIsRunning:)``
+    /// that succeeded comes first.
+    func signalTracked(_ signal: Int32) {
+        guard !retired else { return }
         for pid in identities.keys where kill(pid, signal) != 0 {
             identities[pid] = nil
         }

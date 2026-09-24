@@ -15,6 +15,12 @@ struct TerminalRoutingTests {
         private(set) var released: [String] = []
         private var shutDown = false
         private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
+        /// Holds the first ``shutdown()`` until the test opens it, when given.
+        private var shutdownGate: Gate?
+
+        init(shutdownGate: Gate? = nil) {
+            self.shutdownGate = shutdownGate
+        }
 
         func createTerminal(_ request: CreateTerminalRequest) -> CreateTerminalResponse {
             created.append(request)
@@ -36,7 +42,11 @@ struct TerminalRoutingTests {
             return ReleaseTerminalResponse()
         }
 
-        func shutdown() {
+        func shutdown() async {
+            if let gate = shutdownGate {
+                shutdownGate = nil
+                _ = await gate.confirm()
+            }
             shutDown = true
             shutdownWaiters.forEach { $0.resume() }
             shutdownWaiters = []
@@ -312,6 +322,28 @@ struct TerminalRoutingTests {
         #expect(await !first.hasShutDown)
         await client.setTerminalHandler(RecordingTerminals())
         #expect(await first.hasShutDown)
+    }
+
+    /// A handler given once the terminals are being shut down is shut down at once:
+    /// the shutdown under way does not come back for it, and none follows. So is one
+    /// given after a connection that had none shut down.
+    @Test func aHandlerGivenOnceShutdownBeganIsShutDown() async throws {
+        let gate = Gate()
+        let client = ACPAgentConnection(transport: LoopbackTransport.pair().0)
+        await client.setTerminalHandler(RecordingTerminals(shutdownGate: gate))
+        let shuttingDown = Task { await client.shutDownTerminals() }
+        await gate.waitUntilAsked()
+        let late = RecordingTerminals()
+        await client.setTerminalHandler(late)
+        #expect(await late.hasShutDown)
+        await gate.open()
+        await shuttingDown.value
+
+        let bare = ACPAgentConnection(transport: LoopbackTransport.pair().0)
+        await bare.shutDownTerminals()
+        let afterwards = RecordingTerminals()
+        await bare.setTerminalHandler(afterwards)
+        #expect(await afterwards.hasShutDown)
     }
 
     /// Terminals are released when the connection ends, as acpx retires them when its

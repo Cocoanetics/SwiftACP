@@ -34,6 +34,9 @@ public actor TerminalManager: ACPTerminalHandler {
     private var outputCeiling: Int?
     /// How long `SIGTERM` has before `SIGKILL`.
     public let killGrace: TimeInterval
+    /// A pause between signalling the command and what it started: none, but where a
+    /// test widens the moment to show the order matters.
+    private let signalGap: TimeInterval
     private var terminals: [String: ManagedTerminal] = [:]
     /// Set when ``shutdown()`` begins: no command starts after it.
     private var shutDown = false
@@ -48,9 +51,14 @@ public actor TerminalManager: ACPTerminalHandler {
         cwd: String = FileManager.default.currentDirectoryPath, outputCeiling: Int? = nil,
         killGrace: TimeInterval = TerminalManager.defaultKillGrace
     ) {
+        self.init(cwd: cwd, outputCeiling: outputCeiling, killGrace: killGrace, signalGap: 0)
+    }
+
+    init(cwd: String, outputCeiling: Int? = nil, killGrace: TimeInterval, signalGap: TimeInterval) {
         self.cwd = cwd
         self.outputCeiling = outputCeiling
         self.killGrace = max(0, killGrace)
+        self.signalGap = signalGap
     }
 
     /// Caps the output of the terminals created from now on — `nil` is no cap. A
@@ -211,16 +219,21 @@ public actor TerminalManager: ACPTerminalHandler {
     /// acpx's `killProcess`: `SIGTERM` to everything, a grace period for all of it to
     /// exit, then `SIGKILL` and one more.
     private func kill(_ terminal: ManagedTerminal) async {
-        signal(terminal, SIGTERM)
+        await signal(terminal, SIGTERM)
         guard await !cleanedUp(terminal) else { return }
-        signal(terminal, SIGKILL)
+        await signal(terminal, SIGKILL)
         _ = await cleanedUp(terminal)
     }
 
-    /// Each process started under the command, from a fresh snapshot, then the command.
-    private func signal(_ terminal: ManagedTerminal, _ signal: Int32) {
-        terminal.descendants.signal(signal, rootIsRunning: terminal.isRunning)
+    /// The command, then each process started under it, from a snapshot taken while
+    /// the command still runs. acpx signals the command last, which leaves a moment
+    /// in which a shell can outlive the child it waits for and carry on with its
+    /// script — run its next command, or exit `137` before its own `SIGKILL` arrives.
+    private func signal(_ terminal: ManagedTerminal, _ signal: Int32) async {
+        let tracked = terminal.descendants.capture(rootIsRunning: terminal.isRunning)
         if terminal.isRunning { terminal.process.send(signal) }
+        if signalGap > 0 { await Self.pause(signalGap) }
+        if tracked { terminal.descendants.signalTracked(signal) }
     }
 
     /// Whether the command and everything it started exited within ``killGrace``.

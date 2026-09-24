@@ -98,10 +98,12 @@ final class TerminalProcess: @unchecked Sendable {
     }
 
     /// Where `command` runs from: as given when it names a path (a relative one is
-    /// resolved against `cwd` when the command starts), else the first executable
-    /// regular file of that name on `path` (libuv's `/usr/bin:/bin` without one).
-    /// Like `execvp`, a match that is not executable is `EACCES` if nothing better
-    /// turns up.
+    /// resolved against `cwd` when the command starts), else found on `path` (libuv's
+    /// `/usr/bin:/bin` without one) the way libuv searches it, after musl's `execvp`.
+    /// A match that cannot run — a directory, a FIFO, a file without the execute bit —
+    /// is `EACCES`, and the search goes on past it as past `ENOENT` and `ENOTDIR`; any
+    /// other failure ends it. Nothing found is `EACCES` if one was seen, else the last
+    /// entry's failure. A name longer than `NAME_MAX` is `ENAMETOOLONG` at once.
     ///
     /// A relative `PATH` entry is looked for from `cwd` — the child's directory — and
     /// returned as it is, since the child resolves it after changing into `cwd`, as
@@ -109,19 +111,33 @@ final class TerminalProcess: @unchecked Sendable {
     private static func resolveExecutable(_ command: String, cwd: String, path: String?) throws -> String {
         guard !command.isEmpty else { throw SpawnError(code: ENOENT) }
         if command.contains("/") { return command }
-        var sawUnexecutable = false
+        guard command.utf8.count <= Int(NAME_MAX) else { throw SpawnError(code: ENAMETOOLONG) }
+        var sawEACCES = false
+        var failure = ENOENT
         for directory in (path ?? "/usr/bin:/bin").split(separator: ":", omittingEmptySubsequences: false) {
             let base = directory.isEmpty ? "." : String(directory)
             let candidate = "\(base)/\(command)"
-            let located = base.hasPrefix("/") ? candidate : "\(cwd)/\(candidate)"
-            var status = stat()
-            guard stat(located, &status) == 0, UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFREG) else {
-                continue
+            failure = executability(of: base.hasPrefix("/") ? candidate : "\(cwd)/\(candidate)")
+            switch failure {
+            case 0: return candidate
+            case EACCES: sawEACCES = true
+            case ENOENT, ENOTDIR: continue
+            default: throw SpawnError(code: failure)
             }
-            if access(located, X_OK) == 0 { return candidate }
-            sawUnexecutable = true
         }
-        throw SpawnError(code: sawUnexecutable ? EACCES : ENOENT)
+        throw SpawnError(code: sawEACCES ? EACCES : failure)
+    }
+
+    /// What `execve` would make of `path`, short of running it: `0` for a regular file
+    /// this process may execute, `EACCES` for anything else found there, else why
+    /// nothing is found.
+    private static func executability(of path: String) -> Int32 {
+        var status = stat()
+        guard stat(path, &status) == 0 else { return errno }
+        guard UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFREG), access(path, X_OK) == 0 else {
+            return EACCES
+        }
+        return 0
     }
 
     private static func makePipe() throws -> (read: Int32, write: Int32) {
