@@ -1,0 +1,653 @@
+[
+  {
+    "method": "fs/read_text_file",
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [
+          "Invalid input: expected object, received undefined"
+        ]
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": null,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [
+          "Invalid input: expected object, received null"
+        ]
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": [],
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [
+          "Invalid input: expected object, received array"
+        ]
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": "text",
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [
+          "Invalid input: expected object, received string"
+        ]
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": {},
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        },
+        "path": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": {
+      "sessionId": 5,
+      "path": null
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received number"
+          ]
+        },
+        "path": {
+          "_errors": [
+            "Invalid input: expected string, received null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": {
+      "sessionId": 1.5,
+      "path": {}
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received number"
+          ]
+        },
+        "path": {
+          "_errors": [
+            "Invalid input: expected string, received object"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": {
+      "sessionId": true,
+      "path": [
+        "x"
+      ]
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received boolean"
+          ]
+        },
+        "path": {
+          "_errors": [
+            "Invalid input: expected string, received array"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/read_text_file",
+    "params": {
+      "sessionId": "SID",
+      "path": 0,
+      "line": "a",
+      "limit": -1
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "path": {
+          "_errors": [
+            "Invalid input: expected string, received number"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/write_text_file",
+    "params": {
+      "sessionId": "SID",
+      "path": "/tmp/x"
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "content": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/write_text_file",
+    "params": {
+      "sessionId": "SID",
+      "path": "/tmp/x",
+      "content": 7
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "content": {
+          "_errors": [
+            "Invalid input: expected string, received number"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "fs/write_text_file",
+    "params": {
+      "content": null
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        },
+        "path": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        },
+        "content": {
+          "_errors": [
+            "Invalid input: expected string, received null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/create",
+    "params": {
+      "sessionId": "SID"
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "command": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/create",
+    "params": {
+      "sessionId": "SID",
+      "command": [
+        "ls"
+      ],
+      "args": 5,
+      "env": "x",
+      "cwd": 3,
+      "outputByteLimit": "x"
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "command": {
+          "_errors": [
+            "Invalid input: expected string, received array"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/output",
+    "params": {
+      "sessionId": "SID",
+      "terminalId": null
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "terminalId": {
+          "_errors": [
+            "Invalid input: expected string, received null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/output",
+    "params": {
+      "terminalId": true
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        },
+        "terminalId": {
+          "_errors": [
+            "Invalid input: expected string, received boolean"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/kill",
+    "params": {},
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        },
+        "terminalId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/release",
+    "params": {
+      "sessionId": null
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received null"
+          ]
+        },
+        "terminalId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "terminal/wait_for_exit",
+    "params": {
+      "sessionId": "SID",
+      "terminalId": 3
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "terminalId": {
+          "_errors": [
+            "Invalid input: expected string, received number"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {},
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "sessionId": {
+          "_errors": [
+            "Invalid input: expected string, received undefined"
+          ]
+        },
+        "toolCall": {
+          "_errors": [
+            "Invalid input: expected object, received undefined"
+          ]
+        },
+        "options": {
+          "_errors": [
+            "Invalid input: expected array, received undefined"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": {},
+      "options": []
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "toolCall": {
+          "_errors": [],
+          "toolCallId": {
+            "_errors": [
+              "Invalid input: expected string, received undefined"
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": {
+        "toolCallId": "t"
+      },
+      "options": [
+        {
+          "optionId": "o",
+          "name": "n",
+          "kind": "bad"
+        }
+      ]
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "options": {
+          "0": {
+            "_errors": [],
+            "kind": {
+              "_errors": [
+                "Invalid input: expected \"allow_once\"",
+                "Invalid input: expected \"allow_always\"",
+                "Invalid input: expected \"reject_once\"",
+                "Invalid input: expected \"reject_always\""
+              ]
+            }
+          },
+          "_errors": []
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": {
+        "toolCallId": "t"
+      },
+      "options": [
+        {}
+      ]
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "options": {
+          "0": {
+            "_errors": [],
+            "optionId": {
+              "_errors": [
+                "Invalid input: expected string, received undefined"
+              ]
+            },
+            "name": {
+              "_errors": [
+                "Invalid input: expected string, received undefined"
+              ]
+            },
+            "kind": {
+              "_errors": [
+                "Invalid input: expected \"allow_once\"",
+                "Invalid input: expected \"allow_always\"",
+                "Invalid input: expected \"reject_once\"",
+                "Invalid input: expected \"reject_always\""
+              ]
+            }
+          },
+          "_errors": []
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": "x",
+      "options": {}
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "toolCall": {
+          "_errors": [
+            "Invalid input: expected object, received string"
+          ]
+        },
+        "options": {
+          "_errors": [
+            "Invalid input: expected array, received object"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": {
+        "toolCallId": 1,
+        "kind": "nope",
+        "status": 3,
+        "title": 4
+      },
+      "options": [
+        {
+          "optionId": "o",
+          "name": "n",
+          "kind": "allow_once"
+        },
+        5
+      ]
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "toolCall": {
+          "_errors": [],
+          "toolCallId": {
+            "_errors": [
+              "Invalid input: expected string, received number"
+            ]
+          }
+        },
+        "options": {
+          "1": {
+            "_errors": [
+              "Invalid input: expected object, received number"
+            ]
+          },
+          "_errors": []
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": null,
+      "options": null
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "toolCall": {
+          "_errors": [
+            "Invalid input: expected object, received null"
+          ]
+        },
+        "options": {
+          "_errors": [
+            "Invalid input: expected array, received null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "SID",
+      "toolCall": {
+        "toolCallId": "t"
+      },
+      "options": [
+        {
+          "optionId": null,
+          "name": 2,
+          "kind": 3
+        }
+      ]
+    },
+    "error": {
+      "code": -32602,
+      "message": "Invalid params",
+      "data": {
+        "_errors": [],
+        "options": {
+          "0": {
+            "_errors": [],
+            "optionId": {
+              "_errors": [
+                "Invalid input: expected string, received null"
+              ]
+            },
+            "name": {
+              "_errors": [
+                "Invalid input: expected string, received number"
+              ]
+            },
+            "kind": {
+              "_errors": [
+                "Invalid input: expected \"allow_once\"",
+                "Invalid input: expected \"allow_always\"",
+                "Invalid input: expected \"reject_once\"",
+                "Invalid input: expected \"reject_always\""
+              ]
+            }
+          },
+          "_errors": []
+        }
+      }
+    }
+  }
+]
