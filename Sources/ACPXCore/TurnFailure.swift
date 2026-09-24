@@ -9,6 +9,12 @@ public protocol OutputErrorMeta: Error {
     var outputCode: String? { get }
     var detailCode: String? { get }
     var origin: String? { get }
+    /// acpx's `retryable`, which its JSON error line carries when the error sets it.
+    var retryable: Bool? { get }
+}
+
+extension OutputErrorMeta {
+    public var retryable: Bool? { nil }
 }
 
 /// acpx's `normalizeOutputError` as its queue owner applies it to a failed turn
@@ -24,7 +30,8 @@ public enum TurnFailure {
         let detailCode = meta?.detailCode ?? "QUEUE_RUNTIME_PROMPT_FAILED"
         return TurnFailedEvent(
             outputCode: outputCode, detailCode: detailCode, origin: meta?.origin ?? "runtime",
-            message: message(of: error), acp: acp.map(\.jsonValue), shown: shown != nil, sessionId: sessionId)
+            message: message(of: error), acp: acp.map(\.jsonValue), shown: shown != nil, sessionId: sessionId,
+            retryable: meta?.retryable)
     }
 
     /// acpx's `formatErrorMessage`: an agent's error by its message, anything else by

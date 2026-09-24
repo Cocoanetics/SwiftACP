@@ -55,11 +55,12 @@ extension DaemonToolsTests {
         try SessionStore.writeRecord(record)
     }
 
-    /// A turn takes the replacement onto the record it saves before the saved choices
-    /// are replayed: the replay waits on the agent, and a checkpoint of the turn's
-    /// record during it would otherwise write the old session back.
+    /// The record moves to a replacement only once the saved selections are back on it
+    /// (#73): acpx sets `acpSessionId` after `replaySessionPreferences` succeeded, so a
+    /// replay that fails leaves the record on the session it had. What connecting
+    /// changes reaches the turn's record in one change.
     @Test(.enabled(if: mockPythonAvailable))
-    func theReplacementIsHandedOverBeforeTheReplay() async throws {
+    func theRecordMovesOnlyOnceTheReplaySucceeded() async throws {
         try await withLoggedMock(loadMode: "gone", sessionIdPerProcess: true) { command, methods in
             let id = try await ACPXDaemonBackend(inheritAgentStderr: false)
                 .newSession(agentCommand: command, cwd: NSTemporaryDirectory())
@@ -71,25 +72,24 @@ extension DaemonToolsTests {
             }
             let record = try #require(SessionStore.loadRecord(id))
             let before = try methods().count
-            let (handedOver, handOver) = AsyncStream<String>.makeStream()
-            let (resumed, resume) = AsyncStream<Void>.makeStream()
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let connecting = Task {
-                _ = try await daemon.ensure(
+            let (changes, change) = AsyncStream<(sessionId: String, methods: [String])>.makeStream()
+            try await withoutActuallyEscaping(methods) { methods in
+                // Read only while `ensure` waits for the change to be taken.
+                nonisolated(unsafe) let sent = methods
+                _ = try await ACPXDaemonBackend(inheritAgentStderr: false).ensure(
                     recordId: id, agentCommand: record.agentCommand, cwd: record.cwd, mcpServers: nil,
-                    onReplacement: { response in
-                        handOver.yield(response.sessionId)
-                        for await _ in resumed { break }
+                    onRecordChange: { apply in
+                        var changed = record
+                        apply(&changed)
+                        change.yield((changed.acpSessionId, Array(((try? sent()) ?? []).dropFirst(before))))
                     })
             }
-            // Held at the hand-over: the agent has started the new session, and has not
-            // been asked for anything since.
-            let replacement = await handedOver.first { _ in true }
-            #expect(replacement != nil && replacement != record.acpSessionId)
-            #expect(Array(try methods().dropFirst(before)) == ["session/load", "session/new"])
-            resume.yield()
-            try await connecting.value
-            #expect(Array(try methods().dropFirst(before)) == ["session/load", "session/new", "session/set_mode"])
+            change.finish()
+            var seen: [(sessionId: String, methods: [String])] = []
+            for await each in changes { seen.append(each) }
+            #expect(seen.count == 1)
+            #expect(seen.first?.sessionId != record.acpSessionId)
+            #expect(seen.first?.methods == ["session/load", "session/new", "session/set_mode"])
         }
     }
 

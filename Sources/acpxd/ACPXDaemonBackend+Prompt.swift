@@ -31,6 +31,7 @@ extension ACPXDaemonBackend {
     ///   - nonInteractivePermissions: `deny` (the default) or `fail`.
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none —
     ///     omitted, the daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`.
+    ///   - model: the turn's `--model`, put on the session before the prompt and pinned.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -38,7 +39,8 @@ extension ACPXDaemonBackend {
         sessionId rawSessionId: String, text: String,
         blocks: [PromptBlock]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil
+        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
+        model: String? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -91,10 +93,12 @@ extension ACPXDaemonBackend {
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
+        let requestedModel = model?.javaScriptTrimmed
         let turn = Turn(
             recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers, blocks: content,
-            permissions: permissions, terminalOutputCeiling: ceiling, persister: persister,
-            eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
+            model: requestedModel?.isEmpty == false ? requestedModel : nil, permissions: permissions,
+            terminalOutputCeiling: ceiling, persister: persister, eventBuffer: eventBuffer,
+            streamWire: streamWire, errors: errors)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
             try await attemptWithRetry(turn, wasHeld: wasHeld)
@@ -108,6 +112,8 @@ extension ACPXDaemonBackend {
         let cwd: String
         let mcpServers: [McpServerConfig]?
         let blocks: [ContentBlock]
+        /// The turn's `--model`, trimmed; `nil` without one.
+        let model: String?
         let permissions: TurnPermissions
         /// The caller's cap on terminal output, `nil` for none.
         let terminalOutputCeiling: Int?
@@ -201,7 +207,7 @@ extension ACPXDaemonBackend {
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
             handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
-            onReplacement: { await persister.adoptReplacement($0) },
+            requestedModel: turn.model,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
         // The attempt proper starts once connected: a restore the agent refused while
@@ -210,8 +216,10 @@ extension ACPXDaemonBackend {
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId
-        // Whether any of this turn has been written to the agent — its prompt is the
-        // first thing that is. Cleared when the turn ends.
+        // Whether any of the turn itself has been written to the agent: its prompt. The
+        // `--model` asked for before it is not — a fresh launch asks for it again, which
+        // does no harm. Cleared when the turn ends.
+        let prompting = WriteMark()
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
@@ -221,7 +229,7 @@ extension ACPXDaemonBackend {
         // client with the turn's end, in the shape the agent sent them.
         let promptResult = PromptResultCapture()
         entry.agent.rawWire.set { direction, body in
-            if direction == .outbound { wrote.mark() }
+            if direction == .outbound, prompting.happened { wrote.mark() }
             errors.observe(direction, body)
             wireFeed.observe(direction, body)
             promptResult.observe(direction, body)
@@ -237,43 +245,15 @@ extension ACPXDaemonBackend {
         // finishes the stream, so the consumer task completes having sent every
         // event — in order — and built the agent's message content for the turn.
         let (subscriptionId, stream) = await connection.makeEventSubscription()
-        let consumer = Task { () -> String in
-            // Accumulate the full streamed text for the MCP result, and fold each
-            // update into the persister (which debounce-saves the record as it goes).
-            var fullText = ""
-            for await event in stream {
-                switch event {
-                case .update(let note) where note.sessionId == boundSessionId:
-                    if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
-                        fullText += chunk
-                    }
-                    await persister.apply(note.update)
-                    let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
-                    await clientSession?.sendLogNotification(
-                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
-                case .inboundRequest(let request)
-                    where request.sessionId == nil || request.sessionId == boundSessionId:
-                    // The agent's own request (a file write, a permission question), and
-                    // the client's refusal of it: acpx's formatter prints both, so they
-                    // stream in order with the updates.
-                    await clientSession?.sendLogNotification(
-                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
-                case .clientOperation(let operation)
-                    where operation.sessionId == nil || operation.sessionId == boundSessionId:
-                    // A client-side diagnostic the connection reported mid-turn — a
-                    // permission refusal that may end the turn (see `CodexCompat`).
-                    // Streamed in order like an update, so the CLI renders it in place;
-                    // not part of the conversation history (the wire log has the
-                    // annotated response).
-                    await clientSession?.sendLogNotification(
-                        LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
-                default:
-                    break
-                }
-            }
-            return fullText
+        let consumer = Task {
+            await Self.relay(
+                stream, of: boundSessionId, as: sessionId, into: persister, to: clientSession)
         }
         do {
+            if let model = turn.model {
+                try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
+            }
+            prompting.mark()
             let response = try await entry.session.prompt(blocks)
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
@@ -308,6 +288,71 @@ extension ACPXDaemonBackend {
             let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
             await wireFeed.finish(showingHeld: !retried)
             throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
+        }
+    }
+}
+
+extension ACPXDaemonBackend {
+    /// What one attempt's event subscription carries, relayed as the turn goes: each of
+    /// the session's updates folded into the persister (which debounce-saves the record)
+    /// and streamed to the calling client with the agent's requests and the client's
+    /// diagnostics, in order. Returns the agent's message text.
+    private static func relay(
+        _ stream: AsyncStream<ConnectionEvent>, of boundSessionId: SessionId, as sessionId: String,
+        into persister: TurnPersister, to clientSession: Session?
+    ) async -> String {
+        // Accumulate the full streamed text for the MCP result, and fold each
+        // update into the persister (which debounce-saves the record as it goes).
+        var fullText = ""
+        for await event in stream {
+            switch event {
+            case .update(let note) where note.sessionId == boundSessionId:
+                if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
+                    fullText += chunk
+                }
+                await persister.apply(note.update)
+                let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
+                await clientSession?.sendLogNotification(
+                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
+            case .inboundRequest(let request)
+                where request.sessionId == nil || request.sessionId == boundSessionId:
+                // The agent's own request (a file write, a permission question), and
+                // the client's refusal of it: acpx's formatter prints both, so they
+                // stream in order with the updates.
+                await clientSession?.sendLogNotification(
+                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
+            case .clientOperation(let operation)
+                where operation.sessionId == nil || operation.sessionId == boundSessionId:
+                // A client-side diagnostic the connection reported mid-turn — a
+                // permission refusal that may end the turn (see `CodexCompat`).
+                // Streamed in order like an update, so the CLI renders it in place;
+                // not part of the conversation history (the wire log has the
+                // annotated response).
+                await clientSession?.sendLogNotification(
+                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
+            default:
+                break
+            }
+        }
+        return fullText
+    }
+
+    /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
+    /// before the prompt — checked against what the session advertises, not sent when
+    /// it is already the current model — and is pinned in the record the turn saves.
+    /// A model the session cannot take fails the turn before the prompt goes out.
+    func applyPromptModel(
+        _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String
+    ) async throws {
+        let application = try await ModelApplication.applyRequestedModel(
+            connection: entry.agent.connection, sessionId: entry.session.id, requestedModel: model,
+            models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand)
+        guard application.applied else { return }
+        let response = application.response
+        await persister.adopt { record in
+            var acpx = record.acpx ?? SessionAcpxState()
+            ModelSupport.applyModelSelection(model, response: response, to: &acpx)
+            record.acpx = acpx
         }
     }
 }

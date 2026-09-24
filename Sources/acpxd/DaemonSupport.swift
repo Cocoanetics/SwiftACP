@@ -61,4 +61,9 @@ extension DaemonError: OutputErrorMeta {
         if case .sessionResumeRequired = self { return "acp" }
         return nil
     }
+
+    var retryable: Bool? {
+        if case .sessionResumeRequired = self { return true }
+        return nil
+    }
 }

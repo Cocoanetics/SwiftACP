@@ -16,12 +16,21 @@ public struct ACPSession: Sendable {
     /// The `_meta` of the agent's reply that opened the session — `session/new`,
     /// `session/load` or `session/resume` — where an agent names its own session id.
     public let meta: JSONValue?
+    /// The config options that reply advertised, when it named any.
+    public let configOptions: [JSONValue]?
+    /// The legacy `models` block that reply advertised, when it had one.
+    public let models: JSONValue?
 
-    public init(id: SessionId, agent: ACPAgent, modes: SessionModeState? = nil, meta: JSONValue? = nil) {
+    public init(
+        id: SessionId, agent: ACPAgent, modes: SessionModeState? = nil, meta: JSONValue? = nil,
+        configOptions: [JSONValue]? = nil, models: JSONValue? = nil
+    ) {
         self.id = id
         self.agent = agent
         self.modes = modes
         self.meta = meta
+        self.configOptions = configOptions
+        self.models = models
     }
 
     /// A stream of this session's updates only. Subscribe before prompting.

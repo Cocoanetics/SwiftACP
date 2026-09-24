@@ -40,7 +40,7 @@ public protocol ACPXBackend: Sendable {
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, wait: Bool,
         permissionMode: String?, nonInteractivePermissions: String?, streamWire: Bool,
-        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?
+        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, model: String?
     ) async throws -> String
     func cancelSession(sessionId: String) async throws -> Bool
 }

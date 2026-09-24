@@ -38,22 +38,12 @@ public actor TurnPersister {
         self.intervalNanos = intervalNanos
     }
 
-    /// Move the turn's record to the session a reconnect just started in place of the
-    /// gone one (`response` is that session's `session/new` reply), and save it at once.
-    /// The turn saves the record it holds, so this is where the replacement has to
-    /// land: any later save would otherwise write the old session back. It applies
-    /// even when the agent reuses the old session id — what the new session advertised
-    /// still replaces the old state.
-    public func adoptReplacement(_ response: NewSessionResponse) {
-        record.moveToReplacement(
-            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models,
-            agentSessionId: AgentSessionId.extract(from: response.meta))
-        dirty = true
-        flush()
-    }
+    /// The `acpx` state of the record the turn saves, as it stands.
+    public var acpx: SessionAcpxState? { record.acpx }
 
-    /// Apply a change a reconnect made — the agent's own session id it named, the model
-    /// its replay put back — to the record the turn saves.
+    /// Apply a change a reconnect made — the session it moved the record to, what that
+    /// session advertises, what the replay put back — to the record the turn saves,
+    /// and save it at once: any later save would otherwise write the old state back.
     public func adopt(_ change: @Sendable (inout SessionRecord) -> Void) {
         change(&record)
         dirty = true

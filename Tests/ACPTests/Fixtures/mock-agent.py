@@ -244,6 +244,11 @@ def main():
                             "currentModeId": params.get("modeId", "")})
             respond(req_id, {})
         elif method == "session/set_config_option":
+            # MOCK_SET_CONFIG_OPTION_ERROR: refuse every option, with details.
+            if os.environ.get("MOCK_SET_CONFIG_OPTION_ERROR"):
+                send({"jsonrpc": "2.0", "id": req_id, "error": {
+                    "code": -32602, "message": "Invalid params", "data": {"details": "option unavailable"}}})
+                continue
             respond(req_id, {})
         elif method == "session/set_model":
             respond(req_id, {})
