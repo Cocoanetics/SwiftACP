@@ -28,8 +28,17 @@ import Glibc
             inheritStderr: false, onRawWire: onRawWire)
     }
 
+    /// Whether `pid` runs: a process ended but not yet reaped — as it can stay in a
+    /// container whose init reaps slowly — is not.
     static func isRunning(_ pid: pid_t) -> Bool {
-        kill(pid, 0) == 0
+        guard kill(pid, 0) == 0 else { return false }
+        #if os(Linux)
+        if let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+           let state = stat.split(separator: ")").last?.split(separator: " ").first {
+            return state != "Z"
+        }
+        #endif
+        return true
     }
 
     @Test(.enabled(if: mockPythonAvailable))
@@ -255,16 +264,22 @@ import Glibc
     /// So is what it starts when it opens a session, though the agent exits first and it
     /// is handed to `init`: acpx notes the agent's processes again once a session is open
     /// (#113 review).
-    @Test(.enabled(if: mockPythonAvailable))
-    func whatTheAgentStartsForASessionEndsWithIt() async throws {
+    /// However the session was opened: through the agent, or on its connection itself.
+    @Test(.enabled(if: mockPythonAvailable), arguments: [false, true])
+    func whatTheAgentStartsForASessionEndsWithIt(onTheConnection: Bool) async throws {
         let pidFile = NSTemporaryDirectory() + "exit-agent-child-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: pidFile) }
         let agent = try await Self.launch(
             "EXIT_AGENT_CHILD='\(pidFile)' EXIT_AGENT_CHILD_AT=session/new EXIT_AGENT_ON=prompt")
-        let session = try await agent.newSession()
+        let sessionId: SessionId
+        if onTheConnection {
+            sessionId = try await agent.connection.newSession(NewSessionRequest(cwd: NSTemporaryDirectory())).sessionId
+        } else {
+            sessionId = try await agent.newSession().id
+        }
         let child = try #require(pid_t(String(contentsOfFile: pidFile, encoding: .utf8)))
         #expect(Self.isRunning(child))
-        _ = try? await session.prompt([.text("hi")])
+        _ = try? await agent.connection.prompt(PromptRequest(sessionId: sessionId, prompt: [.text("hi")]))
         await agent.close()
         #expect(!Self.isRunning(child))
     }
