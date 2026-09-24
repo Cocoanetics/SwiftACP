@@ -325,10 +325,18 @@ public struct TurnEndedEvent: Codable, Sendable {
     /// How the turn's permissions were settled, which decides the CLI's exit code
     /// (`PERMISSION_DENIED`, 5). `nil` from a daemon that predates it.
     public var permissions: PermissionStats?
+    /// The prompt response's `usage` and `cost` as the agent sent them, whatever their
+    /// shape — what acpx's quiet output reports after the reply.
+    public var usage: JSONValue?
+    public var cost: JSONValue?
 
-    public init(stopReason: String, permissions: PermissionStats? = nil) {
+    public init(
+        stopReason: String, permissions: PermissionStats? = nil, usage: JSONValue? = nil, cost: JSONValue? = nil
+    ) {
         self.stopReason = stopReason
         self.permissions = permissions
+        self.usage = usage
+        self.cost = cost
     }
 }
 

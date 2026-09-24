@@ -139,6 +139,15 @@ final class OutputRenderer: @unchecked Sendable {
         }
     }
 
+    /// acpx's quiet `flushMetadata`: after the reply, the prompt response's token usage
+    /// and cost on stderr, each when present (see ``QuietMetadata``). Other formats
+    /// report neither.
+    func promptMetadata(usage: WireJSON?, cost: WireJSON?) {
+        guard options.format == .quiet else { return }
+        if let line = QuietMetadata.usageLine(usage) { err(line + "\n") }
+        if let line = QuietMetadata.costLine(cost) { err(line + "\n") }
+    }
+
     func finish(stopReason: StopReason) {
         lock.lock()
         defer { lock.unlock() }

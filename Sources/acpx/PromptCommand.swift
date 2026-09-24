@@ -67,6 +67,7 @@ enum PromptCommand {
             }
         }
         renderer.finish(stopReason: turn.stopReason)
+        renderer.promptMetadata(usage: turn.usage.map(WireJSON.init), cost: turn.cost.map(WireJSON.init))
         let permissions = turn.permissions ?? PermissionStats()
         if permissions.promptUnavailable { renderer.permissionPromptUnavailable(sessionId: record.acpxRecordId) }
         return permissionExitCode(
