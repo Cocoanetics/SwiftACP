@@ -260,7 +260,9 @@ public enum SessionRecordParser {
             "cumulative_token_usage": parsed["cumulative_token_usage"],
             "cumulative_cost": parsed["cumulative_cost"],
             "request_token_usage": parsed["request_token_usage"],
+            // A block that does not read at all may have held restrictions: it fails closed.
             "acpx": parsed["acpx"].map { withOwnFields($0, from: raw["acpx"]) }
+                ?? (raw["acpx"] == nil ? nil : unreadableAcpxState)
         ]
         return .object(members.compactMap { member in
             guard let replacement = normalized[String(decoding: member.key, as: UTF16.self)] else {
@@ -269,6 +271,16 @@ public enum SessionRecordParser {
             return replacement.map { WireJSON.Member(key: member.key, value: $0) }
         })
     }
+
+    /// What an `acpx` block that is there but is no object leaves SwiftACP's model with:
+    /// its own restrictions at their tightest — no MCP servers and no client
+    /// capabilities — since the block may have held some. acpx drops such a block.
+    static let unreadableAcpxState = object([
+        ("mcp_servers", .array([])),
+        ("client_capabilities", object([
+            ("read_text_file", .bool(false)), ("write_text_file", .bool(false)), ("terminal", .bool(false))
+        ]))
+    ])
 
     /// The `acpx` fields acpx reads (`SessionAcpxState`).
     static let acpxStateKeys: Set<String> = [

@@ -70,9 +70,10 @@ import Testing
         }
     }
 
-    /// SwiftACP's own restrictions fail closed when they do not read: no client
-    /// capabilities rather than the defaults, and no MCP servers rather than the config
-    /// file's. The record itself is still read, as acpx reads it.
+    /// SwiftACP's own restrictions fail closed when they do not read — the fields
+    /// themselves, or the whole `acpx` block they live in: no client capabilities
+    /// rather than the defaults, and no MCP servers rather than the config file's. The
+    /// record itself is still read, as acpx reads it.
     @Test func anUnreadableRestrictionFailsClosed() async throws {
         let unreadable = try Self.fixtureCase("acpx own field unreadable")
         try await withIsolatedStore {
@@ -81,6 +82,16 @@ import Testing
             #expect(record.acpx?.clientCapabilities
                 == .init(readTextFile: false, writeTextFile: false, terminal: false))
             #expect(record.acpx?.mcpServers?.isEmpty == true)
+        }
+        for name in ["acpx not an object", "acpx null"] {
+            let whole = try Self.fixtureCase(name)
+            try await withIsolatedStore {
+                try Self.store(whole.raw, cwd: try Self.workingDirectory())
+                let record = try #require(SessionStore.loadRecord("rec-1"), "\(name)")
+                #expect(record.acpx?.clientCapabilities
+                    == .init(readTextFile: false, writeTextFile: false, terminal: false), "\(name)")
+                #expect(record.acpx?.mcpServers?.isEmpty == true, "\(name)")
+            }
         }
         let absent = try Self.fixtureCase("acpx empty")
         try await withIsolatedStore {
