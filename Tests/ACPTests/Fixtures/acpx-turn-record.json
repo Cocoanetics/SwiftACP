@@ -1,0 +1,219 @@
+{
+  "schema": "acpx.session.v1",
+  "acpx_record_id": "record-session",
+  "acp_session_id": "record-session",
+  "agent_command": "python3 \"/SwiftACP/Tests/ACPTests/Fixtures/record-agent.py\"",
+  "agent_argv": [
+    "python3",
+    "/SwiftACP/Tests/ACPTests/Fixtures/record-agent.py"
+  ],
+  "cwd": "/ACPX-CWD",
+  "created_at": "2026-09-24T13:11:35.567Z",
+  "last_used_at": "2026-09-24T13:11:38.318Z",
+  "last_seq": 24,
+  "last_request_id": "1213a2c4-be86-4808-bccf-ee8b444466a8",
+  "event_log": {
+    "active_path": "/ACPX-HOME/.acpx/sessions/record-session.stream.ndjson",
+    "segment_count": 5,
+    "max_segment_bytes": 67108864,
+    "max_segments": 5,
+    "last_write_at": "2026-09-24T13:11:37.817Z",
+    "last_write_error": null
+  },
+  "closed": false,
+  "agent_started_at": "2026-09-24T13:11:35.936Z",
+  "last_prompt_at": "2026-09-24T13:11:37.303Z",
+  "last_agent_exit_code": null,
+  "last_agent_exit_signal": null,
+  "last_agent_exit_at": "2026-09-24T13:11:38.363Z",
+  "last_agent_disconnect_reason": "connection_close",
+  "protocol_version": 1,
+  "agent_capabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "audio": false,
+      "embeddedContext": true,
+      "image": true
+    }
+  },
+  "title": null,
+  "messages": [
+    {
+      "User": {
+        "id": "a1acbf75-c13d-4c55-9e7a-b2dc32f6a5c3",
+        "content": [
+          {
+            "Text": "Look at this"
+          },
+          {
+            "Mention": {
+              "uri": "file:///tmp/a.txt",
+              "content": "a.txt"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "Agent": {
+        "content": [
+          {
+            "Thinking": {
+              "text": "Let me think.",
+              "signature": null
+            }
+          },
+          {
+            "ToolUse": {
+              "id": "zz-2",
+              "name": "Read notes",
+              "raw_input": "{\"alpha\":2,\"path\":\"/tmp/n\",\"zeta\":1}",
+              "input": {
+                "alpha": 2,
+                "path": "/tmp/n",
+                "zeta": 1
+              },
+              "is_input_complete": true,
+              "thought_signature": null
+            }
+          },
+          {
+            "ToolUse": {
+              "id": "aa-1",
+              "name": "Run ls",
+              "raw_input": "{\"command\":\"ls\"}",
+              "input": {
+                "command": "ls"
+              },
+              "is_input_complete": true,
+              "thought_signature": null
+            }
+          },
+          {
+            "Text": "Done."
+          }
+        ],
+        "tool_results": {
+          "zz-2": {
+            "tool_use_id": "zz-2",
+            "tool_name": "Read notes",
+            "is_error": true,
+            "content": {
+              "Text": "no such file"
+            },
+            "output": "no such file"
+          },
+          "aa-1": {
+            "tool_use_id": "aa-1",
+            "tool_name": "Run ls",
+            "is_error": false,
+            "content": {
+              "Text": "{\"code\":0,\"stdout\":\"x\"}"
+            },
+            "output": {
+              "code": 0,
+              "stdout": "x"
+            }
+          }
+        }
+      }
+    },
+    {
+      "User": {
+        "id": "aff5fa08-f986-428a-a4e8-b7294e671f74",
+        "content": [
+          {
+            "Text": "Again"
+          }
+        ]
+      }
+    },
+    {
+      "Agent": {
+        "content": [
+          {
+            "Thinking": {
+              "text": "Let me think.",
+              "signature": null
+            }
+          },
+          {
+            "ToolUse": {
+              "id": "zz-2",
+              "name": "Read notes",
+              "raw_input": "{\"alpha\":2,\"path\":\"/tmp/n\",\"zeta\":1}",
+              "input": {
+                "alpha": 2,
+                "path": "/tmp/n",
+                "zeta": 1
+              },
+              "is_input_complete": true,
+              "thought_signature": null
+            }
+          },
+          {
+            "ToolUse": {
+              "id": "aa-1",
+              "name": "Run ls",
+              "raw_input": "{\"command\":\"ls\"}",
+              "input": {
+                "command": "ls"
+              },
+              "is_input_complete": true,
+              "thought_signature": null
+            }
+          },
+          {
+            "Text": "Done."
+          }
+        ],
+        "tool_results": {
+          "zz-2": {
+            "tool_use_id": "zz-2",
+            "tool_name": "Read notes",
+            "is_error": true,
+            "content": {
+              "Text": "no such file"
+            },
+            "output": "no such file"
+          },
+          "aa-1": {
+            "tool_use_id": "aa-1",
+            "tool_name": "Run ls",
+            "is_error": false,
+            "content": {
+              "Text": "{\"code\":0,\"stdout\":\"x\"}"
+            },
+            "output": {
+              "code": 0,
+              "stdout": "x"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "updated_at": "2026-09-24T13:11:38.318Z",
+  "cumulative_token_usage": {
+    "input_tokens": 20,
+    "output_tokens": 40,
+    "total_tokens": 60
+  },
+  "cumulative_cost": {
+    "amount": 1,
+    "currency": "USD"
+  },
+  "request_token_usage": {
+    "a1acbf75-c13d-4c55-9e7a-b2dc32f6a5c3": {
+      "input_tokens": 10,
+      "output_tokens": 20,
+      "total_tokens": 30
+    },
+    "aff5fa08-f986-428a-a4e8-b7294e671f74": {
+      "input_tokens": 20,
+      "output_tokens": 40,
+      "total_tokens": 60
+    }
+  },
+  "acpx": {}
+}
