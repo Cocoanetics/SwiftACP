@@ -125,6 +125,21 @@ struct SessionRecordSerializerTests {
         }
     }
 
+    /// Past 100 turns of usage, the oldest entries go, as acpx keeps the ones it added
+    /// last: those the record was read with in their order, however their keys sort,
+    /// though their messages are gone (#117 review).
+    @Test func theOldestUsageGoesThoughItsMessageIsGone() async throws {
+        let keys = ["b", "a"] + (0..<99).map { String(format: "c%03d", $0) }
+        let usage = "{" + keys.map { #""\#($0)":{"input_tokens":1}"# }.joined(separator: ",") + "}"
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [], usage: usage)
+            var record = try #require(SessionStore.loadRecord("r"))
+            ConversationModel.trimForRuntime(&record)
+            #expect(record.requestTokenUsage?.keys.sorted() == Array(keys.dropFirst()).sorted())
+        }
+    }
+
     /// A list the record replaced whole — as a reconnect replaces `config_options` — keeps
     /// the order it has, not that of the items once in its places (#117 review).
     @Test func aListReplacedWholeKeepsItsOwnOrder() async throws {
@@ -140,11 +155,11 @@ struct SessionRecordSerializerTests {
     }
 
     /// A record `r` with these messages, as SwiftACP would have it on disk.
-    private static func storeRecord(messages: [String], acpx: String? = nil) throws {
+    private static func storeRecord(messages: [String], acpx: String? = nil, usage: String = "{}") throws {
         let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
             + #""cwd":"/w","created_at":"t","last_used_at":"t","last_seq":0,"closed":false,"#
             + #""messages":[\#(messages.joined(separator: ","))],"updated_at":"t","#
-            + #""cumulative_token_usage":{},"request_token_usage":{}"#
+            + #""cumulative_token_usage":{},"request_token_usage":\#(usage)"#
             + (acpx.map { #","acpx":\#($0)"# } ?? "") + "}"
         try Data(raw.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
     }

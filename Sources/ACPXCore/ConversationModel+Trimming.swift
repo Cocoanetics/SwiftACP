@@ -10,14 +10,25 @@ extension ConversationModel {
         }
         record.messages = record.messages.map(trimMessage)
         if let usage = record.requestTokenUsage, usage.count > maxRuntimeRequestTokenUsage {
-            // acpx keeps the entries it added last: one a turn, under the turn's user
-            // message id — so the oldest, whose message is gone, go first.
-            var position: [String: Int] = [:]
-            for case .user(let user) in record.messages { position[user.id] = position[user.id] ?? position.count }
-            let kept = Set(usage.keys.sorted { (position[$0] ?? -1, $0) < (position[$1] ?? -1, $1) }
-                .suffix(maxRuntimeRequestTokenUsage))
+            let order = requestUsageOrder(record)
+            let kept = Set(usage.keys.sorted { (order($0), $0) < (order($1), $1) }.suffix(maxRuntimeRequestTokenUsage))
             record.requestTokenUsage = usage.filter { kept.contains($0.key) }
         }
+    }
+
+    /// Where each `request_token_usage` entry comes in the order acpx added them, which it
+    /// keeps the last of: those the record was read with, in their order, then one a turn
+    /// since, under the turn's user message id — any whose message is gone before those
+    /// whose message is not.
+    private static func requestUsageOrder(_ record: SessionRecord) -> (String) -> Int {
+        var read: [String: Int] = [:]
+        if case .object(let members)? = record.parsedByAcpx?["request_token_usage"] {
+            for member in members { read[String(decoding: member.key, as: UTF16.self)] = read.count }
+        }
+        var turns: [String: Int] = [:]
+        for case .user(let user) in record.messages where turns[user.id] == nil { turns[user.id] = turns.count }
+        let (readCount, gone) = (read.count, read.count)
+        return { id in read[id] ?? turns[id].map { readCount + 1 + $0 } ?? gone }
     }
 
     private static func trimMessage(_ message: SessionMessage) -> SessionMessage {
