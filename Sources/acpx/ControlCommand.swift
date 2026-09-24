@@ -53,26 +53,26 @@ enum ControlCommand {
         // Route through acpxd — the single manager that holds the live agent and owns
         // its record — rather than launching a throwaway agent and writing the record
         // here (which would miss the live session and could clobber a concurrent turn).
-        try runBlocking {
+        let result = try runBlocking {
             do {
-                try await DaemonClient.setMode(sessionId: sessionId, modeId: modeId)
+                return try await DaemonClient.setMode(sessionId: sessionId, modeId: modeId)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
         }
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
-        printSetMode(modeId: modeId, record: updated, format: flags.format)
+        printSetMode(modeId: modeId, resumed: result.resumed, record: updated, format: flags.format)
         return ExitCodes.success
     }
 
-    private static func printSetMode(modeId: String, record: SessionRecord, format: String) {
+    private static func printSetMode(modeId: String, resumed: Bool, record: SessionRecord, format: String) {
         switch format {
         case "json":
             Console.out(jsonObject([
                 ("action", .string("mode_set")),
                 ("modeId", .string(modeId)),
-                ("resumed", .bool(false)),
+                ("resumed", .bool(resumed)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
                 ("agentSessionId", record.agentSessionId.map(JSONValue.string))
@@ -107,12 +107,11 @@ enum ControlCommand {
         // its record — rather than launching a throwaway agent and writing the record
         // here. The set_config_option response carries the agent's updated config
         // options, which acpx reports + echoes in the JSON envelope.
-        let resultOptions: [JSONValue] = try runBlocking {
+        let result: SessionControlResult = try runBlocking {
             do {
                 switch operation {
                 case .model:
-                    try await DaemonClient.setModel(sessionId: sessionId, modelId: value)
-                    return []
+                    return try await DaemonClient.setModel(sessionId: sessionId, modelId: value)
                 case .configOption(let configId):
                     return try await DaemonClient.setConfigOption(
                         sessionId: sessionId, configId: configId, value: value)
@@ -126,17 +125,19 @@ enum ControlCommand {
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
         switch operation {
         case .model:
-            printSetModel(modelId: value, record: updated, format: flags.format)
+            printSetModel(modelId: value, resumed: result.resumed, record: updated, format: flags.format)
         case .configOption:
             // acpx prints the user's original key, not the resolved config id.
             printSetConfig(
-                key: key, value: value, configOptions: resultOptions, record: updated, format: flags.format)
+                key: key, value: value, configOptions: result.configOptions ?? [], resumed: result.resumed,
+                record: updated, format: flags.format)
         }
         return ExitCodes.success
     }
 
     private static func printSetConfig(
-        key: String, value: String, configOptions: [JSONValue], record: SessionRecord, format: String
+        key: String, value: String, configOptions: [JSONValue], resumed: Bool, record: SessionRecord,
+        format: String
     ) {
         switch format {
         case "json":
@@ -144,7 +145,7 @@ enum ControlCommand {
                 ("action", .string("config_set")),
                 ("configId", .string(key)),
                 ("value", .string(value)),
-                ("resumed", .bool(false)),
+                ("resumed", .bool(resumed)),
                 ("configOptions", .array(configOptions)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
@@ -157,13 +158,13 @@ enum ControlCommand {
         }
     }
 
-    private static func printSetModel(modelId: String, record: SessionRecord, format: String) {
+    private static func printSetModel(modelId: String, resumed: Bool, record: SessionRecord, format: String) {
         switch format {
         case "json":
             Console.out(jsonObject([
                 ("action", .string("model_set")),
                 ("modelId", .string(modelId)),
-                ("resumed", .bool(false)),
+                ("resumed", .bool(resumed)),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
                 ("agentSessionId", record.agentSessionId.map(JSONValue.string))
