@@ -332,6 +332,7 @@ public final class ACPAgent: Sendable {
             NewSessionRequest(
                 cwd: cwd ?? self.cwd, mcpServers: mcpServers,
                 additionalDirectories: additionalDirectories, meta: meta))
+        captureDescendants()
         return ACPSession(
             id: response.sessionId, agent: self, modes: response.modes, meta: response.meta,
             configOptions: response.configOptions, models: response.models)
@@ -360,6 +361,7 @@ public final class ACPAgent: Sendable {
                 sessionId: id, cwd: cwd ?? self.cwd, mcpServers: mcpServers,
                 additionalDirectories: additionalDirectories, meta: meta),
             suppressReplayUpdates: suppressReplayUpdates, rawWire: rawWire)
+        captureDescendants()
         return ACPSession(
             id: id, agent: self, modes: response.modes, meta: response.meta,
             configOptions: response.configOptions, models: response.models)
@@ -374,9 +376,19 @@ public final class ACPAgent: Sendable {
             ResumeSessionRequest(
                 sessionId: id, cwd: cwd ?? self.cwd, mcpServers: mcpServers,
                 additionalDirectories: additionalDirectories, meta: meta))
+        captureDescendants()
         return ACPSession(
             id: id, agent: self, modes: response.modes, meta: response.meta,
             configOptions: response.configOptions, models: response.models)
+    }
+
+    /// acpx's `captureAgentDescendants` once a session is open: an adapter starts its
+    /// workers then (codex-acp its `codex`), and they end with the agent even if it exits
+    /// first and they are handed to `init`.
+    private func captureDescendants() {
+        #if os(macOS) || os(Linux)
+        (transport as? AgentProcessTransport)?.captureDescendants()
+        #endif
     }
 
     /// Reconnect to an existing session the way the agent says it can be reconnected:

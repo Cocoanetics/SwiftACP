@@ -21,8 +21,9 @@
 - `EXIT_AGENT_INIT_ERROR=1` answers `initialize` with an error, and runs on.
 - `EXIT_AGENT_AUTH=1` advertises a sign-in method on `initialize`.
 - `EXIT_AGENT_STUBBORN=1` ignores `SIGTERM` and keeps running once its stdin ends.
-- `EXIT_AGENT_CHILD=<path>` starts `sleep 300` at `initialize`, ignoring `SIGTERM` like
-  itself, and writes its pid to the path.
+- `EXIT_AGENT_CHILD=<path>` starts `sleep 300` at `initialize` — or at the method
+  `EXIT_AGENT_CHILD_AT` names — ignoring `SIGTERM` like itself, and writes its pid to the
+  path.
 """
 import json
 import os
@@ -70,22 +71,27 @@ def initialize_result(req_id):
     send(answer)
 
 
+def start_child():
+    child = os.environ.get("EXIT_AGENT_CHILD")
+    if child:
+        sleeper = subprocess.Popen(
+            ["/bin/sh", "-c", "trap '' TERM; exec sleep 300"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(child, "w") as output:
+            output.write(str(sleeper.pid))
+
+
 def main():
     for line in sys.stdin:
         if not line.strip():
             continue
         message = json.loads(line)
         method, req_id = message.get("method"), message.get("id")
+        if method == os.environ.get("EXIT_AGENT_CHILD_AT", "initialize"):
+            start_child()
         if method == "initialize":
             if ON == "initialize":
                 die()
-            child = os.environ.get("EXIT_AGENT_CHILD")
-            if child:
-                sleeper = subprocess.Popen(
-                    ["/bin/sh", "-c", "trap '' TERM; exec sleep 300"], stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                with open(child, "w") as output:
-                    output.write(str(sleeper.pid))
             initialize_result(req_id)
         elif method in ("session/new", "session/load"):
             result = {"sessionId": "exit-session"} if method == "session/new" else {}

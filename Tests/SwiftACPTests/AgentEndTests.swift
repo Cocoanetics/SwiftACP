@@ -252,6 +252,23 @@ import Glibc
         #expect(!Self.isRunning(child))
     }
 
+    /// So is what it starts when it opens a session, though the agent exits first and it
+    /// is handed to `init`: acpx notes the agent's processes again once a session is open
+    /// (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func whatTheAgentStartsForASessionEndsWithIt() async throws {
+        let pidFile = NSTemporaryDirectory() + "exit-agent-child-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let agent = try await Self.launch(
+            "EXIT_AGENT_CHILD='\(pidFile)' EXIT_AGENT_CHILD_AT=session/new EXIT_AGENT_ON=prompt")
+        let session = try await agent.newSession()
+        let child = try #require(pid_t(String(contentsOfFile: pidFile, encoding: .utf8)))
+        #expect(Self.isRunning(child))
+        _ = try? await session.prompt([.text("hi")])
+        await agent.close()
+        #expect(!Self.isRunning(child))
+    }
+
     /// A line longer than `ACPX_MAX_ACP_MESSAGE_BYTES` fails what waits with acpx's
     /// error and ends the connection; a line of exactly the limit is read.
     @Test(.enabled(if: mockPythonAvailable))
