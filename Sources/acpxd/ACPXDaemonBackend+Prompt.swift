@@ -29,6 +29,7 @@ extension ACPXDaemonBackend {
     ///   - permissionMode: how this turn's permission requests and writes are
     ///     answered — see ``TurnPermissions``. `nil` approves everything.
     ///   - nonInteractivePermissions: `deny` (the default) or `fail`.
+    ///   - model: the turn's `--model`, put on the session before the prompt and pinned.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -36,7 +37,7 @@ extension ACPXDaemonBackend {
         sessionId rawSessionId: String, text: String,
         blocks: [PromptBlock]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil
+        streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, model: String? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -88,10 +89,11 @@ extension ACPXDaemonBackend {
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
+        let requestedModel = model?.javaScriptTrimmed
         let turn = Turn(
             recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers, blocks: content,
-            permissions: permissions, persister: persister, eventBuffer: eventBuffer, streamWire: streamWire,
-            errors: errors)
+            model: requestedModel?.isEmpty == false ? requestedModel : nil, permissions: permissions,
+            persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
             try await attemptWithRetry(turn, wasHeld: wasHeld)
@@ -105,6 +107,8 @@ extension ACPXDaemonBackend {
         let cwd: String
         let mcpServers: [McpServerConfig]?
         let blocks: [ContentBlock]
+        /// The turn's `--model`, trimmed; `nil` without one.
+        let model: String?
         let permissions: TurnPermissions
         let persister: TurnPersister
         let eventBuffer: WireBuffer
@@ -191,7 +195,7 @@ extension ACPXDaemonBackend {
         // connecting put on the wire goes to the calling client first.
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
-            onReplacement: { await persister.adoptReplacement($0) },
+            requestedModel: turn.model,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
         // The attempt proper starts once connected: a restore the agent refused while
@@ -265,6 +269,9 @@ extension ACPXDaemonBackend {
             return fullText
         }
         do {
+            if let model = turn.model {
+                try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
+            }
             let response = try await entry.session.prompt(blocks)
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
@@ -298,6 +305,27 @@ extension ACPXDaemonBackend {
             let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
             await wireFeed.finish(showingHeld: !retried)
             throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
+        }
+    }
+}
+
+extension ACPXDaemonBackend {
+    /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
+    /// before the prompt — checked against what the session advertises, not sent when
+    /// it is already the current model — and is pinned in the record the turn saves.
+    /// A model the session cannot take fails the turn before the prompt goes out.
+    func applyPromptModel(
+        _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String
+    ) async throws {
+        let application = try await ModelApplication.applyRequestedModel(
+            connection: entry.agent.connection, sessionId: entry.session.id, requestedModel: model,
+            models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand)
+        guard application.applied else { return }
+        let response = application.response
+        await persister.adopt { record in
+            var acpx = record.acpx ?? SessionAcpxState()
+            ModelSupport.applyModelSelection(model, response: response, to: &acpx)
+            record.acpx = acpx
         }
     }
 }

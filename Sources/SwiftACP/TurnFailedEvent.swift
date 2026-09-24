@@ -23,10 +23,12 @@ public struct TurnFailedEvent: Codable, Sendable, Equatable {
     public var shown: Bool
     /// The acpx record id of the session, which acpx's JSON error line names.
     public var sessionId: String
+    /// Whether trying again may succeed, when the failure says — acpx's `retryable`.
+    public var retryable: Bool?
 
     public init(
         outputCode: String, detailCode: String?, origin: String?, message: String, acp: JSONValue?,
-        shown: Bool, sessionId: String
+        shown: Bool, sessionId: String, retryable: Bool? = nil
     ) {
         self.outputCode = outputCode
         self.detailCode = detailCode
@@ -35,5 +37,6 @@ public struct TurnFailedEvent: Codable, Sendable, Equatable {
         self.acp = acp
         self.shown = shown
         self.sessionId = sessionId
+        self.retryable = retryable
     }
 }

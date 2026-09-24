@@ -10,15 +10,23 @@ every `session/set_config_option`, and appends each request it received to
 `MODEL_AGENT_LEGACY=1` switches it to the legacy shape instead — no config
 options, a `models` block, and `session/set_model` as the only model control.
 `MODEL_AGENT_MODELS` (comma-separated ids) replaces the advertised models, `m1`
-and `m2`; the current one stays `m1`.
+and `m2`; the current one stays `m1`. `MODEL_AGENT_MODELS_FILE` names a file holding
+that list instead, read at launch, so a test can change what a later launch offers.
+`MODEL_AGENT_LOAD=1` makes it take sessions back with `session/load`, answering with
+what `session/new` would. `session/set_mode` is accepted.
 """
 import json
 import os
 import sys
 
 LEGACY = os.environ.get("MODEL_AGENT_LEGACY") == "1"
+LOAD = os.environ.get("MODEL_AGENT_LOAD") == "1"
 CURRENT = {"model": "m1", "effort": "low"}
-MODELS = os.environ.get("MODEL_AGENT_MODELS", "m1,m2").split(",")
+MODELS_FILE = os.environ.get("MODEL_AGENT_MODELS_FILE")
+if MODELS_FILE and os.path.exists(MODELS_FILE):
+    MODELS = open(MODELS_FILE).read().strip().split(",")
+else:
+    MODELS = os.environ.get("MODEL_AGENT_MODELS", "m1,m2").split(",")
 NAMES = {"m1": "One", "m2": "Two"}
 
 
@@ -63,11 +71,11 @@ def main():
             send({"jsonrpc": "2.0", "id": req_id, "result": {
                 "protocolVersion": 1,
                 "agentInfo": {"name": "model-agent", "version": "0.1.0"},
-                "agentCapabilities": {"loadSession": False,
+                "agentCapabilities": {"loadSession": LOAD,
                                       "promptCapabilities": {"image": False, "audio": False}},
                 "authMethods": []}})
-        elif method == "session/new":
-            result = {"sessionId": "model-session-1"}
+        elif method in ("session/new", "session/load"):
+            result = {} if method == "session/load" else {"sessionId": "model-session-1"}
             if LEGACY:
                 result["models"] = legacy_models()
             else:
@@ -79,6 +87,8 @@ def main():
                 CURRENT[params["configId"]] = params.get("value")
             send({"jsonrpc": "2.0", "id": req_id,
                   "result": {} if LEGACY else {"configOptions": config_options()}})
+        elif method == "session/set_mode":
+            send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         elif method == "session/set_model":
             CURRENT["model"] = message.get("params", {}).get("modelId", CURRENT["model"])
             send({"jsonrpc": "2.0", "id": req_id, "result": {}})

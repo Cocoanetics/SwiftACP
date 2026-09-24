@@ -177,7 +177,7 @@ enum DaemonClient {
     static func runPrompt(
         sessionId: String, blocks: [PromptBlock], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
-        renderer: OutputRenderer
+        model: String? = nil, renderer: OutputRenderer
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
@@ -187,14 +187,14 @@ enum DaemonClient {
         return try await runPrompt(
             on: proxy, stopReason: stopReason, sessionId: sessionId, blocks: blocks, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-            permissionPolicy: permissionPolicy, streamWire: renderer.streamsWireJSON)
+            permissionPolicy: permissionPolicy, model: model, streamWire: renderer.streamsWireJSON)
     }
 
     /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
     static func runPrompt(
         on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, blocks: [PromptBlock],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
-        permissionPolicy: PermissionRules? = nil, streamWire: Bool = false
+        permissionPolicy: PermissionRules? = nil, model: String? = nil, streamWire: Bool = false
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
@@ -204,7 +204,7 @@ enum DaemonClient {
             _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
                 sessionId: sessionId, text: "", blocks: blocks, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-                streamWire: streamWire, permissionPolicy: permissionPolicy)
+                streamWire: streamWire, permissionPolicy: permissionPolicy, model: model)
         } catch is DecodingError {
             // The turn succeeded; only its ignored text did not decode. SwiftMCP's typed
             // client turns a plain-text result into a JSON string by wrapping it in

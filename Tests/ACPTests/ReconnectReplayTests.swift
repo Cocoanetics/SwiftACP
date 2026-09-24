@@ -53,6 +53,9 @@ extension DaemonToolsTests {
     /// its client was made with, and on a reconnect those come from the record.
     /// Without this the session that actually receives the prompt runs with none
     /// of them — the model, tool allow-list and turn cap silently lapse.
+    ///
+    /// acpx 0.19.1 then puts the pinned model back on the new session, which advertises
+    /// no models here, so the turn fails as a retryable replay failure (#73).
     @Test(.enabled(if: mockPythonAvailable))
     func theFallbackSessionIsCreatedWithTheRecordsOptions() async throws {
         let command = try #require(mockCommand())
@@ -80,7 +83,15 @@ extension DaemonToolsTests {
             // The mock no longer has the session a restarted daemon asks it to load
             // (`-32002`), so the daemon takes the fresh-session fallback.
             let restarted = ACPXDaemonBackend(inheritAgentStderr: false)
-            _ = try await restarted.runPrompt(sessionId: id, text: "ping")
+            let failure = await #expect(throws: SessionReplayError.self) {
+                _ = try await restarted.runPrompt(sessionId: id, text: "ping")
+            }
+            #expect(failure?.localizedDescription == """
+                Failed to replay saved session model sonnet on ACP session mock-session-1: Cannot replay \
+                saved model "sonnet": the ACP agent did not advertise model support through a session \
+                config option or legacy models metadata, and the adapter does not support a startup \
+                model flag.
+                """)
 
             let requests = try String(contentsOf: log, encoding: .utf8)
                 .split(separator: "\n")
@@ -104,102 +115,98 @@ extension DaemonToolsTests {
         }
     }
 
-    /// The record keeps the user's intent even when the agent will not take it back, so
-    /// a retired model cannot strand the session on an unusable reconnect. The agent
-    /// takes the session itself back here: a new session in its place replaces the
-    /// advertised model state with its own, as acpx's does (#56).
+    /// A saved option the agent refuses to take back fails the turn, as a retryable
+    /// replay failure — acpx 0.19.1's `SessionConfigOptionReplayError` (#73). The record
+    /// keeps the user's intent and its session, and the agent is not held: the next turn
+    /// connects again, and asks again.
     @Test(.enabled(if: mockPythonAvailable))
-    func aRejectedSelectionDoesNotFailTheReconnect() async throws {
+    func aRefusedSelectionFailsTheTurnAndKeepsTheRecord() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(
-                agentCommand: "/usr/bin/env MOCK_LOAD_SESSION=ok \(command)", cwd: NSTemporaryDirectory())
-
-            // Pin something the mock has no idea about, behind the daemon's back.
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            let refusing = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_SET_CONFIG_OPTION_ERROR=1 "
+                + "MOCK_REQUEST_LOG='\(log.path)' \(command)"
+            let id = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .newSession(agentCommand: refusing, cwd: NSTemporaryDirectory())
             var record = try #require(SessionStore.loadRecord(id))
             var acpx = record.acpx ?? SessionAcpxState()
-            acpx.currentModelId = "no-such-model"
-            acpx.desiredConfigOptions = ["no-such-option": "value"]
+            acpx.desiredConfigOptions = ["effort": "high"]
             record.acpx = acpx
             try SessionStore.writeRecord(record)
 
             let restarted = ACPXDaemonBackend(inheritAgentStderr: false)
-            let answer = try await restarted.runPrompt(sessionId: id, text: "ping")
+            let failure = await #expect(throws: SessionReplayError.self) {
+                _ = try await restarted.runPrompt(sessionId: id, text: "ping")
+            }
+            #expect(failure?.localizedDescription == """
+                Failed to replay saved session config option effort on ACP session \(record.acpSessionId): \
+                Invalid params
+                """)
+            #expect(failure?.detailCode == "SESSION_CONFIG_OPTION_REPLAY_FAILED" && failure?.retryable == true)
+            let after = try #require(SessionStore.loadRecord(id))
+            #expect(after.acpSessionId == record.acpSessionId)
+            #expect(after.acpx?.desiredConfigOptions == ["effort": "high"])
 
-            #expect(!answer.isEmpty)
-            #expect(SessionStore.loadRecord(id)?.acpx?.currentModelId == "no-such-model")
+            _ = try? await restarted.runPrompt(sessionId: id, text: "again")
+            #expect(try Self.requestMethods(log).filter { $0 == "session/load" }.count == 2)
         }
     }
 
-    /// When the agent exposes model selection as a config option, the choice lives in
-    /// `desired_config_options` under that option's id while `current_model_id` can
-    /// still hold the advertised default. The option has to go first — ahead of the mode
-    /// and of the other options — not wherever dictionary order happens to put it.
+    /// The methods `mock-agent.py` logged, in order.
+    private static func requestMethods(_ log: URL) throws -> [String] {
+        try String(contentsOf: log, encoding: .utf8).split(separator: "\n").compactMap {
+            ((try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any])?["method"] as? String
+        }
+    }
+
+    /// A model an earlier SwiftACP saved as the model option's selection — `set model`
+    /// did not pin then, and acpx never writes one — is put back as the model: after the
+    /// mode, ahead of the other options, and pinned, as `set model` records it now. A
+    /// fresh session gets the saved mode first, as acpx 0.19.1's replay orders them.
     @Test(.enabled(if: mockPythonAvailable))
-    func aModelHeldAsAConfigOptionIsReplayedFirst() async throws {
-        let command = try #require(mockCommand())
+    func aModelSavedAsItsOptionIsReplayedAsTheModel() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
         try await withIsolatedStore {
-            try FileManager.default.createDirectory(
-                at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
             let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
-            let loggedCommand = "/usr/bin/env MOCK_REQUEST_LOG='\(log.path)' \(command)"
-
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(
-                agentCommand: loggedCommand, cwd: NSTemporaryDirectory())
-
+            let command = "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' '\(python)' '\(fixture.path)'"
+            let id = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             var record = try #require(SessionStore.loadRecord(id))
-            var acpx = record.acpx ?? SessionAcpxState()
-            // The agent advertises model selection as a config option named `model`…
-            acpx.configOptions = .array([
-                .object([
-                    "id": .string("model"), "type": .string("select"),
-                    "category": .string("model"), "name": .string("Model"),
-                    "currentValue": .string("haiku"),
-                    "options": .array([
-                        .object(["value": .string("haiku"), "name": .string("Haiku")]),
-                        .object(["value": .string("opus"), "name": .string("Opus")])
-                    ])
-                ])
-            ])
-            acpx.modelControl = "config_option"
-            // …the record's `current_model_id` still holds the advertised default…
-            acpx.currentModelId = "haiku"
-            // …while the user's actual choice, and an unrelated option that sorts before
-            // it, live among the desired options.
-            acpx.desiredConfigOptions = ["model": "opus", "effort": "high"]
-            acpx.desiredModeId = "auto"
+            var acpx = try #require(record.acpx)
+            acpx.desiredConfigOptions = ["effort": "high", "model": "m2"]
+            acpx.desiredModeId = "plan"
             record.acpx = acpx
             try SessionStore.writeRecord(record)
 
-            let restarted = ACPXDaemonBackend(inheritAgentStderr: false)
-            _ = try await restarted.runPrompt(sessionId: id, text: "ping")
-
-            let entries = try String(contentsOf: log, encoding: .utf8)
-                .split(separator: "\n")
-                .compactMap {
-                    (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
-                }
-            let lastReconnect = try #require(
-                entries.lastIndex { ($0["method"] as? String) == "session/load" })
-            let replayed = entries[lastReconnect...].compactMap { entry -> String? in
-                guard let method = entry["method"] as? String, method.hasPrefix("session/set_")
-                else { return nil }
-                if method == "session/set_config_option",
-                    let params = entry["params"] as? [String: Any],
-                    let configId = params["configId"] as? String {
-                    return "\(method):\(configId)"
-                }
-                return method
-            }
-
-            // The model option first, then the mode, then the rest — and no legacy
-            // `session/set_model` carrying the stale default.
-            #expect(replayed == [
-                "session/set_config_option:model", "session/set_mode",
-                "session/set_config_option:effort"
+            let before = try Self.modelAgentRequests(log).count
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false).runPrompt(sessionId: id, text: "hi")
+            #expect(Array(try Self.modelAgentRequests(log).dropFirst(before)) == [
+                "session/new", "session/set_mode plan", "session/set_config_option model=m2",
+                "session/set_config_option effort=high", "session/prompt"
             ])
+            let after = try #require(SessionStore.loadRecord(id)?.acpx)
+            #expect(after.sessionOptions?.model == "m2")
+            #expect(after.desiredConfigOptions == ["effort": "high"])
+        }
+    }
+
+    /// The session requests `model-agent.py` logged: a mode, model or option named.
+    static func modelAgentRequests(_ log: URL) throws -> [String] {
+        try String(contentsOf: log, encoding: .utf8).split(separator: "\n").compactMap { line in
+            guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                  let method = message["method"] as? String, method.hasPrefix("session/")
+            else { return nil }
+            let params = message["params"] as? [String: Any] ?? [:]
+            if let modeId = params["modeId"] as? String { return "\(method) \(modeId)" }
+            if let modelId = params["modelId"] as? String { return "\(method) \(modelId)" }
+            if let configId = params["configId"] as? String, let value = params["value"] as? String {
+                return "\(method) \(configId)=\(value)"
+            }
+            return method
         }
     }
 }

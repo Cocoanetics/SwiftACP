@@ -86,7 +86,7 @@ extension OutputRenderer {
             defer { lock.unlock() }
             out(JSONErrorLine.make(
                 outputCode: event.outputCode, detailCode: event.detailCode, origin: event.origin ?? "runtime",
-                message: event.message, sessionId: event.sessionId, acp: acp) + "\n")
+                message: event.message, retryable: event.retryable, sessionId: event.sessionId, acp: acp) + "\n")
         }
     }
 }

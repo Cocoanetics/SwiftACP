@@ -151,8 +151,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// builds on (and persists on top of) whatever turn it queued behind, rather than
     /// clobbering it. Also says whether connecting had to take the session back
     /// (acpx's `resumed`).
+    ///
+    /// `replacing` is what the control changes, which a reconnect first leaves alone.
     private func withSessionTurn<T: Sendable>(
-        _ sessionId: String, _ body: (Live, inout SessionRecord) async throws -> T
+        _ sessionId: String, replacing: ReconnectReplay.Replacing,
+        _ body: (Live, inout SessionRecord) async throws -> T
     ) async throws -> (value: T, resumed: Bool) {
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
@@ -167,7 +170,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         }
         let (entry, resumed) = try await connect(
             recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-            mcpServers: current.acpx?.mcpServers, control: true)
+            mcpServers: current.acpx?.mcpServers, control: true, replacing: replacing)
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
         let result = try await body(entry, &record)
@@ -189,7 +192,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
     func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
-        let (_, resumed) = try await withSessionTurn(sessionId) { entry, record in
+        let (_, resumed) = try await withSessionTurn(sessionId, replacing: .mode) { entry, record in
             try await entry.session.setMode(modeId)
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.desiredModeId = modeId
@@ -213,7 +216,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   session had to be taken back first.
     func setConfigOption(sessionId: String, configId: String, value: String) async throws
         -> SessionControlResult {
-        let (options, resumed) = try await withSessionTurn(sessionId) { entry, record in
+        let (options, resumed) = try await withSessionTurn(
+            sessionId, replacing: .configOption(configId)) { entry, record in
             var acpx = record.acpx ?? SessionAcpxState()
             // acpx's owner control: a value for the model's own option is a model id,
             // checked and resolved against the session's advertised models.
@@ -236,7 +240,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
     func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
-        let (_, resumed) = try await withSessionTurn(sessionId) { entry, record in
+        let (_, resumed) = try await withSessionTurn(sessionId, replacing: .configOption("model")) { entry, record in
             var acpx = record.acpx ?? SessionAcpxState()
             let response = try await ModelApplication.setModel(
                 connection: entry.agent.connection, sessionId: entry.session.id, modelId: modelId,

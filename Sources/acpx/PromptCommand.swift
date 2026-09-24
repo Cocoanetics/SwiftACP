@@ -52,7 +52,7 @@ enum PromptCommand {
                 return try await DaemonClient.runPrompt(
                     sessionId: sessionId, blocks: promptBlocks, wait: wait,
                     permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                    permissionPolicy: permissionRules, renderer: renderer)
+                    permissionPolicy: permissionRules, model: flags.model, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {
