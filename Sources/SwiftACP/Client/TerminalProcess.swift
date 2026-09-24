@@ -68,7 +68,13 @@ final class TerminalProcess: @unchecked Sendable {
         let variables = environment ?? ProcessInfo.processInfo.environment
         let executable = try resolveExecutable(command, cwd: cwd, path: variables["PATH"])
         let stdout = try makePipe()
-        let stderr = try makePipe()
+        let stderr: (read: Int32, write: Int32)
+        do {
+            stderr = try makePipe()
+        } catch {
+            [stdout.read, stdout.write].forEach { close($0) }
+            throw error
+        }
         let wake: (read: Int32, write: Int32)
         do {
             wake = try makePipe()
@@ -295,18 +301,26 @@ final class TerminalProcess: @unchecked Sendable {
     private func readOutput(_ onOutput: @Sendable ([UInt8]) -> Void) {
         var open = outputDescriptors
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        /// Take in everything `descriptor` holds now. `false` once it is at its end.
-        func drain(_ descriptor: Int32) -> Bool {
-            while true {
-                let count = buffer.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
+        /// Take in up to `limit` bytes of what `descriptor` holds. `false` once it is at
+        /// its end.
+        func take(_ descriptor: Int32, upTo limit: Int) -> Bool {
+            var remaining = limit
+            while remaining > 0 {
+                let count = buffer.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, min($0.count, remaining)) }
                 if count > 0 {
                     onOutput(Array(buffer[0..<count]))
+                    remaining -= count
                 } else if count < 0, errno == EINTR {
                     continue
                 } else {
                     return count < 0 && errno == EAGAIN
                 }
             }
+            return true
+        }
+        func closePipe(_ descriptor: Int32) {
+            close(descriptor)
+            open.removeAll { $0 == descriptor }
         }
         while !open.isEmpty {
             var polled = (open + [wake.read]).map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
@@ -314,22 +328,25 @@ final class TerminalProcess: @unchecked Sendable {
                 if errno == EINTR { continue }
                 break
             }
-            let woken = polled.last!.revents != 0
-            // Woken, every pipe is emptied: a drain request wants all of it.
-            for entry in polled.dropLast() where entry.revents != 0 || woken {
-                guard !drain(entry.fd) else { continue }
-                close(entry.fd)
-                open.removeAll { $0 == entry.fd }
+            // A bounded read per ready pipe, then back to `poll`: a writer that never
+            // stops cannot keep the loop from the wake pipe.
+            for entry in polled.dropLast() where entry.revents != 0 {
+                if !take(entry.fd, upTo: buffer.count) { closePipe(entry.fd) }
             }
-            guard woken else { continue }
+            guard polled.last!.revents != 0 else { continue }
             var byte: UInt8 = 0
             while read(wake.read, &byte, 1) > 0 {}
-            let stop: Bool = lock.withLock {
-                if drainRequested {
+            let (stop, draining) = lock.withLock { (stopped, drainRequested) }
+            if draining {
+                // What each pipe holds now — all the command wrote before it exited — and
+                // no more: a background child may never stop writing.
+                for descriptor in open where !take(descriptor, upTo: Self.pendingBytes(descriptor)) {
+                    closePipe(descriptor)
+                }
+                lock.withLock {
                     drainRequested = false
                     drained.signal()
                 }
-                return stopped
             }
             if stop { break }
         }
@@ -344,6 +361,20 @@ final class TerminalProcess: @unchecked Sendable {
         close(wake.read)
         close(wake.write)
     }
+
+    /// How many bytes `descriptor` holds now (`FIONREAD`); a pipe's worth if unknown.
+    private static func pendingBytes(_ descriptor: Int32) -> Int {
+        var pending: Int32 = 0
+        let result = withUnsafeMutablePointer(to: &pending) { ioctl(descriptor, bytesPending, $0) }
+        return result == 0 ? Int(pending) : 64 * 1024
+    }
+
+    #if canImport(Darwin)
+    /// Darwin's `FIONREAD`, `_IOR('f', 127, int)`, which Swift does not import.
+    private static let bytesPending: UInt = 0x4004_667F
+    #else
+    private static let bytesPending = UInt(FIONREAD)
+    #endif
 
     /// Wait for the exit without reaping (`WNOWAIT`); have the reader take in what the
     /// command left in the pipes; then reap under the lock: until ``reaped`` is set, the

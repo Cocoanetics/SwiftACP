@@ -206,6 +206,42 @@ struct TerminalManagerTests {
         process.stopReading()
     }
 
+    /// A background child writing faster than its output is taken in does not hold up
+    /// the exit: what the command left in the pipe when it exited is taken in, and no
+    /// more. (`yes` fills the pipe before the command exits, and a reader slower than
+    /// `yes` keeps it from ever running dry.)
+    @Test func aBackgroundWriterDoesNotHoldUpTheExit() async throws {
+        let process = try TerminalProcess.spawn(
+            command: "sh", arguments: ["-c", "yes & sleep 0.2; exit 0"], cwd: try workspace(), environment: nil)
+        // The sleep only bounds a hang, so the test fails rather than never ending.
+        let reported = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = Once()
+            process.start(onOutput: { _ in usleep(10_000) }, onExit: { _ in
+                if once.claim() { continuation.resume(returning: true) }
+            })
+            Task {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                if once.claim() { continuation.resume(returning: false) }
+            }
+        }
+        #expect(reported)
+        // `yes` still runs in the command's process group, which outlives its leader.
+        killpg(process.pid, SIGKILL)
+        process.stopReading()
+    }
+
+    /// Whichever claims first.
+    final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var claimed = false
+        func claim() -> Bool {
+            lock.withLock {
+                defer { claimed = true }
+                return !claimed
+            }
+        }
+    }
+
     /// Output read before the exit carries no exit status.
     @Test func aRunningCommandHasNoExitStatusYet() async throws {
         let fifo = try Fifo()
