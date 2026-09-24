@@ -200,6 +200,40 @@ extension DaemonToolsTests {
         }
     }
 
+    /// When the fresh launch that takes a dropped session back cannot even connect,
+    /// the turn fails on that, not on the dropped session's error, which no output
+    /// showed: the report says the output shows nothing, and names no ACP error.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aFreshLaunchThatCannotConnectFailsOnItsOwnError() async throws {
+        try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, _ in
+            // The third launch exits at once: `newSession`'s, the first turn's, and then
+            // the retry's.
+            let launches = ACPXPaths.baseDir.appendingPathComponent("launches")
+            let wrapper = ACPXPaths.baseDir.appendingPathComponent("launch-twice.sh")
+            try """
+                #!/bin/sh
+                n=$(cat '\(launches.path)' 2>/dev/null || echo 0)
+                n=$((n + 1)); echo "$n" > '\(launches.path)'
+                [ "$n" -ge 3 ] && exit 3
+                exec "$@"
+                """.write(to: wrapper, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: "'\(wrapper.path)' \(command)", cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            let client = CallingClient()
+            await #expect(throws: (any Error).self) {
+                try await prompt(daemon, id, text: "second", client: client)
+            }
+            let failure = try #require(client.failure)
+            #expect(!failure.shown)
+            #expect(failure.acp == nil)
+            #expect(!failure.message.contains("Resource not found"))
+        }
+    }
+
     /// An image for an agent that never advertised images fails the turn as a usage
     /// error, after the prompt is recorded — acpx records it before connecting.
     @Test(.enabled(if: mockPythonAvailable))

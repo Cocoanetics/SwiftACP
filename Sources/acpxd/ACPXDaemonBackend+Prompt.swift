@@ -176,6 +176,9 @@ extension ACPXDaemonBackend {
     private func attemptPrompt(_ turn: Turn, retriesOnAFreshLaunch: Bool) async throws -> String {
         let (recordId, blocks, permissions) = (turn.recordId, turn.blocks, turn.permissions)
         let (persister, eventBuffer, errors) = (turn.persister, turn.eventBuffer, turn.errors)
+        // Nothing an earlier attempt showed says how this one fails — not even when it
+        // fails to connect at all.
+        errors.reset()
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
