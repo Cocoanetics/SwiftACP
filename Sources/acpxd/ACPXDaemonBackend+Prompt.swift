@@ -227,10 +227,12 @@ extension ACPXDaemonBackend {
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId
-        // Whether any of the turn itself has been written to the agent: its prompt. The
-        // `--model` asked for before it is not — a fresh launch asks for it again, which
-        // does no harm. Cleared when the turn ends.
-        let prompting = WriteMark()
+        // Whether the turn itself — its prompt — may have reached the agent: from when it
+        // starts to be written, unless the write fails. acpx counts a prompt once it is
+        // written (`onPromptRequestWritten`); counting it from before, an agent that took
+        // it and exited at once never gets it twice, and one whose closed stdin refused it
+        // gets it from a fresh launch. The `--model` asked for before it is not — a fresh
+        // launch asks for it again, which does no harm. Cleared when the turn ends.
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
@@ -240,12 +242,18 @@ extension ACPXDaemonBackend {
         // client with the turn's end, in the shape the agent sent them.
         let promptResult = PromptResultCapture()
         entry.agent.rawWire.set { direction, body in
-            if direction == .outbound, prompting.happened { wrote.mark() }
             errors.observe(direction, body)
             wireFeed.observe(direction, body)
             promptResult.observe(direction, body)
         }
-        defer { entry.agent.rawWire.set(nil) }
+        entry.agent.rawWire.onDelivery { body, delivery in
+            guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
+            if delivery == .writing { wrote.mark() } else { wrote.unmark() }
+        }
+        defer {
+            entry.agent.rawWire.set(nil)
+            entry.agent.rawWire.onDelivery(nil)
+        }
 
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
@@ -264,7 +272,6 @@ extension ACPXDaemonBackend {
             if let model = turn.model {
                 try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
             }
-            prompting.mark()
             let response = try await entry.session.prompt(blocks)
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
@@ -274,6 +281,7 @@ extension ACPXDaemonBackend {
             // Capture the token breakdown the agent reports on the response (Claude
             // Code does; acpx misses this — it only reads usage_update._meta.usage).
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
+            await persister.applyLifecycle(entry.agent.lifecycle)
             // Final checkpoint: stamp timestamps and flush the completed turn —
             // including any wire lines still buffered for the event log.
             await persister.finish()
@@ -297,6 +305,11 @@ extension ACPXDaemonBackend {
             let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
                 ? AgentExitedBeforeTheTurn(underlying: error) : error
             let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
+            // How the agent ended, if it did, goes into the record the failure saves — once
+            // it has: an agent whose connection is gone can still be running (its stdout
+            // closed, say), and is ended before its pid would be kept.
+            if ACPAgentConnection.endedTheConnection(error) { await entry.agent.close() }
+            await persister.applyLifecycle(entry.agent.lifecycle)
             await wireFeed.finish(showingHeld: !retried)
             throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
         }
@@ -423,6 +436,10 @@ final class WriteMark: @unchecked Sendable {
 
     func mark() {
         lock.withLock { marked = true }
+    }
+
+    func unmark() {
+        lock.withLock { marked = false }
     }
 
     var happened: Bool {

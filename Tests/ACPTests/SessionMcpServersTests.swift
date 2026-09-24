@@ -276,6 +276,7 @@ import Testing
                 agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory(),
                 mcpServers: [Self.own])
             _ = try await daemon.runPrompt(sessionId: id, text: "ping")
+            #expect(SessionStore.loadRecord(id)?.pid != nil)
 
             // Without `restart` the live session refuses the switch (npm's rule) …
             await #expect(throws: DaemonError.self) {
@@ -287,6 +288,8 @@ import Testing
             #expect(try await daemon.setSessionMcpServers(
                 sessionId: id, mcpServers: [Self.other], restart: true))
             #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.other])
+            // The adapter it dropped leaves no pid behind (#113 review).
+            #expect(SessionStore.loadRecord(id)?.pid == nil)
 
             _ = try await daemon.runPrompt(sessionId: id, text: "after switch")
             let requests = try sessionRequests(log)

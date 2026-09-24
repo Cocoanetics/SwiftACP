@@ -112,29 +112,35 @@ enum ProcessTable {
     }
 }
 
-/// The processes a terminal's command started, tracked so they can be signalled with
-/// it — acpx's `ProcessDescendants` with `ownProcessGroup: true`.
+/// The processes a child started, tracked so they can be signalled with it — acpx's
+/// `ProcessDescendants`. A terminal's command leads a process group of its own
+/// (`ownProcessGroup`), whose members count as its; an agent shares this process's
+/// group, so only what descends from it does.
 ///
 /// Each ``capture(rootIsRunning:)`` reads the process table and keeps, by pid and
-/// birth, every process seen before that is still the same process, the members of
-/// the root's process group (while the root runs, or once more after it exits for
-/// those it started before), and the children of anything kept. A process that left
-/// the group — a daemon calling `setsid` — stays tracked once it has been seen. The
-/// root itself is not among them: its owner signals it.
+/// birth, every process seen before that is still the same process, with its own
+/// group the members of the root's process group (while the root runs, or once more
+/// after it exits for those it started before), and the children of anything kept. A
+/// process that left the group — a daemon calling `setsid` — or lost its parent stays
+/// tracked once it has been seen. The root itself is not among them: its owner
+/// signals it.
 final class ProcessDescendants {
     private let root: pid_t
+    private let ownProcessGroup: Bool
     private var identities: [pid_t: ProcessTableEntry] = [:]
     private var rootBirth: UInt64?
     private var retired = false
     /// Whether the next snapshot still takes the root's group, although the root is
     /// gone: one fresh snapshot after the exit, for a shell's last fork.
-    private var captureGroupAfterExit = true
+    private var captureGroupAfterExit: Bool
     /// When the root exited: `.none` while it runs, `.some(nil)` if the clock could not
     /// be read (then no later group member counts).
     private var groupExitedAt: ProcessTable.ExitClock??
 
-    init(root: pid_t) {
+    init(root: pid_t, ownProcessGroup: Bool = true) {
         self.root = root
+        self.ownProcessGroup = ownProcessGroup
+        captureGroupAfterExit = ownProcessGroup
     }
 
     /// Record that the root has exited.
@@ -147,7 +153,7 @@ final class ProcessDescendants {
     @discardableResult
     func capture(rootIsRunning: Bool) -> Bool {
         guard !retired else { return true }
-        let captureRootGroup = rootIsRunning || captureGroupAfterExit
+        let captureRootGroup = ownProcessGroup && (rootIsRunning || captureGroupAfterExit)
         if !rootIsRunning { captureGroupAfterExit = false }
         guard var table = ProcessTable.snapshot() else { return false }
         // Custody never includes PID 1 or this process.
@@ -167,7 +173,7 @@ final class ProcessDescendants {
         }
         // A shell can exit while a snapshot is in flight; later discovery needs a
         // witnessed member still in the group.
-        if captureRootGroup || owned.contains(where: { table[$0]?.groupPid == root }) {
+        if ownProcessGroup, captureRootGroup || owned.contains(where: { table[$0]?.groupPid == root }) {
             for entry in table.values where entry.groupPid == root && startedBeforeRootExit(entry) {
                 owned.insert(entry.pid)
             }

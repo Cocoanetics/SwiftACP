@@ -78,25 +78,14 @@ extension ACPXDaemonBackend {
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
+        guard !stopping else { throw DaemonError.stopping }
         let handlers = handlers ?? .standard(permission: .approveAll)
         let replacing = replacing ?? (requestedModel == nil ? nil : .configOption("model"))
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
-        var replacesExitedAgent = false
-        while let existing = live[recordId] {
-            if await !existing.agent.connection.isClosed {
-                guard existing.sessionSpecs == sessionSpecs else {
-                    throw DaemonError.mcpConfigConflict(recordId)
-                }
-                // acpx replays nothing onto a session its client still holds.
-                await existing.agent.connection.setHandlers(handlers)
-                await existing.agent.setTerminalOutputCeiling(terminalOutputCeiling)
-                return (existing, false)
-            }
-            replacesExitedAgent = true
-            // Re-checked after the suspension above: only drop the entry that died.
-            if live[recordId]?.agent === existing.agent { live.removeValue(forKey: recordId) }
-            await existing.agent.close()
-        }
+        let held = try await heldAgent(
+            recordId, sessionSpecs: sessionSpecs, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
+        if let entry = held.entry { return (entry, false) }
+        let replacesExitedAgent = held.replacedExited
         let cwd = try resolveCwd(rawCwd)
         // Resolve config for this cwd so the agent gets the same injected `auth`
         // credentials / auth policy (and config-alias resolution) the CLI applies.
@@ -167,11 +156,18 @@ extension ACPXDaemonBackend {
         let sessionId = session.id
         let agentSessionId = AgentSessionId.extract(from: session.meta)
         let connected = state
-        await apply({ record in
+        // acpx writes the agent's lifecycle as soon as its client has started.
+        await apply({ [handle] record in
             record.acpSessionId = sessionId
             record.reconcileAgentSessionId(agentSessionId)
             record.acpx = connected
+            record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
+        // An agent started while the daemon began stopping is not held: nothing would end it.
+        guard !stopping else {
+            await handle.close()
+            throw DaemonError.stopping
+        }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         handle.rawWire.set(nil)
@@ -179,6 +175,32 @@ extension ACPXDaemonBackend {
         await showConnectOutput(fellBack)
         // Taken back unless a new session had to replace it.
         return (entry, !fellBack)
+    }
+
+    /// The live entry for `recordId`, given this call's handlers and terminal output
+    /// ceiling, when its agent is still connected; an agent that has exited is let go.
+    /// - Returns: that entry, `nil` when there is none, and whether an exited agent was
+    ///   let go.
+    private func heldAgent(
+        _ recordId: String, sessionSpecs: [MCPServerSpec]?, handlers: ACPClientHandlers, terminalOutputCeiling: Int?
+    ) async throws -> (entry: Live?, replacedExited: Bool) {
+        var replacedExited = false
+        while let existing = live[recordId] {
+            if await !existing.agent.connection.isClosed {
+                guard existing.sessionSpecs == sessionSpecs else {
+                    throw DaemonError.mcpConfigConflict(recordId)
+                }
+                // acpx replays nothing onto a session its client still holds.
+                await existing.agent.connection.setHandlers(handlers)
+                await existing.agent.setTerminalOutputCeiling(terminalOutputCeiling)
+                return (existing, replacedExited)
+            }
+            replacedExited = true
+            // Re-checked after the suspension above: only drop the entry that died.
+            if live[recordId]?.agent === existing.agent { live.removeValue(forKey: recordId) }
+            await existing.agent.close()
+        }
+        return (nil, replacedExited)
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
