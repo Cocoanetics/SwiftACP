@@ -258,6 +258,7 @@ public enum SessionRecordParser {
             "last_seq": modelInteger(raw["last_seq"]),
             "pid": modelInteger(raw["pid"]),
             "last_agent_exit_code": modelInteger(raw["last_agent_exit_code"]),
+            "messages": modelMessages(raw["messages"]),
             "event_log": parsed["eventLog"].map { log in
                 counts.reduce(log) { $0.replacing($1, with: modelInteger($0[$1]) ?? .null) }
             },
@@ -290,9 +291,13 @@ public enum SessionRecordParser {
 
     /// An integer beyond what the model's `Int` holds — acpx takes any finite integral
     /// number — read as the largest one a JavaScript number holds exactly, with its
-    /// sign, so the record still reads. The printed record keeps the stored value.
+    /// sign, so the record still reads. What the model reads is the number as
+    /// JavaScript prints it, so that is what `Int` has to hold: -2^63 prints as
+    /// -9223372036854776000, which it does not. The printed record keeps the stored
+    /// value.
     static func modelInteger(_ value: WireJSON?) -> WireJSON? {
-        guard case .number(let number)? = value, isInteger(number), abs(number) >= 9.2e18 else { return value }
+        guard case .number(let number)? = value, isInteger(number), Int(WireJSON.number(number).stringified) == nil
+        else { return value }
         return .number((number < 0 ? -1 : 1) * 9_007_199_254_740_992)
     }
 

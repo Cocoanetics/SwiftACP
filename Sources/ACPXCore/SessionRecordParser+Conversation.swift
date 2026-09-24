@@ -173,6 +173,53 @@ extension SessionRecordParser {
         return false
     }
 
+    // MARK: - The conversation as the model reads it
+
+    /// The messages as SwiftACP's model reads them. Each message, and each piece of its
+    /// content, is reduced to the variant acpx's checks accepted it as — the first, in
+    /// their order — so a wrong-typed member ahead of it cannot fail the model's
+    /// decoding of a record acpx reads.
+    static func modelMessages(_ messages: WireJSON?) -> WireJSON? {
+        guard case .array(let list)? = messages else { return messages }
+        return .array(list.map(modelMessage))
+    }
+
+    static func modelMessage(_ message: WireJSON) -> WireJSON {
+        if isUserMessage(message), let user = message["User"], case .array(let content)? = user["content"] {
+            return object([("User", user.replacing("content", with: .array(content.map(modelUserContent))))])
+        }
+        if isAgentMessage(message), let agent = message["Agent"], case .array(let content)? = agent["content"] {
+            return object([("Agent", agent.replacing("content", with: .array(content.map(modelAgentContent))))])
+        }
+        return message
+    }
+
+    /// ``isUserContent(_:)``'s choice: text when it is a string, else whichever of a
+    /// mention, an image or an audio clip comes first. An image's `mime_type`, which
+    /// only SwiftACP writes, stays only when it is a string.
+    static func modelUserContent(_ content: WireJSON) -> WireJSON {
+        if let text = content["Text"], text.stringValue != nil { return object([("Text", text)]) }
+        if let mention = content["Mention"] { return object([("Mention", mention)]) }
+        if let image = content["Image"] {
+            let unreadableMimeType = image["mime_type"].map { $0.stringValue == nil } ?? false
+            return object([("Image", unreadableMimeType ? image.removing("mime_type") : image)])
+        }
+        if let audio = content["Audio"] { return object([("Audio", audio)]) }
+        return content
+    }
+
+    /// ``isAgentContent(_:)``'s choice: text when it is a string, else thinking, else
+    /// redacted thinking when it is a string, else a tool use.
+    static func modelAgentContent(_ content: WireJSON) -> WireJSON {
+        if let text = content["Text"], text.stringValue != nil { return object([("Text", text)]) }
+        if let thinking = content["Thinking"] { return object([("Thinking", thinking)]) }
+        if let redacted = content["RedactedThinking"], redacted.stringValue != nil {
+            return object([("RedactedThinking", redacted)])
+        }
+        if let toolUse = content["ToolUse"] { return object([("ToolUse", toolUse)]) }
+        return content
+    }
+
     /// `isOptionalString`: absent, `null` or a string.
     static func isOptionalString(_ value: WireJSON?) -> Bool {
         switch value {
