@@ -42,11 +42,12 @@ extension ACPXDaemonBackend {
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, onReplacement: ReplacementHandler? = nil,
-        onConnectOutput: ConnectOutputHandler? = nil
+        onAgentSessionId: AgentSessionIdHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
-            control: control, onReplacement: onReplacement, onConnectOutput: onConnectOutput
+            control: control, onReplacement: onReplacement, onAgentSessionId: onAgentSessionId,
+            onConnectOutput: onConnectOutput
         ).entry
     }
 
@@ -57,7 +58,7 @@ extension ACPXDaemonBackend {
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, onReplacement: ReplacementHandler? = nil,
-        onConnectOutput: ConnectOutputHandler? = nil
+        onAgentSessionId: AgentSessionIdHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
@@ -125,6 +126,14 @@ extension ACPXDaemonBackend {
                 } else {
                     recordReplacement(recordId: recordId, response: replacement)
                 }
+            } else if let agentSessionId = AgentSessionId.extract(from: session.meta) {
+                // acpx's `reconcileAgentSessionId`: the id a load or resume names is the
+                // record's from now on.
+                if let onAgentSessionId {
+                    await onAgentSessionId(agentSessionId)
+                } else {
+                    recordAgentSessionId(recordId: recordId, agentSessionId)
+                }
             }
         } catch {
             handle.rawWire.set(nil)
@@ -149,13 +158,29 @@ extension ACPXDaemonBackend {
     /// record a turn in flight will save.
     typealias ReplacementHandler = @Sendable (NewSessionResponse) async -> Void
 
+    /// Takes the agent's own session id, as a reconnect's load or resume named it, onto
+    /// the record a turn in flight will save.
+    typealias AgentSessionIdHandler = @Sendable (String) async -> Void
+
+    /// The agent's own session id, as a reconnect named it, when no turn holds the record.
+    private func recordAgentSessionId(recordId: String, _ id: String) {
+        guard var record = findRecord(recordId), record.agentSessionId != id else { return }
+        record.reconcileAgentSessionId(id)
+        do {
+            try SessionStore.writeRecord(record)
+        } catch {
+            reconnectLog.warning("session record write failed after a reconnect: \(error)")
+        }
+    }
+
     /// The session a fallback started is the record's session from now on: acpx moves
     /// `acpSessionId` to it (keeping `acpxRecordId`) along with what it advertised, so
     /// the next reconnect asks for this one — not the one that was already gone.
     private func recordReplacement(recordId: String, response: NewSessionResponse) {
         guard var record = findRecord(recordId) else { return }
         record.moveToReplacement(
-            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models,
+            agentSessionId: AgentSessionId.extract(from: response.meta))
         do {
             try SessionStore.writeRecord(record)
         } catch {
