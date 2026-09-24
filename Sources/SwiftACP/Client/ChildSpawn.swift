@@ -96,9 +96,12 @@ enum ChildSpawn {
     ///     leads its own process group and has no controlling terminal.
     ///   - withoutCloseFrom: for tests, close inherited descriptors as on a glibc
     ///     without `closefrom` (Linux; ignored elsewhere).
+    ///   - withoutChangeDirectory: for tests, change into `cwd` as on a glibc without the
+    ///     `addchdir` spawn action (``changingDirectory(_:argv:cwd:)``).
     static func launch(
         _ executable: String, argv: [String], cwd: String, environment: [String],
-        stdin: Input, stdout: Int32, stderr: Int32, newSession: Bool, withoutCloseFrom: Bool = false
+        stdin: Input, stdout: Int32, stderr: Int32, newSession: Bool, withoutCloseFrom: Bool = false,
+        withoutChangeDirectory: Bool = false
     ) throws -> pid_t {
         #if canImport(Darwin)
         var actions: posix_spawn_file_actions_t?
@@ -118,7 +121,8 @@ enum ChildSpawn {
         }
         posix_spawn_file_actions_adddup2(&actions, stdout, 1)
         posix_spawn_file_actions_adddup2(&actions, stderr, 2)
-        try addChangeDirectory(&actions, cwd)
+        let (program, arguments) = try !withoutChangeDirectory && addChangeDirectory(&actions, cwd)
+            ? (executable, argv) : changingDirectory(executable, argv: argv, cwd: cwd)
         closeInheritedDescriptors(&actions, withoutCloseFrom: withoutCloseFrom)
 
         var noSignals = sigset_t()
@@ -135,13 +139,28 @@ enum ChildSpawn {
         guard result == 0 else { throw SpawnError(code: result) }
 
         var pid: pid_t = 0
-        let status = withCStrings(argv) { argvPointers in
+        let status = withCStrings(arguments) { argvPointers in
             withCStrings(environment) { environmentPointers in
-                posix_spawn(&pid, executable, &actions, &attributes, argvPointers, environmentPointers)
+                posix_spawn(&pid, program, &actions, &attributes, argvPointers, environmentPointers)
             }
         }
         guard status == 0 else { throw SpawnError(code: status) }
         return pid
+    }
+
+    /// Where the spawn itself cannot change into `cwd` — glibc before 2.29, without
+    /// `posix_spawn_file_actions_addchdir_np` — the child does: it starts as a shell that
+    /// changes into `cwd` and becomes `executable`, in the same process. The directory
+    /// is looked at first, so one the child could not change into fails the spawn as
+    /// the spawn's own `chdir` would. `executable`'s `argv[0]` becomes its path.
+    private static func changingDirectory(
+        _ executable: String, argv: [String], cwd: String
+    ) throws -> (program: String, argv: [String]) {
+        var status = stat()
+        guard stat(cwd, &status) == 0 else { throw SpawnError(code: errno) }
+        guard UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFDIR) else { throw SpawnError(code: ENOTDIR) }
+        guard access(cwd, X_OK) == 0 else { throw SpawnError(code: EACCES) }
+        return ("/bin/sh", ["/bin/sh", "-c", #"cd -- "$0" && exec "$@""#, cwd, executable] + argv.dropFirst())
     }
 
     #if canImport(Darwin)
@@ -150,9 +169,10 @@ enum ChildSpawn {
     /// Darwin closes every descriptor the file actions did not set up.
     private static let closeOnExecDefault = Int32(POSIX_SPAWN_CLOEXEC_DEFAULT)
 
-    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t?, _ cwd: String) throws {
+    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t?, _ cwd: String) throws -> Bool {
         let result = posix_spawn_file_actions_addchdir_np(&actions, cwd)
         guard result == 0 else { throw SpawnError(code: result) }
+        return true
     }
 
     private static func closeInheritedDescriptors(
@@ -172,7 +192,7 @@ enum ChildSpawn {
     private typealias CloseFrom = @convention(c) (UnsafeMutablePointer<posix_spawn_file_actions_t>, Int32) -> Int32
 
     /// glibc 2.29's `posix_spawn_file_actions_addchdir_np`, looked up at run time so the
-    /// library still builds against older headers.
+    /// library still builds, and runs, where it is missing.
     private static let changeDirectory: ChangeDirectory? = symbol("posix_spawn_file_actions_addchdir_np")
     /// glibc 2.34's `posix_spawn_file_actions_addclosefrom_np`.
     private static let closeFrom: CloseFrom? = symbol("posix_spawn_file_actions_addclosefrom_np")
@@ -182,10 +202,12 @@ enum ChildSpawn {
         return unsafeBitCast(address, to: T.self)
     }
 
-    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t, _ cwd: String) throws {
-        guard let changeDirectory else { throw SpawnError(code: ENOSYS) }
+    /// Whether the spawn changes into `cwd`: without the action, the child does.
+    private static func addChangeDirectory(_ actions: inout posix_spawn_file_actions_t, _ cwd: String) throws -> Bool {
+        guard let changeDirectory else { return false }
         let result = cwd.withCString { changeDirectory(&actions, $0) }
         guard result == 0 else { throw SpawnError(code: result) }
+        return true
     }
 
     /// Nothing but the three standard descriptors reaches the child. Before glibc 2.34

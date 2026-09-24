@@ -75,9 +75,12 @@ final class ChildProcess: @unchecked Sendable {
     ///   - newSession: start it in a session of its own, as a terminal's command is.
     ///   - withoutCloseFrom: for tests, close inherited descriptors as on a glibc
     ///     without `closefrom` (Linux; ignored elsewhere).
+    ///   - withoutChangeDirectory: for tests, change into `cwd` as on a glibc without the
+    ///     `addchdir` spawn action.
     static func spawn(
         command: String, arguments: [String], cwd: String, environment: [String: String]?,
-        input: Bool = false, newSession: Bool = true, withoutCloseFrom: Bool = false
+        input: Bool = false, newSession: Bool = true, withoutCloseFrom: Bool = false,
+        withoutChangeDirectory: Bool = false
     ) throws -> ChildProcess {
         let variables = environment ?? ProcessInfo.processInfo.environment
         let executable = try ChildSpawn.resolveExecutable(command, cwd: cwd, path: variables["PATH"])
@@ -95,7 +98,8 @@ final class ChildProcess: @unchecked Sendable {
             let pid = try ChildSpawn.launch(
                 executable, argv: [command] + arguments, cwd: cwd,
                 environment: variables.map { "\($0.key)=\($0.value)" }, stdin: stdin.map { .pipe($0.read) } ?? .null,
-                stdout: stdout.write, stderr: stderr.write, newSession: newSession, withoutCloseFrom: withoutCloseFrom)
+                stdout: stdout.write, stderr: stderr.write, newSession: newSession, withoutCloseFrom: withoutCloseFrom,
+                withoutChangeDirectory: withoutChangeDirectory)
             [stdout.write, stderr.write].forEach { close($0) }
             if let stdin {
                 close(stdin.read)

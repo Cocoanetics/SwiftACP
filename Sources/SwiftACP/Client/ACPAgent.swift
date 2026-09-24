@@ -197,8 +197,11 @@ public final class ACPAgent: Sendable {
                 detailCode: error.code == ENOENT ? AgentLaunchError.spawnENOENT : nil)
         }
         #else
-        _ = maxMessageBytes
-        return StdioTransport(endpoint: .childProcess(spec), framing: TappedFraming(LineFraming(), tap: tap))
+        let framing = TappedFraming(LineFraming(), tap: tap)
+        guard let maxMessageBytes else { return StdioTransport(endpoint: .childProcess(spec), framing: framing) }
+        let limit = MessageLimit.Signal()
+        let limited = MessageLimit.Framing(framing, limit: maxMessageBytes, signal: limit)
+        return MessageLimit.Transport(StdioTransport(endpoint: .childProcess(spec), framing: limited), signal: limit)
         #endif
     }
 
