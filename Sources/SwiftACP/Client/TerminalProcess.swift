@@ -58,8 +58,12 @@ final class TerminalProcess: @unchecked Sendable {
 
     /// Start `command` with `arguments` in `cwd`. `environment` is the command's whole
     /// environment, its `PATH` included; `nil` passes this process's own.
+    ///
+    /// - Parameter withoutCloseFrom: for tests, close inherited descriptors as on a
+    ///   glibc without `closefrom` (Linux; ignored elsewhere).
     static func spawn(
-        command: String, arguments: [String], cwd: String, environment: [String: String]?
+        command: String, arguments: [String], cwd: String, environment: [String: String]?,
+        withoutCloseFrom: Bool = false
     ) throws -> TerminalProcess {
         let variables = environment ?? ProcessInfo.processInfo.environment
         let executable = try resolveExecutable(command, cwd: cwd, path: variables["PATH"])
@@ -77,7 +81,7 @@ final class TerminalProcess: @unchecked Sendable {
             pid = try launch(
                 executable, argv: [command] + arguments, cwd: cwd,
                 environment: variables.map { "\($0.key)=\($0.value)" },
-                stdout: stdout.write, stderr: stderr.write)
+                stdout: stdout.write, stderr: stderr.write, withoutCloseFrom: withoutCloseFrom)
         } catch {
             [stdout.read, stdout.write, stderr.read, stderr.write, wake.read, wake.write].forEach { close($0) }
             throw error
@@ -123,7 +127,7 @@ final class TerminalProcess: @unchecked Sendable {
 
     private static func launch(
         _ executable: String, argv: [String], cwd: String, environment: [String],
-        stdout: Int32, stderr: Int32
+        stdout: Int32, stderr: Int32, withoutCloseFrom: Bool
     ) throws -> pid_t {
         #if canImport(Darwin)
         var actions: posix_spawn_file_actions_t?
@@ -141,7 +145,7 @@ final class TerminalProcess: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&actions, stdout, 1)
         posix_spawn_file_actions_adddup2(&actions, stderr, 2)
         try addChangeDirectory(&actions, cwd)
-        closeInheritedDescriptors(&actions)
+        closeInheritedDescriptors(&actions, withoutCloseFrom: withoutCloseFrom)
 
         var noSignals = sigset_t()
         sigemptyset(&noSignals)
@@ -175,7 +179,9 @@ final class TerminalProcess: @unchecked Sendable {
         guard result == 0 else { throw SpawnError(code: result) }
     }
 
-    private static func closeInheritedDescriptors(_ actions: inout posix_spawn_file_actions_t?) {}
+    private static func closeInheritedDescriptors(
+        _ actions: inout posix_spawn_file_actions_t?, withoutCloseFrom: Bool
+    ) {}
     #else
     /// glibc's `POSIX_SPAWN_SETSID` (2.26), which its headers only declare under
     /// `_GNU_SOURCE`.
@@ -189,8 +195,7 @@ final class TerminalProcess: @unchecked Sendable {
     /// glibc 2.29's `posix_spawn_file_actions_addchdir_np`, looked up at run time so the
     /// library still builds against older headers.
     private static let changeDirectory: ChangeDirectory? = symbol("posix_spawn_file_actions_addchdir_np")
-    /// glibc 2.34's `posix_spawn_file_actions_addclosefrom_np`: nothing but the three
-    /// standard descriptors reaches the command.
+    /// glibc 2.34's `posix_spawn_file_actions_addclosefrom_np`.
     private static let closeFrom: CloseFrom? = symbol("posix_spawn_file_actions_addclosefrom_np")
 
     private static func symbol<T>(_ name: String) -> T? {
@@ -204,8 +209,20 @@ final class TerminalProcess: @unchecked Sendable {
         guard result == 0 else { throw SpawnError(code: result) }
     }
 
-    private static func closeInheritedDescriptors(_ actions: inout posix_spawn_file_actions_t) {
-        _ = closeFrom?(&actions, 3)
+    /// Nothing but the three standard descriptors reaches the command. Before glibc
+    /// 2.34 there is no `closefrom` action, so each descriptor open now is closed by
+    /// its own: one closed meanwhile is harmless, as glibc ignores `EBADF` there.
+    private static func closeInheritedDescriptors(
+        _ actions: inout posix_spawn_file_actions_t, withoutCloseFrom: Bool
+    ) {
+        if let closeFrom, !withoutCloseFrom {
+            _ = closeFrom(&actions, 3)
+            return
+        }
+        let open = (try? FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd")) ?? []
+        for descriptor in open.compactMap(Int32.init) where descriptor > 2 {
+            posix_spawn_file_actions_addclose(&actions, descriptor)
+        }
     }
     #endif
 

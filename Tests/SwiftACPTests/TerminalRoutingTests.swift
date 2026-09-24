@@ -253,6 +253,53 @@ struct TerminalRoutingTests {
 
     // MARK: - Lifetime
 
+    /// A confirmation that holds until the test lets it answer yes.
+    actor Gate {
+        private var asked = false
+        private var askedWaiters: [CheckedContinuation<Void, Never>] = []
+        private var openWaiters: [CheckedContinuation<Void, Never>] = []
+
+        func confirm() async -> Bool {
+            asked = true
+            askedWaiters.forEach { $0.resume() }
+            askedWaiters = []
+            await withCheckedContinuation { openWaiters.append($0) }
+            return true
+        }
+
+        func waitUntilAsked() async {
+            if asked { return }
+            await withCheckedContinuation { askedWaiters.append($0) }
+        }
+
+        func open() {
+            openWaiters.forEach { $0.resume() }
+            openWaiters = []
+        }
+    }
+
+    /// A command approved only after the connection ended does not start: its
+    /// terminals were released, and it would outlive them. acpx rechecks its control
+    /// authority after asking and answers `Request cancelled`.
+    @Test func aCommandApprovedAfterTheConnectionEndedDoesNotStart() async throws {
+        let gate = Gate()
+        let terminals = RecordingTerminals()
+        let handlers = ACPClientHandlers.standard(
+            permission: .approveReads, confirmTerminal: { _ in await gate.confirm() }, terminal: .none)
+        let client = ACPAgentConnection(transport: LoopbackTransport.pair().0, handlers: handlers)
+        await client.setTerminalHandler(terminals)
+        let create = Task {
+            await client.handleIncomingRequest(
+                method: "terminal/create", params: .object(["sessionId": .string("s"), "command": .string("true")]))
+        }
+        await gate.waitUntilAsked()
+        await client.shutDownTerminals()
+        await gate.open()
+        guard case .failure(let error) = await create.value else { Issue.record("started"); return }
+        #expect(error.code == -32800 && error.message == "Request cancelled")
+        #expect(await terminals.created.isEmpty)
+    }
+
     /// Terminals are released when the connection ends, as acpx retires them when its
     /// client closes.
     @Test func closingTheConnectionShutsTheTerminalsDown() async throws {

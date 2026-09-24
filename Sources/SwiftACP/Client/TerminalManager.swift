@@ -35,6 +35,8 @@ public actor TerminalManager: ACPTerminalHandler {
     /// How long `SIGTERM` has before `SIGKILL`.
     public let killGrace: TimeInterval
     private var terminals: [String: ManagedTerminal] = [:]
+    /// Set when ``shutdown()`` begins: no command starts after it.
+    private var shutDown = false
 
     /// - Parameters:
     ///   - cwd: where a command runs when its request names no `cwd`.
@@ -54,6 +56,9 @@ public actor TerminalManager: ACPTerminalHandler {
     // MARK: - ACP methods
 
     public func createTerminal(_ request: CreateTerminalRequest) async throws -> CreateTerminalResponse {
+        // Nothing below suspends until the terminal is registered, so a shutdown either
+        // finds it or has already begun and refuses it here.
+        guard !shutDown else { throw CancellationError() }
         let output = TerminalOutput(
             limit: TerminalOutputLimit.resolve(requested: request.outputByteLimit, ceiling: outputCeiling))
         let process = try Self.start(request, cwd: request.cwd ?? cwd)
@@ -99,6 +104,7 @@ public actor TerminalManager: ACPTerminalHandler {
     }
 
     public func shutdown() async {
+        shutDown = true
         await withTaskGroup(of: Void.self) { group in
             for terminalId in terminals.keys {
                 group.addTask {

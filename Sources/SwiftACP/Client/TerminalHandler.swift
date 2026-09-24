@@ -19,7 +19,9 @@ public protocol ACPTerminalHandler: Sendable {
         -> WaitForTerminalExitResponse
     func killTerminal(_ request: KillTerminalRequest) async throws -> KillTerminalResponse
     func releaseTerminal(_ request: ReleaseTerminalRequest) async throws -> ReleaseTerminalResponse
-    /// Release every terminal still open: the connection has ended.
+    /// Release every terminal still open: the connection has ended. A
+    /// ``createTerminal(_:)`` arriving once this has begun must be refused (throw
+    /// `CancellationError`), or its command would outlive the connection.
     func shutdown() async
 }
 

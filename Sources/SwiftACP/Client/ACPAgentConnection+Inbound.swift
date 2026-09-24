@@ -34,6 +34,10 @@ extension ACPAgentConnection {
             code: -32601, message: "\"Method not found\": \(method)", data: .object(["method": .string(method)]))
     }
 
+    /// The ACP SDK's `RequestError.requestCancelled()`: a request its client stopped
+    /// serving — closed, or cancelling the session — while the request was in flight.
+    static let requestCancelled = JSONRPCErrorBody(code: -32800, message: "Request cancelled")
+
     /// The ACP SDK's `RequestError.invalidParams()` for params its schema rejects. acpx
     /// also sends the schema's issues in `data`; those are not reproduced.
     static let invalidParams = JSONRPCErrorBody(code: -32602, message: "Invalid params")
