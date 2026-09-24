@@ -1,0 +1,300 @@
+@testable import ACPXCore
+import Foundation
+import JSONFoundation
+import SwiftACP
+import Testing
+
+/// How a session record is written: acpx's `serializeSessionRecordForDisk`, printed as
+/// `JSON.stringify(…, null, 2)` with a newline (#85). The parser fixture holds, for each
+/// record acpx takes, the exact file acpx 0.19.1 wrote for it (`disk`).
+struct SessionRecordSerializerTests {
+    private struct Case: Decodable {
+        let name: String
+        let raw: String
+        let parsed: String?
+        let disk: String?
+    }
+
+    private static let cases: [Case] = {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/acpx-record-parse.json")
+        return (try? JSONDecoder().decode([Case].self, from: Data(contentsOf: fixture))) ?? []
+    }()
+
+    /// acpx's in-memory record serialized as acpx serializes it is acpx's file, byte for
+    /// byte.
+    @Test func aRecordIsSerializedAsAcpxSerializesIt() throws {
+        let written = Self.cases.filter { $0.parsed != nil && $0.disk != nil }
+        #expect(written.count == 75)
+        for testCase in written {
+            let text = try #require(testCase.parsed)
+            let parsed = try #require(WireJSON(parsing: Data(text.utf8)))
+            let disk = SessionRecordSerializer.forDisk(parsed, storedAcpx: nil).stringified(indent: 2) + "\n"
+            #expect(disk == testCase.disk, "\(testCase.name)")
+        }
+    }
+
+    /// And from the file itself — read as acpx reads it — as well. The fixture was made
+    /// with `HOME=/ACPX-HOME`, so a default event log names that home's sessions
+    /// directory; the test puts its own store's in its place.
+    @Test func aStoredRecordIsWrittenBackAsAcpxWritesIt() async throws {
+        try await withIsolatedStore {
+            let sessionsDir = ACPXPaths.sessionsDir.path
+            for testCase in Self.cases where testCase.disk != nil {
+                let raw = try #require(WireJSON(parsing: Data(testCase.raw.utf8)))
+                let parsed = try #require(SessionRecordParser.parse(raw), "\(testCase.name)")
+                let disk = SessionRecordSerializer.forDisk(parsed, storedAcpx: nil).stringified(indent: 2) + "\n"
+                let expected = testCase.disk?.replacingOccurrences(of: "/ACPX-HOME/.acpx/sessions", with: sessionsDir)
+                #expect(disk == expected, "\(testCase.name)")
+            }
+        }
+    }
+
+    /// What a record read into SwiftACP's model and written back loses, besides SwiftACP's
+    /// own `acpx` fields, which it adds: what the model cannot hold.
+    private static let beyondTheModel: [String: String] = [
+        "integers beyond Int": "a number the model holds as an Int",
+        "integers at 2^63": "a number the model holds as an Int",
+        "acpx max turns beyond Int": "a number the model holds as an Int",
+        "protocol version fractional": "a number the model holds as an Int",
+        "name with a lone surrogate": "a Swift string has no lone surrogate",
+        "variants after a wrong-typed one": "the model holds one variant of a message's content",
+        "acpx not an object": "SwiftACP keeps its restrictions at their tightest",
+        "acpx null": "SwiftACP keeps its restrictions at their tightest"
+    ]
+
+    /// A record read into the model and written back is the file acpx writes for it,
+    /// SwiftACP's own `acpx` fields aside: each value where the record had it, as acpx
+    /// keeps what it read, and `null` where it was `null`.
+    @Test func aRecordReadIsWrittenBackAsAcpxWritesIt() async throws {
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            let sessionsDir = ACPXPaths.sessionsDir.path
+            let stored = ACPXPaths.sessionsDir.appendingPathComponent("stored.json")
+            let written = Self.cases.filter { $0.disk != nil && Self.beyondTheModel[$0.name] == nil }
+            #expect(written.count == 67)
+            for testCase in written {
+                try Data(testCase.raw.utf8).write(to: stored)
+                let record = try #require(SessionStore.readRecord(at: stored), "\(testCase.name)")
+                try SessionStore.writeRecord(record)
+                let url = ACPXPaths.sessionRecordPath(record.acpxRecordId)
+                let text = try String(contentsOf: url, encoding: .utf8)
+                let file = try #require(WireJSON(parsing: Data(text.utf8)))
+                let acpxFields = file["acpx"].map {
+                    file.replacing("acpx", with: $0.removing("mcp_servers").removing("client_capabilities"))
+                } ?? file
+                let expected = testCase.disk?.replacingOccurrences(of: "/ACPX-HOME/.acpx/sessions", with: sessionsDir)
+                #expect(acpxFields.stringified(indent: 2) + "\n" == expected, "\(testCase.name)")
+                #expect(text == file.stringified(indent: 2) + "\n")
+                try FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    /// A record whose oldest messages were trimmed away keeps each remaining message in its
+    /// own stored order, not in that of the message once in its place, and writes a new
+    /// message as acpx builds one, even one equal to a message trimmed away (#117 review).
+    @Test func trimmedMessagesKeepTheirOwnStoredOrder() async throws {
+        let stored = [
+            #"{"User":{"content":[{"Text":"a"}],"id":"u1"}}"#,
+            #"{"Agent":{"tool_results":{},"content":[{"Text":"b"}]}}"#,
+            #""Resume""#,
+            #"{"Agent":{"tool_results":{},"content":[{"Text":"c"}]}}"#
+        ]
+        let newMessages = ConversationModel.maxRuntimeMessages - 1
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            for trimmed in [0, 1, 3, 4] {
+                try Self.storeRecord(messages: stored)
+                var record = try #require(SessionStore.loadRecord("r"))
+                // A message equal to the last one read, then enough to trim `trimmed` away.
+                record.messages.append(.agent(SessionAgentMessage(content: [.text("c")])))
+                for index in 0..<(newMessages - stored.count + trimmed) {
+                    record.messages.append(.user(SessionUserMessage(id: "n\(index)", content: [.text("n")])))
+                }
+                ConversationModel.trimForRuntime(&record)
+                #expect(record.messagesTrimmedSinceRead == trimmed)
+                try SessionStore.writeRecord(record)
+                let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+                guard case .array(let messages)? = written["messages"] else { throw POSIXError(.EINVAL) }
+                let kept = try stored.dropFirst(trimmed).map { try #require(WireJSON(parsing: Data($0.utf8))) }
+                #expect(Array(messages.prefix(kept.count)) == kept, "less \(trimmed)")
+                let built = try #require(
+                    WireJSON(parsing: Data(#"{"Agent":{"content":[{"Text":"c"}],"tool_results":{}}}"#.utf8)))
+                #expect(messages[kept.count] == built, "less \(trimmed)")
+            }
+        }
+    }
+
+    /// Past 100 turns of usage, the oldest entries go, as acpx keeps the ones it added
+    /// last: those the record was read with in their order, however their keys sort,
+    /// though their messages are gone (#117 review).
+    @Test func theOldestUsageGoesThoughItsMessageIsGone() async throws {
+        let keys = ["b", "a"] + (0..<99).map { String(format: "c%03d", $0) }
+        let usage = "{" + keys.map { #""\#($0)":{"input_tokens":1}"# }.joined(separator: ",") + "}"
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [], usage: usage)
+            var record = try #require(SessionStore.loadRecord("r"))
+            ConversationModel.trimForRuntime(&record)
+            #expect(record.requestTokenUsage?.keys.sorted() == Array(keys.dropFirst()).sorted())
+        }
+    }
+
+    /// Past 100 turns of usage, the entries added first go, however their ids sort and
+    /// though their messages are gone, and the file lists the rest in the order they came,
+    /// as acpx's object holds them (#117 review).
+    @Test func usageAddedGoesInTheOrderItCame() async throws {
+        let ids = (0...100).reversed().map { String(format: "u%03d", $0) }
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [])
+            var record = try #require(SessionStore.loadRecord("r"))
+            for id in ids {
+                ConversationModel.recordResponseUsage(into: &record, PromptUsage(inputTokens: 1), promptMessageId: id)
+            }
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            guard case .object(let usage)? = written["request_token_usage"] else { throw POSIXError(.EINVAL) }
+            #expect(usage.map { String(decoding: $0.key, as: UTF16.self) } == Array(ids.dropFirst()))
+        }
+    }
+
+    /// What the agent sent within a message — a tool's input and output — keeps its stored
+    /// order while unchanged, and once changed, the order it has, items and all: acpx
+    /// replaced it whole (#117 review).
+    @Test func aChangedToolPayloadKeepsItsOwnOrder() async throws {
+        let payload = #"{"z":0,"edits":[{"old":"a","new":"b"}]}"#
+        let message = #"{"Agent":{"content":[{"ToolUse":{"id":"t","name":"edit","raw_input":"{}","input":"#
+            + payload + #","is_input_complete":true,"thought_signature":null}},{"ToolUse":{"id":"u","#
+            + #""name":"edit","raw_input":"{}","input":"# + payload + #","is_input_complete":true,"#
+            + #""thought_signature":null}}],"tool_results":{"t":{"tool_use_id":"t","tool_name":"edit","#
+            + #""is_error":false,"content":{"Text":""},"output":"# + payload + "}}}}"
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [message])
+            var record = try #require(SessionStore.loadRecord("r"))
+            guard case .agent(var agent) = record.messages.first, case .toolUse(var tool)? = agent.content.first
+            else { throw POSIXError(.EINVAL) }
+            let changed = JSONValue.object([
+                "z": .integer(1), "edits": .array([.object(["old": .string("c"), "new": .string("d")])])
+            ])
+            tool.input = changed
+            agent.content[0] = .toolUse(tool)
+            agent.toolResults["t"]?.output = changed
+            record.messages[0] = .agent(agent)
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            guard case .array(let messages)? = written["messages"],
+                case .array(let content)? = messages.first?["Agent"]?["content"]
+            else { throw POSIXError(.EINVAL) }
+            let replaced = #"{"edits":[{"new":"d","old":"c"}],"z":1}"#
+            #expect(content.first?["ToolUse"]?["input"]?.stringified == replaced)
+            #expect(messages.first?["Agent"]?["tool_results"]?["t"]?["output"]?.stringified == replaced)
+            #expect(content.last?["ToolUse"]?["input"]?.stringified == payload)
+        }
+    }
+
+    /// A list the record replaced whole — as a reconnect replaces `config_options` — keeps
+    /// the order it has, not that of the items once in its places (#117 review).
+    @Test func aListReplacedWholeKeepsItsOwnOrder() async throws {
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [], acpx: #"{"config_options":[{"zeta":1,"id":"old"}]}"#)
+            var record = try #require(SessionStore.loadRecord("r"))
+            record.acpx?.configOptions = .array([.object(["id": .string("new"), "zeta": .integer(2)])])
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["config_options"]?.stringified == #"[{"id":"new","zeta":2}]"#)
+        }
+    }
+
+    /// The names of the models the agent advertises are in the order it advertises them,
+    /// as acpx builds the map anew — a JavaScript object, index-like ids first — not in
+    /// the order the record was read with, even where the names are the same. A record
+    /// written with no models advertised since it was read keeps the order it was read
+    /// with, as acpx does (#117 review).
+    @Test func modelNamesFollowTheAdvertisedOrder() async throws {
+        let acpx = #"{"available_models":["z","a"],"available_model_names":{"z":"Z","a":"A"}}"#
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            for (models, expected) in [
+                ([("a", "A"), ("z", "Z")], #"{"a":"A","z":"Z"}"#),
+                ([("m", "M"), ("b", "B")], #"{"m":"M","b":"B"}"#),
+                ([("b", "B"), ("2", "Two"), ("1", "One")], #"{"1":"One","2":"Two","b":"B"}"#)
+            ] {
+                try Self.storeRecord(messages: [], acpx: acpx)
+                var record = try #require(SessionStore.loadRecord("r"))
+                var state = try #require(record.acpx)
+                ModelSupport.applyAdvertisedModelState(
+                    ModelSupport.ModelState(configId: nil, currentModelId: "a", availableModels: models), to: &state)
+                record.acpx = state
+                try SessionStore.writeRecord(record)
+                let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+                #expect(written["acpx"]?["available_model_names"]?.stringified == expected)
+            }
+            let unadvertised = #"{"available_models":["a","z"],"available_model_names":{"z":"Z","a":"A"}}"#
+            try Self.storeRecord(messages: [], acpx: unadvertised)
+            var record = try #require(SessionStore.loadRecord("r"))
+            record.closed = true
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["available_model_names"]?.stringified == #"{"z":"Z","a":"A"}"#)
+        }
+    }
+
+    /// The saved selections a control's reply rebuilds are in the order the reply lists
+    /// its options, as acpx builds the map anew (`applyAcceptedConfigOptions`); with no
+    /// reply since the record was read, they keep the order it was read with
+    /// (#117 review).
+    @Test func savedSelectionsFollowTheReplysOrder() async throws {
+        func option(_ id: String, _ value: String) -> JSONValue {
+            .object(["id": .string(id), "name": .string(id), "type": .string("select"), "currentValue": .string(value),
+                     "options": .array([.object(["value": .string(value), "name": .string(value)])])])
+        }
+        let acpx = #"{"desired_config_options":{"b":"1","a":"2"}}"#
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [], acpx: acpx)
+            var record = try #require(SessionStore.loadRecord("r"))
+            var state = try #require(record.acpx)
+            let reply = SetSessionConfigOptionResponse(configOptions: [option("a", "2"), option("b", "3")])
+            ModelSupport.applyConfigOptionSelection("b", value: "3", response: reply, to: &state)
+            record.acpx = state
+            try SessionStore.writeRecord(record)
+            var written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["desired_config_options"]?.stringified == #"{"a":"2","b":"3"}"#)
+
+            try Self.storeRecord(messages: [], acpx: acpx)
+            record = try #require(SessionStore.loadRecord("r"))
+            record.closed = true
+            try SessionStore.writeRecord(record)
+            written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["desired_config_options"]?.stringified == #"{"b":"1","a":"2"}"#)
+        }
+    }
+
+    /// A record `r` with these messages, as SwiftACP would have it on disk.
+    private static func storeRecord(messages: [String], acpx: String? = nil, usage: String = "{}") throws {
+        let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
+            + #""cwd":"/w","created_at":"t","last_used_at":"t","last_seq":0,"closed":false,"#
+            + #""messages":[\#(messages.joined(separator: ","))],"updated_at":"t","#
+            + #""cumulative_token_usage":{},"request_token_usage":\#(usage)"#
+            + (acpx.map { #","acpx":\#($0)"# } ?? "") + "}"
+        try Data(raw.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
+    }
+
+    /// SwiftACP's own `acpx` fields, which acpx does not read, follow acpx's.
+    @Test func swiftACPsOwnFieldsFollowAcpxs() throws {
+        let raw = try #require(WireJSON(parsing: Data(#"""
+            {"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","cwd":"/w",
+            "created_at":"t","last_used_at":"t","last_seq":0,"event_log":{"active_path":"/p","segment_count":1,
+            "max_segment_bytes":1,"max_segments":1,"last_write_at":null,"last_write_error":null},"closed":false,
+            "messages":[],"updated_at":"t","cumulative_token_usage":{},"request_token_usage":{},
+            "acpx":{"mcp_servers":[],"current_mode_id":"plan"}}
+            """#.utf8)))
+        let parsed = try #require(SessionRecordParser.parse(raw))
+        let acpx = try #require(SessionRecordSerializer.forDisk(parsed, storedAcpx: raw["acpx"])["acpx"])
+        #expect(acpx.stringified == #"{"current_mode_id":"plan","mcp_servers":[]}"#)
+    }
+}

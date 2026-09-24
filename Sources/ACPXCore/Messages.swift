@@ -135,14 +135,29 @@ public enum SessionUserContent: Codable, Sendable {
 /// `RedactedThinking`/`ToolUse`); unrecognized shapes round-trip via `.other`.
 public enum SessionAgentContent: Codable, Sendable {
     case text(String)
-    case thinking(text: String, signature: String?)
+    /// `signature` is `string | null | absent`: acpx builds thinking with a `null` one,
+    /// and keeps whichever a record it read had.
+    case thinking(text: String, signature: Nullable<String>?)
     case redactedThinking(String)
     case toolUse(SessionToolUse)
     case other(JSONValue)
 
     struct Thinking: Codable, Sendable {
         var text: String
-        var signature: String?
+        var signature: Nullable<String>?
+
+        enum CodingKeys: String, CodingKey { case text, signature }
+
+        init(text: String, signature: Nullable<String>?) {
+            self.text = text
+            self.signature = signature
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            text = try c.decode(String.self, forKey: .text)
+            signature = c.contains(.signature) ? try c.decode(Nullable<String>.self, forKey: .signature) : nil
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -194,12 +209,25 @@ public enum SessionAgentContent: Codable, Sendable {
 /// — while still decoding a populated `source` from records acpx itself wrote.
 public struct SessionMessageImage: Codable, Sendable {
     public var source: String
-    public var size: Size?
+    /// `size | null | absent`: acpx builds an image with a `null` size, and keeps
+    /// whichever a record it read had.
+    public var size: Nullable<Size>?
     /// The image's MIME type, when known. An acpx extension: upstream records omit it.
     public var mimeType: String?
     public struct Size: Codable, Sendable {
         public var width: Double
         public var height: Double
+    }
+}
+
+extension SessionMessageImage {
+    enum CodingKeys: String, CodingKey { case source, size, mimeType }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decode(String.self, forKey: .source)
+        size = c.contains(.size) ? try c.decode(Nullable<Size>.self, forKey: .size) : nil
+        mimeType = try c.decodeIfPresent(String.self, forKey: .mimeType)
     }
 }
 
@@ -318,6 +346,18 @@ public struct SessionAcpxState: Codable, Sendable {
     /// reason: npm acpx carries capabilities on the queue owner that *is* the session,
     /// while `acpxd` outlives any one connection and has to read them back.
     public var clientCapabilities: PersistedCapabilities?
+    /// The member order acpx gave each map of this block that it built anew since the
+    /// record was read, by the map's name in the record: `available_model_names` from the
+    /// models an agent advertised, `desired_config_options` from a control's reply —
+    /// JavaScript objects, built by insertion (``ModelSupport``). A map not here keeps the
+    /// order it was read with. Never written.
+    var rebuiltOrders: [String: [String]] = [:]
+
+    enum CodingKeys: String, CodingKey {
+        case resetOnNextEnsure, currentModeId, desiredModeId, desiredConfigOptions, currentModelId
+        case availableModels, availableModelNames, modelControl, availableCommands, configOptions
+        case sessionOptions, mcpServers, clientCapabilities
+    }
 
     /// The `fs` / `terminal` switches in the record's own shape.
     public struct PersistedCapabilities: Codable, Sendable, Hashable {
