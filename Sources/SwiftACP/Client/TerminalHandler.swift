@@ -156,6 +156,15 @@ public struct TerminalApproval: Sendable {
 /// How much of a command's output a terminal keeps — acpx's
 /// `resolveTerminalOutputLimit` and its host ceiling.
 public enum TerminalOutputLimit {
+    /// Where a launch takes the host ceiling from.
+    public enum Source: Sendable, Equatable {
+        /// `ACPX_TERMINAL_MAX_OUTPUT_BYTES` in this process's environment, as acpx reads
+        /// it building its client.
+        case environment
+        /// A ceiling the caller already has — its own caller's — `nil` being none.
+        case given(Int?)
+    }
+
     /// acpx's `DEFAULT_TERMINAL_OUTPUT_LIMIT_BYTES`: what a request naming no limit gets.
     public static let defaultBytes = 64 * 1024
 

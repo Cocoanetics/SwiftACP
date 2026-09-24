@@ -12,7 +12,8 @@ JSON array — a command and its arguments — it runs that through the client's
 terminal, waits for it, reads its output, releases it, and answers
 `ran:<exit code>:<output>`, or the first error. A `session/set_mode` runs it too, before
 answering, and appends that line to `$MOCK_TERMINAL_LOG`. With `MOCK_TERMINAL_ON_INITIALIZE`
-set, `initialize` starts it instead, waits for it to print something, logs that, and fails.
+set, `initialize` starts it instead, waits for it to print something, logs that, and fails
+— or answers, when it is set to `ok`.
 """
 import json
 import os
@@ -33,6 +34,11 @@ running_for = None
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
+
+
+def initialize_result():
+    return {"protocolVersion": 1, "agentInfo": {"name": "write-agent", "version": "0.1.0"},
+            "agentCapabilities": {"loadSession": False, "promptCapabilities": {}}, "authMethods": []}
 
 
 def say(session_id, text):
@@ -63,18 +69,19 @@ for line in sys.stdin:
             if TERMINAL_LOG:
                 with open(TERMINAL_LOG, "a") as log:
                     log.write(result["output"])
-            send({"jsonrpc": "2.0", "id": pending[0],
-                  "error": {"code": -32603, "message": "initialize failed on purpose"}})
+            if os.environ.get("MOCK_TERMINAL_ON_INITIALIZE") == "ok":
+                running_for = None
+                send({"jsonrpc": "2.0", "id": pending[0], "result": initialize_result()})
+            else:
+                send({"jsonrpc": "2.0", "id": pending[0],
+                      "error": {"code": -32603, "message": "initialize failed on purpose"}})
             continue
         else:
             time.sleep(0.02)
         send({"jsonrpc": "2.0", "id": "term-poll", "method": "terminal/output",
               "params": {"sessionId": "init", "terminalId": terminal}})
     elif method == "initialize":
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "protocolVersion": 1, "agentInfo": {"name": "write-agent", "version": "0.1.0"},
-            "agentCapabilities": {"loadSession": False, "promptCapabilities": {}},
-            "authMethods": []}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": initialize_result()})
     elif method in ("session/new", "session/load"):
         cwd = message["params"]["cwd"]
         send({"jsonrpc": "2.0", "id": req_id,

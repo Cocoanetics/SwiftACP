@@ -79,6 +79,29 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A command the agent starts while it answers `initialize` is capped by the caller's
+    /// ceiling already: the launch builds the agent's terminal manager with it (#101
+    /// review). The fixture logs what that command printed; the daemon's own launch, for
+    /// `newSession`, has no cap.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aCommandStartedDuringInitializeIsCappedByTheCallersCeiling() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/write-agent.py")
+        let log = NSTemporaryDirectory() + "initialize-log-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: log) }
+        let command = "/usr/bin/env MOCK_TERMINAL='[\"printf\",\"0123456789\"]' MOCK_TERMINAL_ON_INITIALIZE=ok "
+            + "MOCK_TERMINAL_LOG='\(log)' '\(python)' '\(fixture.path)'"
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await daemon.evict(id)
+            _ = try await daemon.runPrompt(
+                sessionId: id, text: "go", permissionMode: "approve-all", terminalOutputCeiling: 4)
+            #expect(try String(contentsOfFile: log, encoding: .utf8) == "0123456789" + "6789")
+        }
+    }
+
     /// A caller's ceiling is held to the environment variable's rule, before the turn
     /// is queued.
     @Test func aNegativeCeilingIsRefused() async throws {

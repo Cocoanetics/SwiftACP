@@ -15,7 +15,7 @@ extension ClientCapabilities {
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: false)
 
     /// What acpx advertises: real file access, and client-side terminals — where
-    /// ``TerminalManager`` can run them (macOS and Linux). ``ACPAgent/launch(agent:argv:cwd:handlers:clientInfo:capabilities:environment:authCredentials:authPolicy:inheritStderr:overrides:onClientRequest:onRawWire:)``
+    /// ``TerminalManager`` can run them (macOS and Linux). ``ACPAgent/launch(agent:argv:cwd:handlers:clientInfo:capabilities:environment:authCredentials:authPolicy:inheritStderr:overrides:terminalOutputCeiling:onClientRequest:onRawWire:)``
     /// gives a connection advertising terminals a ``TerminalManager`` to run them on.
     public static let acpx = ClientCapabilities(
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: terminalsSupported)
@@ -112,6 +112,7 @@ public final class ACPAgent: Sendable {
         authPolicy: String = "skip",
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
@@ -131,8 +132,9 @@ public final class ACPAgent: Sendable {
             throw failure
         }
         // acpx builds its terminal manager with its client, before the agent starts —
-        // so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the launch outright.
-        let terminals = try terminalManager(for: capabilities, cwd: cwd)
+        // so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the launch outright, and a
+        // command the agent starts while it answers `initialize` is capped already.
+        let terminals = try terminalManager(for: capabilities, cwd: cwd, ceiling: terminalOutputCeiling)
         // Tapped from the start, so an observer given here sees the handshake too.
         let rawWire = RawWireTap(onRawWire)
         let transport = StdioTransport(
@@ -168,9 +170,13 @@ public final class ACPAgent: Sendable {
     /// The ceiling is read whether or not terminals are advertised: acpx builds its
     /// terminal manager with every client, so `--no-terminal` does not excuse a bad one.
     private static func terminalManager(
-        for capabilities: ClientCapabilities, cwd: String
+        for capabilities: ClientCapabilities, cwd: String, ceiling source: TerminalOutputLimit.Source
     ) throws -> (any ACPTerminalHandler)? {
-        let ceiling = try TerminalOutputLimit.ceiling()
+        let ceiling: Int?
+        switch source {
+        case .environment: ceiling = try TerminalOutputLimit.ceiling()
+        case .given(let bytes): ceiling = bytes
+        }
         #if os(macOS) || os(Linux)
         guard capabilities.terminal else { return nil }
         return TerminalManager(cwd: cwd, outputCeiling: ceiling)
@@ -206,6 +212,7 @@ public final class ACPAgent: Sendable {
         authPolicy: String = "skip",
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
@@ -216,8 +223,8 @@ public final class ACPAgent: Sendable {
                 rules: permissionRules),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest,
-            onRawWire: onRawWire)
+            inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
+            onClientRequest: onClientRequest, onRawWire: onRawWire)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.

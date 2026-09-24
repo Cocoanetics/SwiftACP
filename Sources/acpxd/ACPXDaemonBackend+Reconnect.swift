@@ -117,12 +117,12 @@ extension ACPXDaemonBackend {
                 agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
                 capabilities: capabilities,
                 authCredentials: config.auth, authPolicy: config.authPolicy,
-                inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)
+                inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
+                onRawWire: connectOutput?.observer)
         } catch {
             await showConnectOutput(false)
             throw error
         }
-        await handle.setTerminalOutputCeiling(terminalOutputCeiling)
         let session: ACPSession
         let fellBack: Bool
         var replacementModels: ModelSupport.ModelState?
