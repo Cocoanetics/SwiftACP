@@ -44,6 +44,21 @@ extension ACPXDaemonBackend {
         control: Bool = false, onReplacement: ReplacementHandler? = nil,
         onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
+        try await connect(
+            recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
+            control: control, onReplacement: onReplacement, onConnectOutput: onConnectOutput
+        ).entry
+    }
+
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:onReplacement:onConnectOutput:)``,
+    /// also saying whether the session had to be taken back — acpx's `resumed`: the
+    /// agent was launched and `session/load` or `session/resume` got the session back.
+    /// A session already held, or one a new session replaced, was not.
+    func connect(
+        recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
+        control: Bool = false, onReplacement: ReplacementHandler? = nil,
+        onConnectOutput: ConnectOutputHandler? = nil
+    ) async throws -> (entry: Live, resumed: Bool) {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
         while let existing = live[recordId] {
@@ -51,7 +66,7 @@ extension ACPXDaemonBackend {
                 guard existing.sessionSpecs == sessionSpecs else {
                     throw DaemonError.mcpConfigConflict(recordId)
                 }
-                return existing
+                return (existing, false)
             }
             replacesExitedAgent = true
             // Re-checked after the suspension above: only drop the entry that died.
@@ -120,7 +135,8 @@ extension ACPXDaemonBackend {
         await restoreSelections(selections, on: entry)
         handle.rawWire.set(nil)
         await showConnectOutput(fellBack)
-        return entry
+        // Taken back unless a new session had to replace it.
+        return (entry, !fellBack)
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.

@@ -302,8 +302,7 @@ import Testing
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            let ok = try await daemon.setMode(sessionId: id, modeId: "auto")
-            #expect(ok)
+            _ = try await daemon.setMode(sessionId: id, modeId: "auto")
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpx?.desiredModeId == "auto")
             #expect(record.acpx?.currentModeId == "auto")
@@ -317,8 +316,8 @@ import Testing
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             // Returns the agent's advertised options (none from the mock) and persists.
-            let options = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "opus")
-            #expect(options.isEmpty)
+            let result = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "opus")
+            #expect(result.configOptions?.isEmpty == true)
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpx?.desiredConfigOptions?["model"] == "opus")
         }
@@ -330,8 +329,7 @@ import Testing
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            let ok = try await daemon.setModel(sessionId: id, modelId: "opus")
-            #expect(ok)
+            _ = try await daemon.setModel(sessionId: id, modelId: "opus")
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpx?.currentModelId == "opus")
         }

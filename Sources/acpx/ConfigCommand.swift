@@ -15,37 +15,46 @@ enum ConfigCommand {
     }
 
     private static func show(_ config: ResolvedAcpxConfig, format: String) -> Int32 {
-        // `mcp` (the explicit `--mcp-config` path) appears only when one was given.
-        let payload = jsonObject([
-            ("defaultAgent", .string(config.defaultAgent)),
-            ("defaultPermissions", .string(config.defaultPermissions)),
-            ("nonInteractivePermissions", .string(config.nonInteractivePermissions)),
-            ("authPolicy", .string(config.authPolicy)),
-            ("ttl", .integer(Int((Double(config.ttlMs) / 1000).rounded()))),
-            ("timeout", config.timeoutMs.map { JSONValue.double(Double($0) / 1000) } ?? .null),
-            ("queueMaxDepth", .integer(config.queueMaxDepth)),
-            ("format", .string(config.format)),
-            ("agents", agentsDisplay(config.agents)),
-            ("authMethods", .array(config.auth.keys.sorted().map { JSONValue.string($0) })),
-            ("disableExec", .bool(config.disableExec)),
-            ("paths", jsonObject(
-                [
-                    ("global", .string(config.globalPath)),
-                    ("project", .string(config.projectPath))
-                ] + (config.mcpConfigPath.map { [("mcp", JSONValue.string($0))] } ?? []))),
-            ("loaded", jsonObject([
-                ("global", .bool(config.hasGlobalConfig)),
-                ("project", .bool(config.hasProjectConfig))
-            ]))
-        ])
+        let payload = document(config)
         Console.out((format == "json" ? payload.compact() : payload.pretty()) + "\n")
         return ExitCodes.success
     }
 
-    private static func agentsDisplay(_ agents: [String: String]) -> JSONValue {
-        jsonObject(agents.keys.sorted().map { name in
-            (name, jsonObject([("command", .string(agents[name]!))]))
-        })
+    /// acpx's `toConfigDisplay` with the paths and what loaded, in its order. The TTL and
+    /// timeout are seconds as JavaScript divides them (`500` ms is `0.5`).
+    static func document(_ config: ResolvedAcpxConfig) -> WireJSON {
+        jsonObject([
+            ("defaultAgent", .text(config.defaultAgent)),
+            ("defaultPermissions", .text(config.defaultPermissions)),
+            ("nonInteractivePermissions", .text(config.nonInteractivePermissions)),
+            ("authPolicy", .text(config.authPolicy)),
+            ("ttl", .number(Double(config.ttlMs) / 1000)),
+            ("timeout", config.timeoutMs.map { WireJSON.number(Double($0) / 1000) } ?? .null),
+            ("queueMaxDepth", .integer(config.queueMaxDepth)),
+            ("format", .text(config.format)),
+            ("agents", agentsDisplay(config)),
+            ("authMethods", .array(config.auth.keys.sorted().map(WireJSON.text))),
+            ("disableExec", .bool(config.disableExec)),
+            // `mcp` (the explicit `--mcp-config` path) appears only when one was given.
+            ("paths", jsonObject([
+                ("global", .text(config.globalPath)),
+                ("project", .text(config.projectPath)),
+                ("mcp", config.mcpConfigPath.map(WireJSON.text))
+            ] as [(String, WireJSON?)])),
+            ("loaded", jsonObject([
+                ("global", .bool(config.hasGlobalConfig)),
+                ("project", .bool(config.hasProjectConfig))
+            ] as [(String, WireJSON?)]))
+        ] as [(String, WireJSON?)])
+    }
+
+    /// The agents in config order, as acpx's merged object lists them.
+    private static func agentsDisplay(_ config: ResolvedAcpxConfig) -> WireJSON {
+        jsonObject(config.agentOrder.compactMap { name in
+            config.agents[name].map { command in
+                (name, jsonObject([("command", .text(command))] as [(String, WireJSON?)]))
+            }
+        } as [(String, WireJSON?)])
     }
 
     private static func initConfig(format: String) throws -> Int32 {
@@ -58,17 +67,17 @@ enum ConfigCommand {
             created = false
         } else {
             let template = jsonObject([
-                ("defaultAgent", .string("codex")),
-                ("defaultPermissions", .string("approve-all")),
-                ("nonInteractivePermissions", .string("deny")),
-                ("authPolicy", .string("skip")),
+                ("defaultAgent", .text("codex")),
+                ("defaultPermissions", .text("approve-all")),
+                ("nonInteractivePermissions", .text("deny")),
+                ("authPolicy", .text("skip")),
                 ("ttl", .integer(300)),
                 ("timeout", .null),
                 ("queueMaxDepth", .integer(16)),
-                ("format", .string("text")),
-                ("agents", jsonObject([])),
-                ("auth", jsonObject([]))
-            ])
+                ("format", .text("text")),
+                ("agents", .object([])),
+                ("auth", .object([]))
+            ] as [(String, WireJSON?)])
             try Data((template.pretty() + "\n").utf8).write(to: path)
             created = true
         }

@@ -126,8 +126,9 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
+    /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setMode(sessionId: String, modeId: String) async throws -> Bool {
+    func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
         try await backend.setMode(sessionId: sessionId, modeId: modeId)
     }
 
@@ -139,10 +140,11 @@ public actor ACPXDaemon {
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
     /// - Returns: the agent's advertised config options after the change (the data
-    ///   the CLI echoes; may be empty if the agent reports none).
+    ///   the CLI echoes; may be empty if the agent reports none), and whether the
+    ///   session had to be taken back first.
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> [JSONValue] {
+        -> SessionControlResult {
         try await backend.setConfigOption(sessionId: sessionId, configId: configId, value: value)
     }
 
@@ -153,8 +155,9 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
+    /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setModel(sessionId: String, modelId: String) async throws -> Bool {
+    func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
         try await backend.setModel(sessionId: sessionId, modelId: modelId)
     }
 

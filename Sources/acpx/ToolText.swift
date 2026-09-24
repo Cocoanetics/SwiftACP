@@ -1,3 +1,4 @@
+import ACPXCore
 import Foundation
 import JSONFoundation
 import SwiftACP
@@ -221,14 +222,10 @@ enum ToolText {
         return String(slice)
     }
 
+    /// acpx's `safeJson`: `JSON.stringify`, compact or with two-space indents. The
+    /// payload arrived as a `JSONValue`, which keeps no member order, so keys are sorted.
     private static func jsonString(_ value: JSONValue, pretty: Bool) -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting =
-            pretty
-            ? [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            : [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(value), let string = String(data: data, encoding: .utf8)
-        else { return nil }
-        return string
+        let json = WireJSON(value)
+        return pretty ? json.stringified(indent: 2) : json.stringified
     }
 }

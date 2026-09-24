@@ -1,3 +1,4 @@
+import ACPXCore
 import Foundation
 import SwiftACP
 import JSONFoundation
@@ -103,30 +104,26 @@ func jsonString<E: Encodable>(_ value: E) -> String {
     (try? String(decoding: jsonOutputEncoder.encode(value), as: UTF8.self)) ?? "null"
 }
 
-/// Build a `JSONValue` object from ordered pairs (the encoder sorts keys, so the
-/// pair order is for readability only).
-func jsonObject(_ pairs: [(String, JSONValue)]) -> JSONValue {
-    .object(Dictionary(uniqueKeysWithValues: pairs))
+/// A JSON object as acpx builds one: members in the order given, as a JavaScript object
+/// literal keeps them. A `nil` member is left out, the way `JSON.stringify` leaves out
+/// an `undefined` property; `.null` is printed.
+func jsonObject(_ pairs: [(String, JSONValue?)]) -> WireJSON {
+    .object(pairs.compactMap { key, value in value.map { WireJSON.Member(key, WireJSON($0)) } })
 }
 
-extension JSONValue {
-    /// Compact single-line JSON (sorted keys, unescaped slashes) for `--format json`.
-    func compact() -> String { jsonString(self) }
-
-    /// 2-space pretty JSON (sorted keys) for human-facing output (e.g. `config show`).
-    func pretty() -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return (try? String(decoding: encoder.encode(self), as: UTF8.self)) ?? "null"
-    }
+/// ``jsonObject(_:)`` for members that are documents themselves.
+func jsonObject(_ pairs: [(String, WireJSON?)]) -> WireJSON {
+    .object(pairs.compactMap { key, value in value.map { WireJSON.Member(key, $0) } })
 }
 
-/// Write a JSON result envelope to stdout when the format is json.
-@discardableResult
-func emitJsonResult<E: Encodable>(_ format: String, _ value: E) -> Bool {
-    guard format == "json" else { return false }
-    Console.out(jsonString(value) + "\n")
-    return true
+extension WireJSON {
+    static func integer(_ value: Int) -> WireJSON { .number(Double(value)) }
+
+    /// `JSON.stringify(value)`: how acpx prints a document in `--format json`.
+    func compact() -> String { stringified }
+
+    /// `JSON.stringify(value, null, 2)`: how acpx prints one for a reader (`config show`).
+    func pretty() -> String { stringified(indent: 2) }
 }
 
 /// The physical working directory (resolves symlinks like Node's `process.cwd()`).
