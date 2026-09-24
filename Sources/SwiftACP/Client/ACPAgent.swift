@@ -100,7 +100,7 @@ public final class ACPAgent: Sendable {
         // here so the failure names the command instead of surfacing as an opaque
         // subprocess error once the handshake times out.
         if let failure = AgentLaunchPreflight.failure(
-            for: spec, agentCommand: AgentRegistry.command(for: name, overrides: overrides) ?? name) {
+            for: spec, agentCommand: failureName(agent: name, argv: argv, overrides: overrides)) {
             throw failure
         }
         // Tapped from the start, so an observer given here sees the handshake too.
@@ -124,6 +124,14 @@ public final class ACPAgent: Sendable {
             transport.close()
             throw error
         }
+    }
+
+    /// The command a launch failure names — acpx's `options.agentCommand`. Given an
+    /// argv, that is the caller's own command, since an expansion of the name was never
+    /// launched; otherwise it is what the name expands to.
+    static func failureName(agent name: String, argv: [String]?, overrides: [String: String]) -> String {
+        guard argv == nil else { return name }
+        return AgentRegistry.command(for: name, overrides: overrides) ?? name
     }
 
     /// Convenience that builds standard handlers from a permission policy. Writes
