@@ -39,17 +39,23 @@ public struct ACPClientHandlers: Sendable {
     /// to refuse (a ``FileSystemPermissionError`` reaches the agent in acpx's words).
     /// `nil` approves every write.
     public var authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)?
+    /// Authorize an `fs/read_text_file` before the file is read — acpx refuses reads
+    /// under `--deny-all`. Called at the same point as ``authorizeWrite``; throw to
+    /// refuse. `nil` approves every read.
+    public var authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)?
 
     public init(
         requestPermission: (@Sendable (RequestPermissionRequest) async -> RequestPermissionResponse)? = nil,
         readTextFile: (@Sendable (ReadTextFileRequest) async throws -> ReadTextFileResponse)? = nil,
         writeTextFile: (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)? = nil,
-        authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)? = nil
+        authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)? = nil,
+        authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)? = nil
     ) {
         self.requestPermission = requestPermission
         self.readTextFile = readTextFile
         self.writeTextFile = writeTextFile
         self.authorizeWrite = authorizeWrite
+        self.authorizeRead = authorizeRead
     }
 
     /// Sensible defaults for a headless controller: a permission policy plus real
@@ -74,7 +80,11 @@ public struct ACPClientHandlers: Sendable {
             requestPermission: { await permission.resolve($0) },
             readTextFile: { try LocalFileSystem.read($0) },
             writeTextFile: { try LocalFileSystem.write($0) },
-            authorizeWrite: { try await approval.authorize($0) })
+            authorizeWrite: { try await approval.authorize($0) },
+            authorizeRead: { _ in
+                // acpx's `readTextFile`: only `--deny-all` refuses a read.
+                if case .denyAll = permission { throw FileSystemPermissionError.readDenied }
+            })
     }
 }
 

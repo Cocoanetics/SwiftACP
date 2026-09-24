@@ -148,8 +148,11 @@ struct WriteGateTests {
         var failures: [String]
     }
 
-    private func run(
-        _ agent: WriteProbeAgent, cwd: String, handlers: ACPClientHandlers
+    /// Drive one turn of `agent` over a loopback, with the client answering through
+    /// `handlers`: what the agent said, the turn's permission stats, and the requests
+    /// the client served or refused.
+    func run(
+        _ agent: some ACPAgentHandler, cwd: String, handlers: ACPClientHandlers
     ) async throws -> Run {
         let (clientTransport, serverTransport) = LoopbackTransport.pair()
         let server = ACPAgentServer(handler: agent, transport: serverTransport)
@@ -187,7 +190,7 @@ struct WriteGateTests {
         return run
     }
 
-    private func workspace() throws -> String {
+    func workspace() throws -> String {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("gate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

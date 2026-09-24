@@ -4,6 +4,9 @@
 It writes `<cwd>/written.txt` and answers the turn with what the client said: `ok`,
 or `error:<data.details or message>`. That makes a turn's permission mode observable
 from the daemon's aggregate reply, without an MCP session to catch log events.
+
+With `MOCK_READ` set it reads `<cwd>/notes.txt` instead, and answers `ok:<content>`
+or the error.
 """
 import json
 import os
@@ -42,13 +45,19 @@ for line in sys.stdin:
               "result": {"sessionId": message["params"].get("sessionId", "write-session")}})
     elif method == "session/prompt":
         pending = (req_id, message["params"]["sessionId"])
-        send({"jsonrpc": "2.0", "id": "write", "method": "fs/write_text_file", "params": {
-            "sessionId": pending[1], "path": os.path.join(cwd, "written.txt"), "content": "hi"}})
+        if os.environ.get("MOCK_READ"):
+            send({"jsonrpc": "2.0", "id": "write", "method": "fs/read_text_file", "params": {
+                "sessionId": pending[1], "path": os.path.join(cwd, "notes.txt")}})
+        else:
+            send({"jsonrpc": "2.0", "id": "write", "method": "fs/write_text_file", "params": {
+                "sessionId": pending[1], "path": os.path.join(cwd, "written.txt"), "content": "hi"}})
     elif req_id == "write" and method is None:
         error = message.get("error")
         if error:
             details = (error.get("data") or {}).get("details") or error.get("message")
             say(pending[1], "error:" + details)
+        elif os.environ.get("MOCK_READ"):
+            say(pending[1], "ok:" + message["result"]["content"])
         else:
             say(pending[1], "ok")
         send({"jsonrpc": "2.0", "id": pending[0], "result": {"stopReason": "end_turn"}})

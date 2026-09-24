@@ -377,7 +377,7 @@ public actor ACPAgentConnection {
                 return .failure(.methodNotFound(method))
             }
             return await routeFileSystem(
-                method, params, access: .read, handlers.readTextFile)
+                method, params, access: .read, handlers.readTextFile, authorize: handlers.authorizeRead)
         case "fs/write_text_file":
             guard advertisedCapabilities?.fs.writeTextFile != false else {
                 return .failure(.methodNotFound(method))
