@@ -166,10 +166,12 @@ extension ACPXDaemonBackend {
         let sessionId = session.id
         let agentSessionId = AgentSessionId.extract(from: session.meta)
         let connected = state
-        await apply({ record in
+        // acpx writes the agent's lifecycle as soon as its client has started.
+        await apply({ [handle] record in
             record.acpSessionId = sessionId
             record.reconcileAgentSessionId(agentSessionId)
             record.acpx = connected
+            record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry

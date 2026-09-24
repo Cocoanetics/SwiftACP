@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""A mock ACP agent that ends in the ways an adapter can, for the agent transport.
+
+- `EXIT_AGENT_ON=initialize|prompt` exits at that request without answering it, with
+  `EXIT_AGENT_CODE` (3 by default) — or, with `EXIT_AGENT_SIGNAL=KILL|TERM|...`, by that
+  signal — after writing `EXIT_AGENT_STDERR` to stderr. On a prompt it first streams
+  the text `partial `.
+- `EXIT_AGENT_ARMED=<path>`: while that file exists, the next prompt removes it and
+  exits as `EXIT_AGENT_ON=prompt` does.
+- `EXIT_AGENT_ANSWER_THEN_EXIT=1` answers each prompt, then exits 0 at once.
+- `EXIT_AGENT_CLOSE_STDOUT=1` closes its stdout at a prompt and keeps running.
+- `EXIT_AGENT_STRAY=1` writes lines that are no message before answering a prompt: JSON
+  values that are no object, a batch, a stray object, and text that is no JSON.
+- `EXIT_AGENT_LINE_BYTES=N` answers `initialize` with a line of N bytes, LF excluded.
+- `EXIT_AGENT_STUBBORN=1` ignores `SIGTERM` and keeps running once its stdin ends.
+- `EXIT_AGENT_CHILD=<path>` starts `sleep 300` at `initialize`, ignoring `SIGTERM` like
+  itself, and writes its pid to the path.
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+ON = os.environ.get("EXIT_AGENT_ON", "")
+CODE = int(os.environ.get("EXIT_AGENT_CODE", "3"))
+SIGNAL = os.environ.get("EXIT_AGENT_SIGNAL", "")
+STDERR = os.environ.get("EXIT_AGENT_STDERR", "")
+STUBBORN = os.environ.get("EXIT_AGENT_STUBBORN") == "1"
+LINE_BYTES = int(os.environ.get("EXIT_AGENT_LINE_BYTES", "0"))
+
+if STUBBORN:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def die():
+    if STDERR:
+        sys.stderr.write(STDERR)
+        sys.stderr.flush()
+    if SIGNAL:
+        os.kill(os.getpid(), getattr(signal, "SIG" + SIGNAL))
+    os._exit(CODE)
+
+
+def initialize_result(req_id):
+    result = {"protocolVersion": 1, "agentInfo": {"name": "exit-agent", "version": "0.1.0"},
+              "agentCapabilities": {"loadSession": True}, "authMethods": []}
+    answer = {"jsonrpc": "2.0", "id": req_id, "result": result}
+    if LINE_BYTES:
+        result["pad"] = ""
+        result["pad"] = "a" * (LINE_BYTES - len(json.dumps(answer)))
+    send(answer)
+
+
+def main():
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        message = json.loads(line)
+        method, req_id = message.get("method"), message.get("id")
+        if method == "initialize":
+            if ON == "initialize":
+                die()
+            child = os.environ.get("EXIT_AGENT_CHILD")
+            if child:
+                sleeper = subprocess.Popen(
+                    ["/bin/sh", "-c", "trap '' TERM; exec sleep 300"], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                with open(child, "w") as output:
+                    output.write(str(sleeper.pid))
+            initialize_result(req_id)
+        elif method in ("session/new", "session/load"):
+            result = {"sessionId": "exit-session"} if method == "session/new" else {}
+            send({"jsonrpc": "2.0", "id": req_id, "result": result})
+        elif method == "session/prompt":
+            session_id = message["params"]["sessionId"]
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial "}}}})
+            armed = os.environ.get("EXIT_AGENT_ARMED")
+            if ON == "prompt" or (armed and os.path.exists(armed)):
+                if armed and os.path.exists(armed):
+                    os.remove(armed)
+                die()
+            if os.environ.get("EXIT_AGENT_CLOSE_STDOUT") == "1":
+                os.close(1)
+                time.sleep(30)
+                os._exit(0)
+            if os.environ.get("EXIT_AGENT_STRAY") == "1":
+                update = {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
+                    "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "batched"}}}}
+                for stray in ["42", '"x"', "null", "[1]", json.dumps([update]), '{"stray":true}', "not json"]:
+                    sys.stdout.write(stray + "\n")
+                sys.stdout.flush()
+            send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+            if os.environ.get("EXIT_AGENT_ANSWER_THEN_EXIT") == "1":
+                os._exit(0)
+        elif method == "session/cancel":
+            pass
+        elif req_id is not None:
+            send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}})
+    if STUBBORN:
+        while True:
+            time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()

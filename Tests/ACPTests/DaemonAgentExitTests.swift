@@ -1,0 +1,52 @@
+@testable import ACPXCore
+@testable import acpxd
+import Foundation
+import SwiftACP
+import Testing
+
+/// What acpxd keeps of how its agent is doing, as acpx's queue owner keeps it (#87):
+/// closing a new session's agent is put down to the connection, a turn on a live agent
+/// records its pid, and an agent exiting mid-turn fails the turn in acpx's words and
+/// leaves its exit in the record.
+extension DaemonToolsTests {
+    @Test(.enabled(if: mockPythonAvailable))
+    func aTurnTheAgentExitsInRecordsHowItEnded() async throws {
+        let armed = NSTemporaryDirectory() + "exit-agent-armed-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: armed) }
+        let command = try AgentEndTests.command("EXIT_AGENT_ARMED='\(armed)' EXIT_AGENT_CODE=3")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let created = try #require(SessionStore.loadRecord(id))
+            #expect(created.pid == nil)
+            #expect(created.agentStartedAt != nil)
+            #expect(created.lastAgentDisconnectReason == "connection_close")
+            #expect(created.lastAgentExitCode.map { $0.value == nil } == true)
+
+            try await prompt(daemon, id, text: "first", client: CallingClient())
+            let held = try #require(SessionStore.loadRecord(id))
+            let pid = try #require(held.pid)
+            #expect(AgentEndTests.isRunning(pid_t(pid)))
+            #expect(held.lastAgentDisconnectReason == nil)
+            #expect(held.lastAgentExitCode == nil)
+            #expect(held.lastAgentExitAt == nil)
+
+            try "".write(toFile: armed, atomically: true, encoding: .utf8)
+            let client = CallingClient()
+            await #expect(throws: AgentDisconnectedError.self) {
+                try await prompt(daemon, id, text: "second", client: client)
+            }
+            let failure = try #require(client.failure)
+            #expect(failure.outputCode == "RUNTIME")
+            #expect(failure.detailCode == "AGENT_DISCONNECTED")
+            #expect(failure.origin == "acp")
+            #expect(failure.message == "ACP agent disconnected during request (process_exit, exit=3, signal=null)")
+            let ended = try #require(SessionStore.loadRecord(id))
+            #expect(ended.pid == nil)
+            #expect(ended.lastAgentExitCode?.value == 3)
+            #expect(ended.lastAgentExitSignal.map { $0.value == nil } == true)
+            #expect(ended.lastAgentExitAt != nil)
+            #expect(ended.lastAgentDisconnectReason == "process_exit")
+        }
+    }
+}

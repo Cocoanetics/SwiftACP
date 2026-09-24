@@ -263,6 +263,7 @@ extension ACPXDaemonBackend {
             // Capture the token breakdown the agent reports on the response (Claude
             // Code does; acpx misses this — it only reads usage_update._meta.usage).
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
+            await persister.applyLifecycle(entry.agent.lifecycle)
             // Final checkpoint: stamp timestamps and flush the completed turn —
             // including any wire lines still buffered for the event log.
             await persister.finish()
@@ -286,6 +287,8 @@ extension ACPXDaemonBackend {
             let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
                 ? AgentExitedBeforeTheTurn(underlying: error) : error
             let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
+            // How the agent ended, if it did, goes into the record the failure saves.
+            await persister.applyLifecycle(entry.agent.lifecycle)
             await wireFeed.finish(showingHeld: !retried)
             throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
         }
