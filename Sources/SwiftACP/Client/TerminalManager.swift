@@ -31,7 +31,7 @@ public actor TerminalManager: ACPTerminalHandler {
     public static let defaultKillGrace: TimeInterval = 1.5
 
     private let cwd: String
-    private var outputCeiling: Int?
+    private(set) var outputCeiling: Int?
     /// How long `SIGTERM` has before `SIGKILL`.
     public let killGrace: TimeInterval
     /// A pause between signalling the command and what it started: none, but where a

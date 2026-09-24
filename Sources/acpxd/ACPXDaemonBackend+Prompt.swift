@@ -194,9 +194,13 @@ extension ACPXDaemonBackend {
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
+        // This turn's permissions — acpx sends the mode with every prompt and the queue
+        // owner applies it to that turn — are the live agent's from before connecting
+        // on, as is its cap on terminal output. Turns are serialized per session, so no
+        // other turn can be reading them meanwhile.
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
-            terminalOutputCeiling: turn.terminalOutputCeiling,
+            handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
             onReplacement: { await persister.adoptReplacement($0) },
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
@@ -220,11 +224,6 @@ extension ACPXDaemonBackend {
         }
         defer { entry.agent.rawWire.set(nil) }
 
-        // This turn's permissions: acpx sends the mode with every prompt and the queue
-        // owner applies it to that turn, so the live agent's handlers are swapped per
-        // turn rather than fixed at launch. Turns are serialized per session, so no
-        // other turn can be reading them meanwhile.
-        await connection.setHandlers(permissions.handlers)
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
         await connection.setWireObserver { line in eventBuffer.append(line) }

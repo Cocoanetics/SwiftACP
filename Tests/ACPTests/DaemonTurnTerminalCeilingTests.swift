@@ -1,7 +1,7 @@
 @testable import ACPXCore
 @testable import acpxd
 import Foundation
-import SwiftACP
+@testable import SwiftACP
 import Testing
 
 /// A daemon turn caps terminal output by the ceiling its caller sent with it (#101
@@ -28,27 +28,54 @@ extension DaemonToolsTests {
         }
     }
 
-    /// So does a control's caller: an agent can start a command while it answers one.
-    /// The fixture runs `printf 0123456789` while it answers `session/set_mode`, and logs
-    /// what it read back. A reconnect's replay of the mode runs under the turn's ceiling,
-    /// which applies before anything is asked of the new agent.
-    @Test(.enabled(if: mockPythonAvailable))
-    func aControlAndAReplayCapTerminalsByTheirCallersCeiling() async throws {
+    /// `write-agent.py` running `printf 0123456789` in a client terminal on every prompt,
+    /// and while it answers `session/set_mode`, logging what that read back to `log`.
+    private func terminalAgent(log: String) throws -> String {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/write-agent.py")
+        return "/usr/bin/env MOCK_TERMINAL='[\"printf\",\"0123456789\"]' MOCK_TERMINAL_LOG='\(log)' "
+            + "'\(python)' '\(fixture.path)'"
+    }
+
+    /// So does a control's caller: the cap applies to the agent before the control goes
+    /// out, as to one reconnected for it.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aControlCapsTheAgentsTerminalsByItsCallersCeiling() async throws {
         let log = NSTemporaryDirectory() + "terminal-log-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: log) }
-        let command = "/usr/bin/env MOCK_TERMINAL='[\"printf\",\"0123456789\"]' MOCK_TERMINAL_LOG='\(log)' "
-            + "'\(python)' '\(fixture.path)'"
+        let command = try terminalAgent(log: log)
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             _ = try await daemon.setMode(sessionId: id, modeId: "plan", terminalOutputCeiling: 4)
+            let manager = try #require(await daemon.live[id]?.agent.terminals as? TerminalManager)
+            #expect(await manager.outputCeiling == 4)
             _ = try await daemon.setMode(sessionId: id, modeId: "plan", terminalOutputCeiling: 0)
+            #expect(await manager.outputCeiling == nil)
+        }
+    }
+
+    /// What a reconnect asks of a new agent — here the saved mode, which starts a command
+    /// — runs under the turn's permissions and ceiling, not the daemon's (#101 review).
+    /// A control approves reads only, as acpx's direct controls do, and nobody can be
+    /// asked about the rest, so the control's own command is refused.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aReplayRunsUnderTheTurnsPermissionsAndCeiling() async throws {
+        let log = NSTemporaryDirectory() + "terminal-log-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: log) }
+        let command = try terminalAgent(log: log)
+        let refused = "error:Permission denied for terminal/create"
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.setMode(sessionId: id, modeId: "plan")
             await daemon.evict(id)
-            #expect(try await daemon.runPrompt(sessionId: id, text: "go", terminalOutputCeiling: 2) == "ran:0:89")
-            #expect(try String(contentsOfFile: log, encoding: .utf8) == "ran:0:6789\nran:0:0123456789\nran:0:89\n")
+            #expect(try await daemon.runPrompt(
+                sessionId: id, text: "go", permissionMode: "approve-all", terminalOutputCeiling: 2) == "ran:0:89")
+            await daemon.evict(id)
+            #expect(try await daemon.runPrompt(sessionId: id, text: "go", permissionMode: "deny-all") == refused)
+            #expect(try String(contentsOfFile: log, encoding: .utf8) == "\(refused)\nran:0:89\n\(refused)\n")
         }
     }
 

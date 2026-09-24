@@ -40,31 +40,36 @@ extension ACPXDaemonBackend {
     /// on the wire once it is connected — or once connecting it failed (see
     /// ``ConnectOutputBuffer``). An agent already held has nothing to show.
     ///
-    /// `terminalOutputCeiling` caps the output of the terminals the agent creates from
-    /// here on, `nil` being no cap: the calling CLI's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`,
-    /// which acpx reads in the process that connects the session. It applies before
-    /// anything is asked of the agent — a replayed mode can start a command too.
+    /// `handlers` answer what the agent asks of the client — the caller's permissions —
+    /// and `terminalOutputCeiling` caps the output of the terminals it creates, `nil`
+    /// being no cap: the calling CLI's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, which acpx reads
+    /// in the process that connects the session. Both apply before anything is asked
+    /// of the agent: it can start a command while it answers `initialize`, a load, or a
+    /// replayed mode. Without `handlers` everything is approved.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, terminalOutputCeiling: Int? = nil, onReplacement: ReplacementHandler? = nil,
-        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
+        control: Bool = false, handlers: ACPClientHandlers? = nil, terminalOutputCeiling: Int? = nil,
+        onReplacement: ReplacementHandler? = nil, onRecordChange: RecordChangeHandler? = nil,
+        onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
-            control: control, terminalOutputCeiling: terminalOutputCeiling, onReplacement: onReplacement,
-            onRecordChange: onRecordChange, onConnectOutput: onConnectOutput
+            control: control, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling,
+            onReplacement: onReplacement, onRecordChange: onRecordChange, onConnectOutput: onConnectOutput
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:terminalOutputCeiling:onReplacement:onRecordChange:onConnectOutput:)``,
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:handlers:terminalOutputCeiling:onReplacement:onRecordChange:onConnectOutput:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
     /// A session already held, or one a new session replaced, was not.
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, terminalOutputCeiling: Int? = nil, onReplacement: ReplacementHandler? = nil,
-        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
+        control: Bool = false, handlers: ACPClientHandlers? = nil, terminalOutputCeiling: Int? = nil,
+        onReplacement: ReplacementHandler? = nil, onRecordChange: RecordChangeHandler? = nil,
+        onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
+        let handlers = handlers ?? .standard(permission: .approveAll)
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
         while let existing = live[recordId] {
@@ -72,6 +77,7 @@ extension ACPXDaemonBackend {
                 guard existing.sessionSpecs == sessionSpecs else {
                     throw DaemonError.mcpConfigConflict(recordId)
                 }
+                await existing.agent.connection.setHandlers(handlers)
                 await existing.agent.setTerminalOutputCeiling(terminalOutputCeiling)
                 return (existing, false)
             }
@@ -108,7 +114,7 @@ extension ACPXDaemonBackend {
             // The argv the session recorded (`agent_argv`) launches it as it was launched;
             // without one, its command line is split.
             handle = try await ACPAgent.launch(
-                agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, permission: .approveAll,
+                agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
                 capabilities: capabilities,
                 authCredentials: config.auth, authPolicy: config.authPolicy,
                 inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)

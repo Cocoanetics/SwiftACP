@@ -23,11 +23,16 @@ public protocol ACPXBackend: Sendable {
     func setSessionMcpServers(
         sessionId: String, mcpServers: [McpServerConfig], restart: Bool
     ) async throws -> Bool
-    func setMode(sessionId: String, modeId: String, terminalOutputCeiling: Int?) async throws -> SessionControlResult
-    func setConfigOption(
-        sessionId: String, configId: String, value: String, terminalOutputCeiling: Int?
+    func setMode(
+        sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?
     ) async throws -> SessionControlResult
-    func setModel(sessionId: String, modelId: String, terminalOutputCeiling: Int?) async throws -> SessionControlResult
+    func setConfigOption(
+        sessionId: String, configId: String, value: String, nonInteractivePermissions: String?,
+        terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult
+    func setModel(
+        sessionId: String, modelId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult
     func closeSession(sessionId: String) async throws -> Bool
     func pruneSessions(
         agentCommand: String?, olderThanDays: Int?, includeHistory: Bool, dryRun: Bool

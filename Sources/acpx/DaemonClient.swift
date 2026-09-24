@@ -230,15 +230,18 @@ enum DaemonClient {
         var errorDescription: String? { message }
     }
 
-    /// Set a session's mode on the live agent via the daemon (which persists it). The
-    /// daemon caps terminal output meanwhile by `terminalOutputCeiling`, as it does a
-    /// turn's — `0` for none, so its own never stands in.
+    /// Set a session's mode on the live agent via the daemon (which persists it). What
+    /// the agent asks meanwhile is answered as acpx's direct controls answer it —
+    /// reads approved, the rest by `nonInteractivePermissions` — and the daemon caps
+    /// terminal output by `terminalOutputCeiling`, as it does a turn's: `0` for none,
+    /// so its own never stands in.
     static func setMode(
-        sessionId: String, modeId: String, terminalOutputCeiling: Int?
+        sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?
     ) async throws -> SessionControlResult {
         try await withClient {
             try await $0.setMode(
-                sessionId: sessionId, modeId: modeId, terminalOutputCeiling: terminalOutputCeiling ?? 0)
+                sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0)
         }
     }
 
@@ -256,28 +259,30 @@ enum DaemonClient {
         }
     }
 
-    /// Set a session's model on the live agent via the daemon (legacy set_model), with
-    /// terminal output capped as ``setMode(sessionId:modeId:terminalOutputCeiling:)`` caps it.
+    /// Set a session's model on the live agent via the daemon (legacy set_model),
+    /// answering and capping as ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:)``.
     static func setModel(
-        sessionId: String, modelId: String, terminalOutputCeiling: Int?
+        sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?
     ) async throws -> SessionControlResult {
         try await withClient {
             try await $0.setModel(
-                sessionId: sessionId, modelId: modelId, terminalOutputCeiling: terminalOutputCeiling ?? 0)
+                sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0)
         }
     }
 
     /// Set a session config option on the live agent via the daemon: the agent's
     /// advertised config options after the change, and whether the session had to be
-    /// taken back first. Terminal output is capped as
-    /// ``setMode(sessionId:modeId:terminalOutputCeiling:)`` caps it.
+    /// taken back first. It answers and caps as
+    /// ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:)``.
     static func setConfigOption(
-        sessionId: String, configId: String, value: String, terminalOutputCeiling: Int?
+        sessionId: String, configId: String, value: String, nonInteractivePermissions: String,
+        terminalOutputCeiling: Int?
     ) async throws -> SessionControlResult {
         try await withClient {
             try await $0.setConfigOption(
                 sessionId: sessionId, configId: configId, value: value,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0)
+                nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling ?? 0)
         }
     }
 

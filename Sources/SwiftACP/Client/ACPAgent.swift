@@ -152,6 +152,10 @@ public final class ACPAgent: Sendable {
                 name: name, cwd: cwd, connection: connection,
                 transport: transport, rawWire: rawWire, initializeResult: info, terminals: terminals)
         } catch {
+            // A command the agent started meanwhile goes with it: nothing else would
+            // ever reach its terminal.
+            await connection.shutDownTerminals()
+            await connection.close()
             transport.close()
             throw error
         }

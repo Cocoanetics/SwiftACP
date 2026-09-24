@@ -4,6 +4,12 @@ import Foundation
 import SwiftACP
 import Testing
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 /// `exec` against an agent that runs `echo hello terminal` through the client's
 /// terminal (#82): advertised and served as acpx 0.19.1 serves it, refused under
 /// `--deny-all` with exit 5, and withheld by `--no-terminal`.
@@ -43,6 +49,26 @@ struct TerminalCommandTests {
         #expect(ran.code == ExitCodes.permissionDenied)
         #expect(ran.out.contains("[error] RUNTIME: Permission denied for terminal/create"))
         #expect(ran.out.contains("error:Permission denied for terminal/create"))
+    }
+
+    /// A command the agent starts while it answers `initialize` ends when the launch
+    /// then fails (#101 review): nothing else would ever reach its terminal. The command
+    /// prints its pid, which the agent logs before failing `initialize`.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aFailedLaunchEndsTheCommandTheAgentStarted() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/write-agent.py")
+        let log = NSTemporaryDirectory() + "launch-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: log) }
+        let command = "/usr/bin/env MOCK_TERMINAL='[\"sh\",\"-c\",\"echo $$; exec sleep 30\"]' "
+            + "MOCK_TERMINAL_ON_INITIALIZE=1 MOCK_TERMINAL_LOG='\(log)' '\(python)' '\(fixture.path)'"
+        await #expect(throws: (any Error).self) {
+            _ = try await ACPAgent.launch(
+                agent: command, permission: .approveAll, capabilities: .acpx, inheritStderr: false)
+        }
+        let pid = try #require(pid_t(try String(contentsOfFile: log, encoding: .utf8).javaScriptTrimmed))
+        #expect(kill(pid, 0) != 0)
     }
 
     /// acpx advertises terminals by default; `--no-terminal` withholds them, and the

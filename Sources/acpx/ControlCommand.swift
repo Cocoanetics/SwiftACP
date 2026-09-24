@@ -59,7 +59,8 @@ enum ControlCommand {
         let result = try runBlocking {
             do {
                 return try await DaemonClient.setMode(
-                    sessionId: sessionId, modeId: modeId, terminalOutputCeiling: terminalOutputCeiling)
+                    sessionId: sessionId, modeId: modeId, nonInteractivePermissions: flags.nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
@@ -117,10 +118,13 @@ enum ControlCommand {
                 switch operation {
                 case .model:
                     return try await DaemonClient.setModel(
-                        sessionId: sessionId, modelId: value, terminalOutputCeiling: terminalOutputCeiling)
+                        sessionId: sessionId, modelId: value,
+                        nonInteractivePermissions: flags.nonInteractivePermissions,
+                        terminalOutputCeiling: terminalOutputCeiling)
                 case .configOption(let configId):
                     return try await DaemonClient.setConfigOption(
                         sessionId: sessionId, configId: configId, value: value,
+                        nonInteractivePermissions: flags.nonInteractivePermissions,
                         terminalOutputCeiling: terminalOutputCeiling)
                 }
             } catch let unavailable as DaemonUnavailable {

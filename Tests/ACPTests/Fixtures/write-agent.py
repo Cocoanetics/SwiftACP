@@ -11,11 +11,13 @@ and answers `outcome:<selected option, or cancelled>`. With `MOCK_TERMINAL` set 
 JSON array — a command and its arguments — it runs that through the client's
 terminal, waits for it, reads its output, releases it, and answers
 `ran:<exit code>:<output>`, or the first error. A `session/set_mode` runs it too, before
-answering, and appends that line to `$MOCK_TERMINAL_LOG`.
+answering, and appends that line to `$MOCK_TERMINAL_LOG`. With `MOCK_TERMINAL_ON_INITIALIZE`
+set, `initialize` starts it instead, waits for it to print something, logs that, and fails.
 """
 import json
 import os
 import sys
+import time
 
 cwd = None
 pending = None
@@ -46,7 +48,29 @@ for line in sys.stdin:
         continue
     message = json.loads(line)
     method, req_id = message.get("method"), message.get("id")
-    if method == "initialize":
+    if method == "initialize" and TERMINAL and os.environ.get("MOCK_TERMINAL_ON_INITIALIZE"):
+        pending = (req_id, "init")
+        running_for = "initialize"
+        argv = json.loads(TERMINAL)
+        send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+            "sessionId": "init", "command": argv[0], "args": argv[1:]}})
+    elif method is None and running_for == "initialize" and str(req_id).startswith("term-"):
+        # Poll the output until the command has printed, then fail `initialize`.
+        result = message.get("result") or {}
+        if req_id == "term-create":
+            terminal = result.get("terminalId")
+        elif result.get("output"):
+            if TERMINAL_LOG:
+                with open(TERMINAL_LOG, "a") as log:
+                    log.write(result["output"])
+            send({"jsonrpc": "2.0", "id": pending[0],
+                  "error": {"code": -32603, "message": "initialize failed on purpose"}})
+            continue
+        else:
+            time.sleep(0.02)
+        send({"jsonrpc": "2.0", "id": "term-poll", "method": "terminal/output",
+              "params": {"sessionId": "init", "terminalId": terminal}})
+    elif method == "initialize":
         send({"jsonrpc": "2.0", "id": req_id, "result": {
             "protocolVersion": 1, "agentInfo": {"name": "write-agent", "version": "0.1.0"},
             "agentCapabilities": {"loadSession": False, "promptCapabilities": {}},
