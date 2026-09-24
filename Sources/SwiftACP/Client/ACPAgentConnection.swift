@@ -131,7 +131,7 @@ public actor ACPAgentConnection {
     /// Whether `error` is this layer reporting the connection ended — a request sent
     /// after, or pending when, the agent exited or the connection was closed.
     public static func isConnectionClosed(_ error: Error) -> Bool {
-        (error as? JSONRPCPeerError) == .closed
+        (error as? JSONRPCPeerError) == .closed || error is AgentDisconnectedError
     }
 
     /// Forget that the connection ended, as if its end had been read but not yet

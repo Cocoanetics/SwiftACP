@@ -181,6 +181,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
         let result = try await body(entry, &record)
+        record.applyLifecycle(entry.agent.lifecycle)
         record.lastUsedAt = nowISO()
         do {
             // The control op already took effect on the live agent, so don't fail

@@ -67,6 +67,28 @@ extension AgentLaunchError: OutputErrorMeta {
     public var origin: String? { nil }
 }
 
+/// acpx's `AgentDisconnectedError`.
+extension AgentDisconnectedError: OutputErrorMeta {
+    public var outputCode: String? { "RUNTIME" }
+    public var detailCode: String? { "AGENT_DISCONNECTED" }
+    public var origin: String? { "acp" }
+}
+
+/// acpx's `AgentStartupError`.
+extension AgentStartupError: OutputErrorMeta {
+    public var outputCode: String? { "RUNTIME" }
+    public var detailCode: String? { "AGENT_STARTUP_FAILED" }
+    public var origin: String? { "acp" }
+}
+
+/// acpx's `AcpMessageLimitError`, which says it is not worth retrying.
+extension AcpMessageLimitError: OutputErrorMeta {
+    public var outputCode: String? { "RUNTIME" }
+    public var detailCode: String? { "ACP_MESSAGE_TOO_LARGE" }
+    public var origin: String? { "acp" }
+    public var retryable: Bool? { false }
+}
+
 /// acpx's `UnsupportedPromptContentError`: a usage error, which exits 2.
 extension UnsupportedPromptContentError: OutputErrorMeta {
     public var outputCode: String? { "USAGE" }

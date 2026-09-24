@@ -52,10 +52,12 @@ public final class ACPAgent: Sendable {
     public let name: String
     public let cwd: String
     public let connection: ACPAgentConnection
-    /// The agent subprocess transport: JSONFoundation's swift-subprocess child stdio
-    /// transport, framed as one newline-terminated JSON line per message (ACP framing),
-    /// with every line shown to ``rawWire`` on its way through.
-    public let transport: StdioTransport<TappedFraming<LineFraming>>
+    /// The agent subprocess transport: one newline-terminated JSON line per message
+    /// (ACP framing), with every line shown to ``rawWire`` on its way through. On macOS
+    /// and Linux the agent is started and read as acpx's client does, so its end is
+    /// known (``lifecycle``); elsewhere JSONFoundation's swift-subprocess transport runs
+    /// it.
+    public let transport: any JSONRPCMessageTransport
     /// Every message body exchanged with the agent, as raw bytes in both directions —
     /// from the `initialize` handshake on when `launch` was given `onRawWire`.
     /// Re-point it with ``RawWireTap/set(_:)``.
@@ -75,7 +77,7 @@ public final class ACPAgent: Sendable {
 
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
-        transport: StdioTransport<TappedFraming<LineFraming>>, rawWire: RawWireTap,
+        transport: any JSONRPCMessageTransport, rawWire: RawWireTap,
         initializeResult: InitializeResponse, terminals: (any ACPTerminalHandler)? = nil
     ) {
         self.name = name
@@ -121,24 +123,26 @@ public final class ACPAgent: Sendable {
         // credentials. An explicit `environment` is used as-is.
         let effectiveEnvironment =
             environment ?? AgentEnvironment.forAgent(authCredentials: authCredentials)
-        let spec = try AgentRegistry.launch(
-            for: name, argv: argv, cwd: cwd, environment: effectiveEnvironment,
-            inheritStderr: inheritStderr, overrides: overrides)
-        // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
-        // here so the failure names the command instead of surfacing as an opaque
-        // subprocess error once the handshake times out.
-        if let failure = AgentLaunchPreflight.failure(
-            for: spec, agentCommand: failureName(agent: name, argv: argv, overrides: overrides)) {
-            throw failure
-        }
         // acpx builds its terminal manager with its client, before the agent starts —
         // so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the launch outright, and a
         // command the agent starts while it answers `initialize` is capped already.
         let terminals = try terminalManager(for: capabilities, cwd: cwd, ceiling: terminalOutputCeiling)
+        // Read when the client starts, before anything else: a bad value is refused.
+        let maxMessageBytes = try AcpMessageLimit.bytes()
+        let spec = try AgentRegistry.launch(
+            for: name, argv: argv, cwd: cwd, environment: effectiveEnvironment,
+            inheritStderr: inheritStderr, overrides: overrides)
+        let agentCommand = failureName(agent: name, argv: argv, overrides: overrides)
+        // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
+        // here so the failure names the command instead of surfacing as an opaque
+        // subprocess error once the handshake times out.
+        if let failure = AgentLaunchPreflight.failure(for: spec, agentCommand: agentCommand) {
+            throw failure
+        }
         // Tapped from the start, so an observer given here sees the handshake too.
         let rawWire = RawWireTap(onRawWire)
-        let transport = StdioTransport(
-            endpoint: .childProcess(spec), framing: TappedFraming(LineFraming(), tap: rawWire))
+        let transport = try startTransport(
+            spec, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes, tap: rawWire)
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
         if let terminals { await connection.setTerminalHandler(terminals) }
         await connection.start()
@@ -150,6 +154,9 @@ public final class ACPAgent: Sendable {
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
                 authCredentials: authCredentials, authPolicy: authPolicy)
+            #if os(macOS) || os(Linux)
+            (transport as? AgentProcessTransport)?.captureDescendants()
+            #endif
             return ACPAgent(
                 name: name, cwd: cwd, connection: connection,
                 transport: transport, rawWire: rawWire, initializeResult: info, terminals: terminals)
@@ -158,10 +165,57 @@ public final class ACPAgent: Sendable {
             // ever reach its terminal.
             await connection.shutDownTerminals()
             await connection.close()
+            #if os(macOS) || os(Linux)
+            if let agent = transport as? AgentProcessTransport {
+                let failure = await startupFailure(error, of: agent, agentCommand: agentCommand)
+                await agent.terminate()
+                throw failure
+            }
+            #endif
             transport.close()
             throw error
         }
     }
+
+    /// The agent's transport: started and read as acpx's client does on macOS and
+    /// Linux; JSONFoundation's swift-subprocess transport elsewhere.
+    private static func startTransport(
+        _ spec: ProcessLaunch, agentCommand: String, maxMessageBytes: Int?, tap: RawWireTap
+    ) throws -> any JSONRPCMessageTransport {
+        #if os(macOS) || os(Linux)
+        do {
+            return try AgentProcessTransport.start(
+                spec, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes, tap: tap)
+        } catch let error as ChildProcess.SpawnError {
+            // acpx's `AgentSpawnError`, qualified when a launch path is missing.
+            throw AgentLaunchError(
+                agentCommand: agentCommand, workingDirectory: spec.workingDirectory,
+                detailCode: error.code == ENOENT ? AgentLaunchError.spawnENOENT : nil)
+        }
+        #else
+        _ = maxMessageBytes
+        return StdioTransport(endpoint: .childProcess(spec), framing: TappedFraming(LineFraming(), tap: tap))
+        #endif
+    }
+
+    #if os(macOS) || os(Linux)
+    /// acpx's `normalizeInitializeError`: a handshake that failed because the agent went
+    /// — its connection closed, or it has exited within 100 ms — is
+    /// ``AgentStartupError``, with its exit and the end of its stderr. A line too long
+    /// stays itself, and so does anything else the agent answered.
+    private static func startupFailure(
+        _ error: Error, of transport: AgentProcessTransport, agentCommand: String
+    ) async -> Error {
+        guard !(error is AcpMessageLimitError) else { return error }
+        let closed = ACPAgentConnection.isConnectionClosed(error)
+        let exited = await transport.waitForExit(timeout: .milliseconds(100))
+        guard closed || exited else { return error }
+        let exit = transport.lifecycle.lastExit
+        return AgentStartupError(
+            agentCommand: agentCommand, exitCode: exit?.exitCode, signal: exit?.signal,
+            stderrSummary: transport.stderrSummary)
+    }
+    #endif
 
     /// The terminal manager a connection advertising `capabilities` runs the agent's
     /// commands on: one per connection, capped by acpx's host ceiling, running commands
@@ -349,7 +403,24 @@ public final class ACPAgent: Sendable {
     public func close() async {
         await connection.shutDownTerminals()
         await connection.close()
+        #if os(macOS) || os(Linux)
+        if let agent = transport as? AgentProcessTransport {
+            await agent.terminate()
+            return
+        }
+        #endif
         transport.close()
+    }
+
+    /// The agent's process as acpx reports it (`getAgentLifecycleSnapshot`): its pid,
+    /// when it started, whether it runs, and how it ended — what the session record
+    /// keeps of it. `nil` where it cannot be watched (Windows).
+    public var lifecycle: AgentLifecycleSnapshot? {
+        #if os(macOS) || os(Linux)
+        return (transport as? AgentProcessTransport)?.lifecycle
+        #else
+        return nil
+        #endif
     }
 }
 

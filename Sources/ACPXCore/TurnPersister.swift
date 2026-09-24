@@ -88,6 +88,13 @@ public actor TurnPersister {
         dirty = true
     }
 
+    /// How the agent is doing, as acpx writes it when a turn ends
+    /// (`applyLifecycleSnapshotToRecord`) — saved with the next write.
+    public func applyLifecycle(_ snapshot: AgentLifecycleSnapshot?) {
+        record.applyLifecycle(snapshot)
+        dirty = true
+    }
+
     /// Final flush: stamp `last_used_at` / `last_prompt_at` and write immediately.
     public func finish() {
         timer?.cancel()
