@@ -32,7 +32,10 @@ enum PromptCommand {
             to: try findRoutedSessionOrThrow(agent: agent, name: name), config: context.config)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
 
-        let renderer = OutputRenderer(options: renderOptions(flags))
+        // JSON mode prints the turn's exchange as it crosses the wire, as acpx does.
+        var options = renderOptions(flags)
+        options.streamsWire = true
+        let renderer = OutputRenderer(options: options)
         let sessionId = record.acpSessionId
 
         // The acpxd daemon owns turn persistence: by the time `runPrompt` returns it
@@ -51,12 +54,22 @@ enum PromptCommand {
                     nonInteractivePermissions: flags.nonInteractivePermissions, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
+            } catch {
+                throw turnFailure(error, renderer: renderer)
             }
         }
         renderer.finish(stopReason: turn.stopReason)
         return permissionExitCode(
             turn.permissions ?? PermissionStats(), quiet: flags.format == "quiet",
             queueDetail: "QUEUE_RUNTIME_PROMPT_FAILED")
+    }
+
+    /// How a failed turn reaches the top level. When the JSON stream already shows how
+    /// it failed — the agent's error response — nothing more is printed for it, as in
+    /// acpx (`outputAlreadyEmitted`).
+    static func turnFailure(_ error: Error, renderer: OutputRenderer) -> Error {
+        guard renderer.streamsWireJSON, renderer.showedFailure(error.localizedDescription) else { return error }
+        return FailureAlreadyShown(underlying: error)
     }
 
     // MARK: - Routing + banner

@@ -11,7 +11,7 @@ import JSONRPCPeer
 public actor ACPAgentConnection {
     private let rpc: JSONRPCPeer
     private var handlers: ACPClientHandlers
-    private var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
+    var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
     var eventSinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
@@ -44,6 +44,17 @@ public actor ACPAgentConnection {
 
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
+
+    /// Sessions whose `session/update`s are not delivered — their `session/load` is
+    /// replaying history the caller has — with how many loads asked. acpx's
+    /// `suppressSessionUpdates`, kept per session: one connection can hold several.
+    var replaySuppressed: [SessionId: Int] = [:]
+    /// Each session's `session/update`s as they are read and as they are handled: what
+    /// the replay drain watches go quiet (see ``SessionUpdateLedger``).
+    nonisolated let sessionUpdates = SessionUpdateLedger()
+    /// Sessions a `session/load` is in progress for, with the loads of each waiting
+    /// their turn (see ``loadSession(_:suppressReplayUpdates:rawWire:)``).
+    var loadWaiters: [SessionId: [CheckedContinuation<Void, Never>]] = [:]
 
     /// How each session's latest turn settled its permissions; reset when a turn
     /// starts. See ``permissionStats(for:)``.
@@ -130,10 +141,14 @@ public actor ACPAgentConnection {
         // Runs inline as each message is read, in order: an agent request is counted
         // here, before the peer hands it to its own task, so a turn that ends after
         // reading it is sure to wait for it.
-        await rpc.setWireLog { [wireObserver, inboundRequests] direction, message in
+        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates] direction, message in
             if direction == .inbound, case .request(let request) = message,
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
                 inboundRequests.arrived(sessionId)
+            }
+            if direction == .inbound, case .notification(let note) = message, note.method == "session/update",
+                let sessionId = InboundRequestLedger.sessionId(of: note.params) {
+                sessionUpdates.arrived(sessionId)
             }
             if let observer = wireObserver.current, let line = try? message.encodedString() {
                 observer(line)
@@ -476,18 +491,6 @@ public actor ACPAgentConnection {
     ) -> Bool {
         guard case .cancelled = response.outcome else { return false }
         return request.options.contains { $0.kind == .rejectOnce || $0.kind == .rejectAlways }
-    }
-
-    private func handleIncomingNotification(method: String, params: JSONValue?) async {
-        guard method == "session/update", let params,
-            let notification = try? params.decoded(SessionNotification.self)
-        else { return }
-        for sink in updateSinks.values {
-            sink.yield(notification)
-        }
-        for sink in eventSinks.values {
-            sink.yield(.update(notification))
-        }
     }
 }
 

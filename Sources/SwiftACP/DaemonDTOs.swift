@@ -339,6 +339,25 @@ public struct TurnEndedEvent: Codable, Sendable {
     }
 }
 
+/// One ACP message of a daemon turn as it went over the wire, streamed as a log
+/// notification: what acpx's formatter is fed. The daemon sends the messages of
+/// connecting the agent for the turn (`initialize`, `session/load` or the
+/// `session/new` fallback, the replayed selections) — which the CLI prints as
+/// `[client] <method> (running)` — and, when asked (`streamWire`), every message of
+/// the turn, which `--format json` prints as acpx does.
+public struct WireMessageEvent: Codable, Sendable {
+    /// `outbound` (client to agent) or `inbound` (agent to client). Named apart from
+    /// every other event's fields, so no event decodes as another.
+    public var wireDirection: String
+    /// The JSON-RPC message, as the line it was on the wire.
+    public var wireLine: String
+
+    public init(wireDirection: String, wireLine: String) {
+        self.wireDirection = wireDirection
+        self.wireLine = wireLine
+    }
+}
+
 /// A request the agent made of the client during a daemon turn — `fs/write_text_file`,
 /// `session/request_permission` — streamed as a log notification when it arrives,
 /// and again with ``failure`` if the client refused it. acpx's formatter prints every
