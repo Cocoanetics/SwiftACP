@@ -76,3 +76,26 @@ struct ToolUpdateMergeTests {
         #expect(!out.contains("kind: read"))
     }
 }
+
+/// A member a tool update came with as `null` goes back as `null` — unless it has been
+/// given a value since, which wins (#115 review).
+struct ToolUpdateNullMemberTests {
+    private func encoded(_ update: ToolCallUpdate) throws -> [String: Any] {
+        try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(update)) as? [String: Any])
+    }
+
+    @Test func aNullMemberGoesBackAsNull() throws {
+        let update = try JSONDecoder().decode(
+            ToolCallUpdate.self, from: Data(#"{"toolCallId":"t","kind":null,"status":"completed"}"#.utf8))
+        #expect(update.nullMembers == ["kind"])
+        let json = try encoded(update)
+        #expect(json["kind"] is NSNull)
+        #expect(json["status"] as? String == "completed")
+    }
+
+    @Test func aValueGivenSinceWinsOverTheNull() throws {
+        var update = try JSONDecoder().decode(ToolCallUpdate.self, from: Data(#"{"toolCallId":"t","kind":null}"#.utf8))
+        update.kind = ToolKind("read")
+        #expect(try encoded(update)["kind"] as? String == "read")
+    }
+}

@@ -256,8 +256,22 @@ public struct ToolCallUpdate: Codable, Sendable {
         try container.encodeIfPresent(locations, forKey: .locations)
         try container.encodeIfPresent(rawInput, forKey: .rawInput)
         try container.encodeIfPresent(rawOutput, forKey: .rawOutput)
-        for key in CodingKeys.allCases where nullMembers.contains(key.stringValue) {
+        // A member given a value since wins over the `null` it came as.
+        for key in CodingKeys.allCases where nullMembers.contains(key.stringValue) && !hasValue(key) {
             try container.encodeNil(forKey: key)
+        }
+    }
+
+    private func hasValue(_ key: CodingKeys) -> Bool {
+        switch key {
+        case .toolCallId: return true
+        case .title: return title != nil
+        case .kind: return kind != nil
+        case .status: return status != nil
+        case .content: return content != nil
+        case .locations: return locations != nil
+        case .rawInput: return rawInput != nil
+        case .rawOutput: return rawOutput != nil
         }
     }
 }
