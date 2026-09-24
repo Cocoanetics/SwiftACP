@@ -32,7 +32,8 @@ public protocol ACPXBackend: Sendable {
     ) async -> PruneResult
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, wait: Bool,
-        permissionMode: String?, nonInteractivePermissions: String?, streamWire: Bool
+        permissionMode: String?, nonInteractivePermissions: String?, streamWire: Bool,
+        permissionPolicy: PermissionRules?
     ) async throws -> String
     func cancelSession(sessionId: String) async throws -> Bool
 }

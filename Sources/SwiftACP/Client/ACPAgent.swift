@@ -180,6 +180,7 @@ public final class ACPAgent: Sendable {
         cwd: String = FileManager.default.currentDirectoryPath,
         permission: PermissionPolicy,
         nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
+        permissionRules: PermissionRules? = nil,
         clientInfo: Implementation = .acpx,
         capabilities: ClientCapabilities = .headlessController,
         environment: [String: String]? = nil,
@@ -193,7 +194,8 @@ public final class ACPAgent: Sendable {
         try await launch(
             agent: name, argv: argv, cwd: cwd,
             handlers: .standard(
-                permission: permission, nonInteractivePermissions: nonInteractivePermissions),
+                permission: permission, nonInteractivePermissions: nonInteractivePermissions,
+                rules: permissionRules),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest,

@@ -15,6 +15,7 @@ enum PromptCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let scan = context.options
         let flags = try context.globalFlags()
+        let permissionRules = try flags.permissionRules()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("session", parseSessionName)
         let promptBlocks = try PromptInputResolver.resolve(
@@ -51,8 +52,8 @@ enum PromptCommand {
             do {
                 return try await DaemonClient.runPrompt(
                     sessionId: sessionId, blocks: promptBlocks, wait: wait,
-                    permissionMode: permissionMode,
-                    nonInteractivePermissions: flags.nonInteractivePermissions, renderer: renderer)
+                    permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
+                    permissionPolicy: permissionRules, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {

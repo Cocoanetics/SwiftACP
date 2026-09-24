@@ -79,18 +79,22 @@ public struct ACPClientHandlers: Sendable {
     ///   - confirmWrite: how to ask about a write. `nil` asks on `terminal`, as acpx does.
     ///   - confirmTerminal: how to ask about a command. `nil` asks on `terminal`.
     ///   - terminal: the terminal the default confirmations ask on.
+    ///   - rules: a per-tool permission policy that comes before the mode `permission`
+    ///     names — see ``PermissionRules``. A ``PermissionPolicy/custom(_:)`` resolver
+    ///     answers without it, as acpx's host permission handler does.
     public static func standard(
         permission: PermissionPolicy,
         nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
         confirmWrite: WriteApproval.Confirmation? = nil,
         confirmTerminal: TerminalApproval.Confirmation? = nil,
-        terminal: TerminalPermissionPrompt = .shared
+        terminal: TerminalPermissionPrompt = .shared,
+        rules: PermissionRules? = nil
     ) -> ACPClientHandlers {
         let approval = WriteApproval(
             policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmWrite,
             terminal: terminal)
         let tools = ToolPermissionApproval(
-            policy: permission, nonInteractive: nonInteractivePermissions, terminal: terminal)
+            policy: permission, nonInteractive: nonInteractivePermissions, rules: rules, terminal: terminal)
         let commands = TerminalApproval(
             policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmTerminal,
             terminal: terminal)
