@@ -56,6 +56,33 @@ import Testing
             == .failure("\(cwd)/list.json: permission policy must be a JSON object"))
     }
 
+    /// acpx's `sessions new` and `sessions ensure` read the policy first: a bad one fails
+    /// the command before the prior session is closed or an existing one reused.
+    @Test(arguments: ["new", "ensure"])
+    func aBadPolicyFailsBeforeAnySessionIsTouched(command: String) async throws {
+        try await withIsolatedStore {
+            let cwd = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("policy-\(UUID().uuidString)").resolvingSymlinksInPath().path
+            try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+            var existing = SessionRecord(
+                acpxRecordId: "held", acpSessionId: "held", agentCommand: "some-agent", cwd: cwd,
+                createdAt: "t", lastUsedAt: "t")
+            existing.closed = false
+            try SessionStore.writeRecord(existing)
+
+            let capture = Console.Capture()
+            let code = Console.$capture.withValue(capture) {
+                runCommandLine([
+                    "--cwd", cwd, "--agent", "some-agent", "--permission-policy", "{bad", "sessions", command
+                ])
+            }
+            #expect(code == ExitCodes.usage)
+            #expect(capture.err.contains("Invalid permission policy: "))
+            #expect(capture.out.isEmpty)
+            #expect(SessionStore.loadRecord("held")?.closed == false)
+        }
+    }
+
     // MARK: The escalation, shown
 
     static let escalation: PermissionEscalation = {

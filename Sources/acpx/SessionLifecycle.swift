@@ -9,6 +9,7 @@ enum SessionLifecycle {
     static func new(_ context: CommandContext) throws -> Int32 {
         let scan = context.options
         let flags = try context.globalFlags()
+        let permissions = try resolvePermissions(flags, config: context.config)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("name", parseSessionName)
 
@@ -21,7 +22,8 @@ enum SessionLifecycle {
             }
         }
 
-        let record = try createSession(agent: agent, name: name, flags: flags, config: context.config)
+        let record = try createSession(
+            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         if flags.verbose {
             let scope = name.map { "named session \"\($0)\"" } ?? "cwd session"
@@ -34,6 +36,7 @@ enum SessionLifecycle {
     static func ensure(_ context: CommandContext) throws -> Int32 {
         let scan = context.options
         let flags = try context.globalFlags()
+        let permissions = try resolvePermissions(flags, config: context.config)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("name", parseSessionName)
 
@@ -47,7 +50,8 @@ enum SessionLifecycle {
             return ExitCodes.success
         }
 
-        let record = try createSession(agent: agent, name: name, flags: flags, config: context.config)
+        let record = try createSession(
+            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         printEnsured(record, created: true, format: flags.format)
         return ExitCodes.success
@@ -90,11 +94,20 @@ enum SessionLifecycle {
 
     // MARK: - Create (shared engine → record)
 
+    /// acpx's `handleSessionsNew` / `handleSessionsEnsure` resolve the permission mode
+    /// and `--permission-policy` first: a bad one fails the command before any session
+    /// is closed, reused or started.
+    static func resolvePermissions(
+        _ flags: GlobalFlags, config: ResolvedAcpxConfig
+    ) throws -> (policy: PermissionPolicy, rules: PermissionRules?) {
+        (try permissionPolicy(flags, config: config), try flags.permissionRules())
+    }
+
     static func createSession(
-        agent: AgentInvocation, name: String?, flags: GlobalFlags, config: ResolvedAcpxConfig
+        agent: AgentInvocation, name: String?, flags: GlobalFlags, config: ResolvedAcpxConfig,
+        permissions: (policy: PermissionPolicy, rules: PermissionRules?)
     ) throws -> SessionRecord {
-        let permission = try permissionPolicy(flags, config: config)
-        let permissionRules = try flags.permissionRules()
+        let (permission, permissionRules) = permissions
         let meta = sessionMeta(agent: agent, flags: flags)
         let options = sessionOptions(flags)
         return try runBlocking {
