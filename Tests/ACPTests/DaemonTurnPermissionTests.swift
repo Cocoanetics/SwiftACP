@@ -41,6 +41,23 @@ extension DaemonToolsTests {
         }
     }
 
+    /// `--deny-all` refuses the turn's reads too, in acpx's words; any other mode
+    /// serves them (#91).
+    @Test(.enabled(if: mockPythonAvailable))
+    func denyAllRefusesTheTurnsReads() async throws {
+        let command = "/usr/bin/env MOCK_READ=1 " + (try writeAgentCommand())
+        let cwd = try freshCwd()
+        try "secret".write(toFile: cwd + "/notes.txt", atomically: true, encoding: .utf8)
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: cwd)
+            #expect(try await daemon.runPrompt(sessionId: id, text: "go", permissionMode: "deny-all")
+                == "error:Permission denied for fs/read_text_file (--deny-all)")
+            #expect(try await daemon.runPrompt(sessionId: id, text: "go", permissionMode: "approve-reads")
+                == "ok:secret")
+        }
+    }
+
     /// The daemon has no terminal to ask on — like acpx's detached queue owner — so a
     /// write needing confirmation is refused, or refused as unanswerable under `fail`.
     @Test(.enabled(if: mockPythonAvailable))

@@ -9,18 +9,21 @@ public enum NonInteractivePermissionPolicy: String, Sendable {
     case fail
 }
 
-/// Why a `fs/write_text_file` was refused before it reached the disk. The messages are
-/// acpx's, and reach the agent in `data.details`.
+/// Why a `fs/write_text_file` or `fs/read_text_file` was refused before it reached the
+/// disk. The messages are acpx's, and reach the agent in `data.details`.
 public enum FileSystemPermissionError: Error, Sendable, Equatable, CustomStringConvertible {
-    /// Refused by the permission mode, or by the user at the prompt.
+    /// A write refused by the permission mode, or by the user at the prompt.
     case denied
     /// Needed a confirmation, none could be asked for, and the policy is ``NonInteractivePermissionPolicy/fail``.
     case promptUnavailable
+    /// A read refused by `--deny-all`.
+    case readDenied
 
     public var description: String {
         switch self {
         case .denied: return "Permission denied for fs/write_text_file"
         case .promptUnavailable: return "Permission prompt unavailable in non-interactive mode"
+        case .readDenied: return "Permission denied for fs/read_text_file (--deny-all)"
         }
     }
 }

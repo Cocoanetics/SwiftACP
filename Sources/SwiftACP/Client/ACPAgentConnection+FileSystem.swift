@@ -52,7 +52,7 @@ extension ACPAgentConnection {
         } catch let error as FileSystemPermissionError {
             if let sessionId = decodedSessionId(params) {
                 turnPermissionStats[sessionId, default: PermissionStats()]
-                    .record(error == .denied ? .denied : .cancelled)
+                    .record(error == .promptUnavailable ? .cancelled : .denied)
                 if error == .promptUnavailable {
                     turnPermissionStats[sessionId]?.promptUnavailable = true
                 }
