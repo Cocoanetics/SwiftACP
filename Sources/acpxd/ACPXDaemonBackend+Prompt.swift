@@ -133,7 +133,7 @@ extension ACPXDaemonBackend {
     private func attemptWithRetry(_ turn: Turn, wasHeld: Bool) async throws -> String {
         do {
             return try await attemptPrompt(turn, retriesOnAFreshLaunch: wasHeld)
-        } catch {
+        } catch is RetriedOnAFreshLaunch {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
             // launch. Only retry for session-gone errors, never transient ones like
@@ -144,11 +144,17 @@ extension ACPXDaemonBackend {
             //
             // A held agent can also exit just after `ensure` found it open. When none of
             // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
-            // launch unseen; one it did reach is never sent twice.
-            guard wasHeld, isFixedByAFreshLaunch(error) else { throw error }
+            // launch unseen; one it did reach is never sent twice. Nor is one the agent
+            // answered at all (`TurnWireFeed.agentAnswered`): the attempt decides.
             await evict(turn.recordId)
             return try await attemptPrompt(turn, retriesOnAFreshLaunch: false)
         }
+    }
+
+    /// An attempt a fresh launch of the agent is to take over: see
+    /// ``isFixedByAFreshLaunch(_:)``.
+    struct RetriedOnAFreshLaunch: Error {
+        let underlying: Error
     }
 
     /// A failure a fresh launch of the agent would not have: the held agent dropped the
@@ -171,8 +177,9 @@ extension ACPXDaemonBackend {
     }
 
     /// - Parameter retriesOnAFreshLaunch: whether a failure a fresh launch would not
-    ///   have (``isFixedByAFreshLaunch(_:)``) is retried on one. Its error then does not
-    ///   fail the turn, so it is not shown.
+    ///   have (``isFixedByAFreshLaunch(_:)``) is retried on one, as long as the agent has
+    ///   not answered the attempt. It then throws ``RetriedOnAFreshLaunch``, and nothing
+    ///   of the attempt is shown: it does not fail the turn.
     private func attemptPrompt(_ turn: Turn, retriesOnAFreshLaunch: Bool) async throws -> String {
         let (recordId, blocks, permissions) = (turn.recordId, turn.blocks, turn.permissions)
         let (persister, eventBuffer, errors) = (turn.persister, turn.eventBuffer, turn.errors)
@@ -198,7 +205,7 @@ extension ACPXDaemonBackend {
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
         let wireFeed = TurnWireFeed(
-            streamWire: turn.streamWire, holdingErrors: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
+            streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
         entry.agent.rawWire.set { direction, body in
             if direction == .outbound { wrote.mark() }
             errors.observe(direction, body)
@@ -287,8 +294,9 @@ extension ACPXDaemonBackend {
             _ = await consumer.value
             let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
                 ? AgentExitedBeforeTheTurn(underlying: error) : error
-            await wireFeed.finish(showingHeld: !(retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure)))
-            throw failure
+            let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
+            await wireFeed.finish(showingHeld: !retried)
+            throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
         }
     }
 }

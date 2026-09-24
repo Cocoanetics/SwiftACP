@@ -79,6 +79,16 @@ def handle_prompt(req_id, params):
                 len(base64.b64decode(block.get("data", ""))),
             ))
 
+    # "gone turn": a partial reply, then a session-gone error.
+    if text.strip() == "gone turn":
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "partial "},
+        })
+        send({"jsonrpc": "2.0", "id": req_id, "error": {
+            "code": -32002, "message": "Resource not found: session %s" % session_id}})
+        return
+
     # "fail turn": a partial reply, then the agent's error response, with details.
     if text.strip() == "fail turn":
         session_update(session_id, {

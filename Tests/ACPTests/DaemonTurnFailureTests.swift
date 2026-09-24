@@ -203,9 +203,33 @@ extension DaemonToolsTests {
                 #expect(!client.kinds.contains("wire:inbound:error"), "streamWire: \(streamWire)")
                 #expect(client.failure == nil)
                 #expect(client.kinds.contains { $0.hasPrefix("update:") })
-                // The JSON stream still has the turn that succeeded, through to its result.
-                if streamWire { #expect(client.wireKinds.last == "wire:inbound:result") }
+                // The JSON stream has the turn that succeeded, through to its result, and
+                // nothing of the attempt the fresh launch took over.
+                if streamWire {
+                    #expect(client.wireKinds.last == "wire:inbound:result")
+                    #expect(client.wireKinds.filter { $0 == "wire:outbound:session/prompt" }.count == 1)
+                }
             }
+        }
+    }
+
+    /// A session the agent reports gone after it answered the turn is not taken back
+    /// on a fresh launch: the turn reached it, and is never sent twice. It fails, as
+    /// acpx's does.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aTurnTheAgentAnsweredIsNotRetried() async throws {
+        try await withLoggedMockRequests(loadMode: "ok") { command, requests in
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            let client = CallingClient()
+            await #expect(throws: JSONRPCErrorBody.self) {
+                try await prompt(daemon, id, text: "gone turn", client: client)
+            }
+            #expect(client.failure?.outputCode == "NO_SESSION")
+            #expect(client.failure?.shown == true)
+            let prompts = try requests().filter { $0["method"] as? String == "session/prompt" }
+            #expect(prompts.count == 2)
         }
     }
 

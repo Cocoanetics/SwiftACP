@@ -40,22 +40,27 @@ final class TurnErrorWatch: @unchecked Sendable {
 /// acpx's text output shows as errors: they wait for ``finish()``, so the updates before
 /// them, which reach the client another way, are out first.
 ///
-/// An attempt a fresh launch may retry holds its error responses back in either case
-/// (`holdingErrors`): a retried attempt did not fail the turn, and ``finish(showingHeld:)``
-/// drops them. The prompt's failure is the last message of its attempt, so holding it
-/// back moves it nowhere.
+/// An attempt a fresh launch may retry is `provisional` until the agent answers it with
+/// anything but an error — an update, a request of its own, a result (``agentAnswered``).
+/// Until then, JSON output holds all of its messages back, and a retried attempt's are
+/// dropped by ``finish(showingHeld:)``: a retried attempt did not happen, as far as the
+/// output goes. Once the agent answers, what was held goes out, and the rest streams.
 final class TurnWireFeed: @unchecked Sendable {
     private let streamWire: Bool
-    private let holdingErrors: Bool
+    private let provisional: Bool
     private let feed: AsyncStream<WireMessageEvent>.Continuation
     private let forwarder: Task<Void, Never>
     private let lock = NSLock()
+    /// Text output's error responses, until the turn's exchange is over.
     private var held: [WireMessageEvent] = []
+    /// JSON output's messages of a provisional attempt the agent has not answered yet.
+    private var pending: [WireMessageEvent] = []
+    private var answered = false
 
-    init(streamWire: Bool, holdingErrors: Bool = false, logger: String, to clientSession: Session?) {
+    init(streamWire: Bool, provisional: Bool = false, logger: String, to clientSession: Session?) {
         let (messages, feed) = AsyncStream<WireMessageEvent>.makeStream()
         self.streamWire = streamWire
-        self.holdingErrors = holdingErrors || !streamWire
+        self.provisional = provisional
         self.feed = feed
         forwarder = Task {
             for await message in messages {
@@ -65,12 +70,27 @@ final class TurnWireFeed: @unchecked Sendable {
         }
     }
 
+    /// Whether the agent has answered the attempt with anything but an error. An attempt
+    /// it answered has reached it, and is never sent again.
+    var agentAnswered: Bool { lock.withLock { answered } }
+
     /// A message crossed the wire.
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        if holdingErrors, direction == .inbound, Self.isErrorResponse(body) {
-            lock.withLock { held.append(WireMessageEvent(direction, body)) }
-        } else if streamWire {
-            feed.yield(WireMessageEvent(direction, body))
+        let message = WireMessageEvent(direction, body)
+        let isError = direction == .inbound && Self.isErrorResponse(body)
+        lock.withLock {
+            if direction == .inbound, !isError, !answered {
+                answered = true
+                for earlier in pending { feed.yield(earlier) }
+                pending = []
+            }
+            if !streamWire {
+                if isError { held.append(message) }
+            } else if provisional, !answered {
+                pending.append(message)
+            } else {
+                feed.yield(message)
+            }
         }
     }
 
@@ -78,7 +98,7 @@ final class TurnWireFeed: @unchecked Sendable {
     /// false, for an attempt that is retried — and return once everything has gone out.
     func finish(showingHeld: Bool = true) async {
         if showingHeld {
-            for message in lock.withLock({ held }) { feed.yield(message) }
+            for message in lock.withLock({ pending + held }) { feed.yield(message) }
         }
         feed.finish()
         await forwarder.value
