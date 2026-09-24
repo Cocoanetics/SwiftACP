@@ -129,6 +129,10 @@ extension ACPXDaemonBackend {
                 } else {
                     recordReplacement(recordId: recordId, response: replacement)
                 }
+            } else if let agentSessionId = AgentSessionId.extract(from: session.meta) {
+                // acpx's `reconcileAgentSessionId`: the id a load or resume names is the
+                // record's from now on.
+                await apply({ $0.reconcileAgentSessionId(agentSessionId) }, to: recordId, via: onRecordChange)
             }
         } catch {
             handle.rawWire.set(nil)
@@ -143,11 +147,7 @@ extension ACPXDaemonBackend {
         // saves, as it does a replacement.
         if let change = await restoreSelections(
             selections, on: entry, agentCommand: command, replacementModels: replacementModels) {
-            if let onRecordChange {
-                await onRecordChange(change)
-            } else {
-                recordChange(recordId: recordId, change)
-            }
+            await apply(change, to: recordId, via: onRecordChange)
         }
         handle.rawWire.set(nil)
         await showConnectOutput(fellBack)
@@ -166,6 +166,18 @@ extension ACPXDaemonBackend {
     typealias RecordChange = @Sendable (inout SessionRecord) -> Void
     typealias RecordChangeHandler = @Sendable (@escaping RecordChange) async -> Void
 
+    /// Apply a reconnect's change: to the record a turn in flight saves, through
+    /// `onRecordChange`, else to the stored record here.
+    private func apply(
+        _ change: @escaping RecordChange, to recordId: String, via onRecordChange: RecordChangeHandler?
+    ) async {
+        if let onRecordChange {
+            await onRecordChange(change)
+        } else {
+            recordChange(recordId: recordId, change)
+        }
+    }
+
     /// A reconnect's change, when no turn holds the record.
     private func recordChange(recordId: String, _ change: RecordChange) {
         guard var record = findRecord(recordId) else { return }
@@ -183,7 +195,8 @@ extension ACPXDaemonBackend {
     private func recordReplacement(recordId: String, response: NewSessionResponse) {
         guard var record = findRecord(recordId) else { return }
         record.moveToReplacement(
-            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models,
+            agentSessionId: AgentSessionId.extract(from: response.meta))
         do {
             try SessionStore.writeRecord(record)
         } catch {

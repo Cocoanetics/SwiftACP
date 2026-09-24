@@ -46,13 +46,14 @@ public actor TurnPersister {
     /// still replaces the old state.
     public func adoptReplacement(_ response: NewSessionResponse) {
         record.moveToReplacement(
-            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models,
+            agentSessionId: AgentSessionId.extract(from: response.meta))
         dirty = true
         flush()
     }
 
-    /// Apply a change a reconnect made — the model its replay put back — to the record
-    /// the turn saves.
+    /// Apply a change a reconnect made — the agent's own session id it named, the model
+    /// its replay put back — to the record the turn saves.
     public func adopt(_ change: @Sendable (inout SessionRecord) -> Void) {
         change(&record)
         dirty = true

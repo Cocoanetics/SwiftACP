@@ -93,15 +93,23 @@ public struct LoadSessionResponse: Codable, Sendable {
     /// Legacy model advertisement (`{ currentModelId, availableModels }`), used
     /// by agents like Codex that don't expose models as config options.
     public var models: JSONValue?
+    public var meta: JSONValue?
 
     public init(
         modes: SessionModeState? = nil,
         configOptions: [JSONValue]? = nil,
-        models: JSONValue? = nil
+        models: JSONValue? = nil,
+        meta: JSONValue? = nil
     ) {
         self.modes = modes
         self.configOptions = configOptions
         self.models = models
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case modes, configOptions, models
+        case meta = "_meta"
     }
 }
 
