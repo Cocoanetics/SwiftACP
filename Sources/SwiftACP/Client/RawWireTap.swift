@@ -13,9 +13,11 @@ import JSONRPCWire
 /// it must be thread-safe and fast. Replace it at any time with ``set(_:)``.
 public final class RawWireTap: @unchecked Sendable {
     public typealias Observer = @Sendable (JSONRPCPeer.WireDirection, Data) -> Void
+    public typealias WrittenObserver = @Sendable (Data) -> Void
 
     private let lock = NSLock()
     private var observer: Observer?
+    private var writtenObserver: WrittenObserver?
     /// Sessions whose `session/update` notifications are not shown — their
     /// `session/load` is replaying history — with how many loads asked. acpx's
     /// `suppressReplaySessionUpdateMessages`, kept per session.
@@ -29,6 +31,14 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { self.observer = observer }
     }
 
+    /// Tell `observer` of each outbound body once it has been written to the agent —
+    /// acpx's `onPromptRequestWritten`, which follows the write, where the observer of
+    /// ``set(_:)`` sees a body before it is written, and whether or not it can be. It
+    /// runs on the transport's writer, so it must be thread-safe and fast.
+    public func onWritten(_ observer: WrittenObserver?) {
+        lock.withLock { writtenObserver = observer }
+    }
+
     /// Stop showing `sessionId`'s `session/update` notifications until the matching
     /// ``endSuppressingReplay(of:)``.
     func beginSuppressingReplay(of sessionId: String) {
@@ -40,6 +50,10 @@ public final class RawWireTap: @unchecked Sendable {
             guard let count = replaySuppressed[sessionId] else { return }
             replaySuppressed[sessionId] = count > 1 ? count - 1 : nil
         }
+    }
+
+    func written(_ body: Data) {
+        lock.withLock { writtenObserver }?(body)
     }
 
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
@@ -68,7 +82,9 @@ public final class RawWireTap: @unchecked Sendable {
 
 /// A framing that shows every message body to a ``RawWireTap`` as it passes: an
 /// outbound body just before it is written, an inbound one as soon as it is complete —
-/// before it is decoded. A request is therefore always seen before its response.
+/// before it is decoded. A request is therefore always seen before its response. The
+/// write itself happens out of its sight, so an outbound body counts as written
+/// (``RawWireTap/onWritten(_:)``) once it is framed.
 public struct TappedFraming<Base: MessageFraming>: MessageFraming {
     private var base: Base
     private let tap: RawWireTap
@@ -80,6 +96,7 @@ public struct TappedFraming<Base: MessageFraming>: MessageFraming {
 
     public func frame(_ body: Data) -> Data {
         tap.observe(.outbound, body)
+        tap.written(body)
         return base.frame(body)
     }
 

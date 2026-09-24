@@ -125,4 +125,46 @@ extension DaemonToolsTests {
             #expect(record.acpx?.desiredModeId == nil)
         }
     }
+
+    /// A held agent whose stdin closed between turns never gets the next prompt: its
+    /// write fails, so the turn goes to a fresh launch unseen. Only a prompt written to
+    /// the agent counts as sent, as acpx's `onPromptRequestWritten` has it (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aPromptAHeldAgentCouldNotBeSentGoesToAFreshLaunch() async throws {
+        let armed = NSTemporaryDirectory() + "exit-agent-stdin-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: armed) }
+        let command = try Self.exitAgent("EXIT_AGENT_CLOSE_STDIN_ARMED='\(armed)'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            try "".write(toFile: armed, atomically: true, encoding: .utf8)
+            try await prompt(daemon, id, text: "first", client: CallingClient())
+            let first = try #require(SessionStore.loadRecord(id)?.pid)
+            try await prompt(daemon, id, text: "second", client: CallingClient())
+            let second = try #require(SessionStore.loadRecord(id)?.pid)
+            #expect(second != first)
+        }
+    }
+
+    /// Stopping the daemon lets its agents go as acpx's queue owner does when it stops:
+    /// each record keeps no pid and names the connection its agent was closed on (#113
+    /// review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func stoppingTheDaemonRecordsHowItsAgentsEnded() async throws {
+        let command = try Self.exitAgent("")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            try await prompt(daemon, id, text: "hi", client: CallingClient())
+            let pid = try #require(SessionStore.loadRecord(id)?.pid)
+            await daemon.releaseAll()
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.pid == nil)
+            #expect(kill(pid_t(pid), 0) != 0)
+            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(record.lastAgentExitCode.map { $0.value == nil } == true)
+            #expect(record.lastAgentExitSignal.map { $0.value == nil } == true)
+            #expect(record.lastAgentExitAt != nil)
+        }
+    }
 }

@@ -342,6 +342,23 @@ actor ACPXDaemonBackend: ACPXBackend {
         await entry.agent.close()
     }
 
+    /// Let every held agent go the way acpx's queue owner does when it stops
+    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
+    /// into its record, best effort — no pid, and the connection it was closed on unless
+    /// it had ended before.
+    func releaseAll() async {
+        for recordId in Array(live.keys) {
+            guard let entry = live.removeValue(forKey: recordId) else { continue }
+            await entry.agent.close()
+            // A turn the close ends saves its record first.
+            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
+            defer { Task { await turnQueue.release(recordId) } }
+            guard var record = findRecord(recordId) else { continue }
+            record.applyLifecycle(entry.agent.lifecycle)
+            try? SessionStore.writeRecord(record)
+        }
+    }
+
     /// Whether `error` indicates the agent no longer has the session (ACP has no
     /// standard code, so match the text the agent puts in its error message/data).
     func isSessionGone(_ error: Error) -> Bool {

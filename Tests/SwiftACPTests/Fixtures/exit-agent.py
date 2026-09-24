@@ -12,6 +12,8 @@
   does so at `session/set_mode` instead.
 - `EXIT_AGENT_CLOSE_STDIN=1` closes its stdin once it has answered `session/new`, and keeps
   running.
+- `EXIT_AGENT_CLOSE_STDIN_ARMED=<path>`: while that file exists, the next prompt removes it
+  and closes its stdin before answering, and the agent keeps running.
 - `EXIT_AGENT_STRAY=1` writes lines that are no message before answering a prompt: JSON
   values that are no object, a batch, a stray object, and text that is no JSON.
 - `EXIT_AGENT_LINE_BYTES=N` answers `initialize` with a line of N bytes, LF excluded.
@@ -110,6 +112,13 @@ def main():
                 for stray in ["42", '"x"', "null", "[1]", json.dumps([update]), '{"stray":true}', "not json"]:
                     sys.stdout.write(stray + "\n")
                 sys.stdout.flush()
+            closing = os.environ.get("EXIT_AGENT_CLOSE_STDIN_ARMED")
+            if closing and os.path.exists(closing):
+                os.remove(closing)
+                os.close(0)
+                send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+                time.sleep(30)
+                os._exit(0)
             send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
             if os.environ.get("EXIT_AGENT_ANSWER_THEN_EXIT") == "1":
                 os._exit(0)

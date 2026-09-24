@@ -126,14 +126,13 @@ struct AcpxdCommand: AsyncParsableCommand {
 extension ACPXDaemonBackend: Service {
     /// The daemon's lifecycle in the ``ServiceGroup``. Registered first, it's torn
     /// down LAST — after the transports stop accepting requests — so on graceful
-    /// shutdown it closes every live agent (no orphaned subprocesses) and then
-    /// releases the singleton lock. A forced cancellation isn't ordered, so we skip
-    /// the lock release and let the next daemon reclaim the stale lock.
+    /// shutdown it lets every live agent go (no orphaned subprocesses), their ends
+    /// recorded, and then releases the singleton lock. A forced cancellation isn't
+    /// ordered, so we skip the lock release and let the next daemon reclaim the stale
+    /// lock.
     func run() async throws {
         let graceful = await (try? gracefulShutdown()) != nil
-        for sessionId in Array(live.keys) {
-            await evict(sessionId)
-        }
+        await releaseAll()
         if graceful { lock?.release() }
     }
 }

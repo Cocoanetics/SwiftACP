@@ -227,10 +227,10 @@ extension ACPXDaemonBackend {
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId
-        // Whether any of the turn itself has been written to the agent: its prompt. The
-        // `--model` asked for before it is not — a fresh launch asks for it again, which
-        // does no harm. Cleared when the turn ends.
-        let prompting = WriteMark()
+        // Whether the turn itself — its prompt — has been written to the agent: acpx's
+        // `onPromptRequestWritten`, once the write is done, so a prompt an agent's closed
+        // stdin refused never reached it. The `--model` asked for before it is not — a
+        // fresh launch asks for it again, which does no harm. Cleared when the turn ends.
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
@@ -240,12 +240,17 @@ extension ACPXDaemonBackend {
         // client with the turn's end, in the shape the agent sent them.
         let promptResult = PromptResultCapture()
         entry.agent.rawWire.set { direction, body in
-            if direction == .outbound, prompting.happened { wrote.mark() }
             errors.observe(direction, body)
             wireFeed.observe(direction, body)
             promptResult.observe(direction, body)
         }
-        defer { entry.agent.rawWire.set(nil) }
+        entry.agent.rawWire.onWritten { body in
+            if !wrote.happened, WireJSON(parsing: body)?["method"] == .text("session/prompt") { wrote.mark() }
+        }
+        defer {
+            entry.agent.rawWire.set(nil)
+            entry.agent.rawWire.onWritten(nil)
+        }
 
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
         // it into the event log on each checkpoint. Cleared when the turn ends.
@@ -264,7 +269,6 @@ extension ACPXDaemonBackend {
             if let model = turn.model {
                 try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
             }
-            prompting.mark()
             let response = try await entry.session.prompt(blocks)
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
