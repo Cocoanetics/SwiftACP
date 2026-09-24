@@ -126,7 +126,8 @@ extension ACPXDaemonBackend {
             // without one, its command line is split.
             handle = try await ACPAgent.launch(
                 agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
-                capabilities: capabilities,
+                capabilities: capabilities, environment: AgentEnvironment.forAgent(
+                    authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
                 authCredentials: config.auth, authPolicy: config.authPolicy,
                 inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
                 onRawWire: connectOutput?.observer)
