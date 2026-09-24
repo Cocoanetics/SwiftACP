@@ -1,6 +1,7 @@
 @testable import ACPXCore
 @testable import acpxd
 import Foundation
+import JSONFoundation
 import SwiftACP
 import Testing
 
@@ -253,6 +254,53 @@ import Testing
             let json = try String(
                 contentsOf: ACPXPaths.sessionRecordPath(id), encoding: .utf8)
             #expect(!json.contains(Self.pngBase64))
+        }
+    }
+
+    // MARK: - Content as written (#103)
+
+    /// `content` is checked by acpx's rules rather than `blocks`' — an `image/bmp`, which
+    /// `blocks` refuses, goes through — and reaches the agent as written: a `null` title
+    /// and a block's `_meta` included.
+    @Test(.enabled(if: mockPythonAvailable))
+    func contentReachesTheAgentAsWrittenUnderAcpxsRules() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let log = requestLog()
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: imageCapable(command, log: log), cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "", content: [
+                .object(["type": .string("image"), "mimeType": .string("image/bmp"), "data": .string(Self.pngBase64)]),
+                .object([
+                    "type": .string("resource_link"), "uri": .string("file:///tmp/a.pdf"), "name": .string("a.pdf"),
+                    "title": .null, "_meta": .object(["k": .integer(1)])
+                ]),
+                .object(["type": .string("text"), "text": .string("t"), "_meta": .null, "x-custom": .bool(true)])
+            ])
+            let blocks = try promptBlocks(log)
+            #expect(blocks.first?["mimeType"] as? String == "image/bmp")
+            #expect(blocks[1]["title"] is NSNull)
+            #expect((blocks[1]["_meta"] as? [String: Any])?["k"] as? Int == 1)
+            // What a block's type does not hold goes on too (#114 review).
+            #expect(blocks.last?["_meta"] is NSNull)
+            #expect(blocks.last?["x-custom"] as? Bool == true)
+        }
+    }
+
+    /// A block acpx does not take is refused in its words before the turn is queued, and
+    /// so is a turn that sends both kinds of block.
+    @Test func contentAcpxDoesNotTakeIsRefusedInItsWords() async throws {
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let video: JSONValue = .object(["type": .string("video")])
+            let refused = await #expect(throws: PromptContent.ValidationError.self) {
+                _ = try await daemon.runPrompt(sessionId: "any", text: "", content: [video])
+            }
+            #expect(refused?.message == #"prompt[0] has unsupported content block type "video""#)
+            await #expect(throws: PromptContent.ValidationError.self) {
+                _ = try await daemon.runPrompt(sessionId: "any", text: "", blocks: [.text("x")], content: [video])
+            }
         }
     }
 

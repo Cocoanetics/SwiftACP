@@ -48,11 +48,8 @@ enum CompareCommand {
 
         let promptFile = scan.string("file") ?? scan.string("prompt-file")
         let (agents, promptText) = try splitArgs(context.positionals, promptFile: promptFile)
-        let prompt = try PromptBlock.contentBlocks(
-            text: "",
-            blocks: try PromptInputResolver.resolve(
-                words: promptText.isEmpty ? [] : [promptText], file: promptFile, cwd: flags.cwd),
-            requestLimit: nil)
+        let prompt = try PromptInputResolver.contentBlocks(PromptInputResolver.resolve(
+            words: promptText.isEmpty ? [] : [promptText], file: promptFile, cwd: flags.cwd))
 
         var rows: [Row] = []
         for agentName in agents {

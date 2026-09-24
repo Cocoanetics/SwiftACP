@@ -23,6 +23,8 @@ extension ACPXDaemonBackend {
     ///     `resource_link` handing over a file, or inline resource text. Validated
     ///     before the turn is queued, and refused if the agent never advertised the
     ///     capability a block needs — see ``PromptBlock``.
+    ///   - content: blocks sent as written, checked by acpx's rules instead of
+    ///     `blocks`' — see ``PromptContent``. Not together with `blocks`.
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
@@ -37,7 +39,7 @@ extension ACPXDaemonBackend {
     ///   notification (sent after the last `session/update`, before this returns).
     func runPrompt(
         sessionId rawSessionId: String, text: String,
-        blocks: [PromptBlock]? = nil, wait: Bool = true,
+        blocks: [PromptBlock]? = nil, content rawContent: [JSONValue]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil
@@ -52,8 +54,17 @@ extension ACPXDaemonBackend {
         // Validate before queueing: a malformed block should fail at once, not after
         // waiting out someone else's turn. The daemon's transport has a ceiling, so
         // the request size is capped here (a direct client has nothing in the way).
-        let content = try PromptBlock.contentBlocks(
-            text: text, blocks: blocks, requestLimit: PromptBlock.maxRequestBytes)
+        let content: [ContentBlock]
+        if let rawContent {
+            guard blocks == nil else {
+                throw PromptContent.ValidationError(message: "pass the prompt's blocks or its content, not both")
+            }
+            content = try PromptContent.contentBlocks(
+                text: text, content: rawContent, requestLimit: PromptBlock.maxRequestBytes)
+        } else {
+            content = try PromptBlock.contentBlocks(
+                text: text, blocks: blocks, requestLimit: PromptBlock.maxRequestBytes)
+        }
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
