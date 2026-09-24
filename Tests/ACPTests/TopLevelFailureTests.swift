@@ -1,6 +1,7 @@
 @testable import ACPXCore
 @testable import acpx
 import Foundation
+import SwiftACP
 import Testing
 
 /// A failure that reaches the top level is reported in the requested output format, as
@@ -42,6 +43,22 @@ import Testing
             #expect(text.err == ["Invalid JSON in /p/.acpxrc.json: Unexpected end of JSON input"])
             #expect(text.out.isEmpty)
         }
+    }
+
+    /// A failure the output already shows is not reported again, in any format — only
+    /// its exit code is left to give (acpx's `isOutputAlreadyEmitted`).
+    @Test func aFailureTheOutputShowsIsOnlyAnExitCode() {
+        for format in ["json", "quiet", "text"] {
+            let gone = Self.report(
+                FailureAlreadyShown(underlying: NoSessionError("gone")), ["--format", format, "mock", "hi"])
+            #expect(gone.out.isEmpty && gone.err.isEmpty, "\(format)")
+            #expect(gone.code == ExitCodes.noSession, "\(format)")
+        }
+        let failed = Self.report(
+            FailureAlreadyShown(underlying: JSONRPCErrorBody(code: -32603, message: "Internal error")),
+            ["--format", "json", "mock", "hi"])
+        #expect(failed.out.isEmpty && failed.err.isEmpty)
+        #expect(failed.code == ExitCodes.error)
     }
 
     /// With no format asked for, a failure is reported in the format of the config

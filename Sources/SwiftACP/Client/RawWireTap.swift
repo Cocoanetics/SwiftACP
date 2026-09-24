@@ -16,6 +16,10 @@ public final class RawWireTap: @unchecked Sendable {
 
     private let lock = NSLock()
     private var observer: Observer?
+    /// Sessions whose `session/update` notifications are not shown — their
+    /// `session/load` is replaying history — with how many loads asked. acpx's
+    /// `suppressReplaySessionUpdateMessages`, kept per session.
+    private var replaySuppressed: [String: Int] = [:]
 
     public init(_ observer: Observer? = nil) {
         self.observer = observer
@@ -25,8 +29,40 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { self.observer = observer }
     }
 
+    /// Stop showing `sessionId`'s `session/update` notifications until the matching
+    /// ``endSuppressingReplay(of:)``.
+    func beginSuppressingReplay(of sessionId: String) {
+        lock.withLock { replaySuppressed[sessionId, default: 0] += 1 }
+    }
+
+    func endSuppressingReplay(of sessionId: String) {
+        lock.withLock {
+            guard let count = replaySuppressed[sessionId] else { return }
+            replaySuppressed[sessionId] = count > 1 ? count - 1 : nil
+        }
+    }
+
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        lock.withLock { observer }?(direction, body)
+        lock.lock()
+        let current = self.observer
+        let suppressed = replaySuppressed
+        lock.unlock()
+        guard let observer = current else { return }
+        if direction == .inbound, !suppressed.isEmpty,
+            let sessionId = Self.sessionUpdateSessionId(body), suppressed[sessionId] != nil {
+            return
+        }
+        observer(direction, body)
+    }
+
+    /// The session of a `session/update` notification — acpx's
+    /// `isSessionUpdateNotification`: a `session/update` without an `id` member.
+    static func sessionUpdateSessionId(_ body: Data) -> String? {
+        guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+            message["method"] as? String == "session/update", message["id"] == nil,
+            let params = message["params"] as? [String: Any]
+        else { return nil }
+        return params["sessionId"] as? String
     }
 }
 

@@ -15,12 +15,12 @@ extension DaemonToolsTests {
     /// answered prompts; `exitAfterPrompts` makes it exit.
     func withLoggedMock(
         loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0, exitOnPrompt: Int = 0,
-        sessionIdPerProcess: Bool = false,
+        sessionIdPerProcess: Bool = false, replayOnLoad: Bool = false,
         _ body: (_ command: String, _ methods: () throws -> [String]) async throws -> Void
     ) async throws {
         try await withLoggedMockRequests(
             loadMode: loadMode, forgetAfterPrompts: forgetAfterPrompts, exitAfterPrompts: exitAfterPrompts,
-            exitOnPrompt: exitOnPrompt, sessionIdPerProcess: sessionIdPerProcess
+            exitOnPrompt: exitOnPrompt, sessionIdPerProcess: sessionIdPerProcess, replayOnLoad: replayOnLoad
         ) { command, requests in
             try await withoutActuallyEscaping(requests) { requests in
                 try await body(command) { try requests().compactMap { $0["method"] as? String } }
@@ -28,11 +28,11 @@ extension DaemonToolsTests {
         }
     }
 
-    /// ``withLoggedMock(loadMode:forgetAfterPrompts:exitAfterPrompts:exitOnPrompt:sessionIdPerProcess:_:)``
+    /// ``withLoggedMock(loadMode:forgetAfterPrompts:exitAfterPrompts:exitOnPrompt:sessionIdPerProcess:replayOnLoad:_:)``
     /// with the whole logged requests, params included.
     func withLoggedMockRequests(
         loadMode: String, forgetAfterPrompts: Int = 0, exitAfterPrompts: Int = 0, exitOnPrompt: Int = 0,
-        sessionIdPerProcess: Bool = false,
+        sessionIdPerProcess: Bool = false, replayOnLoad: Bool = false,
         _ body: (_ command: String, _ requests: () throws -> [[String: Any]]) async throws -> Void
     ) async throws {
         let command = try #require(mockCommand())
@@ -44,6 +44,7 @@ extension DaemonToolsTests {
                 "/usr/bin/env MOCK_LOAD_SESSION=\(loadMode) MOCK_FORGET_AFTER_PROMPTS=\(forgetAfterPrompts) "
                 + "MOCK_EXIT_AFTER_PROMPTS=\(exitAfterPrompts) MOCK_EXIT_ON_PROMPT=\(exitOnPrompt) "
                 + (sessionIdPerProcess ? "MOCK_SESSION_ID_PER_PROCESS=1 " : "")
+                + (replayOnLoad ? "MOCK_LOAD_REPLAY=1 " : "")
                 + "MOCK_REQUEST_LOG='\(log.path)' \(command)"
             try await body(logged) {
                 try String(contentsOf: log, encoding: .utf8)

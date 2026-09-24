@@ -35,23 +35,29 @@ extension ACPXDaemonBackend {
     /// A turn in flight passes `onReplacement`: it saves the record it holds, so a
     /// replacement goes to it, and it writes the record. Otherwise the record is
     /// written here.
+    ///
+    /// A turn also passes `onConnectOutput`, which gets what connecting a new agent put
+    /// on the wire once it is connected — or once connecting it failed (see
+    /// ``ConnectOutputBuffer``). An agent already held has nothing to show.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, onReplacement: ReplacementHandler? = nil
+        control: Bool = false, onReplacement: ReplacementHandler? = nil,
+        onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
-            control: control, onReplacement: onReplacement
+            control: control, onReplacement: onReplacement, onConnectOutput: onConnectOutput
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:onReplacement:)``, also
-    /// saying whether the session had to be taken back — acpx's `resumed`: the agent
-    /// was launched and `session/load` or `session/resume` got the session back. A
-    /// session already held, or one a new session replaced, was not.
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:onReplacement:onConnectOutput:)``,
+    /// also saying whether the session had to be taken back — acpx's `resumed`: the
+    /// agent was launched and `session/load` or `session/resume` got the session back.
+    /// A session already held, or one a new session replaced, was not.
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, onReplacement: ReplacementHandler? = nil
+        control: Bool = false, onReplacement: ReplacementHandler? = nil,
+        onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
@@ -83,21 +89,34 @@ extension ACPXDaemonBackend {
         let selections = record?.acpx
         let launch = config.agentLaunch(for: agentCommand)
         let command = launch.command
-        // The argv the session recorded (`agent_argv`) launches it as it was launched;
-        // without one, its command line is split.
-        let handle = try await ACPAgent.launch(
-            agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, permission: .approveAll,
-            capabilities: capabilities,
-            authCredentials: config.auth, authPolicy: config.authPolicy,
-            inheritStderr: inheritAgentStderr)
+        let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
+        // What connecting shows goes out once it is over, however it went: acpx flushes
+        // its buffer when connecting fails too, so the agent's refusal is on screen.
+        let showConnectOutput = { (fellBack: Bool) in
+            guard let connectOutput, let onConnectOutput else { return }
+            await onConnectOutput(connectOutput.flush(fellBack: fellBack))
+        }
+        let handle: ACPAgent
+        do {
+            // The argv the session recorded (`agent_argv`) launches it as it was launched;
+            // without one, its command line is split.
+            handle = try await ACPAgent.launch(
+                agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, permission: .approveAll,
+                capabilities: capabilities,
+                authCredentials: config.auth, authPolicy: config.authPolicy,
+                inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)
+        } catch {
+            await showConnectOutput(false)
+            throw error
+        }
         let session: ACPSession
-        let resumed: Bool
+        let fellBack: Bool
         do {
             let reconnected = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
                 specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent)
             session = reconnected.session
-            resumed = reconnected.replacement == nil
+            fellBack = reconnected.replacement != nil
             // Settled before the replay below: while it runs, a turn could save the
             // record it holds, and with the old session that save would undo this.
             if let replacement = reconnected.replacement {
@@ -108,6 +127,8 @@ extension ACPXDaemonBackend {
                 }
             }
         } catch {
+            handle.rawWire.set(nil)
+            await showConnectOutput(false)
             // Nothing will hold this agent: don't leave its process running.
             await handle.close()
             throw error
@@ -115,8 +136,14 @@ extension ACPXDaemonBackend {
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         await restoreSelections(selections, on: entry)
-        return (entry, resumed)
+        handle.rawWire.set(nil)
+        await showConnectOutput(fellBack)
+        // Taken back unless a new session had to replace it.
+        return (entry, !fellBack)
     }
+
+    /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
+    typealias ConnectOutputHandler = @Sendable ([WireMessageEvent]) async -> Void
 
     /// Takes a reconnect's replacement session — its `session/new` response — onto the
     /// record a turn in flight will save.
@@ -153,7 +180,11 @@ extension ACPXDaemonBackend {
         command: String, sameSessionOnly: Bool
     ) async throws -> (session: ACPSession, replacement: NewSessionResponse?) {
         do {
-            return (try await handle.reconnectSession(id: sessionId, cwd: cwd, mcpServers: specs), nil)
+            // The history a `session/load` replays is the record's already: acpx neither
+            // shows nor records it when it reconnects.
+            let session = try await handle.reconnectSession(
+                id: sessionId, cwd: cwd, mcpServers: specs, suppressReplayUpdates: true)
+            return (session, nil)
         } catch {
             let record = findRecord(recordId)
             switch ReconnectFallback.outcome(

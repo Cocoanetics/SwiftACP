@@ -103,6 +103,27 @@ import Testing
         #expect(tracker.match(failureText: "The JSON-RPC connection is closed") == nil)
     }
 
+    /// Each attempt at the prompt starts afresh — acpx resets its tracker just before
+    /// it sends `session/prompt` — so an error from connecting the agent does not stand
+    /// in for how the turn failed.
+    @Test func thePromptStartsTheTrackerAfresh() throws {
+        var tracker = AcpErrorTracker()
+        tracker.observe(
+            try Self.json(#"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"Mode rejected"}}"#),
+            direction: .inbound)
+        tracker.observe(
+            try Self.json(#"{"jsonrpc":"2.0","id":"w1","error":{"code":-32603,"message":"refused"}}"#),
+            direction: .outbound)
+        tracker.observe(
+            try Self.json(#"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{}}"#), direction: .outbound)
+        #expect(tracker.match(failureText: "refused") == nil)
+
+        tracker.observe(
+            try Self.json(#"{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"Internal error"}}"#),
+            direction: .inbound)
+        #expect(tracker.match(failureText: "anything at all")?.message == "Internal error")
+    }
+
     // MARK: - The error line
 
     @Test func errorLinesAreAcpxs() {
@@ -182,6 +203,36 @@ import Testing
         #expect(ExecCommand.reportJSONFailure(ExecCommand.PromptUnavailable(), renderer: shown)
             == ExitCodes.permissionDenied)
         #expect(shownOut.text == refusal + "\n")
+    }
+
+    /// A prompt turn whose failure the JSON stream showed — the agent's error response —
+    /// reaches the top level as already shown: nothing more is printed, and the exit
+    /// code is still the failure's (acpx's `outputAlreadyEmitted`). Anything else is
+    /// reported as before.
+    @Test func aPromptFailureTheStreamShowedIsNotReportedAgain() {
+        let failure = JSONRPCErrorBody(code: -32002, message: "Resource not found: session s")
+        let (renderer, out) = Self.capturingRenderer()
+        #expect(!(PromptCommand.turnFailure(failure, renderer: renderer) is FailureAlreadyShown))
+
+        let prompt = #"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"s","prompt":[]}}"#
+        let response = #"{"jsonrpc":"2.0","id":3,"error":{"code":-32002,"message":"Resource not found: session s"}}"#
+        renderer.wireMessage(WireMessageEvent(wireDirection: "outbound", wireLine: prompt))
+        renderer.wireMessage(WireMessageEvent(wireDirection: "inbound", wireLine: response))
+        let shown = PromptCommand.turnFailure(failure, renderer: renderer)
+        #expect(shown is FailureAlreadyShown)
+
+        var reported = ""
+        let code = TopLevelFailure.report(
+            shown, arguments: ["--format", "json", "mock", "hi"], out: { reported += $0 }, err: { reported += $0 })
+        #expect(reported.isEmpty)
+        #expect(code == ExitCodes.noSession)
+        #expect(out.text == prompt + "\n" + response + "\n")
+
+        // Text mode prints no wire, so nothing there counts as shown.
+        let text = OutputRenderer(
+            options: RenderOptions(format: .text, streamsWire: true), out: { _ in }, err: { _ in }, color: false)
+        text.wireMessage(WireMessageEvent(wireDirection: "inbound", wireLine: response))
+        #expect(!(PromptCommand.turnFailure(failure, renderer: text) is FailureAlreadyShown))
     }
 
     // MARK: - The renderer in wire mode
