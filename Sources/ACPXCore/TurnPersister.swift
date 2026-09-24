@@ -51,6 +51,14 @@ public actor TurnPersister {
         flush()
     }
 
+    /// Apply a change a reconnect made — the model its replay put back — to the record
+    /// the turn saves.
+    public func adopt(_ change: @Sendable (inout SessionRecord) -> Void) {
+        change(&record)
+        dirty = true
+        flush()
+    }
+
     /// Record the user's prompt as one `User` message, then schedule a save.
     public func recordPrompt(_ text: String) {
         promptMessageId = ConversationModel.recordPromptSubmission(into: &record, prompt: text)

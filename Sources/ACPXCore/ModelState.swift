@@ -137,6 +137,38 @@ public enum ModelSupport {
             availableModels: available.map { ($0, state.availableModelNames?[$0] ?? $0) })
     }
 
+    /// acpx's `applyModelSelection`: what selecting `modelId` leaves in the record — the
+    /// options the agent reported back, with only the saved selections reconciled to
+    /// them; the model pinned in `session_options`, and current; and no saved selection
+    /// for the model's own option.
+    public static func applyModelSelection(
+        _ modelId: String, response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
+    ) {
+        let modelConfigId = advertisedModelState(state)?.configId
+        if let reported = response?.configOptions {
+            applyConfigOptionsModelState(reported, to: &state)
+            if let desired = state.desiredConfigOptions {
+                // A control's reply can change sibling options: only saved selections follow.
+                var kept: [String: String] = [:]
+                for case .object(let option) in reported {
+                    if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
+                       desired[id] != nil {
+                        kept[id] = value
+                    }
+                }
+                state.desiredConfigOptions = kept.isEmpty ? nil : kept
+            }
+        }
+        var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
+        options.model = modelId
+        state.sessionOptions = options
+        state.currentModelId = modelState(fromConfigOptions: response?.configOptions)?.currentModelId ?? modelId
+        if let configId = modelConfigId ?? advertisedModelState(state)?.configId {
+            state.desiredConfigOptions?.removeValue(forKey: configId)
+            if state.desiredConfigOptions?.isEmpty == true { state.desiredConfigOptions = nil }
+        }
+    }
+
     /// acpx's `clearAdvertisedModelState`.
     static func clearAdvertisedModelState(_ state: inout SessionAcpxState) {
         state.currentModelId = nil

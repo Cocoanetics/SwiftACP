@@ -42,11 +42,12 @@ extension ACPXDaemonBackend {
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, onReplacement: ReplacementHandler? = nil,
-        onConnectOutput: ConnectOutputHandler? = nil
+        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
-            control: control, onReplacement: onReplacement, onConnectOutput: onConnectOutput
+            control: control, onReplacement: onReplacement, onRecordChange: onRecordChange,
+            onConnectOutput: onConnectOutput
         ).entry
     }
 
@@ -57,7 +58,7 @@ extension ACPXDaemonBackend {
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, onReplacement: ReplacementHandler? = nil,
-        onConnectOutput: ConnectOutputHandler? = nil
+        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
@@ -111,6 +112,7 @@ extension ACPXDaemonBackend {
         }
         let session: ACPSession
         let fellBack: Bool
+        var replacementModels: ModelSupport.ModelState?
         do {
             let reconnected = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
@@ -120,6 +122,8 @@ extension ACPXDaemonBackend {
             // Settled before the replay below: while it runs, a turn could save the
             // record it holds, and with the old session that save would undo this.
             if let replacement = reconnected.replacement {
+                replacementModels = ModelSupport.modelState(fromConfigOptions: replacement.configOptions)
+                    ?? ModelSupport.modelState(fromLegacyModels: replacement.models)
                 if let onReplacement {
                     await onReplacement(replacement)
                 } else {
@@ -135,7 +139,16 @@ extension ACPXDaemonBackend {
         }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
-        await restoreSelections(selections, on: entry, agentCommand: command)
+        // What the replay put back is the record's too: a turn applies it to the record it
+        // saves, as it does a replacement.
+        if let change = await restoreSelections(
+            selections, on: entry, agentCommand: command, replacementModels: replacementModels) {
+            if let onRecordChange {
+                await onRecordChange(change)
+            } else {
+                recordChange(recordId: recordId, change)
+            }
+        }
         handle.rawWire.set(nil)
         await showConnectOutput(fellBack)
         // Taken back unless a new session had to replace it.
@@ -148,6 +161,21 @@ extension ACPXDaemonBackend {
     /// Takes a reconnect's replacement session — its `session/new` response — onto the
     /// record a turn in flight will save.
     typealias ReplacementHandler = @Sendable (NewSessionResponse) async -> Void
+
+    /// A change a reconnect makes to the record, and where a turn in flight takes it.
+    typealias RecordChange = @Sendable (inout SessionRecord) -> Void
+    typealias RecordChangeHandler = @Sendable (@escaping RecordChange) async -> Void
+
+    /// A reconnect's change, when no turn holds the record.
+    private func recordChange(recordId: String, _ change: RecordChange) {
+        guard var record = findRecord(recordId) else { return }
+        change(&record)
+        do {
+            try SessionStore.writeRecord(record)
+        } catch {
+            reconnectLog.warning("session record write failed after a reconnect: \(error)")
+        }
+    }
 
     /// The session a fallback started is the record's session from now on: acpx moves
     /// `acpSessionId` to it (keeping `acpxRecordId`) along with what it advertised, so
@@ -231,8 +259,14 @@ extension ACPXDaemonBackend {
     /// Each is best-effort: an agent that no longer offers a saved choice must not fail
     /// the turn that triggered the reconnect, and the record keeps the user's intent
     /// either way.
-    func restoreSelections(_ selections: SessionAcpxState?, on entry: Live, agentCommand: String) async {
-        guard let acpx = selections else { return }
+    /// Returns what the replay changed in the record — the pinned model it put back —
+    /// for the caller to save.
+    func restoreSelections(
+        _ selections: SessionAcpxState?, on entry: Live, agentCommand: String,
+        replacementModels: ModelSupport.ModelState?
+    ) async -> RecordChange? {
+        guard let acpx = selections else { return nil }
+        var change: RecordChange?
         let desiredOptions = acpx.desiredConfigOptions ?? [:]
         // The record keeps the agent's advertised options verbatim; the model's option
         // id is derived from them the same way `session/new` derived it.
@@ -245,9 +279,22 @@ extension ACPXDaemonBackend {
             // `--model` asked for — through the control the session advertises,
             // resolving an alias as `--model` does, even when unchanged
             // (`replayDesiredModel`).
-            _ = try? await ModelApplication.setModel(
-                connection: entry.agent.connection, sessionId: entry.session.id, modelId: pinned,
-                models: ModelSupport.advertisedModelState(acpx), agentCommand: agentCommand)
+            //
+            // A session the reconnect had to start in place of the old one is asked
+            // through the control it advertises, not the old one's.
+            // `try?` would take the legacy path's success, which replies nothing, for failure.
+            do {
+                let response = try await ModelApplication.setModel(
+                    connection: entry.agent.connection, sessionId: entry.session.id, modelId: pinned,
+                    models: replacementModels ?? ModelSupport.advertisedModelState(acpx), agentCommand: agentCommand)
+                change = { record in
+                    var state = record.acpx ?? SessionAcpxState()
+                    ModelSupport.applyModelSelection(pinned, response: response, to: &state)
+                    record.acpx = state
+                }
+            } catch {
+                // Best-effort, as the rest of this replay; #73 makes it fail the turn, as acpx's does.
+            }
         } else if let modelConfigId, let modelValue = desiredOptions[modelConfigId] {
             await apply(configId: modelConfigId, value: modelValue, on: entry)
         } else if let modelId = acpx.currentModelId, acpx.modelControl != "config_option" {
@@ -262,6 +309,7 @@ extension ACPXDaemonBackend {
             guard let value = desiredOptions[configId] else { continue }
             await apply(configId: configId, value: value, on: entry)
         }
+        return change
     }
 
     private func apply(configId: String, value: String, on entry: Live) async {

@@ -15,6 +15,8 @@ import Testing
         var requests: [String]
         /// What the agent received for a daemon turn after the creation, when asked for.
         var turn: [String] = []
+        /// The record after that turn.
+        var afterTurn: SessionRecord?
     }
 
     /// Creates a session on the model fixture with `model` requested, returning the
@@ -46,6 +48,7 @@ import Testing
                 _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
                     .runPrompt(sessionId: record.acpxRecordId, text: "hi")
                 created.turn = Array(Self.requests(log).dropFirst(created.requests.count))
+                created.afterTurn = SessionStore.loadRecord(record.acpxRecordId)
             }
             return created
         }
@@ -133,6 +136,48 @@ import Testing
         #expect(options.turn == ["session/new", "session/set_config_option model=m2", "session/prompt"])
         let legacy = try await create(legacy: true, model: "m2", thenPrompt: true)
         #expect(legacy.turn == ["session/new", "session/set_model m2", "session/prompt"])
+        // The record says so, as acpx's `applyModelSelection` leaves it — not the
+        // default the replacement session started on.
+        #expect(options.afterTurn?.acpx?.currentModelId == "m2")
+        #expect(legacy.afterTurn?.acpx?.currentModelId == "m2")
+        guard case .array(let reported)? = options.afterTurn?.acpx?.configOptions,
+              case .object(let model)? = reported.first
+        else {
+            Issue.record("expected the options the replay's reply reported")
+            return
+        }
+        #expect(model["currentValue"] == .string("m2"))
+    }
+
+    /// A session the reconnect started in place of the old one is asked for the pinned
+    /// model through the control it advertises: here a model option, where the old one
+    /// had a legacy model list.
+    @Test(.enabled(if: mockPythonAvailable))
+    func theReplacementsOwnControlCarriesTheModel() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            let agent = "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' "
+            var options = SessionAcpxState.SessionOptions()
+            options.model = "m2"
+            var record = try await SessionEngine.createSession(
+                agentCommand: agent + "MODEL_AGENT_LEGACY=1 '\(python)' '\(fixture.path)'",
+                cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll, authCredentials: [:],
+                authPolicy: "skip", sessionOptions: options)
+            #expect(record.acpx?.modelControl == "legacy_set_model")
+            // The adapter changed how it offers models since.
+            record.agentCommand = agent + "'\(python)' '\(fixture.path)'"
+            record.agentArgv = nil
+            try SessionStore.writeRecord(record)
+            let before = Self.requests(log).count
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .runPrompt(sessionId: record.acpxRecordId, text: "hi")
+            #expect(Array(Self.requests(log).dropFirst(before))
+                == ["session/new", "session/set_config_option model=m2", "session/prompt"])
+        }
     }
 
     /// Model ids are the keys of `available_model_names`, and go to disk as they are.
