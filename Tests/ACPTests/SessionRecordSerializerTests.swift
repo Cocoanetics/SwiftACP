@@ -91,28 +91,47 @@ struct SessionRecordSerializerTests {
     }
 
     /// A record whose oldest messages were trimmed away keeps each remaining message in its
-    /// own stored order, not in that of the message once in its place (#117 review).
+    /// own stored order, not in that of the message once in its place — with or without a
+    /// user message to tell them apart (#117 review).
     @Test func trimmedMessagesKeepTheirOwnStoredOrder() async throws {
-        let messages = [
-            #"{"User":{"content":[{"Text":"a"}],"id":"u1"}}"#,
-            #"{"Agent":{"tool_results":{},"content":[{"Text":"b"}]}}"#,
-            #"{"User":{"id":"u2","content":[{"Text":"c"}]}}"#,
-            #"{"Agent":{"content":[{"Text":"d"}],"tool_results":{}}}"#
+        let conversations = [
+            [
+                #"{"User":{"content":[{"Text":"a"}],"id":"u1"}}"#,
+                #"{"Agent":{"tool_results":{},"content":[{"Text":"b"}]}}"#,
+                #"{"User":{"id":"u2","content":[{"Text":"c"}]}}"#,
+                #"{"Agent":{"content":[{"Text":"d"}],"tool_results":{}}}"#
+            ],
+            [
+                #"{"Agent":{"tool_results":{},"content":[{"Text":"a"}]}}"#,
+                #""Resume""#,
+                #"{"Agent":{"content":[{"Text":"b"}],"tool_results":{}}}"#,
+                #""Resume""#,
+                #"{"Agent":{"tool_results":{},"content":[{"Text":"c"}]}}"#
+            ]
         ]
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            for messages in conversations {
+                for trimmed in [0, 1, 3] {
+                    try Self.storeRecord(messages: messages)
+                    var record = try #require(SessionStore.loadRecord("r"))
+                    record.messages.removeFirst(trimmed)
+                    try SessionStore.writeRecord(record)
+                    let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+                    let kept = try messages.dropFirst(trimmed).map { try #require(WireJSON(parsing: Data($0.utf8))) }
+                    #expect(written["messages"] == .array(kept), "\(messages.first ?? "") less \(trimmed)")
+                }
+            }
+        }
+    }
+
+    /// A record `r` with these messages, as SwiftACP would have it on disk.
+    private static func storeRecord(messages: [String]) throws {
         let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
             + #""cwd":"/w","created_at":"t","last_used_at":"t","last_seq":0,"closed":false,"#
             + #""messages":[\#(messages.joined(separator: ","))],"updated_at":"t","#
             + #""cumulative_token_usage":{},"request_token_usage":{}}"#
-        try await withIsolatedStore {
-            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
-            try Data(raw.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
-            var record = try #require(SessionStore.loadRecord("r"))
-            record.messages.removeFirst(2)
-            try SessionStore.writeRecord(record)
-            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
-            let kept = try messages.suffix(2).map { try #require(WireJSON(parsing: Data($0.utf8))) }
-            #expect(written["messages"] == .array(kept))
-        }
+        try Data(raw.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
     }
 
     /// SwiftACP's own `acpx` fields, which acpx does not read, follow acpx's.

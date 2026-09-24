@@ -187,15 +187,18 @@ enum MessageOrder {
 
     /// `stored`, the messages a record was read with, lined up with `messages`, those it
     /// holds now: trimming drops the oldest (`trimConversationForRuntime`), so each
-    /// message is paired with itself, found by the first user message's id, and not with
-    /// whatever message was once in its place. With no user message to go by, none is
-    /// paired.
+    /// message is paired with itself, not with whatever message was once in its place.
+    /// The first message kept is where what was read carries on unchanged into what is
+    /// held — all but the last, which a turn may have added to. Without such a place,
+    /// messages are paired by position.
     static func aligned(_ stored: WireJSON, with messages: WireJSON?) -> WireJSON {
         let (storedItems, items) = (items(of: stored), items(of: messages))
-        guard let first = items.firstIndex(where: { $0["User"]?["id"] != nil }),
-              let storedFirst = storedItems.firstIndex(where: { $0["User"]?["id"] == items[first]["User"]?["id"] })
-        else { return .array([]) }
-        let offset = storedFirst - first
+        let offset = storedItems.indices.first { start in
+            let last = storedItems.count - 1 - start
+            return !items.isEmpty && (0...min(last, items.count - 1)).allSatisfy { index in
+                index == last || SessionRecordSerializer.sameValue(items[index], storedItems[start + index])
+            }
+        } ?? 0
         return .array(items.indices.map { index in
             storedItems.indices.contains(index + offset) ? storedItems[index + offset] : .null
         })
