@@ -152,13 +152,16 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// clobbering it. Also says whether connecting had to take the session back
     /// (acpx's `resumed`).
     ///
+    /// `replacing` is what the control changes, which a reconnect first leaves alone.
+    ///
     /// An agent can ask the client for something while it answers a control, as while
     /// it runs a turn. A control approves reads and asks about the rest, which no one
     /// can answer here, so `nonInteractivePermissions` decides — acpx's direct controls
     /// connect with `approve-reads` and the caller's non-interactive policy. Terminal
     /// output is capped by the caller's `terminalOutputCeiling`, as a turn's is.
     private func withSessionTurn<T: Sendable>(
-        _ sessionId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
+        _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
+        terminalOutputCeiling: Int?,
         _ body: (Live, inout SessionRecord) async throws -> T
     ) async throws -> (value: T, resumed: Bool) {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
@@ -177,7 +180,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         let (entry, resumed) = try await connect(
             recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
             mcpServers: current.acpx?.mcpServers, control: true, handlers: permissions.handlers,
-            terminalOutputCeiling: ceiling)
+            terminalOutputCeiling: ceiling, replacing: replacing)
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
         let result = try await body(entry, &record)
@@ -216,7 +219,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         terminalOutputCeiling: Int? = nil
     ) async throws -> SessionControlResult {
         let (_, resumed) = try await withSessionTurn(
-            sessionId, nonInteractivePermissions: nonInteractivePermissions,
+            sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             try await entry.session.setMode(modeId)
             var acpx = record.acpx ?? SessionAcpxState()
@@ -248,7 +251,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         terminalOutputCeiling: Int? = nil
     ) async throws -> SessionControlResult {
         let (options, resumed) = try await withSessionTurn(
-            sessionId, nonInteractivePermissions: nonInteractivePermissions,
+            sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             var acpx = record.acpx ?? SessionAcpxState()
             // acpx's owner control: a value for the model's own option is a model id,
@@ -280,7 +283,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         terminalOutputCeiling: Int? = nil
     ) async throws -> SessionControlResult {
         let (_, resumed) = try await withSessionTurn(
-            sessionId, nonInteractivePermissions: nonInteractivePermissions,
+            sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             var acpx = record.acpx ?? SessionAcpxState()
             let response = try await ModelApplication.setModel(

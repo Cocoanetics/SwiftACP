@@ -158,12 +158,12 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A mode the agent refuses to restore while connecting is on the wire, but it is
-    /// not how the turn fails: the attempt starts afresh once connected, as acpx's does,
-    /// so content refused before the prompt goes out is reported as it is — not as the
-    /// refused restore, which text output would then leave unreported.
+    /// A mode the agent refuses to restore while connecting fails the turn, as acpx
+    /// 0.19.1's replay does (#73): a retryable `SESSION_MODE_REPLAY_FAILED`, which the wire
+    /// already showed, so nothing repeats it — and before the prompt, so content the
+    /// agent could not take is never reached.
     @Test(.enabled(if: mockPythonAvailable))
-    func aRestoreRefusedWhileConnectingIsNotHowTheTurnFails() async throws {
+    func aRestoreRefusedWhileConnectingFailsTheTurn() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
@@ -176,15 +176,17 @@ extension DaemonToolsTests {
             try SessionStore.writeRecord(record)
 
             let client = CallingClient()
-            await #expect(throws: UnsupportedPromptContentError.self) {
+            await #expect(throws: (any Error).self) {
                 let image = PromptBlock(type: "image", data: "iVBORw0KGgo=", mimeType: "image/png")
                 try await prompt(daemon, id, text: "look", blocks: [image], client: client)
             }
             #expect(client.kinds.contains("wire:inbound:error"))
+            #expect(!client.kinds.contains("wire:outbound:session/prompt"))
             let failure = try #require(client.failure)
-            #expect(failure.outputCode == "USAGE")
-            #expect(!failure.shown)
-            #expect(failure.acp == nil)
+            #expect(failure.outputCode == "RUNTIME")
+            #expect(failure.detailCode == "SESSION_MODE_REPLAY_FAILED")
+            #expect(failure.retryable == true)
+            #expect(failure.shown)
         }
     }
 

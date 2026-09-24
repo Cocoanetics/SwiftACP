@@ -80,28 +80,6 @@ public enum ModelSupport {
 
     /// Apply config-option models, falling back to the legacy `models` field, into
     /// a record's `acpx` block (`session/new` response).
-    /// A fresh session's advertised model state *replaces* the record's — acpx's
-    /// `applyReconnectedModelState` for a created session: config options it did not
-    /// report are dropped, a legacy model list with no model option drops the model
-    /// options, and with no models at all the advertised model state is cleared.
-    public static func applyFreshSessionModelState(
-        configOptions: [JSONValue]?, models: JSONValue?, to state: inout SessionAcpxState
-    ) {
-        if configOptions == nil { state.configOptions = nil }
-        applySessionModelState(configOptions: configOptions, models: models, to: &state)
-        let derived = modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
-        guard let derived else {
-            clearAdvertisedModelState(&state)
-            return
-        }
-        if models != nil, derived.configId == nil, case .array(let options)? = state.configOptions {
-            state.configOptions = .array(options.filter { option in
-                guard case .object(let fields) = option else { return true }
-                return fields["category"] != .string("model") && fields["id"] != .string("model")
-            })
-        }
-    }
-
     public static func applySessionModelState(
         configOptions: [JSONValue]?, models: JSONValue?, to state: inout SessionAcpxState
     ) {
@@ -146,6 +124,7 @@ public enum ModelSupport {
     ) {
         let modelConfigId = advertisedModelState(state)?.configId
         applyAcceptedConfigOptions(response, to: &state)
+        if let modelConfigId { noteAccepted(modelConfigId, value: modelId, unreportedBy: response, in: &state) }
         var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
         options.model = modelId
         state.sessionOptions = options
@@ -173,6 +152,28 @@ public enum ModelSupport {
         desired[configId] = value
         state.desiredConfigOptions = desired
         applyAcceptedConfigOptions(response, to: &state)
+        noteAccepted(configId, value: value, unreportedBy: response, in: &state)
+    }
+
+    /// A reply that does not report the options — `{}`, as SwiftACP's own agent bridge
+    /// answers — leaves the record's as they were, but with the option just set at the
+    /// value it was set to: the agent accepted it, as acpx takes the model a
+    /// `session/set_model` reply leaves current to be the one asked for. Otherwise a
+    /// later `--model` for the old value would be skipped as already current. (acpx
+    /// reads the missing list as no options at all, clearing the model state with it,
+    /// and fails outright on saved selections.)
+    private static func noteAccepted(
+        _ configId: String, value: String, unreportedBy response: SetSessionConfigOptionResponse?,
+        in state: inout SessionAcpxState
+    ) {
+        guard response?.configOptions == nil, case .array(var options)? = state.configOptions else { return }
+        for (index, option) in options.enumerated() {
+            guard case .object(var fields) = option, case .string(let id)? = fields["id"], id == configId
+            else { continue }
+            fields["currentValue"] = .string(value)
+            options[index] = .object(fields)
+        }
+        state.configOptions = .array(options)
     }
 
     /// acpx's `applyAcceptedConfigOptions`: the options a control's reply reported
@@ -237,25 +238,5 @@ public enum ModelSupport {
         guard application.applied else { return }
         let current = modelState(fromConfigOptions: replied)?.currentModelId ?? requestedModel
         state.currentModelId = current.flatMap { $0.javaScriptTrimmed.isEmpty ? nil : $0.javaScriptTrimmed }
-    }
-}
-
-extension SessionRecord {
-    /// Move the record to the session a reconnect started in place of the gone one —
-    /// acpx's fresh-session fallback: `acpSessionId` becomes the new session's, and
-    /// the model state it advertised replaces the old (see
-    /// ``ModelSupport/applyFreshSessionModelState(configOptions:models:to:)``).
-    /// `acpxRecordId` stays.
-    ///
-    /// The new session's own id, when its `_meta` names one, is reconciled into
-    /// `agent_session_id` (``reconcileAgentSessionId(_:)``).
-    public mutating func moveToReplacement(
-        sessionId: String, configOptions: [JSONValue]?, models: JSONValue?, agentSessionId: String? = nil
-    ) {
-        acpSessionId = sessionId
-        reconcileAgentSessionId(agentSessionId)
-        var state = acpx ?? SessionAcpxState()
-        ModelSupport.applyFreshSessionModelState(configOptions: configOptions, models: models, to: &state)
-        acpx = state
     }
 }
