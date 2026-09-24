@@ -183,6 +183,23 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A held session the agent dropped is taken back on a fresh launch, and the turn
+    /// succeeds: the dropped session's error is no failure of the turn, so it is not
+    /// shown, and nothing reports one.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aDroppedSessionTakenBackShowsNoError() async throws {
+        try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, _ in
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            let client = CallingClient()
+            try await prompt(daemon, id, text: "second", client: client)
+            #expect(!client.kinds.contains("wire:inbound:error"))
+            #expect(client.failure == nil)
+            #expect(client.kinds.contains { $0.hasPrefix("update:") })
+        }
+    }
+
     /// An image for an agent that never advertised images fails the turn as a usage
     /// error, after the prompt is recorded — acpx records it before connecting.
     @Test(.enabled(if: mockPythonAvailable))

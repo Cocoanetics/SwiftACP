@@ -132,7 +132,7 @@ extension ACPXDaemonBackend {
 
     private func attemptWithRetry(_ turn: Turn, wasHeld: Bool) async throws -> String {
         do {
-            return try await attemptPrompt(turn)
+            return try await attemptPrompt(turn, retriesOnAFreshLaunch: wasHeld)
         } catch {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
@@ -145,10 +145,16 @@ extension ACPXDaemonBackend {
             // A held agent can also exit just after `ensure` found it open. When none of
             // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
             // launch unseen; one it did reach is never sent twice.
-            guard wasHeld, isSessionGone(error) || error is AgentExitedBeforeTheTurn else { throw error }
+            guard wasHeld, isFixedByAFreshLaunch(error) else { throw error }
             await evict(turn.recordId)
-            return try await attemptPrompt(turn)
+            return try await attemptPrompt(turn, retriesOnAFreshLaunch: false)
         }
+    }
+
+    /// A failure a fresh launch of the agent would not have: the held agent dropped the
+    /// session, or exited before any of the turn reached it.
+    func isFixedByAFreshLaunch(_ error: Error) -> Bool {
+        isSessionGone(error) || error is AgentExitedBeforeTheTurn
     }
 
     /// Forwards what connecting an agent for a turn put on the wire to the MCP client
@@ -164,7 +170,10 @@ extension ACPXDaemonBackend {
         }
     }
 
-    private func attemptPrompt(_ turn: Turn) async throws -> String {
+    /// - Parameter retriesOnAFreshLaunch: whether a failure a fresh launch would not
+    ///   have (``isFixedByAFreshLaunch(_:)``) is retried on one. Its error then does not
+    ///   fail the turn, so it is not shown.
+    private func attemptPrompt(_ turn: Turn, retriesOnAFreshLaunch: Bool) async throws -> String {
         let (recordId, blocks, permissions) = (turn.recordId, turn.blocks, turn.permissions)
         let (persister, eventBuffer, errors) = (turn.persister, turn.eventBuffer, turn.errors)
         // A reconnect that has to start a new session hands it to the persister, so the
@@ -272,11 +281,10 @@ extension ACPXDaemonBackend {
             // Everything the agent said before failing still goes out, and is kept, as
             // acpx shows and records it — then the error itself.
             _ = await consumer.value
-            await wireFeed.finish()
-            if ACPAgentConnection.isConnectionClosed(error), !wrote.happened {
-                throw AgentExitedBeforeTheTurn(underlying: error)
-            }
-            throw error
+            let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
+                ? AgentExitedBeforeTheTurn(underlying: error) : error
+            await wireFeed.finish(showingHeld: !(retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure)))
+            throw failure
         }
     }
 }

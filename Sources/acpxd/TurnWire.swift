@@ -67,10 +67,12 @@ final class TurnWireFeed: @unchecked Sendable {
         }
     }
 
-    /// The turn's exchange is over: send what was held back, and return once
-    /// everything has gone out.
-    func finish() async {
-        for message in lock.withLock({ held }) { feed.yield(message) }
+    /// The turn's exchange is over: send what was held back — unless `showingHeld` is
+    /// false, for an attempt that is retried — and return once everything has gone out.
+    func finish(showingHeld: Bool = true) async {
+        if showingHeld {
+            for message in lock.withLock({ held }) { feed.yield(message) }
+        }
         feed.finish()
         await forwarder.value
     }
