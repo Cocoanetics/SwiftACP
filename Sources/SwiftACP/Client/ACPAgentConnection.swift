@@ -377,7 +377,10 @@ public actor ACPAgentConnection {
         // The turn is not over until the agent's requests from it are answered: one it
         // sent without awaiting would otherwise be counted against the next turn.
         return try await answeringItsRequests(in: request.sessionId) {
-            try await send("session/prompt", request)
+            let response: PromptResponse = try await send("session/prompt", request)
+            // The updates the agent sent before its answer have reached the subscriptions.
+            for sink in eventSinks.values { sink.yield(.promptAnswered(request.sessionId, response)) }
+            return response
         }
     }
 

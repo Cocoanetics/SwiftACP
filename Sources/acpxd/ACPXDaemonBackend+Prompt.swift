@@ -217,6 +217,7 @@ extension ACPXDaemonBackend {
         errors.reset()
         // Until this attempt's prompt goes out, a cancel waits for it.
         turns[recordId]?.prompt = nil
+        turns[recordId]?.answered = false
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
@@ -280,20 +281,18 @@ extension ACPXDaemonBackend {
         // finishes the stream, so the consumer task completes having sent every
         // event — in order — and built the agent's message content for the turn.
         let (subscriptionId, stream) = await connection.makeEventSubscription()
+        let announceEnd = Self.announcingTheEnd(
+            on: connection, of: boundSessionId, as: sessionId, to: clientSession, with: promptResult)
         let consumer = Task {
             await Self.relay(
-                stream, of: boundSessionId, as: sessionId, into: persister, to: clientSession)
+                stream, of: boundSessionId, as: sessionId, into: persister, to: clientSession,
+                onAnswered: announceEnd)
         }
         do {
             if let model = turn.model {
                 try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
             }
-            // A cancel asked before the prompt went out ends the turn so, the prompt
-            // unsent, as acpx's attempt stops at its aborted turn (`runPromptWithRetries`)
-            // — the user's message kept. One asked from here on waits for it to go out.
-            let unsent = turns[recordId]?.cancelPending == true
-            if !unsent { await promptGoingOut?(recordId) }
-            let response = unsent ? PromptResponse(stopReason: .cancelled) : try await entry.session.prompt(blocks)
+            let (response, sent) = try await sendPrompt(blocks, on: entry, recordId: recordId)
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
             let fullText = await consumer.value
@@ -306,16 +305,14 @@ extension ACPXDaemonBackend {
             // Final checkpoint: stamp timestamps and flush the completed turn —
             // including any wire lines still buffered for the event log.
             await persister.finish()
-            // Demote the stop reason to a streamed event: emit it last, after every
-            // update, so a client reconstructing the turn sees it in order. It carries
-            // how the turn's permissions went, which decides the CLI's exit code.
-            let permissionStats = unsent ? PermissionStats() : await connection.permissionStats(for: boundSessionId)
-            await clientSession?.sendLogNotification(
-                LogMessage(
-                    level: .info, logger: sessionId,
-                    data: toJSONValue(TurnEndedEvent(
-                        stopReason: response.stopReason.rawValue, permissions: permissionStats,
-                        usage: promptResult.usage, cost: promptResult.cost))))
+            // A prompt never sent has no answer to mark the turn's end at: it goes now.
+            if !sent {
+                await clientSession?.sendLogNotification(
+                    LogMessage(
+                        level: .info, logger: sessionId,
+                        data: toJSONValue(TurnEndedEvent(
+                            stopReason: response.stopReason.rawValue, permissions: PermissionStats()))))
+            }
             return fullText
         } catch {
             await connection.endSubscription(subscriptionId)
@@ -338,50 +335,6 @@ extension ACPXDaemonBackend {
 }
 
 extension ACPXDaemonBackend {
-    /// What one attempt's event subscription carries, relayed as the turn goes: each of
-    /// the session's updates folded into the persister (which debounce-saves the record)
-    /// and streamed to the calling client with the agent's requests and the client's
-    /// diagnostics, in order. Returns the agent's message text.
-    private static func relay(
-        _ stream: AsyncStream<ConnectionEvent>, of boundSessionId: SessionId, as sessionId: String,
-        into persister: TurnPersister, to clientSession: Session?
-    ) async -> String {
-        // Accumulate the full streamed text for the MCP result, and fold each
-        // update into the persister (which debounce-saves the record as it goes).
-        var fullText = ""
-        for await event in stream {
-            switch event {
-            case .update(let note) where note.sessionId == boundSessionId:
-                if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
-                    fullText += chunk
-                }
-                await persister.apply(note.update)
-                let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
-            case .inboundRequest(let request)
-                where request.sessionId == nil || request.sessionId == boundSessionId:
-                // The agent's own request (a file write, a permission question), and
-                // the client's refusal of it: acpx's formatter prints both, so they
-                // stream in order with the updates.
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
-            case .clientOperation(let operation)
-                where operation.sessionId == nil || operation.sessionId == boundSessionId:
-                // A client-side diagnostic the connection reported mid-turn — a
-                // permission refusal that may end the turn (see `CodexCompat`).
-                // Streamed in order like an update, so the CLI renders it in place;
-                // not part of the conversation history (the wire log has the
-                // annotated response).
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
-            default:
-                break
-            }
-        }
-        return fullText
-    }
-
     /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
     /// before the prompt — checked against what the session advertises, not sent when
     /// it is already the current model — and is pinned in the record the turn saves.

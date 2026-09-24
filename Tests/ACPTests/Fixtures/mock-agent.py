@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import sys
+import time
 
 
 def send(obj):
@@ -165,6 +166,13 @@ def handle_prompt(req_id, params):
             "cachedWriteTokens": 6, "totalTokens": 57,
         },
     })
+
+    # MOCK_LATE_CHUNK: one more reply chunk, 200 ms after the answer.
+    late = os.environ.get("MOCK_LATE_CHUNK")
+    if late:
+        time.sleep(0.2)
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": late}})
 
 
 def main():

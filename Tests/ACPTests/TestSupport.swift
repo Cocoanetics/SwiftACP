@@ -70,5 +70,12 @@ func withIsolatedStore<T>(_ body: () async throws -> T) async rethrows -> T {
         ACPXPaths.baseDir = original
         try? FileManager.default.removeItem(at: dir)
     }
-    return try await body()
+    // A turn waits a second past the agent's answer, as acpx's does; the tests have no
+    // late updates to wait for, but those that do say so.
+    return try await TurnReplyDrain.$current.withValue(.forTests) { try await body() }
+}
+
+extension ReplyDrain {
+    /// A wait short enough not to hold up every daemon test by a second.
+    static let forTests = ReplyDrain(idleMilliseconds: 20, timeoutMilliseconds: 1_000)
 }

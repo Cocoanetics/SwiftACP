@@ -18,6 +18,10 @@ extension ACPXDaemonBackend {
         var prompt: (connection: ACPAgentConnection, sessionId: SessionId)?
         /// A cancel asked before its prompt went out (acpx's `pendingCancel`).
         var cancelPending = false
+        /// Whether its prompt was answered. A cancel from then on has nothing to send,
+        /// as acpx's owner finds no active prompt then, and a late note of the prompt
+        /// going out is too late.
+        var answered = false
     }
 
     /// Cancel the turn a session runs, as acpx's owner answers `cancelPrompt`.
@@ -39,7 +43,7 @@ extension ACPXDaemonBackend {
     /// now on, and one asked before is sent now (acpx's `applyPendingCancel` once the
     /// prompt is active).
     func promptWritten(recordId: String, turn id: UUID, to connection: ACPAgentConnection, sessionId: SessionId) async {
-        guard turns[recordId]?.id == id else { return }
+        guard turns[recordId]?.id == id, turns[recordId]?.answered == false else { return }
         turns[recordId]?.prompt = (connection, sessionId)
         guard turns[recordId]?.cancelPending == true else { return }
         turns[recordId]?.cancelPending = false
