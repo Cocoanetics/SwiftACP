@@ -46,6 +46,7 @@ public enum SessionEngine {
         let handle = try await ACPAgent.launch(
             agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission, permissionRules: permissionRules,
             capabilities: capabilities,
+            environment: AgentEnvironment.forAgent(authCredentials: authCredentials, sessionEnv: sessionOptions?.env),
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)
         do {
