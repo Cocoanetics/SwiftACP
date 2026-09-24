@@ -80,9 +80,13 @@ extension ConversationModel {
         return result
     }
 
-    /// `trimRuntimeText` — truncate to `maxChars`, appending an ellipsis.
+    /// `trimRuntimeText`: a text longer than `maxChars` UTF-16 code units — JavaScript's
+    /// `length` — cut to its first `maxChars - 3` of them, `...` added. A cut through a
+    /// surrogate pair leaves half of it, which a Swift string cannot hold: it becomes
+    /// U+FFFD, where acpx keeps the lone surrogate (openclaw/acpx#774).
     static func trimRuntimeText(_ value: String, _ maxChars: Int) -> String {
-        guard value.count > maxChars else { return value }
-        return String(value.prefix(max(0, maxChars - 3))) + "..."
+        let units = value.utf16
+        guard units.count > maxChars else { return value }
+        return String(decoding: Array(units.prefix(max(0, maxChars - 3))), as: UTF16.self) + "..."
     }
 }
