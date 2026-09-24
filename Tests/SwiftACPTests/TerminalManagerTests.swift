@@ -185,8 +185,11 @@ struct TerminalManagerTests {
 
     /// `to` relative to `from`; both absolute and physical.
     static func relativePath(from: String, to: String) -> String {
-        let fromParts = (realpath(from, nil).map { defer { free($0) }; return String(cString: $0) } ?? from)
-            .split(separator: "/")
+        let physical = realpath(from, nil).map { resolved in
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        let fromParts = (physical ?? from).split(separator: "/")
         let toParts = to.split(separator: "/")
         var common = 0
         while common < min(fromParts.count, toParts.count), fromParts[common] == toParts[common] { common += 1 }
