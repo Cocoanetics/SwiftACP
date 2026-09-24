@@ -27,7 +27,9 @@ enum SessionRecordSerializer {
             .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: parsed["messages"]) }
         var document = forDisk(built, storedAcpx: raw["acpx"])
         if let stored = record.parsedByAcpx {
-            document = inStoredOrder(document, stored: forDisk(stored, storedAcpx: nil), topLevel: true)
+            let read = forDisk(stored, storedAcpx: nil)
+                .mapping("messages") { MessageOrder.aligned($0, with: document["messages"]) }
+            document = inStoredOrder(document, stored: read, topLevel: true)
         }
         return Data((document.stringified(indent: 2) + "\n").utf8)
     }
@@ -181,6 +183,22 @@ enum MessageOrder {
         let ids = items(of: content).compactMap { $0["ToolUse"]?["id"] }
         return sorted(results, by: ids, unknownFirst: false)
             .mappingMembers { $0.ordered(["tool_use_id", "tool_name", "is_error", "content", "output"]) }
+    }
+
+    /// `stored`, the messages a record was read with, lined up with `messages`, those it
+    /// holds now: trimming drops the oldest (`trimConversationForRuntime`), so each
+    /// message is paired with itself, found by the first user message's id, and not with
+    /// whatever message was once in its place. With no user message to go by, none is
+    /// paired.
+    static func aligned(_ stored: WireJSON, with messages: WireJSON?) -> WireJSON {
+        let (storedItems, items) = (items(of: stored), items(of: messages))
+        guard let first = items.firstIndex(where: { $0["User"]?["id"] != nil }),
+              let storedFirst = storedItems.firstIndex(where: { $0["User"]?["id"] == items[first]["User"]?["id"] })
+        else { return .array([]) }
+        let offset = storedFirst - first
+        return .array(items.indices.map { index in
+            storedItems.indices.contains(index + offset) ? storedItems[index + offset] : .null
+        })
     }
 
     /// `request_token_usage` in the order acpx added its entries: one a turn, under the id
