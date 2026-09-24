@@ -242,6 +242,10 @@ public actor ACPXDaemon {
     ///     `resource_link` handing over a file, or inline resource text. The turn is
     ///     refused up front if a block is malformed or the agent never advertised the
     ///     capability it needs. See ``PromptBlock`` for which blocks are worth sending.
+    ///   - content: ACP content blocks to send after the text as written, checked by
+    ///     acpx's rules instead of `blocks`' stricter ones — any `image/*` or `audio/*`
+    ///     type, a `blob` resource — and refused, like acpx, by the first block that falls
+    ///     short (`prompt[<i>] …`). What the acpx CLI sends for a structured prompt.
     ///   - wait: when another turn is already running for this session, `true` (the
     ///     default) queues this one behind it; `false` rejects it immediately with a
     ///     "session busy" error instead of waiting.
@@ -271,13 +275,13 @@ public actor ACPXDaemon {
     ///   notification (sent after the last `session/update`, before this returns).
     @MCPTool(openWorldHint: true)
     func runPrompt(
-        sessionId: String, text: String, blocks: [PromptBlock]? = nil,
+        sessionId: String, text: String, blocks: [PromptBlock]? = nil, content: [JSONValue]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil
     ) async throws -> String {
         try await backend.runPrompt(
-            sessionId: sessionId, text: text, blocks: blocks, wait: wait,
+            sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
             terminalOutputCeiling: terminalOutputCeiling, model: model)

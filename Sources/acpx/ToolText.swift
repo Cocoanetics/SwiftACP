@@ -165,17 +165,14 @@ enum ToolText {
     /// The same test on the kind as it appeared on the wire, which json mode reads
     /// without decoding the update.
     static func isReadLike(title: String?, kindName: String?) -> Bool {
-        if kindName?.trimmingCharacters(in: .whitespaces).lowercased() == "read" { return true }
+        if kindName?.javaScriptTrimmed.lowercased() == "read" { return true }
         // The leading *word* must be the action, not merely contain it. Splitting on the
         // colon alone left the whole title as the head, and a substring test then read
         // "Spreadsheet update" or "overwrite readme.md" as reads and hid their output —
         // acpx's `inferToolKindFromTitle` splits on `[:\s]` and compares exactly.
-        let normalized = (title ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        let normalized = (title ?? "").javaScriptTrimmed.lowercased()
         guard !normalized.isEmpty else { return false }
-        let head = normalized.split(
-            maxSplits: 1, omittingEmptySubsequences: false,
-            whereSeparator: { $0 == ":" || $0.isWhitespace }).first ?? ""
-        return ["read", "cat", "open", "view"].contains(String(head))
+        return ["read", "cat", "open", "view"].contains(normalized.javaScriptHead)
     }
 
     // MARK: Small helpers (port of output.ts)

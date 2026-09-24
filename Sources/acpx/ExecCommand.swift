@@ -13,11 +13,8 @@ enum ExecCommand {
         let permissionRules = try flags.permissionRules()
 
         let configOptions = try scan.parsedAll("config-option", parseSessionConfigOptionAssignment)
-        let prompt = try PromptBlock.contentBlocks(
-            text: "",
-            blocks: try PromptInputResolver.resolve(
-                words: context.positionals, file: scan.string("file"), cwd: flags.cwd),
-            requestLimit: nil)
+        let prompt = try PromptInputResolver.contentBlocks(
+            PromptInputResolver.resolve(words: context.positionals, file: scan.string("file"), cwd: flags.cwd))
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
         let mcpServers = try context.config.mcpServerSpecs()

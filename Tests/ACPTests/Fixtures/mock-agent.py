@@ -79,6 +79,16 @@ def handle_prompt(req_id, params):
                 len(base64.b64decode(block.get("data", ""))),
             ))
 
+    # "env NAME": NAME's value in the agent's environment, to show what it was started with.
+    if text.strip().startswith("env "):
+        name = text.strip()[len("env "):]
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "%s=%s" % (name, os.environ.get(name, "<unset>"))},
+        })
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        return
+
     # "gone turn": a partial reply, then a session-gone error.
     if text.strip() == "gone turn":
         session_update(session_id, {

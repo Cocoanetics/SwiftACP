@@ -35,27 +35,59 @@ public enum AgentEnvironment {
     }
 
     /// The agent's environment, exactly like acpx's `buildAgentEnvironment`:
-    /// inherit the full parent environment, promote `ACPX_AUTH_*`, then inject
-    /// the configured `auth` credentials.
-    public static func forAgent(authCredentials: [String: String] = [:]) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        promotePrefixedAuth(&environment)
+    /// inherit the full parent environment, promote `ACPX_AUTH_*`, inject the
+    /// configured `auth` credentials, then lay the session's own variables over it —
+    /// all but the credential variables acpx manages, which a session cannot replace.
+    public static func forAgent(
+        authCredentials: [String: String] = [:], sessionEnv: [String: String]? = nil
+    ) -> [String: String] {
+        forAgent(authCredentials: authCredentials, sessionEnv: sessionEnv, over: ProcessInfo.processInfo.environment)
+    }
+
+    /// ``forAgent(authCredentials:sessionEnv:)`` over `base` rather than this process's
+    /// environment.
+    static func forAgent(
+        authCredentials: [String: String], sessionEnv: [String: String]?, over base: [String: String]
+    ) -> [String: String] {
+        var environment = base
+        var managed = promotePrefixedAuth(&environment)
         for (methodId, credential) in authCredentials {
+            managed.formUnion(credentialKeys(methodId: methodId, credential: credential))
             assignAuthCredential(&environment, methodId: methodId, credential: credential)
+        }
+        for (key, value) in sessionEnv ?? [:] where !managed.contains(key) {
+            environment[key] = value
         }
         return environment
     }
 
-    /// For each `ACPX_AUTH_X`, also set bare `X` if it isn't already present.
-    private static func promotePrefixedAuth(_ environment: inout [String: String]) {
+    /// For each `ACPX_AUTH_X` with a value, also set `X` — the suffix as an env-token
+    /// — unless it is set already. Returns the variables this manages: both names.
+    private static func promotePrefixedAuth(_ environment: inout [String: String]) -> Set<String> {
+        var managed: Set<String> = []
         for (key, value) in Array(environment) {
-            guard key.hasPrefix(authEnvPrefix),
-                !value.trimmingCharacters(in: .whitespaces).isEmpty
-            else { continue }
-            let normalized = String(key.dropFirst(authEnvPrefix.count))
-            guard !normalized.isEmpty, environment[normalized] == nil else { continue }
-            environment[normalized] = value
+            guard key.hasPrefix(authEnvPrefix), !isBlank(value) else { continue }
+            let normalized = toEnvToken(String(key.dropFirst(authEnvPrefix.count)))
+            guard !normalized.isEmpty else { continue }
+            managed.formUnion([key, normalized])
+            if environment[normalized] == nil { environment[normalized] = value }
         }
+        return managed
+    }
+
+    /// acpx's `addAuthCredentialEnvKeys`: the variables a configured credential sets.
+    private static func credentialKeys(methodId: String, credential: String) -> Set<String> {
+        guard !isBlank(credential) else { return [] }
+        var keys: Set<String> = []
+        if !methodId.contains("=") && !methodId.contains("\0") { keys.insert(methodId) }
+        let token = toEnvToken(methodId)
+        if !token.isEmpty { keys.formUnion(["\(authEnvPrefix)\(token)", token]) }
+        return keys
+    }
+
+    /// `value.trim().length === 0`.
+    private static func isBlank(_ value: String) -> Bool {
+        TerminalOutputLimit.javaScriptTrimmed(value).isEmpty
     }
 
     private static func assignAuthCredential(
