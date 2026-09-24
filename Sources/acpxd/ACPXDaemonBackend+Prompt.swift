@@ -197,7 +197,8 @@ extension ACPXDaemonBackend {
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
-        let wireFeed = TurnWireFeed(streamWire: turn.streamWire, logger: recordId, to: clientSession)
+        let wireFeed = TurnWireFeed(
+            streamWire: turn.streamWire, holdingErrors: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
         entry.agent.rawWire.set { direction, body in
             if direction == .outbound { wrote.mark() }
             errors.observe(direction, body)

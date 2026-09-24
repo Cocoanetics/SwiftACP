@@ -54,6 +54,11 @@ extension DaemonToolsTests {
             }
         }
 
+        /// ``kinds`` without the updates: what JSON output prints of a turn, and the report.
+        var wireKinds: [String] {
+            kinds.filter { $0.hasPrefix("wire:") || $0.hasPrefix("failed:") }
+        }
+
         var failure: TurnFailedEvent? {
             logs.lazy.compactMap { try? $0.decoded(TurnFailedEvent.self) }.first
         }
@@ -69,12 +74,12 @@ extension DaemonToolsTests {
     /// Run one turn as a calling client's request, which the daemon answers on `client`.
     private func prompt(
         _ daemon: ACPXDaemonBackend, _ sessionId: String, text: String, blocks: [PromptBlock]? = nil,
-        client: CallingClient
+        streamWire: Bool = false, client: CallingClient
     ) async throws {
         let session = Session(id: UUID())
         await session.setTransport(client)
         _ = try await session.work { _ in
-            try await daemon.runPrompt(sessionId: sessionId, text: text, blocks: blocks)
+            try await daemon.runPrompt(sessionId: sessionId, text: text, blocks: blocks, streamWire: streamWire)
         }
     }
 
@@ -188,15 +193,35 @@ extension DaemonToolsTests {
     /// shown, and nothing reports one.
     @Test(.enabled(if: mockPythonAvailable))
     func aDroppedSessionTakenBackShowsNoError() async throws {
-        try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, _ in
+        for streamWire in [false, true] {
+            try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, _ in
+                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+                let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+                _ = try await daemon.runPrompt(sessionId: id, text: "first")
+                let client = CallingClient()
+                try await prompt(daemon, id, text: "second", streamWire: streamWire, client: client)
+                #expect(!client.kinds.contains("wire:inbound:error"), "streamWire: \(streamWire)")
+                #expect(client.failure == nil)
+                #expect(client.kinds.contains { $0.hasPrefix("update:") })
+                // The JSON stream still has the turn that succeeded, through to its result.
+                if streamWire { #expect(client.wireKinds.last == "wire:inbound:result") }
+            }
+        }
+    }
+
+    /// A failure no retry follows streams its error response in JSON output as it
+    /// crosses the wire, before the report.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aJSONStreamShowsAFailureNoRetryFollows() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            _ = try await daemon.runPrompt(sessionId: id, text: "first")
             let client = CallingClient()
-            try await prompt(daemon, id, text: "second", client: client)
-            #expect(!client.kinds.contains("wire:inbound:error"))
-            #expect(client.failure == nil)
-            #expect(client.kinds.contains { $0.hasPrefix("update:") })
+            await #expect(throws: JSONRPCErrorBody.self) {
+                try await prompt(daemon, id, text: "fail turn", streamWire: true, client: client)
+            }
+            #expect(Array(client.wireKinds.suffix(2)) == ["wire:inbound:error", "failed:RUNTIME"])
         }
     }
 
