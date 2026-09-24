@@ -115,8 +115,7 @@ public struct ToolPermissionApproval: Sendable {
         if let kind = request.toolCall.kind, !kind.rawValue.isEmpty { return kind }
         guard let title = request.toolCall.title?.trimmedLikeJavaScript.lowercased(), !title.isEmpty
         else { return nil }
-        let head = title.split(maxSplits: 1, omittingEmptySubsequences: false) { $0 == ":" || $0.isWhitespace }
-            .first.map(String.init) ?? ""
+        let head = title.javaScriptHead
         guard !head.isEmpty else { return nil }
         return titleKinds.first { $0.names.contains(head) }?.kind ?? .other
     }

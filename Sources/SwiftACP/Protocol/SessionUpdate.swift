@@ -204,6 +204,10 @@ public struct ToolCallUpdate: Codable, Sendable {
     public var locations: [ToolCallLocation]?
     public var rawInput: JSONValue?
     public var rawOutput: JSONValue?
+    /// The members the update sent as JSON `null` (`kind`, `status`, …). Each clears
+    /// what an earlier update set, where a member left out leaves it as it was — acpx's
+    /// `mergeToolPayloadState`. Sent back as `null`.
+    public var nullMembers: Set<String> = []
 
     public init(
         toolCallId: String, title: String? = nil, kind: ToolKind? = nil,
@@ -219,6 +223,42 @@ public struct ToolCallUpdate: Codable, Sendable {
         self.locations = locations
         self.rawInput = rawInput
         self.rawOutput = rawOutput
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        toolCallId = try container.decode(String.self, forKey: .toolCallId)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        kind = try container.decodeIfPresent(ToolKind.self, forKey: .kind)
+        status = try container.decodeIfPresent(ToolCallStatus.self, forKey: .status)
+        content = try container.decodeIfPresent([ToolCallContent].self, forKey: .content)
+        locations = try container.decodeIfPresent([ToolCallLocation].self, forKey: .locations)
+        rawInput = try container.decodeIfPresent(JSONValue.self, forKey: .rawInput)
+        rawOutput = try container.decodeIfPresent(JSONValue.self, forKey: .rawOutput)
+        var nulled: Set<String> = []
+        for key in CodingKeys.allCases where key != .toolCallId && container.contains(key) {
+            if try container.decodeNil(forKey: key) { nulled.insert(key.stringValue) }
+        }
+        nullMembers = nulled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(toolCallId, forKey: .toolCallId)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(kind, forKey: .kind)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(content, forKey: .content)
+        try container.encodeIfPresent(locations, forKey: .locations)
+        try container.encodeIfPresent(rawInput, forKey: .rawInput)
+        try container.encodeIfPresent(rawOutput, forKey: .rawOutput)
+        for key in CodingKeys.allCases where nullMembers.contains(key.stringValue) {
+            try container.encodeNil(forKey: key)
+        }
     }
 }
 

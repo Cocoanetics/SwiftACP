@@ -57,6 +57,19 @@ struct ToolPermissionApprovalTests {
         #expect(inferred(":x", nil) == nil)
     }
 
+    /// The first word ends where JavaScript's `\s` says (#112): at U+FEFF or a no-break
+    /// space, but not at U+0085, which Swift counts as whitespace — so a title reading
+    /// "Read" before one is no read, and `--approve-reads` does not approve it.
+    @Test func theFirstWordEndsWhereJavaScriptSplitsIt() {
+        let inferred = { (title: String) in
+            ToolPermissionApproval.inferredKind(of: Self.request(title: title, kind: nil))
+        }
+        #expect(inferred("Read\u{FEFF}notes.txt") == .read)
+        #expect(inferred("Read\u{00A0}notes.txt") == .read)
+        #expect(inferred("\u{FEFF}\u{2028}Read notes.txt") == .read)
+        #expect(inferred("Read\u{85}notes.txt") == .other)
+    }
+
     // MARK: Without a terminal
 
     @Test func readsAndSearchesAreApproved() async throws {
