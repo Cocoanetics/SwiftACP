@@ -79,6 +79,34 @@ extension DaemonToolsTests {
         }
     }
 
+    /// So is one whose stdout closed while it answered a control (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aControlWhoseAgentClosedItsStdoutKeepsNoPid() async throws {
+        let command = try Self.exitAgent("EXIT_AGENT_CLOSE_STDOUT=set_mode")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await #expect(throws: AgentDisconnectedError.self) {
+                _ = try await daemon.setMode(sessionId: id, modeId: "plan")
+            }
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.pid == nil)
+            #expect(record.lastAgentDisconnectReason == "pipe_close")
+        }
+    }
+
+    /// Closing an agent is what its end is put down to, however fast it exits once its
+    /// stdin ends: the transport is closed before the stdin is (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func closingAnAgentIsWhatItsEndIsPutDownTo() async throws {
+        for _ in 0..<5 {
+            let agent = try await ACPAgent.launch(
+                agent: Self.exitAgent(""), cwd: NSTemporaryDirectory(), permission: .approveAll, inheritStderr: false)
+            await agent.close()
+            #expect(agent.lifecycle?.lastExit?.reason == .connectionClose)
+        }
+    }
+
     /// A control the agent exits in leaves its exit in the record too, and nothing of the
     /// control (#113 review).
     @Test(.enabled(if: mockPythonAvailable))

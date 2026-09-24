@@ -193,6 +193,9 @@ actor ACPXDaemonBackend: ACPXBackend {
             // control came to, as acpx's controls save it on their way out — but nothing
             // of the control that failed.
             var unchanged = findRecord(recordId) ?? current
+            // An agent whose connection is gone is ended first, as a turn's is: it can be
+            // running still, and its pid would be kept.
+            if ACPAgentConnection.isConnectionClosed(error) { await entry.agent.close() }
             unchanged.applyLifecycle(entry.agent.lifecycle)
             do {
                 try SessionStore.writeRecord(unchanged)

@@ -169,6 +169,7 @@ public final class ACPAgent: Sendable {
                 // Whether the agent went is settled before anything closes it: closing ends
                 // its stdin, and it would exit then, whatever the failure was.
                 let failure = await startupFailure(error, of: agent, agentCommand: agentCommand)
+                agent.close()
                 await connection.close()
                 await agent.terminate()
                 throw failure
@@ -411,13 +412,19 @@ public final class ACPAgent: Sendable {
     /// terminals before the agent.
     public func close() async {
         await connection.shutDownTerminals()
-        await connection.close()
         #if os(macOS) || os(Linux)
         if let agent = transport as? AgentProcessTransport {
+            // The transport is closed here and now, so closing the connection is what
+            // the agent's end is put down to — as acpx records it — before the stdin that
+            // closing ends lets the agent exit first: the connection's own close reaches
+            // the transport from a task of its own.
+            agent.close()
+            await connection.close()
             await agent.terminate()
             return
         }
         #endif
+        await connection.close()
         transport.close()
     }
 
