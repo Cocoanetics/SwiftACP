@@ -7,16 +7,17 @@ import Foundation
 /// Two sources feed it, as upstream:
 ///
 /// - every `session/request_permission`, classified by the answer that went back;
-/// - every `fs/write_text_file` the client *refused* (``FileSystemPermissionError``).
-///   A write that was allowed is not counted — upstream records delegated operations
-///   only when they fail — so one approved tool call is enough to keep a turn with a
-///   refused write from exiting 5.
+/// - every `fs/write_text_file` or `terminal/create` the client *refused*
+///   (``FileSystemPermissionError``, ``TerminalError/permissionDenied``). One that was
+///   allowed is not counted — upstream records delegated operations only when they
+///   fail — so one approved tool call is enough to keep a turn with a refused write
+///   from exiting 5.
 public struct PermissionStats: Codable, Sendable, Equatable {
     public var requested = 0
     public var approved = 0
     public var denied = 0
     public var cancelled = 0
-    /// A write needed confirmation that could not be asked for, under
+    /// A write or command needed confirmation that could not be asked for, under
     /// ``NonInteractivePermissionPolicy/fail``. Upstream rethrows this once the turn
     /// returns, so it fails the run on its own — exit 5 — even if something else in
     /// the turn was approved.

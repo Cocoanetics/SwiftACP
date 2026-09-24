@@ -153,10 +153,19 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// (acpx's `resumed`).
     ///
     /// `replacing` is what the control changes, which a reconnect first leaves alone.
+    ///
+    /// An agent can ask the client for something while it answers a control, as while
+    /// it runs a turn. A control approves reads and asks about the rest, which no one
+    /// can answer here, so `nonInteractivePermissions` decides — acpx's direct controls
+    /// connect with `approve-reads` and the caller's non-interactive policy. Terminal
+    /// output is capped by the caller's `terminalOutputCeiling`, as a turn's is.
     private func withSessionTurn<T: Sendable>(
-        _ sessionId: String, replacing: ReconnectReplay.Replacing,
+        _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
+        terminalOutputCeiling: Int?,
         _ body: (Live, inout SessionRecord) async throws -> T
     ) async throws -> (value: T, resumed: Bool) {
+        let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
+        let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
@@ -170,7 +179,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         }
         let (entry, resumed) = try await connect(
             recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-            mcpServers: current.acpx?.mcpServers, control: true, replacing: replacing)
+            mcpServers: current.acpx?.mcpServers, control: true, handlers: permissions.handlers,
+            terminalOutputCeiling: ceiling, replacing: replacing)
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
         let result = try await body(entry, &record)
@@ -185,14 +195,31 @@ actor ACPXDaemonBackend: ACPXBackend {
         return (result, resumed)
     }
 
+    /// A call's cap on terminal output: the caller's — bytes, `0` for none — else the
+    /// daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`. A bad one is refused before the
+    /// call waits for the session.
+    static func terminalOutputCeiling(_ requested: Int?) throws -> Int? {
+        guard let requested else { return try TerminalOutputLimit.ceiling() }
+        return try TerminalOutputLimit.ceiling(bytes: requested)
+    }
+
     /// Set a session's mode on the live agent (reconnecting if needed) and persist
     /// it as the desired mode — mirrors the CLI's `set-mode`.
     ///
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
-    func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
-        let (_, resumed) = try await withSessionTurn(sessionId, replacing: .mode) { entry, record in
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail`: what a request
+    ///     needing confirmation meanwhile does.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
+    ///     omitted, the daemon's own.
+    func setMode(
+        sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
+        terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        let (_, resumed) = try await withSessionTurn(
+            sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
+            terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             try await entry.session.setMode(modeId)
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.desiredModeId = modeId
@@ -211,13 +238,20 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail`: what a request
+    ///     needing confirmation meanwhile does.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
+    ///     omitted, the daemon's own.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
-    func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> SessionControlResult {
+    func setConfigOption(
+        sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
+        terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
         let (options, resumed) = try await withSessionTurn(
-            sessionId, replacing: .configOption(configId)) { entry, record in
+            sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
+            terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             var acpx = record.acpx ?? SessionAcpxState()
             // acpx's owner control: a value for the model's own option is a model id,
             // checked and resolved against the session's advertised models.
@@ -239,8 +273,17 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
-    func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
-        let (_, resumed) = try await withSessionTurn(sessionId, replacing: .configOption("model")) { entry, record in
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail`: what a request
+    ///     needing confirmation meanwhile does.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
+    ///     omitted, the daemon's own.
+    func setModel(
+        sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
+        terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        let (_, resumed) = try await withSessionTurn(
+            sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
+            terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             var acpx = record.acpx ?? SessionAcpxState()
             let response = try await ModelApplication.setModel(
                 connection: entry.agent.connection, sessionId: entry.session.id, modelId: modelId,

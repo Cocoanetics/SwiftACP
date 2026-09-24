@@ -43,31 +43,42 @@ extension ACPXDaemonBackend {
     /// on the wire once it is connected — or once connecting it failed (see
     /// ``ConnectOutputBuffer``). An agent already held has nothing to show.
     ///
+    /// `handlers` answer what the agent asks of the client — the caller's permissions —
+    /// and `terminalOutputCeiling` caps the output of the terminals it creates, `nil`
+    /// being no cap: the calling CLI's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, which acpx reads
+    /// in the process that connects the session. Both apply before anything is asked
+    /// of the agent: it can start a command while it answers `initialize`, a load, or a
+    /// replayed mode. Without `handlers` everything is approved.
+    ///
     /// A turn run with `--model` passes it as `requestedModel`: the replay then leaves
     /// the saved model and options alone, which the turn replaces, and a session the
     /// reconnect has to start is started on that model, as acpx's queue owner does
     /// with the options it was started with.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
+        control: Bool = false, handlers: ACPClientHandlers? = nil, terminalOutputCeiling: Int? = nil,
+        replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
-            control: control, replacing: replacing, requestedModel: requestedModel,
+            control: control, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling,
+            replacing: replacing, requestedModel: requestedModel,
             onRecordChange: onRecordChange, onConnectOutput: onConnectOutput
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:replacing:requestedModel:onRecordChange:onConnectOutput:)``,
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:handlers:terminalOutputCeiling:replacing:requestedModel:onRecordChange:onConnectOutput:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
     /// A session already held, or one a new session replaced, was not.
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
-        control: Bool = false, replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
+        control: Bool = false, handlers: ACPClientHandlers? = nil, terminalOutputCeiling: Int? = nil,
+        replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
+        let handlers = handlers ?? .standard(permission: .approveAll)
         let replacing = replacing ?? (requestedModel == nil ? nil : .configOption("model"))
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
@@ -77,6 +88,8 @@ extension ACPXDaemonBackend {
                     throw DaemonError.mcpConfigConflict(recordId)
                 }
                 // acpx replays nothing onto a session its client still holds.
+                await existing.agent.connection.setHandlers(handlers)
+                await existing.agent.setTerminalOutputCeiling(terminalOutputCeiling)
                 return (existing, false)
             }
             replacesExitedAgent = true
@@ -93,7 +106,7 @@ extension ACPXDaemonBackend {
         // the record carries them, so every reconnect advertises what the session was
         // created with rather than the defaults.
         let record = findRecord(recordId)
-        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .headlessController
+        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = record?.acpx
@@ -112,10 +125,11 @@ extension ACPXDaemonBackend {
             // The argv the session recorded (`agent_argv`) launches it as it was launched;
             // without one, its command line is split.
             handle = try await ACPAgent.launch(
-                agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, permission: .approveAll,
+                agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
                 capabilities: capabilities,
                 authCredentials: config.auth, authPolicy: config.authPolicy,
-                inheritStderr: inheritAgentStderr, onRawWire: connectOutput?.observer)
+                inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
+                onRawWire: connectOutput?.observer)
         } catch {
             await showConnectOutput(false)
             throw error

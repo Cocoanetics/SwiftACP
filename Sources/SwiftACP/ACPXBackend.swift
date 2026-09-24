@@ -23,9 +23,16 @@ public protocol ACPXBackend: Sendable {
     func setSessionMcpServers(
         sessionId: String, mcpServers: [McpServerConfig], restart: Bool
     ) async throws -> Bool
-    func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult
-    func setConfigOption(sessionId: String, configId: String, value: String) async throws -> SessionControlResult
-    func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult
+    func setMode(
+        sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult
+    func setConfigOption(
+        sessionId: String, configId: String, value: String, nonInteractivePermissions: String?,
+        terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult
+    func setModel(
+        sessionId: String, modelId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult
     func closeSession(sessionId: String) async throws -> Bool
     func pruneSessions(
         agentCommand: String?, olderThanDays: Int?, includeHistory: Bool, dryRun: Bool
@@ -33,7 +40,7 @@ public protocol ACPXBackend: Sendable {
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, wait: Bool,
         permissionMode: String?, nonInteractivePermissions: String?, streamWire: Bool,
-        permissionPolicy: PermissionRules?, model: String?
+        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, model: String?
     ) async throws -> String
     func cancelSession(sessionId: String) async throws -> Bool
 }

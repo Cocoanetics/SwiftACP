@@ -126,10 +126,22 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail` — what a request
+    ///     needing confirmation does while the agent answers. A control approves reads
+    ///     and asks about the rest, as acpx's direct controls do, and the daemon never
+    ///     has anyone to ask.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
+    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
+    ///     `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
-        try await backend.setMode(sessionId: sessionId, modeId: modeId)
+    func setMode(
+        sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
+        terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        try await backend.setMode(
+            sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
+            terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -139,13 +151,24 @@ public actor ACPXDaemon {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail` — what a request
+    ///     needing confirmation does while the agent answers. A control approves reads
+    ///     and asks about the rest, as acpx's direct controls do, and the daemon never
+    ///     has anyone to ask.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
+    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
+    ///     `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> SessionControlResult {
-        try await backend.setConfigOption(sessionId: sessionId, configId: configId, value: value)
+    func setConfigOption(
+        sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
+        terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        try await backend.setConfigOption(
+            sessionId: sessionId, configId: configId, value: value,
+            nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Set a session's model on the live agent via the legacy `session/set_model`
@@ -155,10 +178,22 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
+    ///   - nonInteractivePermissions: `deny` (the default) or `fail` — what a request
+    ///     needing confirmation does while the agent answers. A control approves reads
+    ///     and asks about the rest, as acpx's direct controls do, and the daemon never
+    ///     has anyone to ask.
+    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
+    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
+    ///     `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
-        try await backend.setModel(sessionId: sessionId, modelId: modelId)
+    func setModel(
+        sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
+        terminalOutputCeiling: Int? = nil
+    ) async throws -> SessionControlResult {
+        try await backend.setModel(
+            sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
+            terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Close a session: terminate its live agent (if held) and mark the record
@@ -224,6 +259,10 @@ public actor ACPXDaemon {
     ///   - permissionPolicy: per-tool rules that approve, deny or escalate this turn's
     ///     permission requests ahead of `permissionMode` — acpx's
     ///     `--permission-policy`. See ``PermissionRules``.
+    ///   - terminalOutputCeiling: the most output, in bytes, any terminal the agent
+    ///     creates from this turn on keeps, whatever it asks for — the caller's
+    ///     `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, which acpx reads in the queue owner its CLI
+    ///     starts. `0` is no cap; omitted, the daemon's own environment decides.
     ///   - model: acpx's `--model` for this turn: put on the session before the prompt,
     ///     through the control it advertises, and pinned as the session's model. The
     ///     turn fails before the prompt if the session cannot take it.
@@ -234,12 +273,14 @@ public actor ACPXDaemon {
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, model: String? = nil
+        streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
+        model: String? = nil
     ) async throws -> String {
         try await backend.runPrompt(
             sessionId: sessionId, text: text, blocks: blocks, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-            streamWire: streamWire ?? false, permissionPolicy: permissionPolicy, model: model)
+            streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
+            terminalOutputCeiling: terminalOutputCeiling, model: model)
     }
 
     /// Cancel an in-flight prompt for a session.

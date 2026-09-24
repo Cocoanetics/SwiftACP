@@ -36,7 +36,7 @@ public enum SessionEngine {
         sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
-        capabilities: ClientCapabilities = .headlessController,
+        capabilities: ClientCapabilities = .acpx,
         inheritStderr: Bool = false,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
