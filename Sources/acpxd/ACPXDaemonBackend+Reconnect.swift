@@ -78,6 +78,7 @@ extension ACPXDaemonBackend {
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
+        guard !stopping else { throw DaemonError.stopping }
         let handlers = handlers ?? .standard(permission: .approveAll)
         let replacing = replacing ?? (requestedModel == nil ? nil : .configOption("model"))
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
@@ -162,6 +163,11 @@ extension ACPXDaemonBackend {
             record.acpx = connected
             record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
+        // An agent started while the daemon began stopping is not held: nothing would end it.
+        guard !stopping else {
+            await handle.close()
+            throw DaemonError.stopping
+        }
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         handle.rawWire.set(nil)

@@ -36,6 +36,9 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Live sessions held open between prompts, keyed by ACP session id.
     var live: [String: Live] = [:]
+    /// Set once the daemon lets its agents go for good (``releaseAll()``): from then on
+    /// no agent is started or held.
+    var stopping = false
 
     /// Serializes prompt turns per session so concurrent CLI/MCP callers can't drive
     /// one agent — or persist one record — at the same time (see ``SessionTurnQueue``).
@@ -347,7 +350,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// into its record, best effort — no pid, and the connection it was closed on unless
     /// it had ended before.
     func releaseAll() async {
-        for recordId in Array(live.keys) {
+        // Before anything is let go: a turn whose agent this closes must not start another.
+        stopping = true
+        while let recordId = live.keys.first {
             guard let entry = live.removeValue(forKey: recordId) else { continue }
             await entry.agent.close()
             // A turn the close ends saves its record first.

@@ -19,6 +19,7 @@ enum DaemonError: LocalizedError {
     case invalidPermissionMode(String)
     case invalidNonInteractivePermissions(String)
     case sessionResumeRequired(String, reason: String)
+    case stopping
 
     var errorDescription: String? {
         switch self {
@@ -40,6 +41,8 @@ enum DaemonError: LocalizedError {
         case .sessionResumeRequired(let id, let reason):
             // npm acpx's SessionResumeRequiredError wording.
             return "Persistent ACP session \(id) could not be resumed: \(reason)"
+        case .stopping:
+            return "acpxd is stopping and starts no more agents"
         }
     }
 }

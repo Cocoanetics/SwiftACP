@@ -146,6 +146,22 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A daemon that has let its agents go starts no more: a turn caught by the stop
+    /// fails rather than leaving an agent behind that nothing would end (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aStoppedDaemonStartsNoAgent() async throws {
+        let command = try Self.exitAgent("")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await daemon.releaseAll()
+            await #expect(throws: DaemonError.self) {
+                try await prompt(daemon, id, text: "hi", client: CallingClient())
+            }
+            #expect(await daemon.live.isEmpty)
+        }
+    }
+
     /// Stopping the daemon lets its agents go as acpx's queue owner does when it stops:
     /// each record keeps no pid and names the connection its agent was closed on (#113
     /// review).
