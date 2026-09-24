@@ -25,6 +25,9 @@ enum SessionRecordSerializer {
         let built = parsed
             .mapping("messages") { $0.mappingItems(MessageOrder.built) }
             .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: record) }
+            .mapping("acpx") { acpx in
+                acpx.mapping("available_model_names") { MessageOrder.modelNames($0, of: acpx["available_models"]) }
+            }
         var document = forDisk(built, storedAcpx: raw["acpx"])
         if let stored = record.parsedByAcpx {
             let read = forDisk(stored, storedAcpx: nil)
@@ -84,24 +87,29 @@ enum SessionRecordSerializer {
     /// and the lists of their content, which only grow. Anywhere else a changed array was
     /// replaced whole, as acpx replaces `config_options`, and keeps the order it has — as
     /// does what the agent sent within a message, a tool's input or output, once it
-    /// changed: acpx replaces that whole too.
+    /// changed: acpx replaces that whole too. `acpx.available_model_names` is always as
+    /// built: acpx builds it anew from the models the agent advertises, in their order,
+    /// whenever it connects (``MessageOrder/modelNames(_:of:)``).
     ///
     /// Only the order changes: whatever is taken from `stored` is equal to what it
     /// stands in for.
     static func inStoredOrder(
-        _ value: WireJSON, stored: WireJSON, topLevel: Bool = false, inMessages: Bool = false
+        _ value: WireJSON, stored: WireJSON, topLevel: Bool = false, inMessages: Bool = false,
+        inAcpx: Bool = false
     ) -> WireJSON {
         switch (value, stored) {
         case (.object(let members), .object(let storedMembers)):
-            if !topLevel, sameValue(value, stored) { return stored }
+            if !topLevel, !inAcpx, sameValue(value, stored) { return stored }
             let storedValues = Dictionary(storedMembers.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
             let changed = members.map { member in
                 let kept = storedValues[member.key].map { storedValue in
                     if inMessages, agentPayloads.contains(member.key) {
                         return sameValue(member.value, storedValue) ? storedValue : member.value
                     }
+                    if inAcpx, member.key == Array("available_model_names".utf16) { return member.value }
                     let inMessages = inMessages || (topLevel && member.key == Array("messages".utf16))
-                    return inStoredOrder(member.value, stored: storedValue, inMessages: inMessages)
+                    let inAcpx = topLevel && member.key == Array("acpx".utf16)
+                    return inStoredOrder(member.value, stored: storedValue, inMessages: inMessages, inAcpx: inAcpx)
                 }
                 return WireJSON.Member(key: member.key, value: kept ?? member.value)
             }
@@ -212,6 +220,18 @@ enum MessageOrder {
     /// (`trimConversationForRuntime`) — `trimmed` of them since the record was read.
     static func aligned(_ stored: WireJSON, trimmed: Int) -> WireJSON {
         .array(Array(items(of: stored).dropFirst(trimmed)))
+    }
+
+    /// `available_model_names` as acpx's `applyAdvertisedModelState` builds it:
+    /// `Object.fromEntries` of the advertised models in their order, `models` — a
+    /// JavaScript object's order. Names of models not listed follow, as they were.
+    static func modelNames(_ names: WireJSON, of models: WireJSON?) -> WireJSON {
+        guard case .object(let members) = names else { return names }
+        let ids = items(of: models).compactMap(\.stringValue) + members.map { String(decoding: $0.key, as: UTF16.self) }
+        let values = Dictionary(members.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
+        return .object(WireJSON.propertyOrder(ids).compactMap { id in
+            values[Array(id.utf16)].map { WireJSON.Member(id, $0) }
+        })
     }
 
     /// `request_token_usage` in the order acpx's object holds its entries: the order it

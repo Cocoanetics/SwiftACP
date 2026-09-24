@@ -209,6 +209,32 @@ struct SessionRecordSerializerTests {
         }
     }
 
+    /// The names of the models the agent advertises are in the order it advertises them,
+    /// as acpx builds the map anew — a JavaScript object, index-like ids first — not in
+    /// the order the record was read with, even where the names are the same
+    /// (#117 review).
+    @Test func modelNamesFollowTheAdvertisedOrder() async throws {
+        let acpx = #"{"available_models":["z","a"],"available_model_names":{"z":"Z","a":"A"}}"#
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            for (models, expected) in [
+                ([("a", "A"), ("z", "Z")], #"{"a":"A","z":"Z"}"#),
+                ([("m", "M"), ("b", "B")], #"{"m":"M","b":"B"}"#),
+                ([("b", "B"), ("2", "Two"), ("1", "One")], #"{"1":"One","2":"Two","b":"B"}"#)
+            ] {
+                try Self.storeRecord(messages: [], acpx: acpx)
+                var record = try #require(SessionStore.loadRecord("r"))
+                var state = try #require(record.acpx)
+                ModelSupport.applyAdvertisedModelState(
+                    ModelSupport.ModelState(configId: nil, currentModelId: "a", availableModels: models), to: &state)
+                record.acpx = state
+                try SessionStore.writeRecord(record)
+                let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+                #expect(written["acpx"]?["available_model_names"]?.stringified == expected)
+            }
+        }
+    }
+
     /// A record `r` with these messages, as SwiftACP would have it on disk.
     private static func storeRecord(messages: [String], acpx: String? = nil, usage: String = "{}") throws {
         let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
