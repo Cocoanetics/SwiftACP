@@ -47,19 +47,62 @@ public struct WriteTextFileResponse: Codable, Sendable {
 
 // MARK: - terminal/*
 
-// Modelled for completeness. This client advertises `terminal: false` by
-// default (a headless controller lets the agent run its own commands), so these
-// are only used if terminal support is explicitly enabled.
+// The agent runs a command through the client and reads its output back, instead of
+// running it itself. https://agentclientprotocol.com/protocol/v1/terminals
+//
+// Served by the ``ACPTerminalHandler`` a connection is given (``TerminalManager`` on
+// macOS and Linux) when the client advertises `terminal: true`, as acpx does unless
+// `--no-terminal` is given.
 
 /// The agent asks the client to run a command in a new terminal (`terminal/create`).
 public struct CreateTerminalRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var command: String
+    /// The command's arguments. Absent, and the command may be a shell command line:
+    /// acpx runs one that is not found as a program through the shell.
     public var args: [String]?
     public var cwd: String?
     public var env: [EnvVariable]?
     /// Maximum output bytes the client retains; earlier output is dropped beyond this.
+    /// A fractional limit is rounded, as acpx's `Math.round` rounds it.
     public var outputByteLimit: Int?
+
+    public init(
+        sessionId: SessionId, command: String, args: [String]? = nil, cwd: String? = nil,
+        env: [EnvVariable]? = nil, outputByteLimit: Int? = nil
+    ) {
+        self.sessionId = sessionId
+        self.command = command
+        self.args = args
+        self.cwd = cwd
+        self.env = env
+        self.outputByteLimit = outputByteLimit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, command, args, cwd, env, outputByteLimit
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(SessionId.self, forKey: .sessionId)
+        command = try container.decode(String.self, forKey: .command)
+        args = try container.decodeIfPresent([String].self, forKey: .args)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        env = try container.decodeIfPresent([EnvVariable].self, forKey: .env)
+        // The schema's `number`: any one is taken, rounded half up like `Math.round`.
+        outputByteLimit = try container.decodeIfPresent(Double.self, forKey: .outputByteLimit)
+            .map { Self.javaScriptRounded($0) }
+    }
+
+    /// `Math.round`, saturated into `Int`'s range.
+    static func javaScriptRounded(_ value: Double) -> Int {
+        guard !value.isNaN else { return 0 }
+        let rounded = (value + 0.5).rounded(.down)
+        if rounded >= Double(Int.max) { return Int.max }
+        if rounded <= Double(Int.min) { return Int.min }
+        return Int(rounded)
+    }
 }
 
 /// The id of the new terminal, used by all the other `terminal/*` methods.
@@ -68,13 +111,24 @@ public struct CreateTerminalResponse: Codable, Sendable {
     public init(terminalId: String) { self.terminalId = terminalId }
 }
 
-/// How a terminal command ended: its exit code and/or the signal that killed it.
-public struct TerminalExitStatus: Codable, Sendable {
+/// How a terminal command ended: its exit code, or the signal that killed it.
+///
+/// Both members are always sent, `null` when they do not apply, as acpx sends them.
+public struct TerminalExitStatus: Codable, Sendable, Hashable {
     public var exitCode: Int?
+    /// The signal's name, as Node reports it: `SIGTERM`, `SIGKILL`, …
     public var signal: String?
     public init(exitCode: Int? = nil, signal: String? = nil) {
         self.exitCode = exitCode
         self.signal = signal
+    }
+
+    private enum CodingKeys: String, CodingKey { case exitCode, signal }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(exitCode, forKey: .exitCode)
+        try container.encode(signal, forKey: .signal)
     }
 }
 
@@ -82,6 +136,10 @@ public struct TerminalExitStatus: Codable, Sendable {
 public struct TerminalOutputRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var terminalId: String
+    public init(sessionId: SessionId, terminalId: String) {
+        self.sessionId = sessionId
+        self.terminalId = terminalId
+    }
 }
 
 /// Output captured so far, whether the byte limit truncated it, and — once the
@@ -101,15 +159,32 @@ public struct TerminalOutputResponse: Codable, Sendable {
 public struct WaitForTerminalExitRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var terminalId: String
+    public init(sessionId: SessionId, terminalId: String) {
+        self.sessionId = sessionId
+        self.terminalId = terminalId
+    }
 }
 
-/// The exit code and/or terminating signal of the finished command.
-public struct WaitForTerminalExitResponse: Codable, Sendable {
+/// The exit code or terminating signal of the finished command. Both members are
+/// always sent, `null` when they do not apply, as acpx sends them.
+public struct WaitForTerminalExitResponse: Codable, Sendable, Hashable {
     public var exitCode: Int?
     public var signal: String?
     public init(exitCode: Int? = nil, signal: String? = nil) {
         self.exitCode = exitCode
         self.signal = signal
+    }
+
+    public init(_ status: TerminalExitStatus) {
+        self.init(exitCode: status.exitCode, signal: status.signal)
+    }
+
+    private enum CodingKeys: String, CodingKey { case exitCode, signal }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(exitCode, forKey: .exitCode)
+        try container.encode(signal, forKey: .signal)
     }
 }
 
@@ -118,6 +193,15 @@ public struct WaitForTerminalExitResponse: Codable, Sendable {
 public struct KillTerminalRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var terminalId: String
+    public init(sessionId: SessionId, terminalId: String) {
+        self.sessionId = sessionId
+        self.terminalId = terminalId
+    }
+}
+
+/// Empty acknowledgement that the command was killed.
+public struct KillTerminalResponse: Codable, Sendable {
+    public init() {}
 }
 
 /// The agent frees a terminal and its buffers, killing the command if it is
@@ -125,4 +209,13 @@ public struct KillTerminalRequest: Codable, Sendable {
 public struct ReleaseTerminalRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var terminalId: String
+    public init(sessionId: SessionId, terminalId: String) {
+        self.sessionId = sessionId
+        self.terminalId = terminalId
+    }
+}
+
+/// Empty acknowledgement that the terminal was released.
+public struct ReleaseTerminalResponse: Codable, Sendable {
+    public init() {}
 }

@@ -49,6 +49,7 @@ enum ControlCommand {
         let modeId = try parseNonEmptyValue("Mode", context.positionals[0])
         let record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
         let sessionId = record.acpSessionId
+        try PromptCommand.requireValidTerminalOutputCeiling()
 
         // Route through acpxd — the single manager that holds the live agent and owns
         // its record — rather than launching a throwaway agent and writing the record
@@ -102,6 +103,7 @@ enum ControlCommand {
         // aliases applied + validated against the session's advertised options.
         let operation = resolveSetOperation(key: key, agentCommand: agent.agentCommand, record: record)
         let sessionId = record.acpSessionId
+        try PromptCommand.requireValidTerminalOutputCeiling()
 
         // Route through acpxd — the single manager that holds the live agent and owns
         // its record — rather than launching a throwaway agent and writing the record

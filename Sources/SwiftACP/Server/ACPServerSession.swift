@@ -77,6 +77,53 @@ public final class ACPServerSession: @unchecked Sendable {
             method: "fs/write_text_file", params: try JSONValue(encoding: request))
     }
 
+    // MARK: Terminals (agent → client → agent)
+
+    /// Run a command through the client (`terminal/create`; honours the client's
+    /// `terminal` capability). Returns the id the other terminal calls take.
+    public func createTerminal(
+        command: String, args: [String]? = nil, cwd: String? = nil, env: [EnvVariable]? = nil,
+        outputByteLimit: Int? = nil
+    ) async throws -> String {
+        let request = CreateTerminalRequest(
+            sessionId: id, command: command, args: args, cwd: cwd, env: env, outputByteLimit: outputByteLimit)
+        return try await call("terminal/create", request, CreateTerminalResponse.self).terminalId
+    }
+
+    /// The output a terminal has kept so far, and its exit status once it has one.
+    public func terminalOutput(terminalId: String) async throws -> TerminalOutputResponse {
+        try await call(
+            "terminal/output", TerminalOutputRequest(sessionId: id, terminalId: terminalId),
+            TerminalOutputResponse.self)
+    }
+
+    /// Wait for a terminal's command to exit.
+    public func waitForTerminalExit(terminalId: String) async throws -> WaitForTerminalExitResponse {
+        try await call(
+            "terminal/wait_for_exit", WaitForTerminalExitRequest(sessionId: id, terminalId: terminalId),
+            WaitForTerminalExitResponse.self)
+    }
+
+    /// Kill a terminal's command, keeping its output readable.
+    public func killTerminal(terminalId: String) async throws {
+        _ = try await call(
+            "terminal/kill", KillTerminalRequest(sessionId: id, terminalId: terminalId), KillTerminalResponse.self)
+    }
+
+    /// Kill a terminal's command if it still runs, and forget the terminal.
+    public func releaseTerminal(terminalId: String) async throws {
+        _ = try await call(
+            "terminal/release", ReleaseTerminalRequest(sessionId: id, terminalId: terminalId),
+            ReleaseTerminalResponse.self)
+    }
+
+    private func call<Request: Encodable, Response: Decodable>(
+        _ method: String, _ request: Request, _ response: Response.Type
+    ) async throws -> Response {
+        let result = try await connection.sendRequest(method: method, params: try JSONValue(encoding: request))
+        return try result.decoded(Response.self)
+    }
+
     // MARK: Cancellation
 
     /// `true` once the client sent `session/cancel` for the in-flight turn. The

@@ -9,9 +9,22 @@ extension Implementation {
 
 extension ClientCapabilities {
     /// A headless controller: real file access, but the agent runs its own
-    /// terminals (we don't advertise client-side terminals).
+    /// terminals (we don't advertise client-side terminals). See ``acpx`` for what the
+    /// acpx CLI advertises.
     public static let headlessController = ClientCapabilities(
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: false)
+
+    /// What acpx advertises: real file access, and client-side terminals — where
+    /// ``TerminalManager`` can run them (macOS and Linux). ``ACPAgent/launch(agent:argv:cwd:handlers:clientInfo:capabilities:environment:authCredentials:authPolicy:inheritStderr:overrides:onClientRequest:onRawWire:)``
+    /// gives a connection advertising terminals a ``TerminalManager`` to run them on.
+    public static let acpx = ClientCapabilities(
+        fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: terminalsSupported)
+
+    #if os(macOS) || os(Linux)
+    static let terminalsSupported = true
+    #else
+    static let terminalsSupported = false
+    #endif
 }
 
 // `ACPAgent`/`ACPSession` spawn an agent adapter and speak to it over the
@@ -103,11 +116,15 @@ public final class ACPAgent: Sendable {
             for: spec, agentCommand: failureName(agent: name, argv: argv, overrides: overrides)) {
             throw failure
         }
+        // acpx builds its terminal manager with its client, before the agent starts —
+        // so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the launch outright.
+        let terminals = try terminalManager(for: capabilities, cwd: cwd)
         // Tapped from the start, so an observer given here sees the handshake too.
         let rawWire = RawWireTap(onRawWire)
         let transport = StdioTransport(
             endpoint: .childProcess(spec), framing: TappedFraming(LineFraming(), tap: rawWire))
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
+        if let terminals { await connection.setTerminalHandler(terminals) }
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.
         if let onClientRequest { await connection.setClientRequestObserver(onClientRequest) }
@@ -124,6 +141,25 @@ public final class ACPAgent: Sendable {
             transport.close()
             throw error
         }
+    }
+
+    /// The terminal manager a connection advertising `capabilities` runs the agent's
+    /// commands on: one per connection, capped by acpx's host ceiling, running commands
+    /// in `cwd` unless a session or the request says otherwise.
+    ///
+    /// The ceiling is read whether or not terminals are advertised: acpx builds its
+    /// terminal manager with every client, so `--no-terminal` does not excuse a bad one.
+    private static func terminalManager(
+        for capabilities: ClientCapabilities, cwd: String
+    ) throws -> (any ACPTerminalHandler)? {
+        let ceiling = try TerminalOutputLimit.ceiling()
+        #if os(macOS) || os(Linux)
+        guard capabilities.terminal else { return nil }
+        return TerminalManager(cwd: cwd, outputCeiling: ceiling)
+        #else
+        _ = ceiling
+        return nil
+        #endif
     }
 
     /// The command a launch failure names — acpx's `options.agentCommand`. Given an
@@ -280,8 +316,11 @@ public final class ACPAgent: Sendable {
             suppressReplayUpdates: suppressReplayUpdates)
     }
 
-    /// Gracefully shut down the connection and terminate the subprocess.
+    /// Gracefully shut down the connection and terminate the subprocess — after the
+    /// commands the agent still runs through the client, as acpx retires its
+    /// terminals before the agent.
     public func close() async {
+        await connection.shutDownTerminals()
         await connection.close()
         transport.close()
     }

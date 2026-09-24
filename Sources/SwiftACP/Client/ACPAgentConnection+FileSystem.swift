@@ -21,7 +21,7 @@ extension ACPAgentConnection {
         _ handler: (@Sendable (Request) async throws -> Response)?,
         authorize: (@Sendable (Request) async throws -> Void)? = nil
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
-        guard let handler else { return .failure(.methodNotFound(method)) }
+        guard let handler else { return .failure(Self.methodNotFound(method)) }
         var named: String?
         do {
             var request: Request = try decode(params)

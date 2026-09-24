@@ -10,7 +10,7 @@ import JSONRPCPeer
 /// higher-level ``ACPAgent``/``ACPSession`` wrappers instead.
 public actor ACPAgentConnection {
     private let rpc: JSONRPCPeer
-    private var handlers: ACPClientHandlers
+    var handlers: ACPClientHandlers
     var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
@@ -31,6 +31,11 @@ public actor ACPAgentConnection {
     /// working directory by default; an embedder that mediates filesystem access itself
     /// can set ``FileSystemAccessScope/unrestricted``.
     public private(set) var fileSystemAccess: FileSystemAccessScope = .sessionRoot
+
+    /// Runs the agent's `terminal/*` requests — see ``setTerminalHandler(_:)``.
+    var terminalHandler: (any ACPTerminalHandler)?
+    /// Set once ``shutDownTerminals()`` has run.
+    var terminalsShutDown = false
 
     /// Widen or restore how far `fs/*` may reach. Containment is the default; an
     /// embedder that mediates filesystem access itself can opt out.
@@ -115,6 +120,10 @@ public actor ACPAgentConnection {
 
     private func markClosed() {
         isClosed = true
+        // acpx retires an agent's terminals whenever its connection ends: a disconnected
+        // agent can no longer release them. Not awaited, so the end of the connection is
+        // not held up by commands being killed; `ACPAgent.close()` awaits it itself.
+        if terminalHandler != nil { Task { await shutDownTerminals() } }
     }
 
     /// Whether `error` is this layer reporting the connection ended — a request sent
@@ -177,6 +186,10 @@ public actor ACPAgentConnection {
     }
 
     public func close() {
+        // The agent's commands go too, as acpx retires its terminals when its client
+        // closes. The task keeps the connection until they have; `ACPAgent.close()`
+        // awaits the same shutdown itself.
+        if terminalHandler != nil { Task { await shutDownTerminals() } }
         isClosed = true
         for sink in updateSinks.values { sink.finish() }
         for sink in eventSinks.values { sink.finish() }
@@ -374,20 +387,22 @@ public actor ACPAgentConnection {
         switch method {
         case "fs/read_text_file":
             guard advertisedCapabilities?.fs.readTextFile != false else {
-                return .failure(.methodNotFound(method))
+                return .failure(Self.methodNotFound(method))
             }
             return await routeFileSystem(
                 method, params, access: .read, handlers.readTextFile, authorize: handlers.authorizeRead)
         case "fs/write_text_file":
             guard advertisedCapabilities?.fs.writeTextFile != false else {
-                return .failure(.methodNotFound(method))
+                return .failure(Self.methodNotFound(method))
             }
             return await routeFileSystem(
                 method, params, access: .write, handlers.writeTextFile,
                 authorize: handlers.authorizeWrite)
+        case _ where Self.terminalMethods.contains(method):
+            return await routeTerminal(method, params)
         case "session/request_permission":
             guard let handler = handlers.requestPermission else {
-                return .failure(.methodNotFound(method))
+                return .failure(Self.methodNotFound(method))
             }
             do {
                 let request: RequestPermissionRequest = try decode(params)
@@ -399,7 +414,7 @@ public actor ACPAgentConnection {
                 return .failure(.internalError(error.localizedDescription))
             }
         default:
-            return .failure(.methodNotFound(method))
+            return .failure(Self.methodNotFound(method))
         }
     }
 
@@ -421,11 +436,11 @@ public actor ACPAgentConnection {
         }
     }
 
+    /// The request's params as `T`, or the ACP SDK's `Invalid params` when they are
+    /// missing or do not fit.
     func decode<T: Decodable>(_ params: JSONValue?) throws -> T {
-        guard let params else {
-            throw JSONRPCErrorBody.invalidParams("missing params")
-        }
-        return try params.decoded(T.self)
+        guard let params, let decoded = try? params.decoded(T.self) else { throw Self.invalidParams }
+        return decoded
     }
 }
 

@@ -305,7 +305,7 @@ extension GlobalFlags {
     /// then refuses those methods if an agent calls them anyway, which is what acpx
     /// means by keeping registered methods aligned with the advertised capabilities.
     var clientCapabilities: ClientCapabilities {
-        var capabilities = ClientCapabilities.headlessController
+        var capabilities = ClientCapabilities.acpx
         if fs == false {
             capabilities.fs = FileSystemCapability(readTextFile: false, writeTextFile: false)
         }

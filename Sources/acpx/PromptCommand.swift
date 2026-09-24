@@ -31,6 +31,7 @@ enum PromptCommand {
         let record = try SessionLifecycle.applyExplicitMcpServers(
             to: try findRoutedSessionOrThrow(agent: agent, name: name), config: context.config)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
+        try requireValidTerminalOutputCeiling()
 
         // JSON mode prints the turn's exchange as it crosses the wire, as acpx does.
         var options = renderOptions(flags)
@@ -71,6 +72,13 @@ enum PromptCommand {
     static func turnFailure(_ error: Error, renderer: OutputRenderer) -> Error {
         guard renderer.streamsWireJSON, renderer.showedFailure(error.localizedDescription) else { return error }
         return FailureAlreadyShown(underlying: error)
+    }
+
+    /// acpx builds a client for every turn and control — its terminal manager with it —
+    /// so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the command before any agent is
+    /// reached. The daemon holds the live agent here, so the CLI checks it first.
+    static func requireValidTerminalOutputCeiling() throws {
+        _ = try TerminalOutputLimit.ceiling()
     }
 
     // MARK: - Routing + banner

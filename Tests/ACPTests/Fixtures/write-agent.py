@@ -7,7 +7,10 @@ from the daemon's aggregate reply, without an MCP session to catch log events.
 
 With `MOCK_READ` set it reads `<cwd>/notes.txt` instead, and answers `ok:<content>`
 or the error. With `MOCK_TOOL_PERMISSION` set it asks permission for an edit tool,
-and answers `outcome:<selected option, or cancelled>`.
+and answers `outcome:<selected option, or cancelled>`. With `MOCK_TERMINAL` set to a
+JSON array — a command and its arguments — it runs that through the client's
+terminal, waits for it, reads its output, releases it, and answers
+`ran:<exit code>:<output>`, or the first error.
 """
 import json
 import os
@@ -15,6 +18,10 @@ import sys
 
 cwd = None
 pending = None
+terminal = None
+exit_status = None
+output = None
+TERMINAL = os.environ.get("MOCK_TERMINAL")
 
 
 def send(obj):
@@ -46,7 +53,11 @@ for line in sys.stdin:
               "result": {"sessionId": message["params"].get("sessionId", "write-session")}})
     elif method == "session/prompt":
         pending = (req_id, message["params"]["sessionId"])
-        if os.environ.get("MOCK_TOOL_PERMISSION"):
+        if TERMINAL:
+            argv = json.loads(TERMINAL)
+            send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+                "sessionId": pending[1], "command": argv[0], "args": argv[1:]}})
+        elif os.environ.get("MOCK_TOOL_PERMISSION"):
             send({"jsonrpc": "2.0", "id": "write", "method": "session/request_permission", "params": {
                 "sessionId": pending[1],
                 "toolCall": {"toolCallId": "t1", "title": "Edit notes.txt", "kind": "edit"},
@@ -58,6 +69,27 @@ for line in sys.stdin:
         else:
             send({"jsonrpc": "2.0", "id": "write", "method": "fs/write_text_file", "params": {
                 "sessionId": pending[1], "path": os.path.join(cwd, "written.txt"), "content": "hi"}})
+    elif method is None and str(req_id).startswith("term-"):
+        error = message.get("error")
+        # Each answer sends the next request: create, wait, output, release.
+        following = {"term-create": ("term-wait", "terminal/wait_for_exit"),
+                     "term-wait": ("term-output", "terminal/output"),
+                     "term-output": ("term-release", "terminal/release")}.get(req_id)
+        if req_id == "term-create" and not error:
+            terminal = message["result"]["terminalId"]
+        elif req_id == "term-wait" and not error:
+            exit_status = message["result"]
+        elif req_id == "term-output" and not error:
+            output = message["result"]["output"]
+        if error or following is None:
+            if error:
+                say(pending[1], "error:" + ((error.get("data") or {}).get("details") or error.get("message")))
+            else:
+                say(pending[1], "ran:%s:%s" % (exit_status["exitCode"], output))
+            send({"jsonrpc": "2.0", "id": pending[0], "result": {"stopReason": "end_turn"}})
+        else:
+            send({"jsonrpc": "2.0", "id": following[0], "method": following[1],
+                  "params": {"sessionId": pending[1], "terminalId": terminal}})
     elif req_id == "write" and method is None:
         error = message.get("error")
         if error:

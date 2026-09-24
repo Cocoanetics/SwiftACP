@@ -26,4 +26,15 @@ extension ACPAgentConnection {
     func publish(_ event: ConnectionEvent) {
         for sink in eventSinks.values { sink.yield(event) }
     }
+
+    /// The ACP SDK's `RequestError.methodNotFound(method)`: how acpx refuses a method it
+    /// never registered — one it does not serve, or one whose capability is off.
+    static func methodNotFound(_ method: String) -> JSONRPCErrorBody {
+        JSONRPCErrorBody(
+            code: -32601, message: "\"Method not found\": \(method)", data: .object(["method": .string(method)]))
+    }
+
+    /// The ACP SDK's `RequestError.invalidParams()` for params its schema rejects. acpx
+    /// also sends the schema's issues in `data`; those are not reproduced.
+    static let invalidParams = JSONRPCErrorBody(code: -32602, message: "Invalid params")
 }

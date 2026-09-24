@@ -83,7 +83,7 @@ extension ACPXDaemonBackend {
         // the record carries them, so every reconnect advertises what the session was
         // created with rather than the defaults.
         let record = findRecord(recordId)
-        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .headlessController
+        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .acpx
         // What to put back is read now, before a replacement session's advertised state
         // lands on the record — acpx takes the desired mode, model and options at the
         // start of `connectAndLoadSession` for the same reason.

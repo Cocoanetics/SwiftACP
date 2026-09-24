@@ -35,7 +35,7 @@ public enum SessionEngine {
         sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
-        capabilities: ClientCapabilities = .headlessController,
+        capabilities: ClientCapabilities = .acpx,
         inheritStderr: Bool = false
     ) async throws -> SessionRecord {
         // Validate the session's own servers before paying for a spawn.
