@@ -319,6 +319,7 @@ public enum PromptBlockError: LocalizedError, Equatable {
         }
     }
 }
+
 /// The turn's terminal event, streamed as a final MCP log notification.
 ///
 /// The `runPrompt` tool result is the agent's aggregate response *text* (so an MCP

@@ -149,10 +149,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// record, then stamp `last_used_at` and persist it. Serializes the control op
     /// against prompts and other control ops; reloading *after* acquiring means it
     /// builds on (and persists on top of) whatever turn it queued behind, rather than
-    /// clobbering it.
+    /// clobbering it. Also says whether connecting had to take the session back
+    /// (acpx's `resumed`).
     private func withSessionTurn<T: Sendable>(
         _ sessionId: String, _ body: (Live, inout SessionRecord) async throws -> T
-    ) async throws -> T {
+    ) async throws -> (value: T, resumed: Bool) {
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
@@ -164,7 +165,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let current = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        let entry = try await ensure(
+        let (entry, resumed) = try await connect(
             recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
             mcpServers: current.acpx?.mcpServers, control: true)
         // Read after connecting: a reconnect may have moved the record to a new session.
@@ -178,7 +179,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         } catch {
             log.warning("session record write failed after control op: \(error)")
         }
-        return result
+        return (result, resumed)
     }
 
     /// Set a session's mode on the live agent (reconnecting if needed) and persist
@@ -187,15 +188,15 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modeId: the agent mode to switch to (e.g. `auto`, `read-only`).
-    func setMode(sessionId: String, modeId: String) async throws -> Bool {
-        try await withSessionTurn(sessionId) { entry, record in
+    func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
+        let (_, resumed) = try await withSessionTurn(sessionId) { entry, record in
             try await entry.session.setMode(modeId)
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.desiredModeId = modeId
             acpx.currentModeId = modeId
             record.acpx = acpx
         }
-        return true
+        return SessionControlResult(resumed: resumed)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -206,10 +207,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
     /// - Returns: the agent's advertised config options after the change (the data
-    ///   the CLI echoes; may be empty if the agent reports none).
+    ///   the CLI echoes; may be empty if the agent reports none), and whether the
+    ///   session had to be taken back first.
     func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> [JSONValue] {
-        try await withSessionTurn(sessionId) { entry, record in
+        -> SessionControlResult {
+        let (options, resumed) = try await withSessionTurn(sessionId) { entry, record in
             let response = try await entry.agent.connection.setConfigOption(
                 SetSessionConfigOptionRequest(
                     sessionId: entry.session.id, configId: configId, value: value))
@@ -220,6 +222,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             record.acpx = acpx
             return response.configOptions ?? []
         }
+        return SessionControlResult(resumed: resumed, configOptions: options)
     }
 
     /// Set a session's model on the live agent via the legacy `session/set_model`
@@ -229,15 +232,15 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
-    func setModel(sessionId: String, modelId: String) async throws -> Bool {
-        try await withSessionTurn(sessionId) { entry, record in
+    func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
+        let (_, resumed) = try await withSessionTurn(sessionId) { entry, record in
             try await entry.agent.connection.setModel(
                 SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.currentModelId = modelId
             record.acpx = acpx
         }
-        return true
+        return SessionControlResult(resumed: resumed)
     }
 
     /// Close a session: terminate its live agent (if held) and mark the record

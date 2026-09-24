@@ -39,6 +39,20 @@ extension ACPXDaemonBackend {
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, onReplacement: ReplacementHandler? = nil
     ) async throws -> Live {
+        try await connect(
+            recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
+            control: control, onReplacement: onReplacement
+        ).entry
+    }
+
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:onReplacement:)``, also
+    /// saying whether the session had to be taken back — acpx's `resumed`: the agent
+    /// was launched and `session/load` or `session/resume` got the session back. A
+    /// session already held, or one a new session replaced, was not.
+    func connect(
+        recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
+        control: Bool = false, onReplacement: ReplacementHandler? = nil
+    ) async throws -> (entry: Live, resumed: Bool) {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         var replacesExitedAgent = false
         while let existing = live[recordId] {
@@ -46,7 +60,7 @@ extension ACPXDaemonBackend {
                 guard existing.sessionSpecs == sessionSpecs else {
                     throw DaemonError.mcpConfigConflict(recordId)
                 }
-                return existing
+                return (existing, false)
             }
             replacesExitedAgent = true
             // Re-checked after the suspension above: only drop the entry that died.
@@ -77,11 +91,13 @@ extension ACPXDaemonBackend {
             authCredentials: config.auth, authPolicy: config.authPolicy,
             inheritStderr: inheritAgentStderr)
         let session: ACPSession
+        let resumed: Bool
         do {
             let reconnected = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
                 specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent)
             session = reconnected.session
+            resumed = reconnected.replacement == nil
             // Settled before the replay below: while it runs, a turn could save the
             // record it holds, and with the old session that save would undo this.
             if let replacement = reconnected.replacement {
@@ -99,7 +115,7 @@ extension ACPXDaemonBackend {
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         await restoreSelections(selections, on: entry)
-        return entry
+        return (entry, resumed)
     }
 
     /// Takes a reconnect's replacement session — its `session/new` response — onto the
