@@ -46,7 +46,16 @@ public actor TurnPersister {
     /// still replaces the old state.
     public func adoptReplacement(_ response: NewSessionResponse) {
         record.moveToReplacement(
-            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models)
+            sessionId: response.sessionId, configOptions: response.configOptions, models: response.models,
+            agentSessionId: AgentSessionId.extract(from: response.meta))
+        dirty = true
+        flush()
+    }
+
+    /// Take the agent's own session id, as a reconnect's `session/load` or
+    /// `session/resume` named it, onto the record the turn saves.
+    public func adoptAgentSessionId(_ id: String) {
+        record.reconcileAgentSessionId(id)
         dirty = true
         flush()
     }

@@ -156,6 +156,7 @@ extension ACPXDaemonBackend {
         let entry = try await ensure(
             recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
             onReplacement: { await persister.adoptReplacement($0) },
+            onAgentSessionId: { await persister.adoptAgentSessionId($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId))
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id

@@ -127,8 +127,14 @@ extension SessionRecord {
     /// the model state it advertised replaces the old (see
     /// ``ModelSupport/applyFreshSessionModelState(configOptions:models:to:)``).
     /// `acpxRecordId` stays.
-    public mutating func moveToReplacement(sessionId: String, configOptions: [JSONValue]?, models: JSONValue?) {
+    ///
+    /// The new session's own id, when its `_meta` names one, is reconciled into
+    /// `agent_session_id` (``reconcileAgentSessionId(_:)``).
+    public mutating func moveToReplacement(
+        sessionId: String, configOptions: [JSONValue]?, models: JSONValue?, agentSessionId: String? = nil
+    ) {
         acpSessionId = sessionId
+        reconcileAgentSessionId(agentSessionId)
         var state = acpx ?? SessionAcpxState()
         ModelSupport.applyFreshSessionModelState(configOptions: configOptions, models: models, to: &state)
         acpx = state
