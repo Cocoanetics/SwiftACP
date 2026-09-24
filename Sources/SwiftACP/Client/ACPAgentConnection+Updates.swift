@@ -32,8 +32,15 @@ extension ACPAgentConnection {
     /// Loads of one session take turns, each waiting for the one before to finish its
     /// drain. Which load a replayed update belongs to can only be told by when it
     /// arrives, so an ordinary load overlapping one that suppresses would lose its own.
+    ///
+    /// - Parameters:
+    ///   - replayIdleMilliseconds: how long the replay has to have been quiet, as acpx's
+    ///     `replayIdleMs` (80).
+    ///   - replayDrainTimeoutMilliseconds: how long to wait for that at most, as acpx's
+    ///     `replayDrainTimeoutMs` (5000).
     public func loadSession(
-        _ request: LoadSessionRequest, suppressReplayUpdates: Bool, rawWire: RawWireTap? = nil
+        _ request: LoadSessionRequest, suppressReplayUpdates: Bool, rawWire: RawWireTap? = nil,
+        replayIdleMilliseconds: Int = 80, replayDrainTimeoutMilliseconds: Int = 5000
     ) async throws -> LoadSessionResponse {
         let id = request.sessionId
         await beginLoading(id)
@@ -49,7 +56,9 @@ extension ACPAgentConnection {
             }
         }
         let response = try await loadSession(request)
-        try await waitForSessionUpdateDrain(sessionId: id)
+        try await waitForSessionUpdateDrain(
+            sessionId: id, idleMilliseconds: replayIdleMilliseconds,
+            timeoutMilliseconds: replayDrainTimeoutMilliseconds)
         return response
     }
 

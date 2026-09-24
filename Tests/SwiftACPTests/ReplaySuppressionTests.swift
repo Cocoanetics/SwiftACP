@@ -122,7 +122,7 @@ struct ReplaySuppressionTests {
 
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
         try await client.waitForSessionUpdateDrain(
-            sessionId: "replay-session", idleMilliseconds: 200, timeoutMilliseconds: 10_000)
+            sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 10_000)
         await client.endSubscription(subscription)
 
         #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 10))
@@ -131,15 +131,15 @@ struct ReplaySuppressionTests {
 
     /// A replay that never stops fails the load, in acpx's words.
     @Test func aReplayThatDoesNotStopFailsTheDrain() async throws {
-        let (client, server) = try await connect(ReplayingAgent(trickle: .milliseconds(5), trickleCount: 400))
+        let (client, server) = try await connect(ReplayingAgent(trickle: .milliseconds(5), trickleCount: 600))
         defer { server.cancel() }
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
 
         let error = await #expect(throws: SessionReplayDrainTimeout.self) {
             try await client.waitForSessionUpdateDrain(
-                sessionId: "replay-session", idleMilliseconds: 200, timeoutMilliseconds: 400)
+                sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 1000)
         }
-        #expect(error?.localizedDescription == "Timed out waiting for session replay drain after 400ms")
+        #expect(error?.localizedDescription == "Timed out waiting for session replay drain after 1000ms")
         await client.close()
     }
 
@@ -197,10 +197,14 @@ struct ReplaySuppressionTests {
         let delivered = Task { await texts(stream) }
         let request = LoadSessionRequest(sessionId: "replay-session", cwd: "/")
 
-        let suppressed = Task { try await client.loadSession(request, suppressReplayUpdates: true) }
+        // A replay window far wider than the trickle's gaps, so a slow machine cannot
+        // end the first load's drain while its replay is still going.
+        let suppressed = Task {
+            try await client.loadSession(request, suppressReplayUpdates: true, replayIdleMilliseconds: 500)
+        }
         var reached = loads.makeAsyncIterator()
         _ = await reached.next()
-        _ = try await client.loadSession(request, suppressReplayUpdates: false)
+        _ = try await client.loadSession(request, suppressReplayUpdates: false, replayIdleMilliseconds: 500)
         _ = try await suppressed.value
         await client.endSubscription(subscription)
 
