@@ -35,13 +35,22 @@ public enum SessionStore {
     /// Decode the record at `url`, optionally requiring it to be the record `recordId`
     /// names: a file claiming a different id is ignored, so a copy cannot answer for the
     /// record it was copied from (acpx's `readSessionRecord`).
+    ///
+    /// The record is what acpx's parser makes of the file (``SessionRecordParser``): a file
+    /// it rejects is no record here either, and one it reads leniently is read the same
+    /// way.
     public static func readRecord(at url: URL, expecting recordId: String? = nil)
         -> SessionRecord? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        guard let record = try? recordDiskDecoder.decode(SessionRecord.self, from: data),
+        guard let data = try? Data(contentsOf: url), let stored = WireJSON(parsing: data),
+            let parsed = SessionRecordParser.parse(stored),
+            var record = try? recordDiskDecoder.decode(
+                SessionRecord.self,
+                from: Data(SessionRecordParser.normalizedForModel(stored, parsed: parsed)
+                    .replacingLoneSurrogates().stringified.utf8)),
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
         if let recordId, record.acpxRecordId != recordId { return nil }
+        record.parsedByAcpx = parsed
         return record
     }
 

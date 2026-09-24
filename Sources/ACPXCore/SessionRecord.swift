@@ -73,6 +73,11 @@ public struct SessionRecord: Codable, Sendable {
     public var requestTokenUsage: [String: SessionTokenUsage]?
     public var acpx: SessionAcpxState?
     public var importedFrom: ImportedFrom?
+    /// The record as acpx's parser made it of the file it was read from
+    /// (``SessionRecordParser``) — what acpx prints for it in `--format json`. Set by
+    /// ``SessionStore/readRecord(at:expecting:)``; `nil` for a record built in memory,
+    /// and not updated by changes made since. Never written.
+    public var parsedByAcpx: WireJSON?
 
     public struct ImportedFrom: Codable, Sendable {
         public var recordId: String

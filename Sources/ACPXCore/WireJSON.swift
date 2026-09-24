@@ -253,6 +253,13 @@ extension WireJSON {
         return .object(members)
     }
 
+    /// This object without `key`'s member. Unchanged when absent.
+    public func removing(_ key: String) -> WireJSON {
+        guard case .object(let members) = self else { return self }
+        let units = Array(key.utf16)
+        return .object(members.filter { $0.key != units })
+    }
+
     /// The string, decoded (a lone surrogate becomes U+FFFD); `nil` for non-strings.
     public var stringValue: String? {
         guard case .string(let units) = self else { return nil }

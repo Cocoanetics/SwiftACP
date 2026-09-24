@@ -46,7 +46,9 @@ enum SessionsCommand {
     static func printSessions(_ records: [SessionRecord], format: String) {
         switch format {
         case "json":
-            Console.out(jsonString(records) + "\n")
+            // acpx prints its in-memory records: what its parser made of the files, as
+            // they were when these records were read.
+            Console.out(WireJSON.array(records.compactMap(\.parsedByAcpx)).compact() + "\n")
         case "quiet":
             for r in records { Console.out("\(r.acpxRecordId)\(r.closed == true ? " [closed]" : "")\n") }
         default:
@@ -64,18 +66,23 @@ enum SessionsCommand {
     // MARK: show
 
     private static func show(_ context: CommandContext) throws -> Int32 {
-        let scan = context.options
         let flags = try context.globalFlags()
         let record = try findScopedSessionOrThrow(context, flags, name: context.positionals.first)
-        switch flags.format {
+        printSessionDetails(record, format: flags.format)
+        return ExitCodes.success
+    }
+
+    static func printSessionDetails(_ record: SessionRecord, format: String) {
+        switch format {
         case "json":
-            Console.out(jsonString(record) + "\n")
+            // acpx prints its in-memory record: what its parser made of the file, as it
+            // was when this record was read.
+            Console.out((record.parsedByAcpx ?? .null).compact() + "\n")
         case "quiet":
             Console.out("\(record.acpxRecordId)\n")
         default:
             for line in sessionDetailsLines(record) { Console.out(line + "\n") }
         }
-        return ExitCodes.success
     }
 
     private static func sessionDetailsLines(_ r: SessionRecord) -> [String] {
