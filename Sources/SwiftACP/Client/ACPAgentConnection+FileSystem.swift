@@ -27,7 +27,7 @@ extension ACPAgentConnection {
             var request: Request = try decode(params)
             named = request.path
             if fileSystemAccess == .sessionRoot {
-                guard let root = sessionRoots[request.sessionId] else {
+                guard let root = sessionRoot(request.sessionId) else {
                     return .failure(.invalidParams("Unknown session: \(request.sessionId)"))
                 }
                 // acpx's order: the lexical check, then the permission question, then

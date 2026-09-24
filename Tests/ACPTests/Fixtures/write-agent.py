@@ -13,7 +13,9 @@ terminal, waits for it, reads its output, releases it, and answers
 `ran:<exit code>:<output>`, or the first error. A `session/set_mode` runs it too, before
 answering, and appends that line to `$MOCK_TERMINAL_LOG`. With `MOCK_TERMINAL_ON_INITIALIZE`
 set, `initialize` starts it instead, waits for it to print something, logs that, and fails
-— or answers, when it is set to `ok`.
+— or answers, when it is set to `ok`. With `MOCK_TERMINAL_ON_NEW`, `session/new` does the
+same and then answers; with `MOCK_READ_ON_NEW`, it reads `<cwd>/notes.txt` first and logs
+`ok:<content>` or the error.
 """
 import json
 import os
@@ -60,8 +62,8 @@ for line in sys.stdin:
         argv = json.loads(TERMINAL)
         send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
             "sessionId": "init", "command": argv[0], "args": argv[1:]}})
-    elif method is None and running_for == "initialize" and str(req_id).startswith("term-"):
-        # Poll the output until the command has printed, then fail `initialize`.
+    elif method is None and running_for in ("initialize", "new") and str(req_id).startswith("term-"):
+        # Poll the output until the command has printed, then answer the request.
         result = message.get("result") or {}
         if req_id == "term-create":
             terminal = result.get("terminalId")
@@ -69,7 +71,10 @@ for line in sys.stdin:
             if TERMINAL_LOG:
                 with open(TERMINAL_LOG, "a") as log:
                     log.write(result["output"])
-            if os.environ.get("MOCK_TERMINAL_ON_INITIALIZE") == "ok":
+            if running_for == "new":
+                running_for = None
+                send({"jsonrpc": "2.0", "id": pending[0], "result": {"sessionId": "write-session"}})
+            elif os.environ.get("MOCK_TERMINAL_ON_INITIALIZE") == "ok":
                 running_for = None
                 send({"jsonrpc": "2.0", "id": pending[0], "result": initialize_result()})
             else:
@@ -82,6 +87,26 @@ for line in sys.stdin:
               "params": {"sessionId": "init", "terminalId": terminal}})
     elif method == "initialize":
         send({"jsonrpc": "2.0", "id": req_id, "result": initialize_result()})
+    elif method == "session/new" and TERMINAL and os.environ.get("MOCK_TERMINAL_ON_NEW"):
+        cwd = message["params"]["cwd"]
+        pending = (req_id, "write-session")
+        running_for = "new"
+        argv = json.loads(TERMINAL)
+        send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+            "sessionId": "write-session", "command": argv[0], "args": argv[1:]}})
+    elif method == "session/new" and os.environ.get("MOCK_READ_ON_NEW"):
+        cwd = message["params"]["cwd"]
+        pending = (req_id, "write-session")
+        send({"jsonrpc": "2.0", "id": "new-read", "method": "fs/read_text_file", "params": {
+            "sessionId": "write-session", "path": os.path.join(cwd, "notes.txt")}})
+    elif req_id == "new-read" and method is None:
+        error = message.get("error")
+        line = ("error:" + ((error.get("data") or {}).get("details") or error.get("message"))) if error \
+            else "ok:" + message["result"]["content"]
+        if TERMINAL_LOG:
+            with open(TERMINAL_LOG, "a") as log:
+                log.write(line + "\n")
+        send({"jsonrpc": "2.0", "id": pending[0], "result": {"sessionId": "write-session"}})
     elif method in ("session/new", "session/load"):
         cwd = message["params"]["cwd"]
         send({"jsonrpc": "2.0", "id": req_id,

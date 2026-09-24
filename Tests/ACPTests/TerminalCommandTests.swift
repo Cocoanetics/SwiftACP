@@ -71,6 +71,40 @@ struct TerminalCommandTests {
         #expect(kill(pid, 0) != 0)
     }
 
+    /// What the agent asks for while it creates a session belongs to that session
+    /// (#101 review): a command runs in, and a file is confined to, the directory
+    /// `session/new` asked for — not the one the agent was launched in — although the
+    /// session's id is not known until the agent answers.
+    @Test(.enabled(if: mockPythonAvailable))
+    func whatTheAgentAsksWhileCreatingASessionUsesItsDirectory() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/write-agent.py")
+        func directory() throws -> String {
+            let path = NSTemporaryDirectory() + "session-dir-\(UUID().uuidString)"
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            return try #require(realpath(path, nil).map { resolved in
+                defer { free(resolved) }
+                return String(cString: resolved)
+            })
+        }
+        let launchDirectory = try directory()
+        let sessionDirectory = try directory()
+        try "session notes".write(toFile: sessionDirectory + "/notes.txt", atomically: true, encoding: .utf8)
+        for mode in ["MOCK_TERMINAL_ON_NEW=1 MOCK_TERMINAL='[\"pwd\"]'", "MOCK_READ_ON_NEW=1"] {
+            let log = NSTemporaryDirectory() + "new-log-\(UUID().uuidString)"
+            defer { try? FileManager.default.removeItem(atPath: log) }
+            let command = "/usr/bin/env \(mode) MOCK_TERMINAL_LOG='\(log)' '\(python)' '\(fixture.path)'"
+            let agent = try await ACPAgent.launch(
+                agent: command, cwd: launchDirectory, permission: .approveAll, capabilities: .acpx,
+                inheritStderr: false)
+            _ = try await agent.newSession(cwd: sessionDirectory)
+            await agent.close()
+            let expected = mode.hasPrefix("MOCK_TERMINAL") ? sessionDirectory + "\n" : "ok:session notes\n"
+            #expect(try String(contentsOfFile: log, encoding: .utf8) == expected)
+        }
+    }
+
     /// acpx advertises terminals by default; `--no-terminal` withholds them, and the
     /// agent calling anyway hears the ACP SDK's method-not-found.
     @Test(.enabled(if: mockPythonAvailable))

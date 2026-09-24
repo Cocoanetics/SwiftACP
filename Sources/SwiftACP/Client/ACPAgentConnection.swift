@@ -46,6 +46,8 @@ public actor ACPAgentConnection {
     /// Each session's working directory, recorded from `session/new`, `session/load`
     /// and `session/resume` — the root `fs/*` paths are confined to.
     var sessionRoots: [SessionId: String] = [:]
+    /// The `cwd` of each `session/new` still waiting for its answer.
+    var sessionRootsBeingCreated: [UUID: String] = [:]
 
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
@@ -272,10 +274,26 @@ public actor ACPAgentConnection {
         let _: EmptyResponse = try await send("authenticate", AuthenticateRequest(methodId: methodId))
     }
 
+    /// While the request is out, the agent can ask for a terminal or a file for the
+    /// session it is creating, whose id the client does not know yet: those requests
+    /// get this `cwd` (see ``sessionRoot(_:)``), as acpx's client answers them in its
+    /// own, the session's.
     public func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
+        let creation = UUID()
+        sessionRootsBeingCreated[creation] = request.cwd
+        defer { sessionRootsBeingCreated[creation] = nil }
         let response: NewSessionResponse = try await send("session/new", request)
         sessionRoots[response.sessionId] = request.cwd
         return response
+    }
+
+    /// The root of `sessionId`: the one registered for it, else — for a session being
+    /// created right now — the `cwd` its `session/new` asked for, when every creation
+    /// in flight asked for the same one.
+    func sessionRoot(_ sessionId: SessionId) -> String? {
+        if let root = sessionRoots[sessionId] { return root }
+        let creating = Set(sessionRootsBeingCreated.values)
+        return creating.count == 1 ? creating.first : nil
     }
 
     /// The root is registered *before* the request is sent: this actor is reentrant at

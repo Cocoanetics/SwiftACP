@@ -26,7 +26,7 @@ extension ACPAgentConnection {
                 // acpx runs a command in its client's cwd — the session's — unless told
                 // otherwise; a session this connection never opened has none, and the
                 // handler's own is used.
-                request.cwd = request.cwd ?? sessionRoots[request.sessionId]
+                request.cwd = request.cwd ?? sessionRoot(request.sessionId)
                 try await handlers.authorizeTerminal?(request)
                 // Asking can take long; a connection that ended meanwhile has released its
                 // terminals, and a command started now would outlive it. acpx rechecks its
