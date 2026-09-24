@@ -134,6 +134,8 @@ actor ACPXDaemonBackend: ACPXBackend {
             // flight. Only the adapter process goes; the record — and the agent's
             // rollout behind it — stay, so the next turn reconnects with the new set.
             await evict(recordId)
+            // Its agent is gone: the record keeps no pid for it, as `closeSession` keeps none.
+            record.pid = nil
         }
         var acpx = record.acpx ?? SessionAcpxState()
         acpx.mcpServers = mcpServers

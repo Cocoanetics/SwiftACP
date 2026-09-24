@@ -62,6 +62,23 @@ extension DaemonToolsTests {
         }
     }
 
+    /// An agent whose stdout closed mid-turn, though it runs on, is ended before its end
+    /// is recorded: the record keeps no pid for it (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aTurnWhoseAgentClosedItsStdoutKeepsNoPid() async throws {
+        let command = try Self.exitAgent("EXIT_AGENT_CLOSE_STDOUT=1")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await #expect(throws: AgentDisconnectedError.self) {
+                try await prompt(daemon, id, text: "hi", client: CallingClient())
+            }
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.pid == nil)
+            #expect(record.lastAgentDisconnectReason == "pipe_close")
+        }
+    }
+
     /// A control the agent exits in leaves its exit in the record too, and nothing of the
     /// control (#113 review).
     @Test(.enabled(if: mockPythonAvailable))

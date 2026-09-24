@@ -287,7 +287,10 @@ extension ACPXDaemonBackend {
             let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
                 ? AgentExitedBeforeTheTurn(underlying: error) : error
             let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
-            // How the agent ended, if it did, goes into the record the failure saves.
+            // How the agent ended, if it did, goes into the record the failure saves — once
+            // it has: an agent whose connection is gone can still be running (its stdout
+            // closed, say), and is ended before its pid would be kept.
+            if ACPAgentConnection.isConnectionClosed(error) { await entry.agent.close() }
             await persister.applyLifecycle(entry.agent.lifecycle)
             await wireFeed.finish(showingHeld: !retried)
             throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
