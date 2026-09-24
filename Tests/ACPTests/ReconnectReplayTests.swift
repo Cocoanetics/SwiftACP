@@ -20,7 +20,11 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
                 agentCommand: loggedCommand, cwd: NSTemporaryDirectory())
-            _ = try await daemon.setModel(sessionId: id, modelId: "sonnet")
+            // The mock advertises no models, so acpx's `setSessionModel` refuses one —
+            // and nothing about models is left on the record to put back.
+            await #expect(throws: ModelApplication.UnsupportedError.self) {
+                try await daemon.setModel(sessionId: id, modelId: "sonnet")
+            }
             _ = try await daemon.setMode(sessionId: id, modeId: "auto")
             _ = try await daemon.setConfigOption(sessionId: id, configId: "effort", value: "high")
 
@@ -38,9 +42,9 @@ extension DaemonToolsTests {
 
             let lastReconnect = try #require(methods.lastIndex(of: "session/load"))
             let replayed = methods[lastReconnect...].filter { $0.hasPrefix("session/set_") }
-            // Model first: a config option can depend on which model is selected.
-            #expect(
-                replayed == ["session/set_model", "session/set_mode", "session/set_config_option"])
+            // The mode, then the options. (The model goes first when there is one — see
+            // `SessionNewModelTests.aLaterSelectionIsTheOneReplayed`.)
+            #expect(replayed == ["session/set_mode", "session/set_config_option"])
         }
     }
 

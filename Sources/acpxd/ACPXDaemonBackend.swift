@@ -200,7 +200,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
-    /// persist it as desired — mirrors the CLI's `set <key> <value>`.
+    /// record it as acpx's `applyConfigOptionSelection` does — mirrors the CLI's
+    /// `set <key> <value>`. The model's own option pins the model, so a reconnect puts
+    /// back this one rather than what the session was created with.
     ///
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
@@ -212,32 +214,34 @@ actor ACPXDaemonBackend: ACPXBackend {
     func setConfigOption(sessionId: String, configId: String, value: String) async throws
         -> SessionControlResult {
         let (options, resumed) = try await withSessionTurn(sessionId) { entry, record in
-            let response = try await entry.agent.connection.setConfigOption(
-                SetSessionConfigOptionRequest(
-                    sessionId: entry.session.id, configId: configId, value: value))
             var acpx = record.acpx ?? SessionAcpxState()
-            var desired = acpx.desiredConfigOptions ?? [:]
-            desired[configId] = value
-            acpx.desiredConfigOptions = desired
+            // acpx's owner control: a value for the model's own option is a model id,
+            // checked and resolved against the session's advertised models.
+            let response = try await ModelApplication.setConfigOption(
+                connection: entry.agent.connection, sessionId: entry.session.id, configId: configId,
+                value: value, models: ModelSupport.advertisedModelState(acpx), agentCommand: record.agentCommand)
+            ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
             record.acpx = acpx
             return response.configOptions ?? []
         }
         return SessionControlResult(resumed: resumed, configOptions: options)
     }
 
-    /// Set a session's model on the live agent via the legacy `session/set_model`
-    /// control (reconnecting if needed) and persist it as the current model —
-    /// mirrors the CLI's `set model <value>` for legacy-control agents.
+    /// Set a session's model on the live agent (reconnecting if needed) through the
+    /// control the session advertises, as acpx's `setSessionModel` does — refused when
+    /// it advertises none — and record it as `applyModelSelection` does: pinned and
+    /// current. Mirrors the CLI's `set model <value>` for legacy-control agents.
     ///
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
     func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
         let (_, resumed) = try await withSessionTurn(sessionId) { entry, record in
-            try await entry.agent.connection.setModel(
-                SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
             var acpx = record.acpx ?? SessionAcpxState()
-            acpx.currentModelId = modelId
+            let response = try await ModelApplication.setModel(
+                connection: entry.agent.connection, sessionId: entry.session.id, modelId: modelId,
+                models: ModelSupport.advertisedModelState(acpx), agentCommand: record.agentCommand)
+            ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
             record.acpx = acpx
         }
         return SessionControlResult(resumed: resumed)

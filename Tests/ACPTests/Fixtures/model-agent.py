@@ -9,6 +9,8 @@ every `session/set_config_option`, and appends each request it received to
 
 `MODEL_AGENT_LEGACY=1` switches it to the legacy shape instead — no config
 options, a `models` block, and `session/set_model` as the only model control.
+`MODEL_AGENT_MODELS` (comma-separated ids) replaces the advertised models, `m1`
+and `m2`; the current one stays `m1`.
 """
 import json
 import os
@@ -16,13 +18,15 @@ import sys
 
 LEGACY = os.environ.get("MODEL_AGENT_LEGACY") == "1"
 CURRENT = {"model": "m1", "effort": "low"}
+MODELS = os.environ.get("MODEL_AGENT_MODELS", "m1,m2").split(",")
+NAMES = {"m1": "One", "m2": "Two"}
 
 
 def config_options():
     return [
         {"id": "model", "type": "select", "category": "model", "name": "Model",
          "currentValue": CURRENT["model"],
-         "options": [{"value": "m1", "name": "One"}, {"value": "m2", "name": "Two"}]},
+         "options": [{"value": model, "name": NAMES.get(model, model)} for model in MODELS]},
         {"id": "effort", "type": "select", "name": "Effort",
          "currentValue": CURRENT["effort"],
          "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}]},
@@ -31,8 +35,7 @@ def config_options():
 
 def legacy_models():
     return {"currentModelId": CURRENT["model"],
-            "availableModels": [{"modelId": "m1", "name": "One"},
-                                {"modelId": "m2", "name": "Two"}]}
+            "availableModels": [{"modelId": model, "name": NAMES.get(model, model)} for model in MODELS]}
 
 
 def send(obj):
