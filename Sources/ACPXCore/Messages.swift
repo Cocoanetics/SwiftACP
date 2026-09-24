@@ -380,3 +380,29 @@ public struct SessionAcpxState: Codable, Sendable {
 
     public init() {}
 }
+
+extension SessionAcpxState {
+    /// Each field read on its own, and one that does not read left out rather than failing
+    /// the record: acpx drops what it cannot read in this block and keeps the record
+    /// (`parseAcpxState`), and so does SwiftACP — its own `mcp_servers` and
+    /// `client_capabilities` included, which acpx never reads.
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func field<T: Decodable>(_ key: CodingKeys) -> T? {
+            (try? container.decodeIfPresent(T.self, forKey: key)) ?? nil
+        }
+        resetOnNextEnsure = field(.resetOnNextEnsure)
+        currentModeId = field(.currentModeId)
+        desiredModeId = field(.desiredModeId)
+        desiredConfigOptions = field(.desiredConfigOptions)
+        currentModelId = field(.currentModelId)
+        availableModels = field(.availableModels)
+        modelControl = field(.modelControl)
+        availableCommands = field(.availableCommands)
+        configOptions = field(.configOptions)
+        sessionOptions = field(.sessionOptions)
+        mcpServers = field(.mcpServers)
+        clientCapabilities = field(.clientCapabilities)
+    }
+}

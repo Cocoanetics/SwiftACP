@@ -35,10 +35,18 @@ public enum SessionStore {
     /// Decode the record at `url`, optionally requiring it to be the record `recordId`
     /// names: a file claiming a different id is ignored, so a copy cannot answer for the
     /// record it was copied from (acpx's `readSessionRecord`).
+    ///
+    /// The record is what acpx's parser makes of the file (``SessionRecordParser``): a file
+    /// it rejects is no record here either, and one it reads leniently is read the same
+    /// way.
     public static func readRecord(at url: URL, expecting recordId: String? = nil)
         -> SessionRecord? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        guard let record = try? recordDiskDecoder.decode(SessionRecord.self, from: data),
+        guard let data = try? Data(contentsOf: url), let stored = WireJSON(parsing: data),
+            let parsed = SessionRecordParser.parse(stored),
+            let record = try? recordDiskDecoder.decode(
+                SessionRecord.self,
+                from: Data(SessionRecordParser.normalizedForModel(stored, parsed: parsed)
+                    .replacingLoneSurrogates().stringified.utf8)),
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
         if let recordId, record.acpxRecordId != recordId { return nil }
@@ -48,6 +56,16 @@ public enum SessionStore {
     /// Lookup by exact record id reads that one file — no scan (acpx, `docs/sessions.md`).
     public static func loadRecord(_ recordId: String) -> SessionRecord? {
         readRecord(at: ACPXPaths.sessionRecordPath(recordId), expecting: recordId)
+    }
+
+    /// The record `recordId` names as acpx holds it in memory — ``SessionRecordParser``
+    /// on the stored file — which is what acpx prints for it in `--format json`.
+    public static func storedRecord(_ recordId: String) -> WireJSON? {
+        guard let data = try? Data(contentsOf: ACPXPaths.sessionRecordPath(recordId)),
+            let stored = WireJSON(parsing: data),
+            let parsed = SessionRecordParser.parse(stored), parsed["acpxRecordId"] == .text(recordId)
+        else { return nil }
+        return parsed
     }
 
     /// Atomic write (temp + rename), pretty JSON + trailing newline. Nothing else is

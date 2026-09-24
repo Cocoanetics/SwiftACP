@@ -1,0 +1,82 @@
+@testable import ACPXCore
+@testable import acpx
+import Foundation
+import Testing
+
+/// In `--format json`, `sessions show` and `sessions list` print acpx's in-memory records:
+/// the stored file as acpx's parser makes it. A file that parser rejects is no record
+/// at all (#77). The records and the output expected for them are the parser fixture's,
+/// which acpx 0.19.1 printed.
+///
+/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
+@Suite(.serialized) struct StoredRecordTests {
+    private struct Case: Decodable {
+        let name: String
+        let raw: String
+        let parsed: String?
+    }
+
+    private static func fixtureCase(_ name: String) throws -> Case {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/acpx-record-parse.json")
+        let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: fixture))
+        return try #require(cases.first { $0.name == name })
+    }
+
+    /// Stores `raw` as the record `rec-1`, its `/work` working directory moved to `cwd`.
+    private static func store(_ raw: String, cwd: String) throws {
+        try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+        try Data(raw.replacingOccurrences(of: #""/work""#, with: #""\#(cwd)""#).utf8)
+            .write(to: ACPXPaths.sessionRecordPath("rec-1"))
+    }
+
+    private static func workingDirectory() throws -> String {
+        let cwd = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath()
+            .appendingPathComponent("acpx-stored-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        return cwd
+    }
+
+    @Test func showAndListPrintAcpxsRecord() async throws {
+        let full = try Self.fixtureCase("full record")
+        try await withIsolatedStore {
+            let cwd = try Self.workingDirectory()
+            try Self.store(full.raw, cwd: cwd)
+            let expected = try #require(full.parsed).replacingOccurrences(of: #""/work""#, with: #""\#(cwd)""#)
+            for (arguments, output) in [
+                (["--format", "json", "--cwd", cwd, "codex", "sessions", "show", "alpha"], expected + "\n"),
+                (["--format", "json", "--cwd", cwd, "codex", "sessions", "list"], "[" + expected + "]\n")
+            ] {
+                let capture = Console.Capture()
+                let code = Console.$capture.withValue(capture) { runCommandLine(arguments) }
+                #expect(code == ExitCodes.success, "\(arguments)")
+                #expect(capture.out == output, "\(arguments)")
+            }
+        }
+    }
+
+    /// Every fixture record: SwiftACP reads it exactly when acpx does — including one
+    /// acpx reads leniently, whose unreadable fields it drops or defaults instead.
+    @Test func aRecordIsReadExactlyWhenAcpxReadsIt() async throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/acpx-record-parse.json")
+        let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: fixture))
+        try await withIsolatedStore {
+            let cwd = try Self.workingDirectory()
+            for testCase in cases where testCase.raw.contains(#""rec-1""#) {
+                try Self.store(testCase.raw, cwd: cwd)
+                #expect((SessionStore.loadRecord("rec-1") != nil) == (testCase.parsed != nil), "\(testCase.name)")
+            }
+        }
+    }
+
+    @Test func aFileAcpxRejectsIsNoRecord() async throws {
+        let rejected = try Self.fixtureCase("pid zero")
+        #expect(rejected.parsed == nil)
+        try await withIsolatedStore {
+            try Self.store(rejected.raw, cwd: try Self.workingDirectory())
+            #expect(SessionStore.loadRecord("rec-1") == nil)
+            #expect(SessionStore.listSessions().isEmpty)
+        }
+    }
+}
