@@ -18,6 +18,8 @@ struct ReplaySuppressionTests {
         var trickleCount = 0
         /// Told each time a `session/load` reaches the agent.
         var onLoad: (@Sendable () -> Void)?
+        /// Refuse `session/load` after replaying the history.
+        var refusesLoad = false
 
         func initialize(_ request: InitializeRequest) async -> InitializeResponse {
             InitializeResponse(
@@ -35,6 +37,7 @@ struct ReplaySuppressionTests {
             onLoad?()
             await session.update(.userMessageChunk(.text("earlier question")))
             await session.sendText("earlier answer")
+            if refusesLoad { throw JSONRPCErrorBody(code: -32603, message: "Internal error") }
             if let trickle {
                 // Unstructured on purpose: the updates have to go on after this returns,
                 // as a replay the agent has not finished does. Bounded by `trickleCount`.
@@ -202,6 +205,26 @@ struct ReplaySuppressionTests {
         await client.endSubscription(subscription)
 
         #expect(await delivered.value.first == "earlier answer")
+        await client.close()
+    }
+
+    /// A load the agent refuses after replaying keeps the replay back all the same: the
+    /// peer reads in order and has each update handled before it reads the next message,
+    /// so the refusal only arrives once the replay has been handled — suppressed.
+    @Test func aRefusedLoadStillKeepsItsReplayBack() async throws {
+        let (client, server) = try await connect(ReplayingAgent(refusesLoad: true))
+        defer { server.cancel() }
+        let (subscription, stream) = await client.makeSubscription()
+        let delivered = Task { await texts(stream) }
+
+        await #expect(throws: (any Error).self) {
+            try await client.loadSession(
+                LoadSessionRequest(sessionId: "replay-session", cwd: "/"), suppressReplayUpdates: true)
+        }
+        _ = try await client.prompt(PromptRequest(sessionId: "replay-session", prompt: [.text("go")]))
+        await client.endSubscription(subscription)
+
+        #expect(await delivered.value == ["after"])
         await client.close()
     }
 
