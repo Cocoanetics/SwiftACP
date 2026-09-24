@@ -79,17 +79,26 @@ enum SessionRecordSerializer {
     /// object acpx read and then changed keeps its members' places and adds new ones last.
     /// The file's top level keeps its own order: acpx's serializer builds it anew.
     ///
+    /// An array that changed pairs its items with the stored ones only where an item is
+    /// what was stored at its place: in the messages (lined up by ``MessageOrder/aligned(_:trimmed:)``)
+    /// and the lists within them, which only grow. Anywhere else a changed array was
+    /// replaced whole, as acpx replaces `config_options`, and keeps the order it has.
+    ///
     /// Only the order changes: whatever is taken from `stored` is equal to what it
     /// stands in for.
-    static func inStoredOrder(_ value: WireJSON, stored: WireJSON, topLevel: Bool = false) -> WireJSON {
+    static func inStoredOrder(
+        _ value: WireJSON, stored: WireJSON, topLevel: Bool = false, pairingItems: Bool = false
+    ) -> WireJSON {
         switch (value, stored) {
         case (.object(let members), .object(let storedMembers)):
             if !topLevel, sameValue(value, stored) { return stored }
             let storedValues = Dictionary(storedMembers.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
             let changed = members.map { member in
-                WireJSON.Member(
-                    key: member.key,
-                    value: storedValues[member.key].map { inStoredOrder(member.value, stored: $0) } ?? member.value)
+                let pairing = pairingItems || (topLevel && member.key == Array("messages".utf16))
+                let kept = storedValues[member.key].map {
+                    inStoredOrder(member.value, stored: $0, pairingItems: pairing)
+                }
+                return WireJSON.Member(key: member.key, value: kept ?? member.value)
             }
             guard !topLevel else { return .object(changed) }
             let values = Dictionary(changed.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
@@ -99,8 +108,9 @@ enum SessionRecordSerializer {
             return .object(kept + changed.filter { storedValues[$0.key] == nil })
         case (.array(let items), .array(let storedItems)):
             if sameValue(value, stored) { return stored }
+            guard pairingItems else { return value }
             return .array(items.enumerated().map { index, item in
-                index < storedItems.count ? inStoredOrder(item, stored: storedItems[index]) : item
+                index < storedItems.count ? inStoredOrder(item, stored: storedItems[index], pairingItems: true) : item
             })
         default:
             return value

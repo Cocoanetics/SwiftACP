@@ -125,12 +125,27 @@ struct SessionRecordSerializerTests {
         }
     }
 
+    /// A list the record replaced whole — as a reconnect replaces `config_options` — keeps
+    /// the order it has, not that of the items once in its places (#117 review).
+    @Test func aListReplacedWholeKeepsItsOwnOrder() async throws {
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
+            try Self.storeRecord(messages: [], acpx: #"{"config_options":[{"zeta":1,"id":"old"}]}"#)
+            var record = try #require(SessionStore.loadRecord("r"))
+            record.acpx?.configOptions = .array([.object(["id": .string("new"), "zeta": .integer(2)])])
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            #expect(written["acpx"]?["config_options"]?.stringified == #"[{"id":"new","zeta":2}]"#)
+        }
+    }
+
     /// A record `r` with these messages, as SwiftACP would have it on disk.
-    private static func storeRecord(messages: [String]) throws {
+    private static func storeRecord(messages: [String], acpx: String? = nil) throws {
         let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
             + #""cwd":"/w","created_at":"t","last_used_at":"t","last_seq":0,"closed":false,"#
             + #""messages":[\#(messages.joined(separator: ","))],"updated_at":"t","#
-            + #""cumulative_token_usage":{},"request_token_usage":{}}"#
+            + #""cumulative_token_usage":{},"request_token_usage":{}"#
+            + (acpx.map { #","acpx":\#($0)"# } ?? "") + "}"
         try Data(raw.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
     }
 
