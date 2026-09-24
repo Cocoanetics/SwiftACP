@@ -323,15 +323,23 @@ import Testing
         }
     }
 
+    /// The mock advertises no models, so the model is refused as acpx's
+    /// `setSessionModel` refuses it, and nothing is recorded. (A model an agent does
+    /// advertise: `SessionNewModelTests.aLaterSelectionIsTheOneReplayed`.)
     @Test(.enabled(if: mockPythonAvailable))
-    func setModelPersistsCurrentModel() async throws {
+    func setModelIsRefusedWithoutAdvertisedModels() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            _ = try await daemon.setModel(sessionId: id, modelId: "opus")
+            let error = await #expect(throws: ModelApplication.UnsupportedError.self) {
+                try await daemon.setModel(sessionId: id, modelId: "opus")
+            }
+            #expect(error?.localizedDescription == #"Cannot set model "opus": the ACP session did not advertise "#
+                + "a model config option or legacy session/set_model support.")
             let record = try #require(SessionStore.loadRecord(id))
-            #expect(record.acpx?.currentModelId == "opus")
+            #expect(record.acpx?.currentModelId == nil)
+            #expect(record.acpx?.sessionOptions?.model == nil)
         }
     }
 

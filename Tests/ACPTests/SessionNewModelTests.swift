@@ -149,6 +149,47 @@ import Testing
         #expect(model["currentValue"] == .string("m2"))
     }
 
+    /// A model chosen later with `set model` is the one pinned: a reconnect puts it back,
+    /// not the one the session was created with. acpx's controls pin it with
+    /// `applyModelSelection` — a model option through `applyConfigOptionSelection` — and
+    /// its reconnect puts the model back before the saved options, since an option can
+    /// depend on the model. Requests and record are acpx 0.19.1's for the same steps.
+    @Test(.enabled(if: mockPythonAvailable), arguments: [false, true])
+    func aLaterSelectionIsTheOneReplayed(legacy: Bool) async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            var options = SessionAcpxState.SessionOptions()
+            options.model = "m2"
+            let record = try await SessionEngine.createSession(
+                agentCommand: "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' "
+                    + (legacy ? "MODEL_AGENT_LEGACY=1 " : "") + "'\(python)' '\(fixture.path)'",
+                cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll, authCredentials: [:],
+                authPolicy: "skip", sessionOptions: options)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await daemon.setModel(sessionId: record.acpxRecordId, modelId: "m1")
+            if !legacy {
+                _ = try await daemon.setConfigOption(sessionId: record.acpxRecordId, configId: "effort", value: "high")
+            }
+            await daemon.evict(record.acpxRecordId)
+            let selected = try #require(SessionStore.loadRecord(record.acpxRecordId)?.acpx)
+            #expect(selected.sessionOptions?.model == "m1")
+            #expect(selected.currentModelId == "m1")
+            #expect(selected.desiredConfigOptions == (legacy ? nil : ["effort": "high"]))
+
+            let before = Self.requests(log).count
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .runPrompt(sessionId: record.acpxRecordId, text: "hi")
+            let replayed = legacy
+                ? ["session/set_model m1"]
+                : ["session/set_config_option model=m1", "session/set_config_option effort=high"]
+            #expect(Array(Self.requests(log).dropFirst(before)) == ["session/new"] + replayed + ["session/prompt"])
+        }
+    }
+
     /// A session the reconnect started in place of the old one is asked for the pinned
     /// model through the control it advertises: here a model option, where the old one
     /// had a legacy model list.

@@ -145,20 +145,7 @@ public enum ModelSupport {
         _ modelId: String, response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
     ) {
         let modelConfigId = advertisedModelState(state)?.configId
-        if let reported = response?.configOptions {
-            applyConfigOptionsModelState(reported, to: &state)
-            if let desired = state.desiredConfigOptions {
-                // A control's reply can change sibling options: only saved selections follow.
-                var kept: [String: String] = [:]
-                for case .object(let option) in reported {
-                    if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
-                       desired[id] != nil {
-                        kept[id] = value
-                    }
-                }
-                state.desiredConfigOptions = kept.isEmpty ? nil : kept
-            }
-        }
+        applyAcceptedConfigOptions(response, to: &state)
         var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
         options.model = modelId
         state.sessionOptions = options
@@ -167,6 +154,44 @@ public enum ModelSupport {
             state.desiredConfigOptions?.removeValue(forKey: configId)
             if state.desiredConfigOptions?.isEmpty == true { state.desiredConfigOptions = nil }
         }
+    }
+
+    /// acpx's `applyConfigOptionSelection`: what setting option `configId` to `value`
+    /// leaves in the record. The model's own option is a model selection — pinned, as
+    /// ``applyModelSelection(_:response:to:)`` pins it; any other is saved as a
+    /// selection to restore, with the options the agent reported back.
+    public static func applyConfigOptionSelection(
+        _ configId: String, value: String, response: SetSessionConfigOptionResponse,
+        to state: inout SessionAcpxState
+    ) {
+        let modelConfigId = advertisedModelState(state)?.configId
+        if configId == modelConfigId || configId == modelState(fromConfigOptions: response.configOptions)?.configId {
+            applyModelSelection(value, response: response, to: &state)
+            return
+        }
+        var desired = state.desiredConfigOptions ?? [:]
+        desired[configId] = value
+        state.desiredConfigOptions = desired
+        applyAcceptedConfigOptions(response, to: &state)
+    }
+
+    /// acpx's `applyAcceptedConfigOptions`: the options a control's reply reported
+    /// replace the record's, and saved selections follow what they now say — a reply
+    /// can change sibling options — keeping only those still reported.
+    static func applyAcceptedConfigOptions(
+        _ response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
+    ) {
+        guard let reported = response?.configOptions else { return }
+        applyConfigOptionsModelState(reported, to: &state)
+        guard let desired = state.desiredConfigOptions else { return }
+        var kept: [String: String] = [:]
+        for case .object(let option) in reported {
+            if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
+               desired[id] != nil {
+                kept[id] = value
+            }
+        }
+        state.desiredConfigOptions = kept.isEmpty ? nil : kept
     }
 
     /// acpx's `clearAdvertisedModelState`.

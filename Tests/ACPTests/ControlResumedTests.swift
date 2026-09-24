@@ -17,7 +17,7 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             #expect(try await daemon.setMode(sessionId: id, modeId: "auto").resumed)
             // Held now: the next control finds it running.
-            #expect(try await daemon.setModel(sessionId: id, modelId: "opus").resumed == false)
+            #expect(try await daemon.setMode(sessionId: id, modeId: "plan").resumed == false)
         }
     }
 
