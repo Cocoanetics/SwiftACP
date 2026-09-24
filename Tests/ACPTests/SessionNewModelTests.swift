@@ -204,6 +204,41 @@ import Testing
         }
     }
 
+    /// A record an earlier SwiftACP wrote: created with `--model m2`, then switched by
+    /// `set model m1` when that saved `m1` as the model's option and left the pin at
+    /// `m2`. The later choice is the one put back, and pinned from then on.
+    @Test(.enabled(if: mockPythonAvailable))
+    func anOlderRecordsLaterSelectionWinsOverItsPin() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            var options = SessionAcpxState.SessionOptions()
+            options.model = "m2"
+            var record = try await SessionEngine.createSession(
+                agentCommand: "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' '\(python)' '\(fixture.path)'",
+                cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll, authCredentials: [:],
+                authPolicy: "skip", sessionOptions: options)
+            // What the earlier `set model m1` left: the pin untouched, `m1` saved as an option.
+            var acpx = try #require(record.acpx)
+            acpx.desiredConfigOptions = ["model": "m1"]
+            acpx.currentModelId = "m1"
+            record.acpx = acpx
+            try SessionStore.writeRecord(record)
+
+            let before = Self.requests(log).count
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .runPrompt(sessionId: record.acpxRecordId, text: "hi")
+            #expect(Array(Self.requests(log).dropFirst(before))
+                == ["session/new", "session/set_config_option model=m1", "session/prompt"])
+            let migrated = try #require(SessionStore.loadRecord(record.acpxRecordId)?.acpx)
+            #expect(migrated.sessionOptions?.model == "m1")
+            #expect(migrated.desiredConfigOptions == nil)
+        }
+    }
+
     /// A session the reconnect started in place of the old one is asked for the pinned
     /// model through the control it advertises: here a model option, where the old one
     /// had a legacy model list.

@@ -291,8 +291,13 @@ extension ACPXDaemonBackend {
         var advertised: [JSONValue]?
         if case .array(let options)? = acpx.configOptions { advertised = options }
         let modelConfigId = ModelSupport.modelState(fromConfigOptions: advertised)?.configId
+        // A record an earlier SwiftACP wrote can pin one model and keep a later `set model`
+        // as the model's saved option — `set model` did not pin then. The saved option is
+        // the newer choice: it is put back and pinned, as `set model` pins it now.
+        let pinnedModel = acpx.sessionOptions?.model?.javaScriptTrimmed
+        let laterSelection = pinnedModel == nil ? nil : modelConfigId.flatMap { desiredOptions[$0] }
 
-        if let pinned = acpx.sessionOptions?.model?.javaScriptTrimmed, !pinned.isEmpty {
+        if let pinned = laterSelection ?? pinnedModel, !pinned.isEmpty {
             // acpx replays the session's pinned model — `session_options.model`, what
             // `--model` asked for — through the control the session advertises,
             // resolving an alias as `--model` does, even when unchanged
