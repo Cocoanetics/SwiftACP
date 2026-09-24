@@ -61,4 +61,23 @@ extension DaemonToolsTests {
             #expect(ended.lastAgentDisconnectReason == "process_exit")
         }
     }
+
+    /// A control the agent exits in leaves its exit in the record too, and nothing of the
+    /// control (#113 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aControlTheAgentExitsInRecordsHowItEnded() async throws {
+        let command = try Self.exitAgent("EXIT_AGENT_ON=set_mode EXIT_AGENT_CODE=4")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await #expect(throws: AgentDisconnectedError.self) {
+                _ = try await daemon.setMode(sessionId: id, modeId: "plan")
+            }
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.pid == nil)
+            #expect(record.lastAgentExitCode?.value == 4)
+            #expect(record.lastAgentDisconnectReason == "process_exit")
+            #expect(record.acpx?.desiredModeId == nil)
+        }
+    }
 }

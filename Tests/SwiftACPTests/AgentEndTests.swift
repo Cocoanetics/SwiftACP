@@ -127,6 +127,28 @@ import Glibc
         await transport.terminate()
     }
 
+    /// Nothing keeps a transport once its agent is closed: its writer's failure hook holds
+    /// it weakly (#113 review). Letting go has no signal to wait on, so the check gives
+    /// the reader thread, which ends last, a moment to finish.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aClosedTransportIsLetGo() async throws {
+        weak var released: AgentProcessTransport?
+        do {
+            let launch = try AgentRegistry.launch(
+                for: Self.command(""), cwd: NSTemporaryDirectory(), environment: nil, inheritStderr: false)
+            let transport = try AgentProcessTransport.start(
+                launch, agentCommand: "exit-agent", maxMessageBytes: nil, tap: RawWireTap())
+            released = transport
+            transport.close()
+            await transport.terminate()
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while released != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(released == nil)
+    }
+
     /// A handshake the agent refuses fails with its error, not as a startup failure: it
     /// is still running when it answers, and exits only once it is closed (#113 review).
     @Test(.enabled(if: mockPythonAvailable))

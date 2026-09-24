@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A mock ACP agent that ends in the ways an adapter can, for the agent transport.
 
-- `EXIT_AGENT_ON=initialize|prompt` exits at that request without answering it, with
+- `EXIT_AGENT_ON=initialize|prompt|set_mode` exits at that request without answering it, with
   `EXIT_AGENT_CODE` (3 by default) — or, with `EXIT_AGENT_SIGNAL=KILL|TERM|...`, by that
   signal — after writing `EXIT_AGENT_STDERR` to stderr. On a prompt it first streams
   the text `partial `.
@@ -112,6 +112,10 @@ def main():
             send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
             if os.environ.get("EXIT_AGENT_ANSWER_THEN_EXIT") == "1":
                 os._exit(0)
+        elif method == "session/set_mode":
+            if ON == "set_mode":
+                die()
+            send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         elif method == "session/cancel":
             pass
         elif req_id is not None:

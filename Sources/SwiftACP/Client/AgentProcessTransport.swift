@@ -99,7 +99,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     }
 
     private func begin() {
-        writer.onFailure = { [self] in writeFailed() }
+        // Weakly: the transport owns the writer.
+        writer.onFailure = { [weak self] in self?.writeFailed() }
         _ = Task { [self, eventStream] in
             for await event in eventStream {
                 switch event {

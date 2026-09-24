@@ -183,7 +183,22 @@ actor ACPXDaemonBackend: ACPXBackend {
             terminalOutputCeiling: ceiling, replacing: replacing)
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
-        let result = try await body(entry, &record)
+        let result: T
+        do {
+            result = try await body(entry, &record)
+        } catch {
+            // The agent may have gone meanwhile. How it is doing is saved whatever the
+            // control came to, as acpx's controls save it on their way out — but nothing
+            // of the control that failed.
+            var unchanged = findRecord(recordId) ?? current
+            unchanged.applyLifecycle(entry.agent.lifecycle)
+            do {
+                try SessionStore.writeRecord(unchanged)
+            } catch let writeError {
+                log.warning("session record write failed after a failed control op: \(writeError)")
+            }
+            throw error
+        }
         record.applyLifecycle(entry.agent.lifecycle)
         record.lastUsedAt = nowISO()
         do {
