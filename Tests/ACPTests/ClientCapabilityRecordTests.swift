@@ -23,7 +23,18 @@ struct ClientCapabilityRecordTests {
     /// An unrestricted session writes no `client_capabilities` at all, so the record
     /// keeps the shape npm acpx gives it.
     @Test func anUnrestrictedSessionPersistsNothing() {
-        #expect(ClientCapabilities.headlessController.persistedIfRestricted == nil)
+        #expect(ClientCapabilities.acpx.persistedIfRestricted == nil)
+    }
+
+    /// `--no-terminal` alone is a restriction now that terminals are advertised (#82):
+    /// a reconnect must not offer them again.
+    @Test func withholdingTerminalsIsPersisted() throws {
+        var noTerminal = ClientCapabilities.acpx
+        noTerminal.terminal = false
+        let persisted = try #require(noTerminal.persistedIfRestricted)
+
+        #expect(!persisted.advertised.terminal)
+        #expect(persisted.advertised.fs.readTextFile && persisted.advertised.fs.writeTextFile)
     }
 
     /// Withholding only writes is a real state, not a rounding of "no fs".

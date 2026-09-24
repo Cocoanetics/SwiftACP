@@ -185,7 +185,7 @@ enum DaemonClient {
     static func runPrompt(
         sessionId: String, blocks: [PromptBlock], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
-        renderer: OutputRenderer
+        terminalOutputCeiling: Int? = nil, renderer: OutputRenderer
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
@@ -195,24 +195,27 @@ enum DaemonClient {
         return try await runPrompt(
             on: proxy, stopReason: stopReason, sessionId: sessionId, blocks: blocks, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-            permissionPolicy: permissionPolicy, streamWire: renderer.streamsWireJSON)
+            permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
+            streamWire: renderer.streamsWireJSON)
     }
 
     /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
     static func runPrompt(
         on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, blocks: [PromptBlock],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
-        permissionPolicy: PermissionRules? = nil, streamWire: Bool = false
+        permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, streamWire: Bool = false
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
         // The permission mode travels with every turn, as acpx sends it with every
-        // prompt: the daemon applies it to this turn only.
+        // prompt: the daemon applies it to this turn only. So does the cap on terminal
+        // output — `0` for none, so the daemon's own never stands in for it.
         do {
             _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
                 sessionId: sessionId, text: "", blocks: blocks, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-                streamWire: streamWire, permissionPolicy: permissionPolicy)
+                streamWire: streamWire, permissionPolicy: permissionPolicy,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0)
         } catch is DecodingError {
             // The turn succeeded; only its ignored text did not decode. SwiftMCP's typed
             // client turns a plain-text result into a JSON string by wrapping it in
@@ -236,9 +239,19 @@ enum DaemonClient {
         var errorDescription: String? { message }
     }
 
-    /// Set a session's mode on the live agent via the daemon (which persists it).
-    static func setMode(sessionId: String, modeId: String) async throws -> SessionControlResult {
-        try await withClient { try await $0.setMode(sessionId: sessionId, modeId: modeId) }
+    /// Set a session's mode on the live agent via the daemon (which persists it). What
+    /// the agent asks meanwhile is answered as acpx's direct controls answer it —
+    /// reads approved, the rest by `nonInteractivePermissions` — and the daemon caps
+    /// terminal output by `terminalOutputCeiling`, as it does a turn's: `0` for none,
+    /// so its own never stands in.
+    static func setMode(
+        sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult {
+        try await withClient {
+            try await $0.setMode(
+                sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        }
     }
 
     /// Replace a session's own MCP servers via a *running* daemon (which persists them
@@ -255,18 +268,30 @@ enum DaemonClient {
         }
     }
 
-    /// Set a session's model on the live agent via the daemon (legacy set_model).
-    static func setModel(sessionId: String, modelId: String) async throws -> SessionControlResult {
-        try await withClient { try await $0.setModel(sessionId: sessionId, modelId: modelId) }
+    /// Set a session's model on the live agent via the daemon (legacy set_model),
+    /// answering and capping as ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:)``.
+    static func setModel(
+        sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult {
+        try await withClient {
+            try await $0.setModel(
+                sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        }
     }
 
     /// Set a session config option on the live agent via the daemon: the agent's
     /// advertised config options after the change, and whether the session had to be
-    /// taken back first.
-    static func setConfigOption(sessionId: String, configId: String, value: String) async throws
-        -> SessionControlResult {
+    /// taken back first. It answers and caps as
+    /// ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:)``.
+    static func setConfigOption(
+        sessionId: String, configId: String, value: String, nonInteractivePermissions: String,
+        terminalOutputCeiling: Int?
+    ) async throws -> SessionControlResult {
         try await withClient {
-            try await $0.setConfigOption(sessionId: sessionId, configId: configId, value: value)
+            try await $0.setConfigOption(
+                sessionId: sessionId, configId: configId, value: value,
+                nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling ?? 0)
         }
     }
 

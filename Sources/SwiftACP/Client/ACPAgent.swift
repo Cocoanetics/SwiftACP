@@ -9,9 +9,22 @@ extension Implementation {
 
 extension ClientCapabilities {
     /// A headless controller: real file access, but the agent runs its own
-    /// terminals (we don't advertise client-side terminals).
+    /// terminals (we don't advertise client-side terminals). See ``acpx`` for what the
+    /// acpx CLI advertises.
     public static let headlessController = ClientCapabilities(
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: false)
+
+    /// What acpx advertises: real file access, and client-side terminals — where
+    /// ``TerminalManager`` can run them (macOS and Linux). ``ACPAgent/launch(agent:argv:cwd:handlers:clientInfo:capabilities:environment:authCredentials:authPolicy:inheritStderr:overrides:terminalOutputCeiling:onClientRequest:onRawWire:)``
+    /// gives a connection advertising terminals a ``TerminalManager`` to run them on.
+    public static let acpx = ClientCapabilities(
+        fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: terminalsSupported)
+
+    #if os(macOS) || os(Linux)
+    static let terminalsSupported = true
+    #else
+    static let terminalsSupported = false
+    #endif
 }
 
 // `ACPAgent`/`ACPSession` spawn an agent adapter and speak to it over the
@@ -49,6 +62,8 @@ public final class ACPAgent: Sendable {
     public let rawWire: RawWireTap
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
+    /// The terminal manager `launch` gave the connection, when it advertises terminals.
+    let terminals: (any ACPTerminalHandler)?
 
     public var agentCapabilities: AgentCapabilities? { initializeResult.agentCapabilities }
     /// Which non-text prompt content the agent accepts, as it advertised on
@@ -61,7 +76,7 @@ public final class ACPAgent: Sendable {
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
         transport: StdioTransport<TappedFraming<LineFraming>>, rawWire: RawWireTap,
-        initializeResult: InitializeResponse
+        initializeResult: InitializeResponse, terminals: (any ACPTerminalHandler)? = nil
     ) {
         self.name = name
         self.cwd = cwd
@@ -69,6 +84,18 @@ public final class ACPAgent: Sendable {
         self.transport = transport
         self.rawWire = rawWire
         self.initializeResult = initializeResult
+        self.terminals = terminals
+    }
+
+    /// Caps the output of the terminals the agent creates from now on, `nil` being no
+    /// cap — see ``TerminalManager/setOutputCeiling(_:)``. `launch` caps them by this
+    /// process's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`; a host running turns for other
+    /// processes sets each caller's own. Nothing changes without a terminal manager.
+    public func setTerminalOutputCeiling(_ ceiling: Int?) async {
+        #if os(macOS) || os(Linux)
+        guard let manager = terminals as? TerminalManager else { return }
+        await manager.setOutputCeiling(ceiling)
+        #endif
     }
 
     /// Spawn an agent's ACP adapter, run the `initialize` handshake, and return
@@ -85,6 +112,7 @@ public final class ACPAgent: Sendable {
         authPolicy: String = "skip",
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
@@ -103,11 +131,16 @@ public final class ACPAgent: Sendable {
             for: spec, agentCommand: failureName(agent: name, argv: argv, overrides: overrides)) {
             throw failure
         }
+        // acpx builds its terminal manager with its client, before the agent starts —
+        // so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the launch outright, and a
+        // command the agent starts while it answers `initialize` is capped already.
+        let terminals = try terminalManager(for: capabilities, cwd: cwd, ceiling: terminalOutputCeiling)
         // Tapped from the start, so an observer given here sees the handshake too.
         let rawWire = RawWireTap(onRawWire)
         let transport = StdioTransport(
             endpoint: .childProcess(spec), framing: TappedFraming(LineFraming(), tap: rawWire))
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
+        if let terminals { await connection.setTerminalHandler(terminals) }
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.
         if let onClientRequest { await connection.setClientRequestObserver(onClientRequest) }
@@ -119,11 +152,38 @@ public final class ACPAgent: Sendable {
                 authCredentials: authCredentials, authPolicy: authPolicy)
             return ACPAgent(
                 name: name, cwd: cwd, connection: connection,
-                transport: transport, rawWire: rawWire, initializeResult: info)
+                transport: transport, rawWire: rawWire, initializeResult: info, terminals: terminals)
         } catch {
+            // A command the agent started meanwhile goes with it: nothing else would
+            // ever reach its terminal.
+            await connection.shutDownTerminals()
+            await connection.close()
             transport.close()
             throw error
         }
+    }
+
+    /// The terminal manager a connection advertising `capabilities` runs the agent's
+    /// commands on: one per connection, capped by acpx's host ceiling, running commands
+    /// in `cwd` unless a session or the request says otherwise.
+    ///
+    /// The ceiling is read whether or not terminals are advertised: acpx builds its
+    /// terminal manager with every client, so `--no-terminal` does not excuse a bad one.
+    private static func terminalManager(
+        for capabilities: ClientCapabilities, cwd: String, ceiling source: TerminalOutputLimit.Source
+    ) throws -> (any ACPTerminalHandler)? {
+        let ceiling: Int?
+        switch source {
+        case .environment: ceiling = try TerminalOutputLimit.ceiling()
+        case .given(let bytes): ceiling = bytes
+        }
+        #if os(macOS) || os(Linux)
+        guard capabilities.terminal else { return nil }
+        return TerminalManager(cwd: cwd, outputCeiling: ceiling)
+        #else
+        _ = ceiling
+        return nil
+        #endif
     }
 
     /// The command a launch failure names — acpx's `options.agentCommand`. Given an
@@ -152,6 +212,7 @@ public final class ACPAgent: Sendable {
         authPolicy: String = "skip",
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
@@ -162,8 +223,8 @@ public final class ACPAgent: Sendable {
                 rules: permissionRules),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, overrides: overrides, onClientRequest: onClientRequest,
-            onRawWire: onRawWire)
+            inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
+            onClientRequest: onClientRequest, onRawWire: onRawWire)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.
@@ -282,8 +343,11 @@ public final class ACPAgent: Sendable {
             suppressReplayUpdates: suppressReplayUpdates)
     }
 
-    /// Gracefully shut down the connection and terminate the subprocess.
+    /// Gracefully shut down the connection and terminate the subprocess — after the
+    /// commands the agent still runs through the client, as acpx retires its
+    /// terminals before the agent.
     public func close() async {
+        await connection.shutDownTerminals()
         await connection.close()
         transport.close()
     }

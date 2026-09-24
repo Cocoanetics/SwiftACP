@@ -7,19 +7,40 @@ from the daemon's aggregate reply, without an MCP session to catch log events.
 
 With `MOCK_READ` set it reads `<cwd>/notes.txt` instead, and answers `ok:<content>`
 or the error. With `MOCK_TOOL_PERMISSION` set it asks permission for an edit tool,
-and answers `outcome:<selected option, or cancelled>`.
+and answers `outcome:<selected option, or cancelled>`. With `MOCK_TERMINAL` set to a
+JSON array — a command and its arguments — it runs that through the client's
+terminal, waits for it, reads its output, releases it, and answers
+`ran:<exit code>:<output>`, or the first error. A `session/set_mode` runs it too, before
+answering, and appends that line to `$MOCK_TERMINAL_LOG`. With `MOCK_TERMINAL_ON_INITIALIZE`
+set, `initialize` starts it instead, waits for it to print something, logs that, and fails
+— or answers, when it is set to `ok`. With `MOCK_TERMINAL_ON_NEW`, `session/new` does the
+same and then answers; with `MOCK_READ_ON_NEW`, it reads `<cwd>/notes.txt` first and logs
+`ok:<content>` or the error.
 """
 import json
 import os
 import sys
+import time
 
 cwd = None
 pending = None
+terminal = None
+exit_status = None
+output = None
+TERMINAL = os.environ.get("MOCK_TERMINAL")
+TERMINAL_LOG = os.environ.get("MOCK_TERMINAL_LOG")
+# What the terminal is run for: "prompt", or "set_mode".
+running_for = None
 
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
+
+
+def initialize_result():
+    return {"protocolVersion": 1, "agentInfo": {"name": "write-agent", "version": "0.1.0"},
+            "agentCapabilities": {"loadSession": False, "promptCapabilities": {}}, "authMethods": []}
 
 
 def say(session_id, text):
@@ -35,18 +56,77 @@ for line in sys.stdin:
         continue
     message = json.loads(line)
     method, req_id = message.get("method"), message.get("id")
-    if method == "initialize":
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "protocolVersion": 1, "agentInfo": {"name": "write-agent", "version": "0.1.0"},
-            "agentCapabilities": {"loadSession": False, "promptCapabilities": {}},
-            "authMethods": []}})
+    if method == "initialize" and TERMINAL and os.environ.get("MOCK_TERMINAL_ON_INITIALIZE"):
+        pending = (req_id, "init")
+        running_for = "initialize"
+        argv = json.loads(TERMINAL)
+        send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+            "sessionId": "init", "command": argv[0], "args": argv[1:]}})
+    elif method is None and running_for in ("initialize", "new") and str(req_id).startswith("term-"):
+        # Poll the output until the command has printed, then answer the request.
+        result = message.get("result") or {}
+        if req_id == "term-create":
+            terminal = result.get("terminalId")
+        elif result.get("output"):
+            if TERMINAL_LOG:
+                with open(TERMINAL_LOG, "a") as log:
+                    log.write(result["output"])
+            if running_for == "new":
+                running_for = None
+                send({"jsonrpc": "2.0", "id": pending[0], "result": {"sessionId": "write-session"}})
+            elif os.environ.get("MOCK_TERMINAL_ON_INITIALIZE") == "ok":
+                running_for = None
+                send({"jsonrpc": "2.0", "id": pending[0], "result": initialize_result()})
+            else:
+                send({"jsonrpc": "2.0", "id": pending[0],
+                      "error": {"code": -32603, "message": "initialize failed on purpose"}})
+            continue
+        else:
+            time.sleep(0.02)
+        send({"jsonrpc": "2.0", "id": "term-poll", "method": "terminal/output",
+              "params": {"sessionId": "init", "terminalId": terminal}})
+    elif method == "initialize":
+        send({"jsonrpc": "2.0", "id": req_id, "result": initialize_result()})
+    elif method == "session/new" and TERMINAL and os.environ.get("MOCK_TERMINAL_ON_NEW"):
+        cwd = message["params"]["cwd"]
+        pending = (req_id, "write-session")
+        running_for = "new"
+        argv = json.loads(TERMINAL)
+        send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+            "sessionId": "write-session", "command": argv[0], "args": argv[1:]}})
+    elif method == "session/new" and os.environ.get("MOCK_READ_ON_NEW"):
+        cwd = message["params"]["cwd"]
+        pending = (req_id, "write-session")
+        send({"jsonrpc": "2.0", "id": "new-read", "method": "fs/read_text_file", "params": {
+            "sessionId": "write-session", "path": os.path.join(cwd, "notes.txt")}})
+    elif req_id == "new-read" and method is None:
+        error = message.get("error")
+        line = ("error:" + ((error.get("data") or {}).get("details") or error.get("message"))) if error \
+            else "ok:" + message["result"]["content"]
+        if TERMINAL_LOG:
+            with open(TERMINAL_LOG, "a") as log:
+                log.write(line + "\n")
+        send({"jsonrpc": "2.0", "id": pending[0], "result": {"sessionId": "write-session"}})
     elif method in ("session/new", "session/load"):
         cwd = message["params"]["cwd"]
         send({"jsonrpc": "2.0", "id": req_id,
               "result": {"sessionId": message["params"].get("sessionId", "write-session")}})
+    elif method == "session/set_mode" and TERMINAL:
+        pending = (req_id, message["params"]["sessionId"])
+        running_for = "set_mode"
+        argv = json.loads(TERMINAL)
+        send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+            "sessionId": pending[1], "command": argv[0], "args": argv[1:]}})
+    elif method == "session/set_mode":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/prompt":
         pending = (req_id, message["params"]["sessionId"])
-        if os.environ.get("MOCK_TOOL_PERMISSION"):
+        running_for = "prompt"
+        if TERMINAL:
+            argv = json.loads(TERMINAL)
+            send({"jsonrpc": "2.0", "id": "term-create", "method": "terminal/create", "params": {
+                "sessionId": pending[1], "command": argv[0], "args": argv[1:]}})
+        elif os.environ.get("MOCK_TOOL_PERMISSION"):
             send({"jsonrpc": "2.0", "id": "write", "method": "session/request_permission", "params": {
                 "sessionId": pending[1],
                 "toolCall": {"toolCallId": "t1", "title": "Edit notes.txt", "kind": "edit"},
@@ -58,6 +138,34 @@ for line in sys.stdin:
         else:
             send({"jsonrpc": "2.0", "id": "write", "method": "fs/write_text_file", "params": {
                 "sessionId": pending[1], "path": os.path.join(cwd, "written.txt"), "content": "hi"}})
+    elif method is None and str(req_id).startswith("term-"):
+        error = message.get("error")
+        # Each answer sends the next request: create, wait, output, release.
+        following = {"term-create": ("term-wait", "terminal/wait_for_exit"),
+                     "term-wait": ("term-output", "terminal/output"),
+                     "term-output": ("term-release", "terminal/release")}.get(req_id)
+        if req_id == "term-create" and not error:
+            terminal = message["result"]["terminalId"]
+        elif req_id == "term-wait" and not error:
+            exit_status = message["result"]
+        elif req_id == "term-output" and not error:
+            output = message["result"]["output"]
+        if error or following is None:
+            if error:
+                line = "error:" + ((error.get("data") or {}).get("details") or error.get("message"))
+            else:
+                line = "ran:%s:%s" % (exit_status["exitCode"], output)
+            if running_for == "set_mode":
+                if TERMINAL_LOG:
+                    with open(TERMINAL_LOG, "a") as log:
+                        log.write(line + "\n")
+                send({"jsonrpc": "2.0", "id": pending[0], "result": {}})
+            else:
+                say(pending[1], line)
+                send({"jsonrpc": "2.0", "id": pending[0], "result": {"stopReason": "end_turn"}})
+        else:
+            send({"jsonrpc": "2.0", "id": following[0], "method": following[1],
+                  "params": {"sessionId": pending[1], "terminalId": terminal}})
     elif req_id == "write" and method is None:
         error = message.get("error")
         if error:

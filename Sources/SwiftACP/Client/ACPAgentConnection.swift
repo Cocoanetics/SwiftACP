@@ -10,7 +10,7 @@ import JSONRPCPeer
 /// higher-level ``ACPAgent``/``ACPSession`` wrappers instead.
 public actor ACPAgentConnection {
     private let rpc: JSONRPCPeer
-    private var handlers: ACPClientHandlers
+    var handlers: ACPClientHandlers
     var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
@@ -32,6 +32,11 @@ public actor ACPAgentConnection {
     /// can set ``FileSystemAccessScope/unrestricted``.
     public private(set) var fileSystemAccess: FileSystemAccessScope = .sessionRoot
 
+    /// Runs the agent's `terminal/*` requests — see ``setTerminalHandler(_:)``.
+    var terminalHandler: (any ACPTerminalHandler)?
+    /// Set once ``shutDownTerminals()`` has run.
+    var terminalsShutDown = false
+
     /// Widen or restore how far `fs/*` may reach. Containment is the default; an
     /// embedder that mediates filesystem access itself can opt out.
     public func setFileSystemAccess(_ scope: FileSystemAccessScope) {
@@ -41,6 +46,8 @@ public actor ACPAgentConnection {
     /// Each session's working directory, recorded from `session/new`, `session/load`
     /// and `session/resume` — the root `fs/*` paths are confined to.
     var sessionRoots: [SessionId: String] = [:]
+    /// The `cwd` of each `session/new` still waiting for its answer.
+    var sessionRootsBeingCreated: [UUID: String] = [:]
 
     /// Sessions with a `session/prompt` in flight.
     private var promptingSessionIds: Set<SessionId> = []
@@ -115,6 +122,10 @@ public actor ACPAgentConnection {
 
     private func markClosed() {
         isClosed = true
+        // acpx retires an agent's terminals whenever its connection ends: a disconnected
+        // agent can no longer release them. Not awaited, so the end of the connection is
+        // not held up by commands being killed; `ACPAgent.close()` awaits it itself.
+        if terminalHandler != nil { Task { await shutDownTerminals() } }
     }
 
     /// Whether `error` is this layer reporting the connection ended — a request sent
@@ -177,6 +188,10 @@ public actor ACPAgentConnection {
     }
 
     public func close() {
+        // The agent's commands go too, as acpx retires its terminals when its client
+        // closes. The task keeps the connection until they have; `ACPAgent.close()`
+        // awaits the same shutdown itself.
+        if terminalHandler != nil { Task { await shutDownTerminals() } }
         isClosed = true
         for sink in updateSinks.values { sink.finish() }
         for sink in eventSinks.values { sink.finish() }
@@ -259,10 +274,26 @@ public actor ACPAgentConnection {
         let _: EmptyResponse = try await send("authenticate", AuthenticateRequest(methodId: methodId))
     }
 
+    /// While the request is out, the agent can ask for a terminal or a file for the
+    /// session it is creating, whose id the client does not know yet: those requests
+    /// get this `cwd` (see ``sessionRoot(_:)``), as acpx's client answers them in its
+    /// own, the session's.
     public func newSession(_ request: NewSessionRequest) async throws -> NewSessionResponse {
+        let creation = UUID()
+        sessionRootsBeingCreated[creation] = request.cwd
+        defer { sessionRootsBeingCreated[creation] = nil }
         let response: NewSessionResponse = try await send("session/new", request)
         sessionRoots[response.sessionId] = request.cwd
         return response
+    }
+
+    /// The root of `sessionId`: the one registered for it, else — for a session being
+    /// created right now — the `cwd` its `session/new` asked for, when every creation
+    /// in flight asked for the same one.
+    func sessionRoot(_ sessionId: SessionId) -> String? {
+        if let root = sessionRoots[sessionId] { return root }
+        let creating = Set(sessionRootsBeingCreated.values)
+        return creating.count == 1 ? creating.first : nil
     }
 
     /// The root is registered *before* the request is sent: this actor is reentrant at
@@ -315,30 +346,45 @@ public actor ACPAgentConnection {
             cancellingSessionIds.remove(request.sessionId)
         }
         // The turn is not over until the agent's requests from it are answered: one it
-        // sent without awaiting would otherwise be handled after this returns — under
-        // the next turn's handlers, and counted against that turn.
-        do {
-            let response: PromptResponse = try await send("session/prompt", request)
-            await inboundRequests.waitUntilIdle(request.sessionId)
-            return response
-        } catch {
-            await inboundRequests.waitUntilIdle(request.sessionId)
-            throw error
+        // sent without awaiting would otherwise be counted against the next turn.
+        return try await answeringItsRequests(in: request.sessionId) {
+            try await send("session/prompt", request)
         }
     }
 
     public func setMode(_ request: SetSessionModeRequest) async throws {
-        let _: EmptyResponse = try await send("session/set_mode", request)
+        try await answeringItsRequests(in: request.sessionId) {
+            let _: EmptyResponse = try await send("session/set_mode", request)
+        }
     }
 
     @discardableResult
     public func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
         -> SetSessionConfigOptionResponse {
-        try await send("session/set_config_option", request)
+        try await answeringItsRequests(in: request.sessionId) {
+            try await send("session/set_config_option", request)
+        }
     }
 
     public func setModel(_ request: SetSessionModelRequest) async throws {
-        let _: EmptyResponse = try await send("session/set_model", request)
+        try await answeringItsRequests(in: request.sessionId) {
+            let _: EmptyResponse = try await send("session/set_model", request)
+        }
+    }
+
+    /// Send a request whose answer can arrive before the answers to what the agent asked
+    /// of the client meanwhile — a turn, or a control. Those requests belong to it, and
+    /// are answered before this returns: afterwards they would be handled under
+    /// whatever handlers the next caller put in place.
+    private func answeringItsRequests<T>(in sessionId: SessionId, _ body: () async throws -> T) async throws -> T {
+        do {
+            let value = try await body()
+            await inboundRequests.waitUntilIdle(sessionId)
+            return value
+        } catch {
+            await inboundRequests.waitUntilIdle(sessionId)
+            throw error
+        }
     }
 
     /// `session/cancel` is a notification — fire and forget.
@@ -374,20 +420,22 @@ public actor ACPAgentConnection {
         switch method {
         case "fs/read_text_file":
             guard advertisedCapabilities?.fs.readTextFile != false else {
-                return .failure(.methodNotFound(method))
+                return .failure(Self.methodNotFound(method))
             }
             return await routeFileSystem(
                 method, params, access: .read, handlers.readTextFile, authorize: handlers.authorizeRead)
         case "fs/write_text_file":
             guard advertisedCapabilities?.fs.writeTextFile != false else {
-                return .failure(.methodNotFound(method))
+                return .failure(Self.methodNotFound(method))
             }
             return await routeFileSystem(
                 method, params, access: .write, handlers.writeTextFile,
                 authorize: handlers.authorizeWrite)
+        case _ where Self.terminalMethods.contains(method):
+            return await routeTerminal(method, params)
         case "session/request_permission":
             guard let handler = handlers.requestPermission else {
-                return .failure(.methodNotFound(method))
+                return .failure(Self.methodNotFound(method))
             }
             do {
                 let request: RequestPermissionRequest = try decode(params)
@@ -399,7 +447,7 @@ public actor ACPAgentConnection {
                 return .failure(.internalError(error.localizedDescription))
             }
         default:
-            return .failure(.methodNotFound(method))
+            return .failure(Self.methodNotFound(method))
         }
     }
 
@@ -421,11 +469,11 @@ public actor ACPAgentConnection {
         }
     }
 
+    /// The request's params as `T`, or the ACP SDK's `Invalid params` when they are
+    /// missing or do not fit.
     func decode<T: Decodable>(_ params: JSONValue?) throws -> T {
-        guard let params else {
-            throw JSONRPCErrorBody.invalidParams("missing params")
-        }
-        return try params.decoded(T.self)
+        guard let params, let decoded = try? params.decoded(T.self) else { throw Self.invalidParams }
+        return decoded
     }
 }
 

@@ -45,30 +45,40 @@ public struct ACPClientHandlers: Sendable {
     /// under `--deny-all`. Called at the same point as ``authorizeWrite``; throw to
     /// refuse. `nil` approves every read.
     public var authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)?
+    /// Authorize a `terminal/create` before the command is started — acpx's
+    /// `isExecuteApproved`. The commands themselves are run by the connection's
+    /// ``ACPTerminalHandler``, which outlives any one turn's handlers; this decides, per
+    /// turn, whether one may start. Throw to refuse (a ``TerminalError`` reaches the
+    /// agent in acpx's words). `nil` approves every command.
+    public var authorizeTerminal: (@Sendable (CreateTerminalRequest) async throws -> Void)?
 
     public init(
         requestPermission: (@Sendable (RequestPermissionRequest) async throws -> RequestPermissionResponse)? = nil,
         readTextFile: (@Sendable (ReadTextFileRequest) async throws -> ReadTextFileResponse)? = nil,
         writeTextFile: (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)? = nil,
         authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)? = nil,
-        authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)? = nil
+        authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)? = nil,
+        authorizeTerminal: (@Sendable (CreateTerminalRequest) async throws -> Void)? = nil
     ) {
         self.requestPermission = requestPermission
         self.readTextFile = readTextFile
         self.writeTextFile = writeTextFile
         self.authorizeWrite = authorizeWrite
         self.authorizeRead = authorizeRead
+        self.authorizeTerminal = authorizeTerminal
     }
 
     /// Sensible defaults for a headless controller: a permission policy plus real
     /// local file access (matching the `fs` capability we advertise), with writes
-    /// gated the way acpx gates them — see ``WriteApproval``.
+    /// and commands gated the way acpx gates them — see ``WriteApproval`` and
+    /// ``TerminalApproval``.
     ///
     /// - Parameters:
-    ///   - nonInteractivePermissions: what a write needing confirmation does when
-    ///     there is no terminal to ask on.
-    ///   - confirmWrite: how to ask. `nil` asks on `terminal`, as acpx does.
-    ///   - terminal: the terminal the default confirmation asks on.
+    ///   - nonInteractivePermissions: what a write or command needing confirmation does
+    ///     when there is no terminal to ask on.
+    ///   - confirmWrite: how to ask about a write. `nil` asks on `terminal`, as acpx does.
+    ///   - confirmTerminal: how to ask about a command. `nil` asks on `terminal`.
+    ///   - terminal: the terminal the default confirmations ask on.
     ///   - rules: a per-tool permission policy that comes before the mode `permission`
     ///     names — see ``PermissionRules``. A ``PermissionPolicy/custom(_:)`` resolver
     ///     answers without it, as acpx's host permission handler does.
@@ -76,6 +86,7 @@ public struct ACPClientHandlers: Sendable {
         permission: PermissionPolicy,
         nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
         confirmWrite: WriteApproval.Confirmation? = nil,
+        confirmTerminal: TerminalApproval.Confirmation? = nil,
         terminal: TerminalPermissionPrompt = .shared,
         rules: PermissionRules? = nil
     ) -> ACPClientHandlers {
@@ -84,6 +95,9 @@ public struct ACPClientHandlers: Sendable {
             terminal: terminal)
         let tools = ToolPermissionApproval(
             policy: permission, nonInteractive: nonInteractivePermissions, rules: rules, terminal: terminal)
+        let commands = TerminalApproval(
+            policy: permission, nonInteractive: nonInteractivePermissions, confirm: confirmTerminal,
+            terminal: terminal)
         return ACPClientHandlers(
             requestPermission: { try await tools.resolve($0) },
             readTextFile: { try LocalFileSystem.read($0) },
@@ -92,7 +106,8 @@ public struct ACPClientHandlers: Sendable {
             authorizeRead: { _ in
                 // acpx's `readTextFile`: only `--deny-all` refuses a read.
                 if case .denyAll = permission { throw FileSystemPermissionError.readDenied }
-            })
+            },
+            authorizeTerminal: { try await commands.authorize($0) })
     }
 }
 
