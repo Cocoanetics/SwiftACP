@@ -70,4 +70,26 @@ extension DaemonToolsTests {
             #expect(SessionStore.loadRecord(id)?.acpx?.desiredConfigOptions == ["effort": "low"])
         }
     }
+
+    /// A held agent that exits on the turn's model request leaves the turn to a fresh
+    /// launch, as one that exits before the prompt does: the prompt never reached it
+    /// (#105 review). There the model is already current, so it is not asked again.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aHeldAgentExitingOnTheTurnsModelLeavesTheTurnToAFreshLaunch() async throws {
+        try await withIsolatedStore {
+            let armed = ACPXPaths.baseDir.appendingPathComponent("exit-on-model")
+            let (id, log) = try await pinnedSession(
+                load: true, environment: "MODEL_AGENT_EXIT_ON_MODEL='\(armed.path)' ")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            try "".write(to: armed, atomically: true, encoding: .utf8)
+            try "".write(to: log, atomically: true, encoding: .utf8)
+
+            _ = try await daemon.runPrompt(sessionId: id, text: "second", model: "m1")
+            #expect(try Self.modelAgentRequests(log) == [
+                "session/set_config_option model=m1", "session/load", "session/prompt"
+            ])
+            #expect(SessionStore.loadRecord(id)?.acpx?.sessionOptions?.model == "m1")
+        }
+    }
 }

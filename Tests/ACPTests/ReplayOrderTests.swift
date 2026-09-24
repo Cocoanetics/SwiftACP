@@ -12,8 +12,12 @@ import Testing
 extension DaemonToolsTests {
     /// A session on `model-agent.py`, pinned to `m2`, with `edit` applied to its record
     /// behind the daemon's back. Returns the session's id and the request log.
+    ///
+    /// - Parameter environment: more of the fixture's `MODEL_AGENT_*` settings, as
+    ///   `NAME='value' ` pairs.
     func pinnedSession(
-        load: Bool = false, models: String? = nil, _ edit: (inout SessionAcpxState) -> Void = { _ in }
+        load: Bool = false, models: String? = nil, environment: String = "",
+        _ edit: (inout SessionAcpxState) -> Void = { _ in }
     ) async throws -> (id: String, log: URL) {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)
@@ -23,7 +27,7 @@ extension DaemonToolsTests {
         let modelsFile = ACPXPaths.baseDir.appendingPathComponent("models.txt")
         try "m1,m2".write(to: modelsFile, atomically: true, encoding: .utf8)
         let command = "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' MODEL_AGENT_MODELS_FILE='\(modelsFile.path)' "
-            + (load ? "MODEL_AGENT_LOAD=1 " : "") + "'\(python)' '\(fixture.path)'"
+            + (load ? "MODEL_AGENT_LOAD=1 " : "") + environment + "'\(python)' '\(fixture.path)'"
         var options = SessionAcpxState.SessionOptions()
         options.model = "m2"
         let created = try await SessionEngine.createSession(

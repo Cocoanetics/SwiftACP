@@ -13,7 +13,9 @@ options, a `models` block, and `session/set_model` as the only model control.
 and `m2`; the current one stays `m1`. `MODEL_AGENT_MODELS_FILE` names a file holding
 that list instead, read at launch, so a test can change what a later launch offers.
 `MODEL_AGENT_LOAD=1` makes it take sessions back with `session/load`, answering with
-what `session/new` would. `session/set_mode` is accepted.
+what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
+names a file: while it exists, the next model request removes it and the agent exits
+without answering.
 """
 import json
 import os
@@ -28,6 +30,7 @@ if MODELS_FILE and os.path.exists(MODELS_FILE):
 else:
     MODELS = os.environ.get("MODEL_AGENT_MODELS", "m1,m2").split(",")
 NAMES = {"m1": "One", "m2": "Two"}
+EXIT_ON_MODEL = os.environ.get("MODEL_AGENT_EXIT_ON_MODEL")
 
 
 def config_options():
@@ -44,6 +47,17 @@ def config_options():
 def legacy_models():
     return {"currentModelId": CURRENT["model"],
             "availableModels": [{"modelId": model, "name": NAMES.get(model, model)} for model in MODELS]}
+
+
+def exits_on(method, params):
+    """Whether this is the model request `MODEL_AGENT_EXIT_ON_MODEL` armed the agent to die on."""
+    if not EXIT_ON_MODEL or not os.path.exists(EXIT_ON_MODEL):
+        return False
+    if method == "session/set_model" or (
+            method == "session/set_config_option" and params.get("configId") == "model"):
+        os.remove(EXIT_ON_MODEL)
+        return True
+    return False
 
 
 def send(obj):
@@ -66,6 +80,8 @@ def main():
         message = json.loads(line)
         log(message)
         method, req_id = message.get("method"), message.get("id")
+        if exits_on(method, message.get("params", {})):
+            sys.exit(3)
 
         if method == "initialize":
             send({"jsonrpc": "2.0", "id": req_id, "result": {
