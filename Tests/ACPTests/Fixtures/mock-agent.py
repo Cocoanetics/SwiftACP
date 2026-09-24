@@ -79,6 +79,26 @@ def handle_prompt(req_id, params):
                 len(base64.b64decode(block.get("data", ""))),
             ))
 
+    # "gone turn": a partial reply, then a session-gone error.
+    if text.strip() == "gone turn":
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "partial "},
+        })
+        send({"jsonrpc": "2.0", "id": req_id, "error": {
+            "code": -32002, "message": "Resource not found: session %s" % session_id}})
+        return
+
+    # "fail turn": a partial reply, then the agent's error response, with details.
+    if text.strip() == "fail turn":
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "partial "},
+        })
+        send({"jsonrpc": "2.0", "id": req_id, "error": {
+            "code": -32603, "message": "Internal error", "data": {"details": "model overloaded"}}})
+        return
+
     # A short plan.
     session_update(session_id, {
         "sessionUpdate": "plan",
@@ -169,7 +189,12 @@ def main():
                 "authMethods": [],
             })
         elif method == "session/new":
-            respond(req_id, {"sessionId": SESSION_ID})
+            # MOCK_NEW_META / MOCK_LOAD_META: the `_meta` (JSON) of the replies that
+            # open a session, where an agent names its own session id.
+            result = {"sessionId": SESSION_ID}
+            if os.environ.get("MOCK_NEW_META"):
+                result["_meta"] = json.loads(os.environ["MOCK_NEW_META"])
+            respond(req_id, result)
         elif method == "session/load" and LOAD_MODE != "unsupported":
             # `gone` (the default) is the usual reason a fresh agent process cannot
             # load a session: it no longer has it. `ok` takes it back; `internal`
@@ -181,7 +206,8 @@ def main():
                                             "content": {"type": "text", "text": "replayed question"}})
                     session_update(loaded, {"sessionUpdate": "agent_message_chunk",
                                             "content": {"type": "text", "text": "replayed answer"}})
-                respond(req_id, {})
+                respond(req_id, {"_meta": json.loads(os.environ["MOCK_LOAD_META"])}
+                        if os.environ.get("MOCK_LOAD_META") else {})
                 if LOAD_REPLAY:
                     session_update(loaded, {"sessionUpdate": "agent_message_chunk",
                                             "content": {"type": "text", "text": "replayed late"}})
@@ -206,6 +232,11 @@ def main():
                 sys.stdout.flush()
                 os._exit(0)
         elif method == "session/set_mode":
+            # MOCK_SET_MODE_ERROR: refuse every mode, with details.
+            if os.environ.get("MOCK_SET_MODE_ERROR"):
+                send({"jsonrpc": "2.0", "id": req_id, "error": {
+                    "code": -32603, "message": "Internal error", "data": {"details": "mode unavailable"}}})
+                continue
             # Echo the new mode back as a current_mode_update, then ack.
             params = message.get("params", {})
             session_update(params.get("sessionId", "mock-session-1"),

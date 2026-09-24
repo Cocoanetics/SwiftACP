@@ -67,7 +67,8 @@ import Testing
     // MARK: - What the daemon refuses
 
     /// The mock advertises `promptCapabilities.image: false` unless told otherwise,
-    /// so this is the capability gate, checked once the agent is connected.
+    /// so this is the capability gate, checked once the agent is connected — as acpx
+    /// checks it when it prompts.
     @Test(.enabled(if: mockPythonAvailable))
     func imagesAreRefusedWhenTheAgentDoesNotAdvertiseThem() async throws {
         let command = try #require(mockCommand())
@@ -76,14 +77,18 @@ import Testing
             let id = try await daemon.newSession(
                 agentCommand: command, cwd: NSTemporaryDirectory())
 
-            await #expect(throws: PromptBlockError.self) {
+            let refusal = await #expect(throws: UnsupportedPromptContentError.self) {
                 _ = try await daemon.runPrompt(
                     sessionId: id, text: "look", blocks: [Self.png])
             }
+            #expect(refusal?.index == 1)
+            #expect(refusal?.capability == "image")
 
-            // The gate runs before the prompt is recorded, so a turn the agent never
-            // saw leaves no user message behind — however slowly the agent launched.
-            #expect(try await daemon.sessionHistory(sessionId: id).isEmpty)
+            // acpx records the prompt before it connects, so the refused turn is in the
+            // history although the agent never saw it — and nothing answered it.
+            let history = try await daemon.sessionHistory(sessionId: id)
+            #expect(history.map(\.role) == ["user"])
+            #expect(history.first?.textPreview.contains("look") == true)
         }
     }
 

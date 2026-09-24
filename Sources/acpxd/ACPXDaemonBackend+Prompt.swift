@@ -78,41 +78,62 @@ extension ACPXDaemonBackend {
         // case in which a session-gone failure can mean the agent dropped the session
         // from under it (see the retry below).
         let wasHeld = live[recordId] != nil
-        // Gate each block on what the agent advertised, the way npm acpx's client
-        // does: an agent without the capability either ignores the block or errors
-        // opaquely. Capabilities come from `initialize`, so this has to connect first
-        // — `ensure` is idempotent, and the turn below reuses the entry it warms.
-        // Refusing *here*, before the prompt is recorded, keeps a turn the agent
-        // never saw out of the session's history. Text and `resource_link` are never
-        // gated, so an ordinary turn still connects lazily.
-        let gated = content.enumerated().compactMap { index, block in
-            block.requiredPromptCapability.map { (index: index, requirement: $0) }
-        }
-        if !gated.isEmpty {
-            let entry = try await ensure(
-                recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
-                onConnectOutput: Self.forwardToClient(logger: recordId))
-            let capabilities = entry.agent.promptCapabilities
-            if let unmet = gated.first(where: { !$0.requirement.isAdvertised(by: capabilities) }) {
-                throw PromptBlockError.capabilityUnsupported(
-                    index: unmet.index, capability: unmet.requirement.rawValue,
-                    agent: agentCommand)
-            }
-        }
-        // Record the user's prompt once, up front; the persister checkpoints the
-        // turn to disk on a debounce as updates stream in (acpx's live checkpoint),
-        // draining the wire buffer into the event log on each save. A session-gone
-        // retry reuses both, so the prompt isn't double-recorded.
+        // Record the user's prompt once, up front, before connecting — acpx keeps the
+        // prompt of a turn that fails, even one that never reached the agent. The
+        // persister checkpoints the turn to disk on a debounce as updates stream in
+        // (acpx's live checkpoint), draining the wire buffer into the event log on each
+        // save. A session-gone retry reuses both, so the prompt isn't double-recorded.
         let eventBuffer = WireBuffer()
-        // Read again: connecting above may have moved the record to a replacement session.
-        let persister = TurnPersister(record: findRecord(recordId) ?? record, eventBuffer: eventBuffer)
+        let persister = TurnPersister(record: record, eventBuffer: eventBuffer)
         await persister.recordPrompt(content)
+        // The turn's exchange, watched for the error a failure turns out to be.
+        let errors = TurnErrorWatch()
+        let turn = Turn(
+            recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers, blocks: content,
+            permissions: permissions, persister: persister, eventBuffer: eventBuffer, streamWire: streamWire,
+            errors: errors)
+        // acpx keeps the prompt of a turn that fails, and what the agent said of it.
+        return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
+            try await attemptWithRetry(turn, wasHeld: wasHeld)
+        }
+    }
+
+    /// One turn's settings, as ``attemptPrompt(_:)`` needs them.
+    struct Turn {
+        let recordId: String
+        let agentCommand: String
+        let cwd: String
+        let mcpServers: [McpServerConfig]?
+        let blocks: [ContentBlock]
+        let permissions: TurnPermissions
+        let persister: TurnPersister
+        let eventBuffer: WireBuffer
+        let streamWire: Bool
+        let errors: TurnErrorWatch
+    }
+
+    /// Run `body`; when it fails, tell the calling client how, the way acpx's queue
+    /// owner tells its CLI — a ``TurnFailedEvent`` — and save the turn so far, then
+    /// rethrow.
+    func reportingFailure<T>(
+        of recordId: String, errors: TurnErrorWatch, saving persister: TurnPersister? = nil,
+        _ body: () async throws -> T
+    ) async throws -> T {
         do {
-            return try await attemptPrompt(
-                recordId: recordId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: content, permissions: permissions,
-                persister: persister, eventBuffer: eventBuffer, streamWire: streamWire)
+            return try await body()
         } catch {
+            let event = TurnFailure.event(for: error, shown: errors.match(error), sessionId: recordId)
+            await Session.current?.sendLogNotification(
+                LogMessage(level: .info, logger: recordId, data: toJSONValue(event)))
+            await persister?.finish()
+            throw error
+        }
+    }
+
+    private func attemptWithRetry(_ turn: Turn, wasHeld: Bool) async throws -> String {
+        do {
+            return try await attemptPrompt(turn, retriesOnAFreshLaunch: wasHeld)
+        } catch is RetriedOnAFreshLaunch {
             // A held session can disappear (the agent dropped it — e.g. after an
             // earlier failure). Evict the stale entry and try once more from a fresh
             // launch. Only retry for session-gone errors, never transient ones like
@@ -123,21 +144,31 @@ extension ACPXDaemonBackend {
             //
             // A held agent can also exit just after `ensure` found it open. When none of
             // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
-            // launch unseen; one it did reach is never sent twice.
-            guard wasHeld, isSessionGone(error) || error is AgentExitedBeforeTheTurn else { throw error }
-            await evict(recordId)
-            return try await attemptPrompt(
-                recordId: recordId, agentCommand: agentCommand, cwd: cwd,
-                mcpServers: mcpServers, blocks: content, permissions: permissions,
-                persister: persister, eventBuffer: eventBuffer, streamWire: streamWire)
+            // launch unseen; one it did reach is never sent twice. Nor is one the agent
+            // answered at all (`TurnWireFeed.agentAnswered`): the attempt decides.
+            await evict(turn.recordId)
+            return try await attemptPrompt(turn, retriesOnAFreshLaunch: false)
         }
     }
 
+    /// An attempt a fresh launch of the agent is to take over: see
+    /// ``isFixedByAFreshLaunch(_:)``.
+    struct RetriedOnAFreshLaunch: Error {
+        let underlying: Error
+    }
+
+    /// A failure a fresh launch of the agent would not have: the held agent dropped the
+    /// session, or exited before any of the turn reached it.
+    func isFixedByAFreshLaunch(_ error: Error) -> Bool {
+        isSessionGone(error) || error is AgentExitedBeforeTheTurn
+    }
+
     /// Forwards what connecting an agent for a turn put on the wire to the MCP client
-    /// the turn is for, before the turn's own messages.
-    static func forwardToClient(logger: String) -> ConnectOutputHandler {
+    /// the turn is for, before the turn's own messages — noting its errors on the way.
+    static func forwardToClient(logger: String, errors: TurnErrorWatch? = nil) -> ConnectOutputHandler {
         let clientSession = Session.current
         return { messages in
+            errors?.observe(messages)
             for message in messages {
                 await clientSession?.sendLogNotification(
                     LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
@@ -145,40 +176,43 @@ extension ACPXDaemonBackend {
         }
     }
 
-    private func attemptPrompt(
-        recordId: String, agentCommand: String, cwd: String, mcpServers: [McpServerConfig]?,
-        blocks: [ContentBlock], permissions: TurnPermissions, persister: TurnPersister,
-        eventBuffer: WireBuffer, streamWire: Bool
-    ) async throws -> String {
+    /// - Parameter retriesOnAFreshLaunch: whether a failure a fresh launch would not
+    ///   have (``isFixedByAFreshLaunch(_:)``) is retried on one, as long as the agent has
+    ///   not answered the attempt. It then throws ``RetriedOnAFreshLaunch``, and nothing
+    ///   of the attempt is shown: it does not fail the turn.
+    private func attemptPrompt(_ turn: Turn, retriesOnAFreshLaunch: Bool) async throws -> String {
+        let (recordId, blocks, permissions) = (turn.recordId, turn.blocks, turn.permissions)
+        let (persister, eventBuffer, errors) = (turn.persister, turn.eventBuffer, turn.errors)
+        // Nothing an earlier attempt showed says how this one fails — not even when it
+        // fails to connect at all.
+        errors.reset()
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
         let entry = try await ensure(
-            recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
+            recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
             onReplacement: { await persister.adoptReplacement($0) },
-            onConnectOutput: Self.forwardToClient(logger: recordId))
+            onAgentSessionId: { await persister.adoptAgentSessionId($0) },
+            onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
+        // The attempt proper starts once connected: a restore the agent refused while
+        // connecting is on the wire, but it is not how this attempt fails.
+        errors.reset()
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId
         // Whether any of this turn has been written to the agent — its prompt is the
         // first thing that is. Cleared when the turn ends.
         let wrote = WriteMark()
-        // `streamWire`: each message of the turn goes to the calling client as it crosses
-        // the wire, in order — `--format json` prints them, as acpx does.
-        let (wireMessages, wireFeed) = AsyncStream<WireMessageEvent>.makeStream()
-        entry.agent.rawWire.set { direction, body in
-            if direction == .outbound { wrote.mark() }
-            if streamWire { wireFeed.yield(WireMessageEvent(direction, body)) }
-        }
-        defer { entry.agent.rawWire.set(nil) }
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
-        let wireForwarder = Task {
-            for await message in wireMessages {
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: recordId, data: toJSONValue(message)))
-            }
+        let wireFeed = TurnWireFeed(
+            streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
+        entry.agent.rawWire.set { direction, body in
+            if direction == .outbound { wrote.mark() }
+            errors.observe(direction, body)
+            wireFeed.observe(direction, body)
         }
+        defer { entry.agent.rawWire.set(nil) }
 
         // This turn's permissions: acpx sends the mode with every prompt and the queue
         // owner applies it to that turn, so the live agent's handlers are swapped per
@@ -236,8 +270,7 @@ extension ACPXDaemonBackend {
             await connection.setWireObserver(nil)
             let fullText = await consumer.value
             // The exchange ends with the prompt's response; the turn's end follows it.
-            wireFeed.finish()
-            await wireForwarder.value
+            await wireFeed.finish()
             // Capture the token breakdown the agent reports on the response (Claude
             // Code does; acpx misses this — it only reads usage_update._meta.usage).
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
@@ -257,13 +290,14 @@ extension ACPXDaemonBackend {
         } catch {
             await connection.endSubscription(subscriptionId)
             await connection.setWireObserver(nil)
-            consumer.cancel()
-            wireFeed.finish()
-            await wireForwarder.value
-            if ACPAgentConnection.isConnectionClosed(error), !wrote.happened {
-                throw AgentExitedBeforeTheTurn(underlying: error)
-            }
-            throw error
+            // Everything the agent said before failing still goes out, and is kept, as
+            // acpx shows and records it — then the error itself.
+            _ = await consumer.value
+            let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
+                ? AgentExitedBeforeTheTurn(underlying: error) : error
+            let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
+            await wireFeed.finish(showingHeld: !retried)
+            throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
         }
     }
 }
@@ -329,12 +363,4 @@ final class WriteMark: @unchecked Sendable {
         lock.withLock { marked }
     }
 
-}
-
-extension WireMessageEvent {
-    init(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        self.init(
-            wireDirection: direction == .outbound ? "outbound" : "inbound",
-            wireLine: String(decoding: body, as: UTF8.self))
-    }
 }

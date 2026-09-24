@@ -34,12 +34,12 @@ struct RenderOptions: Sendable {
 /// Renders a turn's `SessionUpdate`s. One instance per turn; access is serial
 /// (the run loop invokes it from a single task), guarded for `@Sendable` use.
 final class OutputRenderer: @unchecked Sendable {
-    private let options: RenderOptions
-    private let lock = NSLock()
+    let options: RenderOptions
+    let lock = NSLock()
     /// Where the transcript (stdout) and the quiet-mode notices (stderr) go — the
     /// console by default; tests capture them.
-    private let out: @Sendable (String) -> Void
-    private let err: @Sendable (String) -> Void
+    let out: @Sendable (String) -> Void
+    let err: @Sendable (String) -> Void
     private let useColor: Bool
 
     // Text-mode state
@@ -49,11 +49,11 @@ final class OutputRenderer: @unchecked Sendable {
     private var atLineStart = true
 
     // Quiet-mode buffer
-    private var quietChunks: [String] = []
+    var quietChunks: [String] = []
 
     // JSON wire-mode state
     private var sanitizer: JSONMessageSanitizer
-    private var shownErrors = AcpErrorTracker()
+    var shownErrors = AcpErrorTracker()
 
     init(
         options: RenderOptions,
@@ -92,36 +92,26 @@ final class OutputRenderer: @unchecked Sendable {
     func wireMessage(_ event: WireMessageEvent) {
         let direction: JSONRPCPeer.WireDirection = event.wireDirection == "outbound" ? .outbound : .inbound
         if streamsWireJSON {
-            acpMessage(direction, Data(event.wireLine.utf8))
+            // The daemon starts each attempt at the turn's prompt: what came before no
+            // longer says how the turn fails.
+            let body = Data(event.wireLine.utf8)
+            if direction == .outbound, WireJSON(parsing: body)?["method"] == .text("session/prompt") {
+                promptAttemptStarts()
+            }
+            acpMessage(direction, body)
             return
         }
-        guard let message = WireJSON(parsing: Data(event.wireLine.utf8)),
-            let method = message["method"]?.stringValue,
+        guard let message = WireJSON(parsing: Data(event.wireLine.utf8)) else { return }
+        // An error response, either way, is shown as an error, as acpx's text formatter
+        // shows one (`parseJsonRpcErrorSummary`: its details, else its message).
+        if options.format == .text, !message.hasMember("method"), let error = AcpErrorPayload.extract(from: message) {
+            renderError(code: "RUNTIME", error.details ?? error.message)
+            return
+        }
+        guard let method = message["method"]?.stringValue,
             !["session/prompt", "session/cancel", "session/update"].contains(method)
         else { return }
         clientOperation(method)
-    }
-
-    /// A turn that needed a permission question nobody could be asked fails once over,
-    /// and acpx's queue owner reports it (`emitQueueOwnerError`): text output as an
-    /// `[error]` section, JSON output as its error line naming the session. Neither
-    /// prints when the stream already shows the client's refusal saying the same, as a
-    /// refused write's does. Quiet output is ``permissionExitCode(_:quiet:queueDetail:)``'s.
-    func permissionPromptUnavailable(sessionId: String) {
-        let message = FileSystemPermissionError.promptUnavailable.description
-        guard !showedFailure(message) else { return }
-        switch options.format {
-        case .text:
-            renderError(code: "PERMISSION_PROMPT_UNAVAILABLE", message, detailCode: "QUEUE_RUNTIME_PROMPT_FAILED")
-        case .json:
-            lock.withLock {
-                out(JSONErrorLine.make(
-                    outputCode: "PERMISSION_PROMPT_UNAVAILABLE", detailCode: "QUEUE_RUNTIME_PROMPT_FAILED",
-                    origin: "runtime", message: message, sessionId: sessionId) + "\n")
-            }
-        case .quiet:
-            break
-        }
     }
 
     /// acpx's `onPermissionEscalation` details, one per line.
@@ -135,24 +125,6 @@ final class OutputRenderer: @unchecked Sendable {
             escalation.toolKind.map { "toolKind: \($0)" },
             escalation.matchedRule.map { "matchedRule: \($0)" }
         ].compactMap { $0 }.joined(separator: "\n")
-    }
-
-    /// Whether the stream has already shown the failure described by `failureText`:
-    /// acpx then prints nothing more for it.
-    func showedFailure(_ failureText: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return shownErrors.match(failureText: failureText) != nil
-    }
-
-    /// Report a failure the stream did not show, as the JSON-RPC error line acpx's
-    /// top-level handler prints (session id `unknown`: it has no session to name).
-    func jsonFailure(outputCode: String, detailCode: String? = nil, origin: String = "cli", message: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        out(JSONErrorLine.make(
-            outputCode: outputCode, detailCode: detailCode, origin: origin, message: message,
-            sessionId: "unknown") + "\n")
     }
 
     // MARK: Entry points
@@ -259,16 +231,18 @@ final class OutputRenderer: @unchecked Sendable {
     /// Mirrors acpx's `onError`, which the wire-driven formatter emits on a
     /// JSON-RPC error response. The raw message is also surfaced on stderr by the
     /// command's `CLIError` handler.
-    func renderError(code: String, _ message: String, acpCode: Int? = nil, detailCode: String? = nil) {
+    func renderError(
+        code: String, _ message: String, acpCode: Int? = nil, detailCode: String? = nil, origin: String = "acp"
+    ) {
         lock.lock()
         defer { lock.unlock() }
         guard options.format == .text else { return }
         flushThoughtBuffer()
         beginSection()
         writeLine(ansi("[error] \(code): \(message)", "31"))
-        // The formatter renders the wire (acp-origin) error.
+        // The formatter renders a wire error as acp-origin.
         for hint in remediationHints(
-            code: code, origin: "acp", detailCode: detailCode, message: message, acpCode: acpCode) {
+            code: code, origin: origin, detailCode: detailCode, message: message, acpCode: acpCode) {
             writeLine(dim(hint))
         }
     }

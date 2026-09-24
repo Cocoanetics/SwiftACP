@@ -55,6 +55,7 @@ public enum SessionEngine {
                 acpxRecordId: response.sessionId, acpSessionId: response.sessionId,
                 agentCommand: agentCommand, cwd: cwd, name: name,
                 createdAt: started, lastUsedAt: started)
+            record.agentSessionId = AgentSessionId.extract(from: response.meta)
             record.agentArgv = agentArgv
             record.closed = false
             record.protocolVersion = handle.initializeResult.protocolVersion

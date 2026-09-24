@@ -55,6 +55,9 @@ enum PromptCommand {
                     permissionPolicy: permissionRules, renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
+            } catch let failed as DaemonTurnFailed {
+                renderer.turnFailed(failed.event)
+                throw FailureAlreadyShown(underlying: failed.underlying, outputCode: failed.event.outputCode)
             } catch {
                 throw turnFailure(error, renderer: renderer)
             }
