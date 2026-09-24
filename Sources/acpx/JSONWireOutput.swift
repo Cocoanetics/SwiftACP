@@ -112,64 +112,9 @@ extension JSONRPCPeer.WireDirection {
     var reversed: JSONRPCPeer.WireDirection { self == .inbound ? .outbound : .inbound }
 }
 
-/// An ACP error as acpx's `extractAcpError` finds one: `{code, message, data}` on the
-/// value itself or nested under `error`, `acp` or `cause`, five levels down.
-struct AcpErrorPayload: Equatable {
-    var code: Double
-    var message: String
-    var data: WireJSON?
-
-    static func extract(from value: WireJSON, depth: Int = 0) -> AcpErrorPayload? {
-        guard depth <= 5, case .object = value else { return nil }
-        if case .number(let code)? = value["code"], code.isFinite,
-            let message = value["message"]?.stringValue, !message.isEmpty {
-            return AcpErrorPayload(code: code, message: message, data: value["data"])
-        }
-        for key in ["error", "acp", "cause"] {
-            if let nested = value[key], let found = extract(from: nested, depth: depth + 1) { return found }
-        }
-        return nil
-    }
-
-    /// acpx's `outboundAcpErrorMatches`: a failure is this error when its text is, or
-    /// contains, the error's `data.details` (or else its message), case-insensitively.
-    func matches(failureText: String) -> Bool {
-        let details = data?["details"]?.stringValue
-        let candidate =
-            details.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? message
-        let normalizedFailure = failureText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedCandidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalizedFailure == normalizedCandidate || normalizedFailure.contains(normalizedCandidate)
-    }
-}
-
-/// acpx's `AcpErrorTracker`: the errors the stream has shown. A failure that matches
-/// one is already on screen, so nothing more is printed for it: the agent's latest
-/// error response always counts; a refusal the client sent counts when the failure
-/// says the same thing.
-///
-/// Each attempt at the prompt starts afresh — acpx resets the tracker just before it
-/// sends `session/prompt` — so an error from connecting the agent does not stand in
-/// for how the turn failed.
-struct AcpErrorTracker {
-    private var latestInbound: AcpErrorPayload?
-    private var outbound: [AcpErrorPayload] = []
-
+extension AcpErrorTracker {
     mutating func observe(_ message: WireJSON, direction: JSONRPCPeer.WireDirection) {
-        if direction == .outbound, message["method"]?.stringValue == "session/prompt", message.hasMember("id") {
-            latestInbound = nil
-            outbound.removeAll()
-        }
-        guard let error = AcpErrorPayload.extract(from: message) else { return }
-        if direction == .inbound {
-            latestInbound = error
-        } else {
-            outbound.append(error)
-        }
-    }
-
-    func match(failureText: String) -> AcpErrorPayload? {
-        latestInbound ?? outbound.last { $0.matches(failureText: failureText) }
+        observe(message, inbound: direction == .inbound)
     }
 }
 

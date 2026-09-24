@@ -1,3 +1,4 @@
+import ACPXCore
 import Foundation
 import JSONFoundation
 
@@ -40,5 +41,24 @@ enum DaemonError: LocalizedError {
             // npm acpx's SessionResumeRequiredError wording.
             return "Persistent ACP session \(id) could not be resumed: \(reason)"
         }
+    }
+}
+
+extension DaemonError: OutputErrorMeta {
+    /// acpx's `SessionResumeRequiredError` carries its own codes; the rest are runtime
+    /// failures.
+    var outputCode: String? {
+        if case .sessionResumeRequired = self { return "RUNTIME" }
+        return nil
+    }
+
+    var detailCode: String? {
+        if case .sessionResumeRequired = self { return "SESSION_RESUME_REQUIRED" }
+        return nil
+    }
+
+    var origin: String? {
+        if case .sessionResumeRequired = self { return "acp" }
+        return nil
     }
 }
