@@ -42,6 +42,8 @@ struct TerminalRoutingTests {
             shutdownWaiters = []
         }
 
+        var hasShutDown: Bool { shutDown }
+
         /// Suspend until ``shutdown()`` has been called.
         func waitForShutdown() async {
             if shutDown { return }
@@ -298,6 +300,18 @@ struct TerminalRoutingTests {
         guard case .failure(let error) = await create.value else { Issue.record("started"); return }
         #expect(error.code == -32800 && error.message == "Request cancelled")
         #expect(await terminals.created.isEmpty)
+    }
+
+    /// A handler replaced by another is shut down: nothing could reach its terminals
+    /// afterwards. Setting the same one again changes nothing.
+    @Test func aReplacedHandlerIsShutDown() async throws {
+        let client = ACPAgentConnection(transport: LoopbackTransport.pair().0)
+        let first = RecordingTerminals()
+        await client.setTerminalHandler(first)
+        await client.setTerminalHandler(first)
+        #expect(await !first.hasShutDown)
+        await client.setTerminalHandler(RecordingTerminals())
+        #expect(await first.hasShutDown)
     }
 
     /// Terminals are released when the connection ends, as acpx retires them when its

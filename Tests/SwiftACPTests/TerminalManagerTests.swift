@@ -122,6 +122,17 @@ struct TerminalManagerTests {
         #expect(TerminalError.spawnFailed(command: "x", code: "ENOENT").description == "spawn x ENOENT")
     }
 
+    /// A NUL would cut the command short in C: it is refused in Node's words, and
+    /// nothing runs.
+    @Test func aCommandWithANulIsRefused() async throws {
+        let manager = TerminalManager(cwd: try workspace())
+        await #expect(throws: TerminalError.invalidSpawnArgument(
+            "The argument 'file' must be a string without null bytes. Received '/bin/echo\\x00-not-echo'")) {
+            try await manager.createTerminal(CreateTerminalRequest(
+                sessionId: "s", command: "/bin/echo\0-not-echo", args: ["x"]))
+        }
+    }
+
     /// A plain name that is not a program is Node's `spawn <name> ENOENT`.
     @Test func aMissingProgramIsENOENT() async throws {
         let manager = TerminalManager(cwd: try workspace())

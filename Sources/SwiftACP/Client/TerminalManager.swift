@@ -121,6 +121,9 @@ public actor TerminalManager: ACPTerminalHandler {
     /// found, not an existing path, and shell syntax or whitespace in it — the same
     /// line through `/bin/sh -c`. A failure is Node's `spawn <command> <code>`.
     private static func start(_ request: CreateTerminalRequest, cwd: String) throws -> TerminalProcess {
+        // What Node's `spawn` refuses before starting anything — after the approval, as
+        // in acpx, so a command that was asked about is refused rather than cut short.
+        try NodeSpawnArguments.validate(command: request.command, args: request.args ?? [], cwd: cwd, env: request.env)
         let environment = Self.environment(request.env)
         do {
             return try TerminalProcess.spawn(

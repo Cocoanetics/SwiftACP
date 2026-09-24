@@ -74,9 +74,13 @@ extension ACPAgentConnection {
 
     /// Run the agent's `terminal/*` requests on `handler` from now on — or refuse them,
     /// given `nil`. The handler lives as long as the connection: its terminals are
-    /// released when the connection ends (see ``shutDownTerminals()``).
-    public func setTerminalHandler(_ handler: (any ACPTerminalHandler)?) {
+    /// released when the connection ends (see ``shutDownTerminals()``). A handler
+    /// replaced by another is shut down first, since nothing could reach its terminals
+    /// afterwards.
+    public func setTerminalHandler(_ handler: (any ACPTerminalHandler)?) async {
+        let previous = terminalHandler
         terminalHandler = handler
+        if let previous, previous !== handler { await previous.shutdown() }
     }
 
     /// Release every terminal the agent still has open, as acpx does when its client

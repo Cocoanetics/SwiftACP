@@ -12,7 +12,7 @@ import Foundation
 ///
 /// Throw a ``TerminalError`` to refuse a request in acpx's words; any error reaches the
 /// agent as `Internal error`, with its message in `data.details`.
-public protocol ACPTerminalHandler: Sendable {
+public protocol ACPTerminalHandler: AnyObject, Sendable {
     func createTerminal(_ request: CreateTerminalRequest) async throws -> CreateTerminalResponse
     func terminalOutput(_ request: TerminalOutputRequest) async throws -> TerminalOutputResponse
     func waitForTerminalExit(_ request: WaitForTerminalExitRequest) async throws
@@ -35,12 +35,17 @@ public enum TerminalError: Error, Sendable, Equatable, LocalizedError, CustomStr
     /// The command could not be started — Node's `spawn <command> <code>`, where the
     /// code is the errno's name, such as `ENOENT`.
     case spawnFailed(command: String, code: String)
+    /// A value `spawn` refuses before starting anything — an empty command, or a NUL
+    /// inside the command, an argument, the directory or a variable, which C would cut
+    /// short — in Node's `ERR_INVALID_ARG_VALUE` words.
+    case invalidSpawnArgument(String)
 
     public var description: String {
         switch self {
         case .permissionDenied: return "Permission denied for terminal/create"
         case .unknownTerminal(let id): return "Unknown terminal: \(id)"
         case .spawnFailed(let command, let code): return "spawn \(command) \(code)"
+        case .invalidSpawnArgument(let message): return message
         }
     }
 
