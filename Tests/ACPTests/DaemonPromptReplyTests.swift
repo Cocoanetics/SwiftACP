@@ -44,7 +44,7 @@ extension DaemonToolsTests {
     ) async throws -> DaemonTurn {
         try await DaemonClient.runPrompt(
             on: proxy, stopReason: stopReason, sessionId: sessionId,
-            blocks: [PromptBlock(type: "text", text: Self.multiLinePrompt)], wait: true,
+            content: [.object(["type": .string("text"), "text": .string(Self.multiLinePrompt)])], wait: true,
             permissionMode: "approve-all", nonInteractivePermissions: "deny")
     }
 

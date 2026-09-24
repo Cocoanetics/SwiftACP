@@ -183,7 +183,7 @@ enum DaemonClient {
     /// ignores (it streams the same output live via `renderer`). The stop reason
     /// arrives as a terminal ``TurnEndedEvent`` log notification, captured here.
     static func runPrompt(
-        sessionId: String, blocks: [PromptBlock], wait: Bool = true,
+        sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
         terminalOutputCeiling: Int? = nil, model: String? = nil, renderer: OutputRenderer
     ) async throws -> DaemonTurn {
@@ -193,7 +193,7 @@ enum DaemonClient {
         }
         defer { Task { await proxy.disconnect() } }
         return try await runPrompt(
-            on: proxy, stopReason: stopReason, sessionId: sessionId, blocks: blocks, wait: wait,
+            on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
             streamWire: renderer.streamsWireJSON)
@@ -201,7 +201,7 @@ enum DaemonClient {
 
     /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
     static func runPrompt(
-        on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, blocks: [PromptBlock],
+        on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, content: [JSONValue],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, model: String? = nil,
         streamWire: Bool = false
@@ -213,7 +213,7 @@ enum DaemonClient {
         // output — `0` for none, so the daemon's own never stands in for it.
         do {
             _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
-                sessionId: sessionId, text: "", blocks: blocks, wait: wait,
+                sessionId: sessionId, text: "", content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 streamWire: streamWire, permissionPolicy: permissionPolicy,
                 terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model)

@@ -164,7 +164,7 @@ extension PromptBlock {
     /// measure here — method name, session id, field names, quoting — and for any
     /// escaping the text picks up on the way into JSON. Base64 needs none: its
     /// alphabet survives JSON quoting byte for byte.
-    static let envelopeReserve = 8 * 1024
+    public static let envelopeReserve = 8 * 1024
 
     /// Validate `blocks` and map them, after `text`, onto ACP content blocks — the
     /// order npm acpx's `toPromptInput` uses.

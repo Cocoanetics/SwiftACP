@@ -1,93 +1,89 @@
+import ACPXCore
 import Foundation
+import JSONFoundation
 import SwiftACP
 
 /// Resolves a command's prompt from positional words, `--file` (`-` = stdin), or
-/// piped stdin, into the ACP content blocks the turn will send.
+/// piped stdin, into the ACP content blocks the turn will send — npm acpx's
+/// `readPromptInput` (`src/cli/prompt-input.ts`).
 ///
-/// Mirrors npm acpx's `readPromptInput` / `parsePromptSource`, including the
-/// structured form: a `--file` or stdin source that starts with `[` is parsed as a
-/// JSON array of ACP content blocks, so a prompt can carry an image or hand over a
-/// file. Positional words are always plain text — only a file or a pipe can be
-/// structured — and when both are given the words become a trailing text block.
-///
-/// A source that starts with `[` but is not valid JSON falls back to being the
-/// prompt text, matching upstream: a prompt may legitimately open with a bracket.
-/// One that *is* a JSON array but holds something other than valid blocks is an
-/// error naming the offending index, rather than being silently sent as text.
+/// A `--file` or stdin source that starts with `[` and is a JSON array is a structured
+/// prompt, checked and kept as written (``PromptContent``): a prompt can carry an image
+/// or hand over a file. Positional words are always plain text — only a file or a pipe
+/// can be structured — and when both are given the words become a trailing text block.
+/// A source that starts with `[` but is not JSON is the prompt's text: a prompt may
+/// open with a bracket. A structured prompt with a block acpx does not take is a usage
+/// error in acpx's words.
 enum PromptInputResolver {
-    /// - Returns: the turn's blocks — never empty.
-    static func resolve(words: [String], file: String?, cwd: String) throws -> [PromptBlock] {
-        let appended = words.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-
-        if let file {
-            let source: String
-            if file == "-" {
-                source = readStdin()
-            } else {
-                let path = file.hasPrefix("/") ? file : cwd + "/" + file
-                source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            }
-            var blocks = try parse(source)
-            if !appended.isEmpty { blocks.append(.text(appended)) }
-            guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from --file is empty") }
-            return blocks
-        }
-
-        if !appended.isEmpty { return [.text(appended)] }
-
-        guard isatty(fileno(stdin)) == 0 else {
-            throw InvalidArgumentError("Prompt is required (pass as argument, --file, or pipe via stdin)")
-        }
-        let blocks = try parse(readStdin())
-        guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from stdin is empty") }
-        return blocks
-    }
-
-    /// npm acpx's `parsePromptSource`: structured blocks when the source is a JSON
-    /// array, one text block otherwise, nothing when it is blank.
-    static func parse(_ source: String) throws -> [PromptBlock] {
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let structured = try structuredBlocks(trimmed) { return structured }
-        return trimmed.isEmpty ? [] : [.text(trimmed)]
-    }
-
-    /// Parses `source` as a JSON array of ACP content blocks, or nil when it is not
-    /// one and should be treated as text.
-    private static func structuredBlocks(_ source: String) throws -> [PromptBlock]? {
-        guard source.hasPrefix("[") else { return nil }
-        guard let data = source.data(using: .utf8),
-              let parsed = try? JSONSerialization.jsonObject(with: data),
-              let elements = parsed as? [Any]
-        else { return nil }
-
-        // An empty array is a valid parse of an empty prompt; the caller reports it.
-        guard !elements.isEmpty else { return [] }
-
-        let decoder = JSONDecoder()
-        let blocks = try elements.enumerated().map { index, element -> PromptBlock in
-            guard let object = element as? [String: Any], object["type"] is String,
-                  let elementData = try? JSONSerialization.data(withJSONObject: object),
-                  let block = try? decoder.decode(PromptBlock.self, from: elementData)
-            else {
-                throw InvalidArgumentError(
-                    "prompt[\(index)]: must be an ACP content block object with a string type")
-            }
-            return block
-        }
-        // Validate at parse time so a bad block is a usage error naming the offending
-        // index — the way upstream reports one — rather than a failure at dispatch.
-        // No request cap here: `exec` and `compare` talk to the agent directly, and
-        // the daemon applies its own transport limit to the turns that go through it.
+    /// - Returns: the turn's content blocks as written — never empty.
+    static func resolve(words: [String], file: String?, cwd: String) throws -> [WireJSON] {
+        let text = words.joined(separator: " ")
         do {
-            _ = try PromptBlock.contentBlocks(text: "", blocks: blocks, requestLimit: nil)
-        } catch let error as PromptBlockError {
-            throw InvalidArgumentError(error.errorDescription ?? "\(error)")
+            if let file {
+                let source = file == "-" ? readStdin() : try read(file, cwd: cwd)
+                let blocks = try PromptContent.parse(source, appending: text)
+                guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from --file is empty") }
+                return blocks
+            }
+
+            let joined = text.javaScriptTrimmed
+            if !joined.isEmpty { return [PromptContent.textBlock(joined)] }
+
+            guard isatty(fileno(stdin)) == 0 else {
+                throw InvalidArgumentError("Prompt is required (pass as argument, --file, or pipe via stdin)")
+            }
+            let blocks = try PromptContent.parse(readStdin())
+            guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from stdin is empty") }
+            return blocks
+        } catch let invalid as PromptContent.ValidationError {
+            throw InvalidArgumentError(invalid.message)
         }
-        return blocks
     }
 
+    /// The blocks as the ACP content a caller talking to the agent itself sends. A block
+    /// acpx takes that SwiftACP's content types cannot hold — a field of an unexpected
+    /// type, say — is refused by its index.
+    static func contentBlocks(_ blocks: [WireJSON]) throws -> [ContentBlock] {
+        try blocks.enumerated().map { index, block in
+            do {
+                return try JSONDecoder().decode(ContentBlock.self, from: Data(block.stringified.utf8))
+            } catch {
+                throw InvalidArgumentError("prompt[\(index)] cannot be sent as an ACP content block: \(error)")
+            }
+        }
+    }
+
+    /// The blocks as JSON values, for the daemon's `runPrompt`.
+    static func jsonValues(_ blocks: [WireJSON]) throws -> [JSONValue] {
+        try blocks.map { try JSONDecoder().decode(JSONValue.self, from: Data($0.stringified.utf8)) }
+    }
+
+    /// Node's `fs.readFile(path.resolve(cwd, file), "utf8")`: the file's bytes as UTF-8,
+    /// a bad sequence becoming U+FFFD; a file that cannot be read fails in Node's words.
+    private static func read(_ file: String, cwd: String) throws -> String {
+        let path = URL(fileURLWithPath: file, relativeTo: URL(fileURLWithPath: cwd, isDirectory: true))
+            .standardizedFileURL.path
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+            throw FileReadError(message: "EISDIR: illegal operation on a directory, read")
+        }
+        guard let data = FileManager.default.contents(atPath: path) else {
+            let reason = FileManager.default.fileExists(atPath: path)
+                ? "EACCES: permission denied" : "ENOENT: no such file or directory"
+            throw FileReadError(message: "\(reason), open '\(path)'")
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Node's `text(process.stdin)`: all of it, as UTF-8.
     private static func readStdin() -> String {
-        let data = FileHandle.standardInput.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
+        String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+    }
+
+    /// A prompt file Node could not read, in its words — acpx reports it as a runtime
+    /// failure.
+    struct FileReadError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
     }
 }

@@ -53,7 +53,7 @@ enum PromptCommand {
         let turn: DaemonTurn = try runBlocking {
             do {
                 return try await DaemonClient.runPrompt(
-                    sessionId: sessionId, blocks: promptBlocks, wait: wait,
+                    sessionId: sessionId, content: try PromptInputResolver.jsonValues(promptBlocks), wait: wait,
                     permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                     permissionPolicy: permissionRules, terminalOutputCeiling: terminalOutputCeiling,
                     model: flags.model, renderer: renderer)

@@ -94,10 +94,18 @@ public struct TextContent: Codable, Hashable, Sendable {
     public var type = "text"
     public var text: String
     public var annotations: JSONValue?
+    /// `_meta`, passed on as given.
+    public var meta: JSONValue?
 
-    public init(text: String, annotations: JSONValue? = nil) {
+    public init(text: String, annotations: JSONValue? = nil, meta: JSONValue? = nil) {
         self.text = text
         self.annotations = annotations
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, text, annotations
+        case meta = "_meta"
     }
 }
 
@@ -109,12 +117,22 @@ public struct ImageContent: Codable, Hashable, Sendable {
     public var mimeType: String
     public var uri: String?
     public var annotations: JSONValue?
+    /// `_meta`, passed on as given.
+    public var meta: JSONValue?
 
-    public init(data: String, mimeType: String, uri: String? = nil, annotations: JSONValue? = nil) {
+    public init(
+        data: String, mimeType: String, uri: String? = nil, annotations: JSONValue? = nil, meta: JSONValue? = nil
+    ) {
         self.data = data
         self.mimeType = mimeType
         self.uri = uri
         self.annotations = annotations
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, data, mimeType, uri, annotations
+        case meta = "_meta"
     }
 }
 
@@ -125,11 +143,19 @@ public struct AudioContent: Codable, Hashable, Sendable {
     public var data: String
     public var mimeType: String
     public var annotations: JSONValue?
+    /// `_meta`, passed on as given.
+    public var meta: JSONValue?
 
-    public init(data: String, mimeType: String, annotations: JSONValue? = nil) {
+    public init(data: String, mimeType: String, annotations: JSONValue? = nil, meta: JSONValue? = nil) {
         self.data = data
         self.mimeType = mimeType
         self.annotations = annotations
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, data, mimeType, annotations
+        case meta = "_meta"
     }
 }
 
@@ -139,10 +165,18 @@ public struct EmbeddedResource: Codable, Hashable, Sendable {
     public var type = "resource"
     public var resource: ResourceContents
     public var annotations: JSONValue?
+    /// `_meta`, passed on as given.
+    public var meta: JSONValue?
 
-    public init(resource: ResourceContents, annotations: JSONValue? = nil) {
+    public init(resource: ResourceContents, annotations: JSONValue? = nil, meta: JSONValue? = nil) {
         self.resource = resource
         self.annotations = annotations
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, resource, annotations
+        case meta = "_meta"
     }
 }
 
@@ -152,12 +186,22 @@ public struct ResourceContents: Codable, Hashable, Sendable {
     public var mimeType: String?
     public var text: String?
     public var blob: String?
+    /// `_meta`, passed on as given.
+    public var meta: JSONValue?
 
-    public init(uri: String, mimeType: String? = nil, text: String? = nil, blob: String? = nil) {
+    public init(
+        uri: String, mimeType: String? = nil, text: String? = nil, blob: String? = nil, meta: JSONValue? = nil
+    ) {
         self.uri = uri
         self.mimeType = mimeType
         self.text = text
         self.blob = blob
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case uri, mimeType, text, blob
+        case meta = "_meta"
     }
 }
 
@@ -171,10 +215,15 @@ public struct ResourceLink: Codable, Hashable, Sendable {
     public var description: String?
     public var size: Int?
     public var annotations: JSONValue?
+    /// `_meta`, passed on as given.
+    public var meta: JSONValue?
+    /// Whether the block said `"title": null`, which goes on as said: acpx passes a
+    /// prompt's blocks to the agent as written.
+    private var titleIsNull = false
 
     public init(
         uri: String, name: String, mimeType: String? = nil, title: String? = nil,
-        description: String? = nil, size: Int? = nil, annotations: JSONValue? = nil
+        description: String? = nil, size: Int? = nil, annotations: JSONValue? = nil, meta: JSONValue? = nil
     ) {
         self.uri = uri
         self.name = name
@@ -183,5 +232,42 @@ public struct ResourceLink: Codable, Hashable, Sendable {
         self.description = description
         self.size = size
         self.annotations = annotations
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, uri, name, mimeType, title, description, size, annotations
+        case meta = "_meta"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        uri = try container.decode(String.self, forKey: .uri)
+        name = try container.decode(String.self, forKey: .name)
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        titleIsNull = title == nil && container.contains(.title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        size = try container.decodeIfPresent(Int.self, forKey: .size)
+        annotations = try container.decodeIfPresent(JSONValue.self, forKey: .annotations)
+        meta = try container.decodeIfPresent(JSONValue.self, forKey: .meta)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encode(uri, forKey: .uri)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(mimeType, forKey: .mimeType)
+        if let title {
+            try container.encode(title, forKey: .title)
+        } else if titleIsNull {
+            try container.encodeNil(forKey: .title)
+        }
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(size, forKey: .size)
+        try container.encodeIfPresent(annotations, forKey: .annotations)
+        try container.encodeIfPresent(meta, forKey: .meta)
     }
 }
