@@ -187,6 +187,20 @@ import Testing
                 ? ["session/set_model m1"]
                 : ["session/set_config_option model=m1", "session/set_config_option effort=high"]
             #expect(Array(Self.requests(log).dropFirst(before)) == ["session/new"] + replayed + ["session/prompt"])
+            // What the replay leaves on the record is the last reply's: the option replayed
+            // after the model keeps its value, where the model's reply still said `low`.
+            let restored = try #require(SessionStore.loadRecord(record.acpxRecordId)?.acpx)
+            #expect(restored.sessionOptions?.model == "m1")
+            if !legacy {
+                #expect(restored.desiredConfigOptions == ["effort": "high"])
+                guard case .array(let reported)? = restored.configOptions,
+                      case .object(let effort)? = reported.last
+                else {
+                    Issue.record("expected the options the replay's last reply reported")
+                    return
+                }
+                #expect(effort["currentValue"] == .string("high"))
+            }
         }
     }
 

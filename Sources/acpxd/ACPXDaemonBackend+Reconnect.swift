@@ -279,7 +279,12 @@ extension ACPXDaemonBackend {
         replacementModels: ModelSupport.ModelState?
     ) async -> RecordChange? {
         guard let acpx = selections else { return nil }
-        var change: RecordChange?
+        // Each replay is recorded in order, as acpx records each one on the record as it
+        // is acknowledged: a later option's reply wins over the model's reply before it.
+        var changes: [RecordChange] = []
+        // The model state a replayed model value is resolved against, as it stands after
+        // each reply — acpx's `advertisedModelState(params.record.acpx)` at that point.
+        var models = replacementModels ?? ModelSupport.advertisedModelState(acpx)
         let desiredOptions = acpx.desiredConfigOptions ?? [:]
         // The record keeps the agent's advertised options verbatim; the model's option
         // id is derived from them the same way `session/new` derived it.
@@ -299,8 +304,9 @@ extension ACPXDaemonBackend {
             do {
                 let response = try await ModelApplication.setModel(
                     connection: entry.agent.connection, sessionId: entry.session.id, modelId: pinned,
-                    models: replacementModels ?? ModelSupport.advertisedModelState(acpx), agentCommand: agentCommand)
-                change = { record in
+                    models: models, agentCommand: agentCommand)
+                models = ModelApplication.advance(models, with: response?.configOptions)
+                changes.append { record in
                     var state = record.acpx ?? SessionAcpxState()
                     ModelSupport.applyModelSelection(pinned, response: response, to: &state)
                     record.acpx = state
@@ -309,7 +315,9 @@ extension ACPXDaemonBackend {
                 // Best-effort, as the rest of this replay; #73 makes it fail the turn, as acpx's does.
             }
         } else if let modelConfigId, let modelValue = desiredOptions[modelConfigId] {
-            await apply(configId: modelConfigId, value: modelValue, on: entry)
+            if let change = await apply(configId: modelConfigId, value: modelValue, on: entry, models: &models) {
+                changes.append(change)
+            }
         } else if let modelId = acpx.currentModelId, acpx.modelControl != "config_option" {
             try? await entry.agent.connection.setModel(
                 SetSessionModelRequest(sessionId: entry.session.id, modelId: modelId))
@@ -319,16 +327,34 @@ extension ACPXDaemonBackend {
         }
         // Sorted so a replay is reproducible; the model is already applied.
         for configId in desiredOptions.keys.sorted() where configId != modelConfigId {
-            guard let value = desiredOptions[configId] else { continue }
-            await apply(configId: configId, value: value, on: entry)
+            guard let value = desiredOptions[configId],
+                  let change = await apply(configId: configId, value: value, on: entry, models: &models)
+            else { continue }
+            changes.append(change)
         }
-        return change
+        guard !changes.isEmpty else { return nil }
+        let recorded = changes
+        return { record in
+            for change in recorded { change(&record) }
+        }
     }
 
-    private func apply(configId: String, value: String, on entry: Live) async {
-        _ = try? await entry.agent.connection.setConfigOption(
-            SetSessionConfigOptionRequest(
-                sessionId: entry.session.id, configId: configId, value: value))
+    /// Replay one saved option and say how to record it — acpx's
+    /// `applyConfigOptionSelection` with the agent's reply — or `nil` if the agent
+    /// refused it.
+    private func apply(
+        configId: String, value: String, on entry: Live, models: inout ModelSupport.ModelState?
+    ) async -> RecordChange? {
+        guard let response = try? await ModelApplication.setConfigOption(
+            connection: entry.agent.connection, sessionId: entry.session.id, configId: configId, value: value,
+            models: models, agentCommand: nil)
+        else { return nil }
+        models = ModelApplication.advance(models, with: response.configOptions)
+        return { record in
+            var state = record.acpx ?? SessionAcpxState()
+            ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &state)
+            record.acpx = state
+        }
     }
 
     /// Expand and validate a caller-supplied working directory. MCP clients have no
