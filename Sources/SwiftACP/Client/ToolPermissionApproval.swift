@@ -20,11 +20,15 @@ public struct PermissionPromptUnavailableError: Error, Sendable, Equatable, Cust
 /// | ``PermissionPolicy/approveReads`` | a read or search: the allow option. Anything else is asked on the terminal, or, with none, follows ``NonInteractivePermissionPolicy`` |
 ///
 /// The kind is the request's, else inferred from the title (``inferredKind(of:)``).
-/// ``PermissionPolicy/custom(_:)`` answers for itself.
 ///
-/// A permission policy (``PermissionRules``, `--permission-policy`) comes first: it
-/// approves, denies, or escalates — asks on the terminal, or, with none, refuses with
-/// the escalation attached (``PermissionEscalation``).
+/// A permission policy (``PermissionRules``, `--permission-policy`) comes before the
+/// mode: it approves, denies, or escalates — asks on the terminal, or, with none,
+/// refuses with the escalation attached (``PermissionEscalation``).
+///
+/// ``PermissionPolicy/custom(_:)`` answers for itself, before any rule: it is what
+/// acpx's host permission handler is, and acpx asks that handler before it resolves a
+/// request under its mode and policy (`tryHandlePermissionRequestWithHost(…) ??
+/// resolvePermissionRequestFromMode(…)`).
 public struct ToolPermissionApproval: Sendable {
     public let policy: PermissionPolicy
     public let nonInteractive: NonInteractivePermissionPolicy

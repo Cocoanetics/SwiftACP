@@ -69,8 +69,9 @@ public struct ACPClientHandlers: Sendable {
     ///     there is no terminal to ask on.
     ///   - confirmWrite: how to ask. `nil` asks on `terminal`, as acpx does.
     ///   - terminal: the terminal the default confirmation asks on.
-    ///   - rules: a per-tool permission policy that comes before `permission` — see
-    ///     ``PermissionRules``.
+    ///   - rules: a per-tool permission policy that comes before the mode `permission`
+    ///     names — see ``PermissionRules``. A ``PermissionPolicy/custom(_:)`` resolver
+    ///     answers without it, as acpx's host permission handler does.
     public static func standard(
         permission: PermissionPolicy,
         nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,

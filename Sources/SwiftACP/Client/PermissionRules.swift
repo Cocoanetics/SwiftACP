@@ -3,7 +3,8 @@ import JSONFoundation
 
 /// acpx's per-tool permission policy (`--permission-policy`, its `PermissionPolicy`):
 /// rules that approve, deny or escalate a tool-call permission request ahead of the
-/// permission mode.
+/// permission mode. A ``PermissionPolicy/custom(_:)`` resolver answers without them, as
+/// acpx's host permission handler does.
 ///
 /// A rule matches a request by its inferred or given kind, its title, its title's first
 /// word, or the tool name its raw input carries — case-insensitively; `*` matches every

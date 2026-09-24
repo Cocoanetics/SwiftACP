@@ -26,6 +26,20 @@ struct PermissionRulesTests {
         return nil
     }
 
+    // MARK: Order
+
+    /// A custom resolver answers before any rule: it is acpx's host permission handler,
+    /// which acpx asks before resolving under its mode and policy.
+    @Test func aCustomResolverAnswersBeforeTheRules() async throws {
+        let approval = ToolPermissionApproval(
+            policy: .custom { _ in .selected("allow") }, rules: PermissionRules(autoDeny: ["*"]), terminal: .none)
+        #expect(Self.selected(try await approval.resolve(Self.request())) == "allow")
+        // Under a mode the same rule decides.
+        let underMode = ToolPermissionApproval(
+            policy: .approveAll, rules: PermissionRules(autoDeny: ["*"]), terminal: .none)
+        #expect(Self.selected(try await underMode.resolve(Self.request())) == "reject")
+    }
+
     // MARK: Matching
 
     /// A rule matches the kind (inferred or given), the title, its first word or the raw
