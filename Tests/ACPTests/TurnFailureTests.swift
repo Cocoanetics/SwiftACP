@@ -132,6 +132,29 @@ import Testing
         #expect(unshown.err.isEmpty)
     }
 
+    /// An error from before the prompt attempt — a restore the agent refused while
+    /// connecting — does not cover how the attempt fails. `exec` starts the attempt
+    /// itself; a daemon turn's stream starts it at the turn's prompt.
+    @Test func anErrorBeforeThePromptAttemptIsNotItsFailure() {
+        let refusedMode = WireMessageEvent(
+            wireDirection: "inbound",
+            wireLine: #"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"Internal error"}}"#)
+        let prompt = WireMessageEvent(
+            wireDirection: "outbound", wireLine: #"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{}}"#)
+        let options = RenderOptions(format: .json, streamsWire: true)
+
+        let exec = OutputRenderer(options: options, out: { _ in }, err: { _ in }, color: false)
+        exec.wireMessage(refusedMode)
+        #expect(exec.showedFailure(Self.refusedImageText))
+        exec.promptAttemptStarts()
+        #expect(!exec.showedFailure(Self.refusedImageText))
+
+        let daemonTurn = OutputRenderer(options: options, out: { _ in }, err: { _ in }, color: false)
+        daemonTurn.wireMessage(refusedMode)
+        daemonTurn.wireMessage(prompt)
+        #expect(!daemonTurn.showedFailure("model overloaded"))
+    }
+
     /// The report arrives as a log notification, and fails the turn once the call ends.
     @Test func theReportIsKeptForWhenTheCallFails() async throws {
         let box = StopReasonBox()

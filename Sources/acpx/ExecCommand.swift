@@ -53,6 +53,7 @@ enum ExecCommand {
                     configOptions: configOptions, agentCommand: agent.agentCommand,
                     onWarning: quietOutput(flags) ? nil : { Console.errLine("[acpx] warning: \($0)") })
                 let session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
+                renderer.promptAttemptStarts()
                 let outcome = try await session.run(
                     prompt, onUpdate: { renderer.render($0) },
                     onClientOperation: { renderer.clientOperation($0) },

@@ -23,6 +23,11 @@ final class TurnErrorWatch: @unchecked Sendable {
         }
     }
 
+    /// A prompt attempt starts, once its agent is connected (acpx's `runPromptAttempt`).
+    func reset() {
+        lock.withLock { tracker.reset() }
+    }
+
     /// The error the stream showed that `error` is, if it showed one.
     func match(_ error: Error) -> AcpErrorPayload? {
         lock.withLock { tracker.match(failureText: TurnFailure.message(of: error)) }

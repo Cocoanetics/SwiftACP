@@ -174,6 +174,9 @@ extension ACPXDaemonBackend {
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
             onReplacement: { await persister.adoptReplacement($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
+        // The attempt proper starts once connected: a restore the agent refused while
+        // connecting is on the wire, but it is not how this attempt fails.
+        errors.reset()
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId

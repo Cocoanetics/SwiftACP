@@ -153,6 +153,36 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A mode the agent refuses to restore while connecting is on the wire, but it is
+    /// not how the turn fails: the attempt starts afresh once connected, as acpx's does,
+    /// so content refused before the prompt goes out is reported as it is — not as the
+    /// refused restore, which text output would then leave unreported.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aRestoreRefusedWhileConnectingIsNotHowTheTurnFails() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: "/usr/bin/env MOCK_SET_MODE_ERROR=1 \(command)", cwd: NSTemporaryDirectory())
+            var record = try #require(SessionStore.loadRecord(id))
+            var acpx = record.acpx ?? SessionAcpxState()
+            acpx.desiredModeId = "plan"
+            record.acpx = acpx
+            try SessionStore.writeRecord(record)
+
+            let client = CallingClient()
+            await #expect(throws: UnsupportedPromptContentError.self) {
+                let image = PromptBlock(type: "image", data: "iVBORw0KGgo=", mimeType: "image/png")
+                try await prompt(daemon, id, text: "look", blocks: [image], client: client)
+            }
+            #expect(client.kinds.contains("wire:inbound:error"))
+            let failure = try #require(client.failure)
+            #expect(failure.outputCode == "USAGE")
+            #expect(!failure.shown)
+            #expect(failure.acp == nil)
+        }
+    }
+
     /// An image for an agent that never advertised images fails the turn as a usage
     /// error, after the prompt is recorded — acpx records it before connecting.
     @Test(.enabled(if: mockPythonAvailable))

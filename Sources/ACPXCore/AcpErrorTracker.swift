@@ -47,21 +47,23 @@ public struct AcpErrorPayload: Equatable, Sendable {
 /// error response always counts; a refusal the client sent counts when the failure
 /// says the same thing.
 ///
-/// Each attempt at the prompt starts afresh — acpx resets the tracker just before it
-/// sends `session/prompt` — so an error from connecting the agent does not stand in
-/// for how the turn failed.
+/// Each attempt at the prompt starts afresh (``reset()``), as acpx's does before it
+/// checks and sends the prompt: an error from connecting the agent then does not stand
+/// in for how the turn failed — not even for a prompt refused before it goes out.
 public struct AcpErrorTracker: Sendable {
     private var latestInbound: AcpErrorPayload?
     private var outbound: [AcpErrorPayload] = []
 
     public init() {}
 
+    /// A prompt attempt starts: nothing seen before it says how the attempt fails.
+    public mutating func reset() {
+        latestInbound = nil
+        outbound.removeAll()
+    }
+
     /// Note one message of the exchange: `inbound` from the agent, else from the client.
     public mutating func observe(_ message: WireJSON, inbound: Bool) {
-        if !inbound, message["method"]?.stringValue == "session/prompt", message.hasMember("id") {
-            latestInbound = nil
-            outbound.removeAll()
-        }
         guard let error = AcpErrorPayload.extract(from: message) else { return }
         if inbound {
             latestInbound = error

@@ -92,7 +92,13 @@ final class OutputRenderer: @unchecked Sendable {
     func wireMessage(_ event: WireMessageEvent) {
         let direction: JSONRPCPeer.WireDirection = event.wireDirection == "outbound" ? .outbound : .inbound
         if streamsWireJSON {
-            acpMessage(direction, Data(event.wireLine.utf8))
+            // The daemon starts each attempt at the turn's prompt: what came before no
+            // longer says how the turn fails.
+            let body = Data(event.wireLine.utf8)
+            if direction == .outbound, WireJSON(parsing: body)?["method"] == .text("session/prompt") {
+                promptAttemptStarts()
+            }
+            acpMessage(direction, body)
             return
         }
         guard let message = WireJSON(parsing: Data(event.wireLine.utf8)) else { return }
@@ -106,6 +112,14 @@ final class OutputRenderer: @unchecked Sendable {
             !["session/prompt", "session/cancel", "session/update"].contains(method)
         else { return }
         clientOperation(method)
+    }
+
+    /// A prompt attempt starts: the errors shown before it no longer say how it fails
+    /// (acpx resets its tracker as each attempt starts).
+    func promptAttemptStarts() {
+        lock.lock()
+        defer { lock.unlock() }
+        shownErrors.reset()
     }
 
     /// Whether the stream has already shown the failure described by `failureText`:

@@ -216,6 +216,11 @@ def main():
                 sys.stdout.flush()
                 os._exit(0)
         elif method == "session/set_mode":
+            # MOCK_SET_MODE_ERROR: refuse every mode, with details.
+            if os.environ.get("MOCK_SET_MODE_ERROR"):
+                send({"jsonrpc": "2.0", "id": req_id, "error": {
+                    "code": -32603, "message": "Internal error", "data": {"details": "mode unavailable"}}})
+                continue
             # Echo the new mode back as a current_mode_update, then ack.
             params = message.get("params", {})
             session_update(params.get("sessionId", "mock-session-1"),
