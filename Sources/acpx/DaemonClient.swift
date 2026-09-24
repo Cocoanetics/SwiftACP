@@ -12,10 +12,23 @@ actor StopReasonBox {
     private(set) var value: StopReason?
     /// How the turn's permissions went, when the daemon reported it.
     private(set) var permissions: PermissionStats?
+    /// How the turn failed, when the daemon said (``TurnFailedEvent``).
+    private(set) var failure: TurnFailedEvent?
     func set(_ reason: StopReason, permissions: PermissionStats?) {
         value = reason
         self.permissions = permissions
     }
+
+    func fail(_ event: TurnFailedEvent) {
+        failure = event
+    }
+}
+
+/// A turn that failed the way the daemon described (``TurnFailedEvent``): the CLI
+/// reports the event as acpx's formatters report such a failure.
+struct DaemonTurnFailed: Error {
+    let event: TurnFailedEvent
+    let underlying: Error
 }
 
 /// What a daemon turn ended with: its stop reason, and how its permissions went —
@@ -41,6 +54,11 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
         // turn sent and got back, and — asked for in JSON mode — the whole turn.
         if let wire = try? message.data.decoded(WireMessageEvent.self) {
             renderer.wireMessage(wire)
+            return
+        }
+        // How the turn failed: reported once the call fails (see `DaemonTurnFailed`).
+        if let failed = try? message.data.decoded(TurnFailedEvent.self) {
+            await stopReason.fail(failed)
             return
         }
         // The terminal event carries the stop reason, not a renderable update.
@@ -190,6 +208,10 @@ enum DaemonClient {
             // client turns a plain-text result into a JSON string by wrapping it in
             // quotes unescaped, so a reply holding a newline or a quote — nearly every
             // reply — fails there. A failed call arrives as `MCPServerProxyError`, not this.
+        } catch {
+            // Ordered delivery: the daemon's account of the failure came first.
+            if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
+            throw error
         }
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
