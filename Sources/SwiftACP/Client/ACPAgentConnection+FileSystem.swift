@@ -40,6 +40,9 @@ extension ACPAgentConnection {
             } else {
                 try await authorize?(request)
             }
+            // A turn cancelled while this was authorized has answered it already
+            // (``servingUnlessCancelled(_:_:sessionId:)``): nothing is read or written now.
+            try Task.checkCancellation()
             let contained = request
             let response = try await handler(contained)
             return .success(try JSONValue(encoding: response))

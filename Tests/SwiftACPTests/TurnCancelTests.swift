@@ -132,6 +132,35 @@ struct TurnCancelTests {
         await connected.close()
     }
 
+    /// A write whose serving is cancelled while it is being authorized — as a turn's
+    /// cancel cancels what serves the turn's requests — is not made when the
+    /// authorization comes after (#125 review).
+    @Test func aWriteCancelledWhileItIsAuthorizedIsNotMade() async throws {
+        let file = NSTemporaryDirectory() + "cancel-write-\(UUID().uuidString).txt"
+        defer { try? FileManager.default.removeItem(atPath: file) }
+        let (asked, release) = (Signal(), Signal())
+        let written = Recorder<String>()
+        let client = ACPAgentConnection(transport: LoopbackTransport.pair().0)
+        await client.setFileSystemAccess(.unrestricted)
+        await client.setHandlers(ACPClientHandlers(
+            writeTextFile: { request in
+                written.append(request.path)
+                return WriteTextFileResponse()
+            },
+            authorizeWrite: { _ in
+                asked.fire()
+                await release.wait()
+            }))
+        let params = try JSONValue(encoding: WriteTextFileRequest(sessionId: "s", path: file, content: "x"))
+        let serving = Task { await client.handleIncomingRequest(method: "fs/write_text_file", params: params) }
+        await asked.wait()
+        serving.cancel()
+        release.fire()
+        let result = await serving.value
+        #expect(written.values.isEmpty)
+        if case .success = result { Issue.record("the write was served") }
+    }
+
     /// A question still being answered when the turn is cancelled is answered
     /// `cancelled` at once, and counted so — however its handler answers later.
     @Test func aQuestionBeingAnsweredIsCancelledWithItsTurn() async throws {
