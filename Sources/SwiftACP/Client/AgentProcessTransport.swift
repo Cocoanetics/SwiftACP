@@ -384,8 +384,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
 /// Writes the agent's messages to its stdin, in order, on a thread of its own — a write
 /// waits while the agent does not read — and closes stdin once told to finish and the
 /// queue is empty. Each body is shown to the tap as it is queued, in the sender's
-/// context and in the order it is written, and told of again once it is written
-/// (``RawWireTap/onWritten(_:)``).
+/// context and in the order it is written, and told of again as it starts to be
+/// written and should the write fail (``RawWireTap/onDelivery(_:)``).
 private final class MessageWriter: @unchecked Sendable {
     private let process: ChildProcess
     private let tap: RawWireTap
@@ -435,12 +435,13 @@ private final class MessageWriter: @unchecked Sendable {
             }
             if let next {
                 guard !failed else { continue }
+                tap.delivery(next, .writing)
                 do {
                     try process.write(Array(next) + [0x0A])
-                    tap.written(next)
                 } catch {
                     // The agent closed its stdin — mostly by exiting, which is noticed
                     // on its own. What remains is not written.
+                    tap.delivery(next, .failed)
                     failed = true
                     onFailure?()
                 }

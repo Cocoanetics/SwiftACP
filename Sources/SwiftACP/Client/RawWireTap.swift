@@ -13,11 +13,19 @@ import JSONRPCWire
 /// it must be thread-safe and fast. Replace it at any time with ``set(_:)``.
 public final class RawWireTap: @unchecked Sendable {
     public typealias Observer = @Sendable (JSONRPCPeer.WireDirection, Data) -> Void
-    public typealias WrittenObserver = @Sendable (Data) -> Void
+    public typealias DeliveryObserver = @Sendable (Data, Delivery) -> Void
+
+    /// How far an outbound body got on its way to the agent.
+    public enum Delivery: Sendable {
+        /// It is being written: from here on, the agent may have it.
+        case writing
+        /// Writing it failed: the agent does not have it.
+        case failed
+    }
 
     private let lock = NSLock()
     private var observer: Observer?
-    private var writtenObserver: WrittenObserver?
+    private var deliveryObserver: DeliveryObserver?
     /// Sessions whose `session/update` notifications are not shown — their
     /// `session/load` is replaying history — with how many loads asked. acpx's
     /// `suppressReplaySessionUpdateMessages`, kept per session.
@@ -31,12 +39,13 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { self.observer = observer }
     }
 
-    /// Tell `observer` of each outbound body once it has been written to the agent —
-    /// acpx's `onPromptRequestWritten`, which follows the write, where the observer of
-    /// ``set(_:)`` sees a body before it is written, and whether or not it can be. It
-    /// runs on the transport's writer, so it must be thread-safe and fast.
-    public func onWritten(_ observer: WrittenObserver?) {
-        lock.withLock { writtenObserver = observer }
+    /// Tell `observer` of each outbound body as it starts to be written to the agent, and
+    /// again should the write fail. Until then the agent may have it, even should it act
+    /// on it and exit before the writer hears the write went through, so a write that
+    /// did not fail is as much as a sender can know of delivery. It runs on the
+    /// transport's writer, so it must be thread-safe and fast.
+    public func onDelivery(_ observer: DeliveryObserver?) {
+        lock.withLock { deliveryObserver = observer }
     }
 
     /// Stop showing `sessionId`'s `session/update` notifications until the matching
@@ -52,8 +61,8 @@ public final class RawWireTap: @unchecked Sendable {
         }
     }
 
-    func written(_ body: Data) {
-        lock.withLock { writtenObserver }?(body)
+    func delivery(_ body: Data, _ delivery: Delivery) {
+        lock.withLock { deliveryObserver }?(body, delivery)
     }
 
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
@@ -83,8 +92,8 @@ public final class RawWireTap: @unchecked Sendable {
 /// A framing that shows every message body to a ``RawWireTap`` as it passes: an
 /// outbound body just before it is written, an inbound one as soon as it is complete —
 /// before it is decoded. A request is therefore always seen before its response. The
-/// write itself happens out of its sight, so an outbound body counts as written
-/// (``RawWireTap/onWritten(_:)``) once it is framed.
+/// write itself happens out of its sight, so an outbound body counts as being written
+/// (``RawWireTap/onDelivery(_:)``) once it is framed, and never as failed.
 public struct TappedFraming<Base: MessageFraming>: MessageFraming {
     private var base: Base
     private let tap: RawWireTap
@@ -96,7 +105,7 @@ public struct TappedFraming<Base: MessageFraming>: MessageFraming {
 
     public func frame(_ body: Data) -> Data {
         tap.observe(.outbound, body)
-        tap.written(body)
+        tap.delivery(body, .writing)
         return base.frame(body)
     }
 

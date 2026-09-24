@@ -127,8 +127,8 @@ extension DaemonToolsTests {
     }
 
     /// A held agent whose stdin closed between turns never gets the next prompt: its
-    /// write fails, so the turn goes to a fresh launch unseen. Only a prompt written to
-    /// the agent counts as sent, as acpx's `onPromptRequestWritten` has it (#113 review).
+    /// write fails, so the turn goes to a fresh launch unseen. A prompt counts as sent
+    /// from when it starts to be written until its write fails (#113 review).
     @Test(.enabled(if: mockPythonAvailable))
     func aPromptAHeldAgentCouldNotBeSentGoesToAFreshLaunch() async throws {
         let armed = NSTemporaryDirectory() + "exit-agent-stdin-\(UUID().uuidString)"

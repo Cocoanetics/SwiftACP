@@ -227,10 +227,12 @@ extension ACPXDaemonBackend {
         let connection = entry.agent.connection
         let boundSessionId = entry.session.id
         let sessionId = boundSessionId
-        // Whether the turn itself — its prompt — has been written to the agent: acpx's
-        // `onPromptRequestWritten`, once the write is done, so a prompt an agent's closed
-        // stdin refused never reached it. The `--model` asked for before it is not — a
-        // fresh launch asks for it again, which does no harm. Cleared when the turn ends.
+        // Whether the turn itself — its prompt — may have reached the agent: from when it
+        // starts to be written, unless the write fails. acpx counts a prompt once it is
+        // written (`onPromptRequestWritten`); counting it from before, an agent that took
+        // it and exited at once never gets it twice, and one whose closed stdin refused it
+        // gets it from a fresh launch. The `--model` asked for before it is not — a fresh
+        // launch asks for it again, which does no harm. Cleared when the turn ends.
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
         let clientSession = Session.current
@@ -244,12 +246,13 @@ extension ACPXDaemonBackend {
             wireFeed.observe(direction, body)
             promptResult.observe(direction, body)
         }
-        entry.agent.rawWire.onWritten { body in
-            if !wrote.happened, WireJSON(parsing: body)?["method"] == .text("session/prompt") { wrote.mark() }
+        entry.agent.rawWire.onDelivery { body, delivery in
+            guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
+            if delivery == .writing { wrote.mark() } else { wrote.unmark() }
         }
         defer {
             entry.agent.rawWire.set(nil)
-            entry.agent.rawWire.onWritten(nil)
+            entry.agent.rawWire.onDelivery(nil)
         }
 
         // Tee every JSON-RPC line on the wire into the buffer; the persister drains
@@ -433,6 +436,10 @@ final class WriteMark: @unchecked Sendable {
 
     func mark() {
         lock.withLock { marked = true }
+    }
+
+    func unmark() {
+        lock.withLock { marked = false }
     }
 
     var happened: Bool {
