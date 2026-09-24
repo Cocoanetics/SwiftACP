@@ -91,46 +91,36 @@ struct SessionRecordSerializerTests {
     }
 
     /// A record whose oldest messages were trimmed away keeps each remaining message in its
-    /// own stored order, not in that of the message once in its place — with or without a
-    /// user message to tell them apart (#117 review).
+    /// own stored order, not in that of the message once in its place, and writes a new
+    /// message as acpx builds one, even one equal to a message trimmed away (#117 review).
     @Test func trimmedMessagesKeepTheirOwnStoredOrder() async throws {
-        let conversations = [
-            [
-                #"{"User":{"content":[{"Text":"a"}],"id":"u1"}}"#,
-                #"{"Agent":{"tool_results":{},"content":[{"Text":"b"}]}}"#,
-                #"{"User":{"id":"u2","content":[{"Text":"c"}]}}"#,
-                #"{"Agent":{"content":[{"Text":"d"}],"tool_results":{}}}"#
-            ],
-            [
-                #"{"Agent":{"tool_results":{},"content":[{"Text":"a"}]}}"#,
-                #""Resume""#,
-                #"{"Agent":{"content":[{"Text":"b"}],"tool_results":{}}}"#,
-                #""Resume""#,
-                #"{"Agent":{"tool_results":{},"content":[{"Text":"c"}]}}"#
-            ]
+        let stored = [
+            #"{"User":{"content":[{"Text":"a"}],"id":"u1"}}"#,
+            #"{"Agent":{"tool_results":{},"content":[{"Text":"b"}]}}"#,
+            #""Resume""#,
+            #"{"Agent":{"tool_results":{},"content":[{"Text":"c"}]}}"#
         ]
+        let newMessages = ConversationModel.maxRuntimeMessages - 1
         try await withIsolatedStore {
             try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
-            for messages in conversations {
-                for trimmed in [0, 1, 3] {
-                    try Self.storeRecord(messages: messages)
-                    var record = try #require(SessionStore.loadRecord("r"))
-                    record.messages.removeFirst(trimmed)
-                    try SessionStore.writeRecord(record)
-                    let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
-                    let kept = try messages.dropFirst(trimmed).map { try #require(WireJSON(parsing: Data($0.utf8))) }
-                    #expect(written["messages"] == .array(kept), "\(messages.first ?? "") less \(trimmed)")
-                }
-                // None of them kept: a message of the same shape now in the last one's place
-                // is written as acpx builds one, not in that message's stored order.
-                try Self.storeRecord(messages: messages)
+            for trimmed in [0, 1, 3, 4] {
+                try Self.storeRecord(messages: stored)
                 var record = try #require(SessionStore.loadRecord("r"))
-                record.messages = [.agent(SessionAgentMessage(content: [.text("z")]))]
+                // A message equal to the last one read, then enough to trim `trimmed` away.
+                record.messages.append(.agent(SessionAgentMessage(content: [.text("c")])))
+                for index in 0..<(newMessages - stored.count + trimmed) {
+                    record.messages.append(.user(SessionUserMessage(id: "n\(index)", content: [.text("n")])))
+                }
+                ConversationModel.trimForRuntime(&record)
+                #expect(record.messagesTrimmedSinceRead == trimmed)
                 try SessionStore.writeRecord(record)
                 let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+                guard case .array(let messages)? = written["messages"] else { throw POSIXError(.EINVAL) }
+                let kept = try stored.dropFirst(trimmed).map { try #require(WireJSON(parsing: Data($0.utf8))) }
+                #expect(Array(messages.prefix(kept.count)) == kept, "less \(trimmed)")
                 let built = try #require(
-                    WireJSON(parsing: Data(#"[{"Agent":{"content":[{"Text":"z"}],"tool_results":{}}}]"#.utf8)))
-                #expect(written["messages"] == built, "\(messages.first ?? "") all replaced")
+                    WireJSON(parsing: Data(#"{"Agent":{"content":[{"Text":"c"}],"tool_results":{}}}"#.utf8)))
+                #expect(messages[kept.count] == built, "less \(trimmed)")
             }
         }
     }

@@ -5,6 +5,7 @@ import JSONFoundation
 extension ConversationModel {
     static func trimForRuntime(_ record: inout SessionRecord) {
         if record.messages.count > maxRuntimeMessages {
+            record.messagesTrimmedSinceRead += record.messages.count - maxRuntimeMessages
             record.messages = Array(record.messages.suffix(maxRuntimeMessages))
         }
         record.messages = record.messages.map(trimMessage)

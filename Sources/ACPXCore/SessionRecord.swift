@@ -86,6 +86,10 @@ public struct SessionRecord: Codable, Sendable {
     /// ``SessionStore/readRecord(at:expecting:)``; `nil` for a record built in memory,
     /// and not updated by changes made since. Never written.
     public var parsedByAcpx: WireJSON?
+    /// How many of the messages the record was read with have been trimmed away since,
+    /// the oldest first (``ConversationModel``): what sits at a message's place in
+    /// ``parsedByAcpx``, less these, is that message as it was read. Never written.
+    public var messagesTrimmedSinceRead = 0
 
     public struct ImportedFrom: Codable, Sendable {
         public var recordId: String

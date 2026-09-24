@@ -28,7 +28,7 @@ enum SessionRecordSerializer {
         var document = forDisk(built, storedAcpx: raw["acpx"])
         if let stored = record.parsedByAcpx {
             let read = forDisk(stored, storedAcpx: nil)
-                .mapping("messages") { MessageOrder.aligned($0, with: document["messages"]) }
+                .mapping("messages") { MessageOrder.aligned($0, trimmed: record.messagesTrimmedSinceRead) }
             document = inStoredOrder(document, stored: read, topLevel: true)
         }
         return Data((document.stringified(indent: 2) + "\n").utf8)
@@ -185,24 +185,11 @@ enum MessageOrder {
             .mappingMembers { $0.ordered(["tool_use_id", "tool_name", "is_error", "content", "output"]) }
     }
 
-    /// `stored`, the messages a record was read with, lined up with `messages`, those it
-    /// holds now: trimming drops the oldest (`trimConversationForRuntime`), so each
-    /// message is paired with itself, not with whatever message was once in its place.
-    /// The first message kept is where what was read carries on unchanged into what is
-    /// held; a turn only adds messages after it. Where nothing that was read carries on,
-    /// no message is paired.
-    static func aligned(_ stored: WireJSON, with messages: WireJSON?) -> WireJSON {
-        let (storedItems, items) = (items(of: stored), items(of: messages))
-        let offset = storedItems.indices.first { start in
-            let overlap = min(items.count, storedItems.count - start)
-            return overlap > 0 && (0..<overlap).allSatisfy { index in
-                SessionRecordSerializer.sameValue(items[index], storedItems[start + index])
-            }
-        }
-        guard let offset else { return .array([]) }
-        return .array(items.indices.map { index in
-            storedItems.indices.contains(index + offset) ? storedItems[index + offset] : .null
-        })
+    /// `stored`, the messages a record was read with, lined up with those it holds now,
+    /// each with itself: a turn only adds messages, and trimming drops the oldest
+    /// (`trimConversationForRuntime`) — `trimmed` of them since the record was read.
+    static func aligned(_ stored: WireJSON, trimmed: Int) -> WireJSON {
+        .array(Array(items(of: stored).dropFirst(trimmed)))
     }
 
     /// `request_token_usage` in the order acpx added its entries: one a turn, under the id
