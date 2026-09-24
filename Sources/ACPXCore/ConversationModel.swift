@@ -121,9 +121,9 @@ public enum ConversationModel {
     private static func applySessionUpdate(into record: inout SessionRecord, update: SessionUpdate) {
         switch update {
         case .userMessageChunk(let block):
-            if let text = extractText(block) {
-                record.messages.append(
-                    .user(SessionUserMessage(id: nextUserMessageId(), content: [.text(text)])))
+            // Recorded as a prompt's block is (`appendUserMessageChunk`).
+            if let content = userContent(block) {
+                record.messages.append(.user(SessionUserMessage(id: nextUserMessageId(), content: [content])))
             }
         case .agentMessageChunk(let block):
             if let text = extractText(block) {
@@ -143,9 +143,51 @@ public enum ConversationModel {
             record.acpx = acpx
         case .usageUpdate(let usage):
             applyUsageUpdate(into: &record, usage)
-        case .plan, .availableCommandsUpdate, .other:
-            // `plan` has no handler in acpx either; available-commands /
-            // session-info / config-option updates are not modelled here.
+        case .availableCommandsUpdate(let commands):
+            var acpx = record.acpx ?? SessionAcpxState()
+            acpx.availableCommands = commands.compactMap(recordedCommand)
+            record.acpx = acpx
+        case .other(let kind, let payload):
+            applyOtherUpdate(kind, payload, into: &record)
+        case .plan:
+            // No handler in acpx either.
+            break
+        }
+    }
+
+    /// An advertised command as acpx records it (`normalizeAvailableCommand`): its name
+    /// and description trimmed, an empty description left out, and whether it takes
+    /// input. One acpx's ACP SDK skips — a command without a description, as a bare
+    /// name is — or whose name is blank, is not recorded.
+    private static func recordedCommand(_ command: AvailableCommand) -> SessionAcpxState.AvailableCommand? {
+        let name = command.name.javaScriptTrimmed
+        guard let description = command.description?.javaScriptTrimmed, !name.isEmpty else { return nil }
+        // The SDK reads an input other than `{ hint: string }` as none.
+        var hasInput = false
+        if case .object(let input)? = command.input, case .string? = input["hint"] { hasInput = true }
+        return .detailed(.init(name: name, description: description.isEmpty ? nil : description, hasInput: hasInput))
+    }
+
+    /// The updates decoded as ``SessionUpdate/other(kind:payload:)`` that acpx records:
+    /// the conversation's title (`session_info_update`, `applySessionInfoUpdate`) and
+    /// the session's config options (`config_option_update`, `applyConfigOptionsModelState`).
+    private static func applyOtherUpdate(_ kind: String, _ payload: JSONValue, into record: inout SessionRecord) {
+        guard case .object(let update) = payload else { return }
+        switch kind {
+        case "session_info_update":
+            // A title the update carries is taken: a string as the title, anything else as
+            // none — acpx's ACP SDK reads what is no string as undefined, which acpx
+            // records as `null`. Its `updatedAt` is stamped over with the update's time.
+            if let title = update["title"] {
+                if case .string(let text) = title { record.title = text } else { record.title = nil }
+            }
+        case "config_option_update":
+            var acpx = record.acpx ?? SessionAcpxState()
+            var options: [JSONValue] = []
+            if case .array(let reported)? = update["configOptions"] { options = reported }
+            ModelSupport.applyConfigOptionsModelState(options, to: &acpx)
+            record.acpx = acpx
+        default:
             break
         }
     }
