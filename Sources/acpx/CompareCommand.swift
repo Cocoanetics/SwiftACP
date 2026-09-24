@@ -73,12 +73,13 @@ enum CompareCommand {
         let permission = try SessionLifecycle.permissionPolicy(flags, config: config)
         let mcpServers = try config.mcpServerSpecs()
         let agentCommand = invocation.agentCommand
+        let agentArgv = invocation.agentArgv
         let cwd = invocation.cwd
         let start = Date()
         do {
             let outcome: PromptOutcome = try runBlocking {
                 let handle = try await ACPAgent.launch(
-                    agent: agentCommand, cwd: cwd, permission: permission,
+                    agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission,
                     capabilities: flags.clientCapabilities,
                     authCredentials: config.auth, authPolicy: flags.authPolicy,
                     inheritStderr: false)

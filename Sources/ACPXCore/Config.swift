@@ -90,6 +90,9 @@ public struct ResolvedAcpxConfig: Sendable {
     public var queueMaxDepth: Int
     public var format: String
     public var agents: [String: String]
+    /// The exact argv of each agent configured with `argv`, or with `command` and
+    /// `args`: acpx launches those as given, where a bare `command` is split.
+    public var agentArgv: [String: [String]] = [:]
     /// The names in ``agents`` in the order acpx lists them: its merge is a JavaScript
     /// object spread (`{...global, ...project}`), so global agents come in file order,
     /// then project-only ones in theirs, and a name in both keeps its global place.
@@ -104,6 +107,21 @@ public struct ResolvedAcpxConfig: Sendable {
     public var mcpConfigPath: String?
     public var hasGlobalConfig: Bool
     public var hasProjectConfig: Bool
+}
+
+extension ResolvedAcpxConfig {
+    /// How acpx launches an agent it is given by name (`resolveInvocationCommand`): a
+    /// configured agent — found by its name, or by its alias's — is its command and
+    /// argv; a built-in is the registry's; any other name is itself, a command line to
+    /// split.
+    public func agentLaunch(for name: String) -> (command: String, argv: [String]?) {
+        let normalized = AgentRegistry.normalize(name)
+        let configured = [normalized, AgentRegistry.aliases[normalized] ?? normalized].first { agents[$0] != nil }
+        if let configured, let command = agents[configured] {
+            return (command, agentArgv[configured])
+        }
+        return (AgentRegistry.command(for: name) ?? name, AgentRegistry.argv(for: name))
+    }
 }
 
 /// An unreadable/invalid config file, with a user-facing message.
@@ -183,7 +201,7 @@ public enum ConfigLoader {
                               expected: "text, json, or quiet")
         } ?? DEFAULT_OUTPUT_FORMAT
 
-        let (agents, agentNames) = try mergedAgents(global, project)
+        let (agentEntries, agentNames) = try mergedAgents(global, project)
         let auth = try mergedAuth(global, project)
         // `resolveMcpServers`: an explicit file's, else the project's, else the global's.
         let mcpServers: [McpServerConfig]
@@ -209,7 +227,8 @@ public enum ConfigLoader {
             timeoutMs: timeoutMs,
             queueMaxDepth: queueMaxDepth,
             format: format,
-            agents: agents,
+            agents: agentEntries.mapValues(\.command),
+            agentArgv: agentEntries.compactMapValues(\.argv),
             agentOrder: WireJSON.propertyOrder(agentNames),
             auth: auth,
             disableExec: disableExec,
@@ -225,12 +244,13 @@ public enum ConfigLoader {
     /// a name in both keeping its global place and taking the project's command.
     private static func mergedAgents(
         _ global: ConfigFields.File?, _ project: ConfigFields.File?
-    ) throws -> (agents: [String: String], names: [String]) {
-        var agents: [String: String] = [:]
+    ) throws -> (agents: [String: ConfigFields.Agent], names: [String]) {
+        var agents: [String: ConfigFields.Agent] = [:]
         var names: [String] = []
         for file in [global, project].compactMap({ $0 }) {
-            for (name, command) in try ConfigFields.agents(file["agents"], file.path) ?? [] {
-                agents[name] = command
+            for (name, agent) in try ConfigFields.agents(file["agents"], file.path) ?? [] {
+                // The whole entry is replaced, argv and all, as a spread replaces it.
+                agents[name] = agent
                 names.append(name)
             }
         }

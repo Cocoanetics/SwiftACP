@@ -48,11 +48,15 @@ enum ConfigCommand {
         ] as [(String, WireJSON?)])
     }
 
-    /// The agents in config order, as acpx's merged object lists them.
+    /// The agents in config order, as acpx's merged object lists them: each as the
+    /// argv it launches (an `argv` entry, or a `command` with `args`), else its command.
     private static func agentsDisplay(_ config: ResolvedAcpxConfig) -> WireJSON {
         jsonObject(config.agentOrder.compactMap { name in
             config.agents[name].map { command in
-                (name, jsonObject([("command", .text(command))] as [(String, WireJSON?)]))
+                let entry = config.agentArgv[name].map { argv in
+                    jsonObject([("argv", .array(argv.map(WireJSON.text)))] as [(String, WireJSON?)])
+                } ?? jsonObject([("command", .text(command))] as [(String, WireJSON?)])
+                return (name, entry)
             }
         } as [(String, WireJSON?)])
     }

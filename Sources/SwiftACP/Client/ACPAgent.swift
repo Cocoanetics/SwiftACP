@@ -75,6 +75,7 @@ public final class ACPAgent: Sendable {
     /// a ready agent. Throws if the adapter can't launch or the handshake fails.
     public static func launch(
         agent name: String,
+        argv: [String]? = nil,
         cwd: String = FileManager.default.currentDirectoryPath,
         handlers: ACPClientHandlers,
         clientInfo: Implementation = .acpx,
@@ -92,14 +93,14 @@ public final class ACPAgent: Sendable {
         // credentials. An explicit `environment` is used as-is.
         let effectiveEnvironment =
             environment ?? AgentEnvironment.forAgent(authCredentials: authCredentials)
-        let spec = AgentRegistry.launch(
-            for: name, cwd: cwd, environment: effectiveEnvironment,
+        let spec = try AgentRegistry.launch(
+            for: name, argv: argv, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
         // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
         // here so the failure names the command instead of surfacing as an opaque
         // subprocess error once the handshake times out.
         if let failure = AgentLaunchPreflight.failure(
-            for: spec, agentCommand: AgentRegistry.command(for: name, overrides: overrides) ?? name) {
+            for: spec, agentCommand: failureName(agent: name, argv: argv, overrides: overrides)) {
             throw failure
         }
         // Tapped from the start, so an observer given here sees the handshake too.
@@ -125,12 +126,21 @@ public final class ACPAgent: Sendable {
         }
     }
 
+    /// The command a launch failure names — acpx's `options.agentCommand`. Given an
+    /// argv, that is the caller's own command, since an expansion of the name was never
+    /// launched; otherwise it is what the name expands to.
+    static func failureName(agent name: String, argv: [String]?, overrides: [String: String]) -> String {
+        guard argv == nil else { return name }
+        return AgentRegistry.command(for: name, overrides: overrides) ?? name
+    }
+
     /// Convenience that builds standard handlers from a permission policy. Writes
     /// the agent asks for are gated by it too — see ``WriteApproval`` — with
     /// `nonInteractivePermissions` deciding what a write needing confirmation does
     /// when there is no terminal to ask on.
     public static func launch(
         agent name: String,
+        argv: [String]? = nil,
         cwd: String = FileManager.default.currentDirectoryPath,
         permission: PermissionPolicy,
         nonInteractivePermissions: NonInteractivePermissionPolicy = .deny,
@@ -145,7 +155,7 @@ public final class ACPAgent: Sendable {
         onRawWire: RawWireTap.Observer? = nil
     ) async throws -> ACPAgent {
         try await launch(
-            agent: name, cwd: cwd,
+            agent: name, argv: argv, cwd: cwd,
             handlers: .standard(
                 permission: permission, nonInteractivePermissions: nonInteractivePermissions),
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,

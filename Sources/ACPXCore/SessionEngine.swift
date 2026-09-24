@@ -25,6 +25,7 @@ public enum SessionEngine {
     ///   - meta: optional `_meta` for the `session/new` request (e.g. claude model).
     public static func createSession(
         agentCommand: String,
+        agentArgv: [String]? = nil,
         cwd: String,
         name: String?,
         permission: PermissionPolicy,
@@ -41,7 +42,7 @@ public enum SessionEngine {
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
         let handle = try await ACPAgent.launch(
-            agent: agentCommand, cwd: cwd, permission: permission, capabilities: capabilities,
+            agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission, capabilities: capabilities,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)
         do {
@@ -52,6 +53,7 @@ public enum SessionEngine {
                 acpxRecordId: response.sessionId, acpSessionId: response.sessionId,
                 agentCommand: agentCommand, cwd: cwd, name: name,
                 createdAt: started, lastUsedAt: started)
+            record.agentArgv = agentArgv
             record.closed = false
             record.protocolVersion = handle.initializeResult.protocolVersion
             record.agentCapabilities = handle.initializeResult.agentCapabilities.flatMap { caps in
