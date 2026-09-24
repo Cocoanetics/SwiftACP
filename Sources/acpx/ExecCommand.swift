@@ -27,11 +27,11 @@ enum ExecCommand {
         let renderer = OutputRenderer(options: options)
         let onClientRequest = clientOperationObserver(renderer)
         // JSON mode prints the exchange from the handshake on, so the tap goes in at launch.
-        let onRawWire: RawWireTap.Observer?
-        if renderer.streamsWireJSON {
-            onRawWire = { direction, body in renderer.acpMessage(direction, body) }
-        } else {
-            onRawWire = nil
+        // Quiet mode reads the prompt response's usage and cost off the wire, as acpx does.
+        let promptResult = PromptResultCapture()
+        let onRawWire: RawWireTap.Observer = { direction, body in
+            promptResult.observe(direction, body)
+            if renderer.streamsWireJSON { renderer.acpMessage(direction, body) }
         }
 
         return try runBlocking {
@@ -60,6 +60,7 @@ enum ExecCommand {
                     onClientOperation: { renderer.clientOperation($0) },
                     onInboundRequest: { renderer.inboundRequest($0) })
                 renderer.finish(stopReason: outcome.stopReason)
+                renderer.promptMetadata(usage: promptResult.result?["usage"], cost: promptResult.result?["cost"])
                 let permissions = await handle.connection.permissionStats(for: response.sessionId)
                 await handle.close()
                 if permissions.promptUnavailable, flags.format != "quiet",
