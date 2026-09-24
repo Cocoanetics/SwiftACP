@@ -320,7 +320,8 @@ extension ACPXDaemonBackend {
                 // Best-effort, as the rest of this replay; #73 makes it fail the turn, as acpx's does.
             }
         } else if let modelConfigId, let modelValue = desiredOptions[modelConfigId] {
-            if let change = await apply(configId: modelConfigId, value: modelValue, on: entry, models: &models) {
+            if let change = await apply(
+                configId: modelConfigId, value: modelValue, on: entry, models: &models, agentCommand: agentCommand) {
                 changes.append(change)
             }
         } else if let modelId = acpx.currentModelId, acpx.modelControl != "config_option" {
@@ -333,7 +334,8 @@ extension ACPXDaemonBackend {
         // Sorted so a replay is reproducible; the model is already applied.
         for configId in desiredOptions.keys.sorted() where configId != modelConfigId {
             guard let value = desiredOptions[configId],
-                  let change = await apply(configId: configId, value: value, on: entry, models: &models)
+                  let change = await apply(
+                    configId: configId, value: value, on: entry, models: &models, agentCommand: agentCommand)
             else { continue }
             changes.append(change)
         }
@@ -347,12 +349,15 @@ extension ACPXDaemonBackend {
     /// Replay one saved option and say how to record it — acpx's
     /// `applyConfigOptionSelection` with the agent's reply — or `nil` if the agent
     /// refused it.
+    /// A value for the model's own option is a model id, resolved with the adapter's
+    /// rules (a Cursor alias, a Claude model outside the list) as `--model` is.
     private func apply(
-        configId: String, value: String, on entry: Live, models: inout ModelSupport.ModelState?
+        configId: String, value: String, on entry: Live, models: inout ModelSupport.ModelState?,
+        agentCommand: String
     ) async -> RecordChange? {
         guard let response = try? await ModelApplication.setConfigOption(
             connection: entry.agent.connection, sessionId: entry.session.id, configId: configId, value: value,
-            models: models, agentCommand: nil)
+            models: models, agentCommand: agentCommand)
         else { return nil }
         models = ModelApplication.advance(models, with: response.configOptions)
         return { record in

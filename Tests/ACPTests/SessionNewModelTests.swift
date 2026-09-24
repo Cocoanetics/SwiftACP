@@ -239,6 +239,42 @@ import Testing
         }
     }
 
+    /// An older record keeps its model only as the model option's saved value. Put back,
+    /// that value is resolved with the adapter's rules, as `--model` is — here Cursor's
+    /// alias rule, `gpt-5` for the advertised `gpt-5[thinking]`.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aSavedModelOptionIsResolvedWithTheAdaptersRules() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            // Named `cursor-agent`, so the adapter's alias rule applies.
+            let wrapper = ACPXPaths.baseDir.appendingPathComponent("cursor-agent")
+            try """
+                #!/bin/sh
+                exec /usr/bin/env MODEL_AGENT_LOG='\(log.path)' MODEL_AGENT_MODELS='m1,gpt-5[thinking]' \
+                  '\(python)' '\(fixture.path)'
+
+                """.write(to: wrapper, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+            var record = try await SessionEngine.createSession(
+                agentCommand: wrapper.path, cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll,
+                authCredentials: [:], authPolicy: "skip")
+            var acpx = try #require(record.acpx)
+            acpx.desiredConfigOptions = ["model": "gpt-5"]
+            record.acpx = acpx
+            try SessionStore.writeRecord(record)
+
+            let before = Self.requests(log).count
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .runPrompt(sessionId: record.acpxRecordId, text: "hi")
+            #expect(Array(Self.requests(log).dropFirst(before))
+                == ["session/new", "session/set_config_option model=gpt-5[thinking]", "session/prompt"])
+        }
+    }
+
     /// A session the reconnect started in place of the old one is asked for the pinned
     /// model through the control it advertises: here a model option, where the old one
     /// had a legacy model list.
