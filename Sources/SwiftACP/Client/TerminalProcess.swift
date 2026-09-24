@@ -102,6 +102,10 @@ final class TerminalProcess: @unchecked Sendable {
     /// regular file of that name on `path` (libuv's `/usr/bin:/bin` without one).
     /// Like `execvp`, a match that is not executable is `EACCES` if nothing better
     /// turns up.
+    ///
+    /// A relative `PATH` entry is looked for from `cwd` — the child's directory — and
+    /// returned as it is, since the child resolves it after changing into `cwd`, as
+    /// libuv's spawn does.
     private static func resolveExecutable(_ command: String, cwd: String, path: String?) throws -> String {
         guard !command.isEmpty else { throw SpawnError(code: ENOENT) }
         if command.contains("/") { return command }
@@ -114,7 +118,7 @@ final class TerminalProcess: @unchecked Sendable {
             guard stat(located, &status) == 0, UInt32(status.st_mode) & UInt32(S_IFMT) == UInt32(S_IFREG) else {
                 continue
             }
-            if access(located, X_OK) == 0 { return located }
+            if access(located, X_OK) == 0 { return candidate }
             sawUnexecutable = true
         }
         throw SpawnError(code: sawUnexecutable ? EACCES : ENOENT)

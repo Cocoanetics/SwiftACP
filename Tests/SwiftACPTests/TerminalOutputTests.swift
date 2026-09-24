@@ -41,6 +41,17 @@ struct TerminalOutputTests {
             == "ACPX_TERMINAL_MAX_OUTPUT_BYTES must be a non-negative safe integer; zero disables the host ceiling")
     }
 
+    /// A ceiling given as a count, as a caller hands the daemon one, keeps the rule.
+    @Test func aCountedCeilingKeepsTheSameRule() throws {
+        #expect(try TerminalOutputLimit.ceiling(bytes: 0) == nil)
+        #expect(try TerminalOutputLimit.ceiling(bytes: 5) == 5)
+        #expect(try TerminalOutputLimit.ceiling(bytes: 9_007_199_254_740_991) == 9_007_199_254_740_991)
+        #expect(throws: TerminalOutputCeilingError()) { try TerminalOutputLimit.ceiling(bytes: -1) }
+        #expect(throws: TerminalOutputCeilingError()) {
+            try TerminalOutputLimit.ceiling(bytes: 9_007_199_254_740_992)
+        }
+    }
+
     // MARK: - Retained output
 
     /// The newest bytes, never starting inside a character: of `héllo wörld`'s last five

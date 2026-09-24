@@ -174,6 +174,14 @@ public enum TerminalOutputLimit {
         return bytes == 0 ? nil : bytes
     }
 
+    /// A ceiling given as a count rather than read from the environment — `0` is none —
+    /// held to the same rule: a negative or unsafe count is refused with
+    /// ``TerminalOutputCeilingError``.
+    public static func ceiling(bytes: Int) throws -> Int? {
+        guard bytes >= 0, bytes <= maxSafeInteger else { throw TerminalOutputCeilingError() }
+        return bytes == 0 ? nil : bytes
+    }
+
     /// The bytes a terminal keeps: the request's limit (``defaultBytes`` without one),
     /// at least 0, at most the ceiling.
     public static func resolve(requested: Int?, ceiling: Int?) -> Int {

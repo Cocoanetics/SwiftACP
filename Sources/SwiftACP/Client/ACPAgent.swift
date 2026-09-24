@@ -62,6 +62,8 @@ public final class ACPAgent: Sendable {
     public let rawWire: RawWireTap
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
+    /// The terminal manager `launch` gave the connection, when it advertises terminals.
+    let terminals: (any ACPTerminalHandler)?
 
     public var agentCapabilities: AgentCapabilities? { initializeResult.agentCapabilities }
     /// Which non-text prompt content the agent accepts, as it advertised on
@@ -74,7 +76,7 @@ public final class ACPAgent: Sendable {
     init(
         name: String, cwd: String, connection: ACPAgentConnection,
         transport: StdioTransport<TappedFraming<LineFraming>>, rawWire: RawWireTap,
-        initializeResult: InitializeResponse
+        initializeResult: InitializeResponse, terminals: (any ACPTerminalHandler)? = nil
     ) {
         self.name = name
         self.cwd = cwd
@@ -82,6 +84,18 @@ public final class ACPAgent: Sendable {
         self.transport = transport
         self.rawWire = rawWire
         self.initializeResult = initializeResult
+        self.terminals = terminals
+    }
+
+    /// Caps the output of the terminals the agent creates from now on, `nil` being no
+    /// cap — see ``TerminalManager/setOutputCeiling(_:)``. `launch` caps them by this
+    /// process's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`; a host running turns for other
+    /// processes sets each caller's own. Nothing changes without a terminal manager.
+    public func setTerminalOutputCeiling(_ ceiling: Int?) async {
+        #if os(macOS) || os(Linux)
+        guard let manager = terminals as? TerminalManager else { return }
+        await manager.setOutputCeiling(ceiling)
+        #endif
     }
 
     /// Spawn an agent's ACP adapter, run the `initialize` handshake, and return
@@ -136,7 +150,7 @@ public final class ACPAgent: Sendable {
                 authCredentials: authCredentials, authPolicy: authPolicy)
             return ACPAgent(
                 name: name, cwd: cwd, connection: connection,
-                transport: transport, rawWire: rawWire, initializeResult: info)
+                transport: transport, rawWire: rawWire, initializeResult: info, terminals: terminals)
         } catch {
             transport.close()
             throw error

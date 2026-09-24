@@ -224,6 +224,10 @@ public actor ACPXDaemon {
     ///   - permissionPolicy: per-tool rules that approve, deny or escalate this turn's
     ///     permission requests ahead of `permissionMode` — acpx's
     ///     `--permission-policy`. See ``PermissionRules``.
+    ///   - terminalOutputCeiling: the most output, in bytes, any terminal the agent
+    ///     creates from this turn on keeps, whatever it asks for — the caller's
+    ///     `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, which acpx reads in the queue owner its CLI
+    ///     starts. `0` is no cap; omitted, the daemon's own environment decides.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -231,12 +235,13 @@ public actor ACPXDaemon {
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil
+        streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil
     ) async throws -> String {
         try await backend.runPrompt(
             sessionId: sessionId, text: text, blocks: blocks, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-            streamWire: streamWire ?? false, permissionPolicy: permissionPolicy)
+            streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
+            terminalOutputCeiling: terminalOutputCeiling)
     }
 
     /// Cancel an in-flight prompt for a session.

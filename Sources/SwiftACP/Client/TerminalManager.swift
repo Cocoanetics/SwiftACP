@@ -31,7 +31,7 @@ public actor TerminalManager: ACPTerminalHandler {
     public static let defaultKillGrace: TimeInterval = 1.5
 
     private let cwd: String
-    private let outputCeiling: Int?
+    private var outputCeiling: Int?
     /// How long `SIGTERM` has before `SIGKILL`.
     public let killGrace: TimeInterval
     private var terminals: [String: ManagedTerminal] = [:]
@@ -51,6 +51,16 @@ public actor TerminalManager: ACPTerminalHandler {
         self.cwd = cwd
         self.outputCeiling = outputCeiling
         self.killGrace = max(0, killGrace)
+    }
+
+    /// Caps the output of the terminals created from now on — `nil` is no cap. A
+    /// terminal already running keeps the limit it was created with, which acpx
+    /// settles once, at `terminal/create`.
+    ///
+    /// For a host that serves many callers, each with its own ceiling: acpx reads
+    /// `ACPX_TERMINAL_MAX_OUTPUT_BYTES` in the process its caller started.
+    public func setOutputCeiling(_ ceiling: Int?) {
+        outputCeiling = ceiling
     }
 
     // MARK: - ACP methods

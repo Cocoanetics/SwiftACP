@@ -159,6 +159,41 @@ struct TerminalManagerTests {
         #expect(try await run(manager, "pwd", cwd: other).output.output == other + "\n")
     }
 
+    /// A relative `PATH` entry names a directory under the command's own directory,
+    /// even when that directory is itself relative, as Node's spawn finds it.
+    @Test func aRelativePathEntryIsFoundFromTheCommandsDirectory() async throws {
+        let root = try workspace()
+        try FileManager.default.createDirectory(atPath: root + "/sub/bin", withIntermediateDirectories: true)
+        try "#!/bin/sh\necho ran in \"$(pwd -P)\"\n".write(
+            toFile: root + "/sub/bin/tool", atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root + "/sub/bin/tool")
+        // `sub`, as seen from this process's own directory: a relative `cwd` is resolved
+        // from there, as in Node. (Changing this process's directory would race the
+        // tests running beside this one.)
+        let relativeSub = Self.relativePath(from: FileManager.default.currentDirectoryPath, to: root + "/sub")
+        let process = try TerminalProcess.spawn(
+            command: "tool", arguments: [], cwd: relativeSub, environment: ["PATH": "bin"])
+        let output = TerminalOutput(limit: 4096)
+        let text: String = await withCheckedContinuation { continuation in
+            process.start(onOutput: { output.append($0) }, onExit: { _ in
+                continuation.resume(returning: output.read().text)
+            })
+        }
+        process.stopReading()
+        #expect(text == "ran in \(root)/sub\n")
+    }
+
+    /// `to` relative to `from`; both absolute and physical.
+    static func relativePath(from: String, to: String) -> String {
+        let fromParts = (realpath(from, nil).map { defer { free($0) }; return String(cString: $0) } ?? from)
+            .split(separator: "/")
+        let toParts = to.split(separator: "/")
+        var common = 0
+        while common < min(fromParts.count, toParts.count), fromParts[common] == toParts[common] { common += 1 }
+        let up = Array(repeating: "..", count: fromParts.count - common)
+        return (up + toParts[common...].map(String.init)).joined(separator: "/")
+    }
+
     /// Node reports a missing working directory as the command not being found.
     @Test func aMissingDirectoryIsENOENT() async throws {
         let manager = TerminalManager(cwd: try workspace())
@@ -191,6 +226,25 @@ struct TerminalManagerTests {
         let manager = TerminalManager(cwd: try workspace(), outputCeiling: 3)
         #expect(try await run(manager, "printf", ["abcdef"]).output.output == "def")
         #expect(try await run(manager, "printf", ["abcdef"], limit: 2).output.output == "ef")
+    }
+
+    /// A new ceiling caps the terminals created after it; one already running keeps
+    /// the limit it was created with.
+    @Test func aNewCeilingCapsTheTerminalsCreatedAfterIt() async throws {
+        let fifo = try Fifo()
+        defer { fifo.remove() }
+        let manager = TerminalManager(cwd: try workspace(), outputCeiling: 3)
+        let running = try await manager.createTerminal(
+            shell("read line < \"$1\"; printf abcdef", fifo)).terminalId
+        await manager.setOutputCeiling(nil)
+        #expect(try await run(manager, "printf", ["abcdef"]).output.output == "abcdef")
+        await manager.setOutputCeiling(2)
+        #expect(try await run(manager, "printf", ["abcdef"]).output.output == "ef")
+        fifo.write("go")
+        _ = try await manager.waitForTerminalExit(WaitForTerminalExitRequest(sessionId: "s", terminalId: running))
+        let output = try await manager.terminalOutput(TerminalOutputRequest(sessionId: "s", terminalId: running))
+        #expect(output.output == "def" && output.truncated)
+        _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: running))
     }
 
     @Test func invalidUTF8IsReplaced() async throws {
