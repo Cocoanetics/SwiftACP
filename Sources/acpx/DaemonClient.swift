@@ -14,9 +14,14 @@ actor StopReasonBox {
     private(set) var permissions: PermissionStats?
     /// How the turn failed, when the daemon said (``TurnFailedEvent``).
     private(set) var failure: TurnFailedEvent?
-    func set(_ reason: StopReason, permissions: PermissionStats?) {
-        value = reason
-        self.permissions = permissions
+    /// The prompt response's `usage` and `cost`, as the agent sent them.
+    private(set) var usage: JSONValue?
+    private(set) var cost: JSONValue?
+    func set(_ ended: TurnEndedEvent) {
+        value = StopReason(rawValue: ended.stopReason)
+        permissions = ended.permissions
+        usage = ended.usage
+        cost = ended.cost
     }
 
     func fail(_ event: TurnFailedEvent) {
@@ -36,6 +41,9 @@ struct DaemonTurnFailed: Error {
 struct DaemonTurn {
     var stopReason: StopReason
     var permissions: PermissionStats?
+    /// The prompt response's `usage` and `cost`, for quiet output.
+    var usage: JSONValue?
+    var cost: JSONValue?
 }
 
 /// Renders streamed session updates that arrive from the daemon as MCP log
@@ -63,7 +71,7 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
         }
         // The terminal event carries the stop reason, not a renderable update.
         if let ended = try? message.data.decoded(TurnEndedEvent.self) {
-            await stopReason.set(StopReason(rawValue: ended.stopReason), permissions: ended.permissions)
+            await stopReason.set(ended)
             return
         }
         // A request the agent made of the daemon's client, or its refusal — acpx
@@ -222,7 +230,8 @@ enum DaemonClient {
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
         return DaemonTurn(
-            stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions)
+            stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions,
+            usage: await stopReason.usage, cost: await stopReason.cost)
     }
 
     /// A control the daemon ran for this CLI failed, for the reason in `message`.

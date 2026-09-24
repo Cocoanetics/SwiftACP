@@ -223,10 +223,14 @@ extension ACPXDaemonBackend {
         let clientSession = Session.current
         let wireFeed = TurnWireFeed(
             streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
+        // The prompt's result as it crossed the wire: its usage and cost go to the
+        // client with the turn's end, in the shape the agent sent them.
+        let promptResult = PromptResultCapture()
         entry.agent.rawWire.set { direction, body in
             if direction == .outbound { wrote.mark() }
             errors.observe(direction, body)
             wireFeed.observe(direction, body)
+            promptResult.observe(direction, body)
         }
         defer { entry.agent.rawWire.set(nil) }
 
@@ -299,7 +303,8 @@ extension ACPXDaemonBackend {
                 LogMessage(
                     level: .info, logger: sessionId,
                     data: toJSONValue(TurnEndedEvent(
-                        stopReason: response.stopReason.rawValue, permissions: permissionStats))))
+                        stopReason: response.stopReason.rawValue, permissions: permissionStats,
+                        usage: promptResult.usage, cost: promptResult.cost))))
             return fullText
         } catch {
             await connection.endSubscription(subscriptionId)

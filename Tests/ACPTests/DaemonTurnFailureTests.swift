@@ -72,7 +72,7 @@ extension DaemonToolsTests {
     ]
 
     /// Run one turn as a calling client's request, which the daemon answers on `client`.
-    private func prompt(
+    func prompt(
         _ daemon: ACPXDaemonBackend, _ sessionId: String, text: String, blocks: [PromptBlock]? = nil,
         streamWire: Bool = false, client: CallingClient
     ) async throws {
