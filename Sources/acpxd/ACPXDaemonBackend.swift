@@ -36,6 +36,9 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Live sessions held open between prompts, keyed by acpx record id.
     var live: [String: Live] = [:]
+    /// Agents being connected, until held, by record: what a close past its grace puts
+    /// down (``ConnectingAgent``).
+    var connecting: [String: ConnectingAgent] = [:]
     /// Set once the daemon lets its agents go for good (``releaseAll()``): from then on
     /// no agent is started or held.
     var stopping = false
@@ -271,25 +274,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         return (result, resumed)
     }
 
-    /// How long a close waits for the turn or control that holds the session
-    /// (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
-    static let closeGraceMilliseconds = 750
-
-    /// Take the session's slot within `milliseconds`: whether it was taken. One that comes
-    /// only later is given back at once. A wait called off — its caller gone — throws: a
-    /// close nobody waits for any more does not force the session's agent down.
-    private func takeSessionSlot(_ recordId: String, within milliseconds: Int) async throws -> Bool {
-        let queue = turnQueue
-        do {
-            try await withTimeout(milliseconds: milliseconds, {
-                try await queue.acquire(recordId, wait: true)
-            }, discardingLate: { await queue.release(recordId) })
-            return true
-        } catch is TimeoutError {
-            return false
-        }
-    }
-
     /// Close `entry`'s agent, and hold it no longer.
     private func letGo(_ entry: Live, of recordId: String) async {
         if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
@@ -394,43 +378,6 @@ actor ACPXDaemonBackend: ACPXBackend {
             record.acpx = acpx
         }
         return SessionControlResult(resumed: resumed)
-    }
-
-    /// Close a session: terminate its live agent (if held) and mark the record
-    /// closed — mirrors the CLI's `sessions close`.
-    ///
-    /// acpx's owner closes a session once drained (`closeActiveBackendSession` after
-    /// `shutdown.drain()`): a prompt running is cancelled, and the turn or control holding
-    /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
-    /// Past that, its agent is closed under it, and the close waits for it to end all the
-    /// same, as acpx's drain waits once it has closed its client — so that whatever it
-    /// writes comes before the close, not over it. A close called off while it waits — its
-    /// caller gone — ends there, throwing `CancellationError`: nothing is forced down, and
-    /// the session is not marked closed.
-    ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
-    /// - Returns: `false` if no such session exists.
-    func closeSession(sessionId: String) async throws -> Bool {
-        guard let initial = findRecord(sessionId) else { return false }
-        let recordId = initial.acpxRecordId
-        _ = try? await cancelSession(sessionId: recordId)
-        if try await !takeSessionSlot(recordId, within: Self.closeGraceMilliseconds) {
-            await evict(recordId)
-            try await turnQueue.acquire(recordId, wait: true)
-        }
-        defer { Task { await turnQueue.release(recordId) } }
-        forgetOwner(recordId)
-        await evict(recordId)
-        // Re-read after the await: closing the agent suspends this actor, so another
-        // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
-        // here to unblock) may have persisted changes meanwhile. Writing the
-        // pre-suspension snapshot would silently revert them.
-        var record = findRecord(initial.acpxRecordId) ?? initial
-        record.pid = nil
-        record.closed = true
-        record.closedAt = nowISO()
-        try SessionStore.writeRecord(record)
-        return true
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:

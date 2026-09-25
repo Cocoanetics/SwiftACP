@@ -33,7 +33,7 @@ mode, so a later launch can behave differently. Otherwise a prompt answers `hell
 Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
 writes its pid to `RETRY_AGENT_PID` on start. `RETRY_AGENT_READY` names a FIFO it
 writes a byte to as each prompt arrives, before doing anything with it — and, in
-`hang-new`, as `session/new` does.
+`hang-init` and `hang-new`, as `initialize` or `session/new` does.
 """
 import json
 import os
@@ -158,6 +158,7 @@ for line in sys.stdin:
     method, req_id, params = message.get("method"), message.get("id"), message.get("params", {})
     if method == "initialize":
         if MODE == "hang-init":
+            signal_ready()
             time.sleep(60)
         send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": {}}})
     elif method == "session/new":

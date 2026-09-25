@@ -151,6 +151,67 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A close whose grace runs out while the control holding the session still connects
+    /// its agent — one that never answers `initialize`, or `session/new` — puts that agent
+    /// down, as acpx's owner closes its client connecting or not: the control fails, the
+    /// close goes through, and no agent is left.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["hang-init", "hang-new"])
+    func aCloseReachesAnAgentStillConnecting(_ mode: String) async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (ready, pidFile) = (directory.appendingPathComponent("ready"), directory.appendingPathComponent("pid"))
+        guard mkfifo(ready.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        try await withIsolatedStore {
+            let session = try await retrySession(
+                in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' RETRY_AGENT_PID='\(pidFile.path)' ")
+            try session.set(mode)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let control = Task { try await daemon.setMode(sessionId: session.id, modeId: "plan") }
+            try await Self.byteWritten(to: ready)
+            #expect(try await daemon.closeSession(sessionId: session.id))
+            await #expect(throws: (any Error).self) { try await control.value }
+            #expect(try #require(SessionStore.loadRecord(session.id)).closed == true)
+            let pid = try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8)))
+            #expect(kill(pid, 0) != 0)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A close past its grace keeps its place in line: what queued behind it comes after
+    /// it, and finds the session closed.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCloseKeepsItsPlaceInLinePastTheGrace() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sent = directory.appendingPathComponent("mode-sent")
+        guard mkfifo(sent.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        try await withIsolatedStore {
+            let session = try await retrySession(
+                in: directory, environment: "RETRY_AGENT_DELAY_MS=5000 RETRY_AGENT_MODE_SENT='\(sent.path)' ")
+            try session.set("slow-set-mode")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = session.id
+            let control = Task { try await daemon.setMode(sessionId: id, modeId: "plan") }
+            try await Self.byteWritten(to: sent)
+            let (queued, queuing) = AsyncStream<Void>.makeStream()
+            await daemon.turnQueue.setOnQueued { _ in queuing.yield() }
+            var inLine = queued.makeAsyncIterator()
+            let close = Task { try await daemon.closeSession(sessionId: id) }
+            _ = await inLine.next()
+            let behind = Task { () -> Bool? in
+                try await daemon.turnQueue.acquire(id, wait: true)
+                defer { Task { await daemon.turnQueue.release(id) } }
+                return SessionStore.loadRecord(id)?.closed
+            }
+            _ = await inLine.next()
+            #expect(try await close.value)
+            #expect(try await behind.value == true)
+            _ = try? await control.value
+            await daemon.turnQueue.setOnQueued(nil)
+            await daemon.releaseAll()
+        }
+    }
+
     /// Return once a byte is written to the FIFO at `path`: opened for reading and
     /// writing, so that neither side waits for the other.
     static func byteWritten(to path: URL) async throws {

@@ -242,10 +242,12 @@ import Testing
     }
 
     /// Closing and attaching servers in flight leave a consistent record whichever
-    /// way the two interleave. (The specific lost-update window inside
-    /// `closeSession` — its write landing after another tool's — is a single actor
-    /// hop and is not deterministically reproducible here; the guard is the re-read
-    /// in `closeSession`, not this test.)
+    /// way the two interleave. The close takes its turn with the session, so an attach
+    /// that gets there first still finds the agent held and refuses; one that comes
+    /// after it goes through. (The specific lost-update window inside `closeSession` —
+    /// its write landing after another tool's — is a single actor hop and is not
+    /// deterministically reproducible here; the guard is the re-read in
+    /// `closeSession`, not this test.)
     @Test(.enabled(if: mockPythonAvailable))
     func closeAndAttachConcurrentlyLeaveAConsistentRecord() async throws {
         let command = try #require(mockCommand())
@@ -256,13 +258,28 @@ import Testing
 
             // The sequence the conflict message invites, run concurrently.
             async let closing: Bool = daemon.closeSession(sessionId: id)
-            async let setting: Bool = daemon.setSessionMcpServers(
-                sessionId: id, mcpServers: [Self.own])
+            async let setting: Result<Bool, Error> = {
+                do {
+                    return .success(try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.own]))
+                } catch {
+                    return .failure(error)
+                }
+            }()
             let (closed, set) = try await (closing, setting)
-            #expect(closed && set)
+            #expect(closed)
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.closed == true)
-            #expect(record.acpx?.mcpServers == [Self.own])
+            switch set {
+            case .success(let applied):
+                #expect(applied)
+                #expect(record.acpx?.mcpServers == [Self.own])
+            case .failure(let error):
+                guard case DaemonError.mcpConfigConflict = error else {
+                    Issue.record("the attach failed otherwise: \(error)")
+                    return
+                }
+                #expect(record.acpx?.mcpServers == nil)
+            }
         }
     }
 

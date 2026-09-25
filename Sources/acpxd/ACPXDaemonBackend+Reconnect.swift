@@ -113,20 +113,26 @@ extension ACPXDaemonBackend {
             guard let connectOutput, let onConnectOutput else { return }
             await onConnectOutput(connectOutput.flush(fellBack: fellBack))
         }
+        // A close past its grace can put it down until it is held.
+        let connecting = ConnectingAgent()
+        self.connecting[recordId] = connecting
+        defer { if self.connecting[recordId] === connecting { self.connecting.removeValue(forKey: recordId) } }
         let handle: ACPAgent
         do {
             // The argv the session recorded (`agent_argv`) launches it as it was launched;
             // without one, its command line is split. Within the timeout, as acpx starts
             // its client: an agent that comes up only past it is put down.
-            handle = try await withTimeout(milliseconds: timeout, { [inheritAgentStderr] in
-                try await ACPAgent.launch(
-                    agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
-                    capabilities: capabilities, environment: AgentEnvironment.forAgent(
-                        authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
-                    authCredentials: config.auth, authPolicy: config.authPolicy,
-                    inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
-                    onRawWire: connectOutput?.observer)
-            }, discardingLate: { await $0.close() })
+            handle = try await connecting.launch { [inheritAgentStderr] in
+                try await withTimeout(milliseconds: timeout, {
+                    try await ACPAgent.launch(
+                        agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
+                        capabilities: capabilities, environment: AgentEnvironment.forAgent(
+                            authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
+                        authCredentials: config.auth, authPolicy: config.authPolicy,
+                        inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
+                        onRawWire: connectOutput?.observer)
+                }, discardingLate: { await $0.close() })
+            }
         } catch {
             await showConnectOutput(false)
             throw error
@@ -170,15 +176,25 @@ extension ACPXDaemonBackend {
             record.acpx = connected
             record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
+        let entry = try await hold(handle, on: session, sessionSpecs: sessionSpecs, for: recordId, via: onRecordChange)
+        let fellBack = loaded.createdFreshSession
+        await showConnectOutput(fellBack)
+        // Taken back unless a new session had to replace it.
+        return (entry, !fellBack)
+    }
+
+    /// Hold the agent connecting has left on `session`, unless the daemon began stopping
+    /// meanwhile (``refuseIfStopping(_:of:via:)``).
+    private func hold(
+        _ handle: ACPAgent, on session: ACPSession, sessionSpecs: [MCPServerSpec]?, for recordId: String,
+        via onRecordChange: RecordChangeHandler?
+    ) async throws -> Live {
         await reconnected?(recordId)
         try await refuseIfStopping(handle, of: recordId, via: onRecordChange)
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         handle.rawWire.set(nil)
-        let fellBack = loaded.createdFreshSession
-        await showConnectOutput(fellBack)
-        // Taken back unless a new session had to replace it.
-        return (entry, !fellBack)
+        return entry
     }
 
     /// An agent started while the daemon began stopping is not held: nothing would end it.
