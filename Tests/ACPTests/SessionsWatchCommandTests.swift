@@ -66,6 +66,12 @@ import Testing
         #expect(watched.code == ExitCodes.usage)
         #expect(watched.err == "Invalid session watch cursor\n")
         #expect(watched.out.isEmpty)
+        // As acpx's JSON error: the failure's own codes, and that it is not worth retrying.
+        let json = try await watch(["--format", "json", "sessions", "watch", "--cursor", "abc"])
+        #expect(json.code == ExitCodes.usage)
+        #expect(json.out == #"{"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"Invalid session watch "#
+            + #"cursor","data":{"acpxCode":"USAGE","detailCode":"WATCH_CURSOR_INVALID","origin":"runtime","#
+            + #""retryable":false,"sessionId":"unknown"}}}"# + "\n")
     }
 
     // MARK: The owner
