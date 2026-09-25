@@ -20,8 +20,8 @@ extension DaemonToolsTests {
         }
     }
 
-    /// acpx's `filterRecoverableLoadFallbackOutput`: after a fallback, the failed
-    /// reconnect request and its error response go; everything else stays, in order.
+    /// acpx's `filterBufferedConnectOutput`: after a fallback, the failed reconnect
+    /// request and its error response go; everything else stays, in order.
     @Test func aFailedReconnectIsLeftOutOnlyAfterAFallback() {
         let buffer = ConnectOutputBuffer()
         let messages: [(JSONRPCPeer.WireDirection, String)] = [
@@ -73,10 +73,11 @@ extension DaemonToolsTests {
     }
 
     /// The filter keys ids exactly as acpx's does: only a string or a finite number is
-    /// an id, `1` is not `"1"`, and one table serves the ids of both sides in the order
-    /// the messages came. So an agent request that reuses the failed load's id hides
-    /// nothing when it comes before the load's error, and takes the client's reply to it
-    /// along when it comes after (openclaw/acpx#764).
+    /// an id, and `1` is not `"1"`. It pairs by direction, as acpx 0.19.3's does (#778,
+    /// for our openclaw/acpx#764): an agent request that reuses the failed load's id, and
+    /// the client's reply to it, are neither hidden nor hide anything, whenever they come;
+    /// and each response settles the one request pending under its id. Every expectation
+    /// is what acpx 0.19.3's filter makes of the same messages.
     @Test func theFallbackFilterKeysIdsAsAcpxDoes() {
         func flushed(_ messages: [(JSONRPCPeer.WireDirection, String)]) -> [String] {
             let buffer = ConnectOutputBuffer()
@@ -96,10 +97,19 @@ extension DaemonToolsTests {
         let clientReply = #"{"jsonrpc":"2.0","id":1,"result":{"content":""}}"#
         #expect(flushed([
             (.outbound, load), (.inbound, agentRequest), (.outbound, clientReply), (.inbound, loadFailed)
-        ]) == [load, agentRequest, clientReply, loadFailed])
+        ]) == [agentRequest, clientReply])
         #expect(flushed([
             (.outbound, load), (.inbound, loadFailed), (.inbound, agentRequest), (.outbound, clientReply)
-        ]) == [agentRequest])
+        ]) == [agentRequest, clientReply])
+
+        // A load that succeeded, then a resume under the same id that failed: only the
+        // failed pair goes.
+        let loaded = #"{"jsonrpc":"2.0","id":1,"result":{}}"#
+        let resume = #"{"jsonrpc":"2.0","id":1,"method":"session/resume","params":{}}"#
+        #expect(flushed([(.outbound, load), (.inbound, loaded), (.outbound, resume), (.inbound, loadFailed)])
+            == [load, loaded])
+        // An error once the load was answered is paired with nothing.
+        #expect(flushed([(.outbound, load), (.inbound, loaded), (.inbound, loadFailed)]) == [load, loaded, loadFailed])
     }
 
     /// The history a `session/load` replays is the record's already, so acpx neither
