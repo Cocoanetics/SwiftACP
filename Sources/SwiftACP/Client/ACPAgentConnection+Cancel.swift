@@ -74,9 +74,9 @@ extension ACPAgentConnection {
             request.serving = serving
             // The prompt's answer, once read, stops it at once — ahead of the prompt's call
             // resuming — as acpx's `clearActivePrompt` aborts its owner.
-            requestOwnership.track(serving, ownedBy: owner)
+            requestOwnership.track(serving, as: key, ownedBy: owner)
         }
-        requestOwnership.untrack(owner)
+        requestOwnership.untrack(key, ownedBy: owner)
         turnRequests[sessionId]?[key] = nil
         return result
     }

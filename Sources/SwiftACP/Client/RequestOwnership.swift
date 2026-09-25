@@ -37,8 +37,9 @@ final class RequestOwnership: @unchecked Sendable {
     private var sessions: [JSONRPCID: SessionId] = [:]
     /// Owned requests read and not yet served, in the order they were read.
     private var unclaimed: [Unclaimed] = []
-    /// What serves each prompt's owned requests, stopped once its answer is read.
-    private var serving: [JSONRPCID: [Task<Void, Never>]] = [:]
+    /// What serves each prompt's owned requests, by request, stopped once its answer is
+    /// read.
+    private var serving: [JSONRPCID: [UUID: Task<Void, Never>]] = [:]
 
     /// Note `message` as it crosses the wire.
     func observe(_ direction: JSONRPCPeer.WireDirection, _ message: JSONRPCMessage) {
@@ -70,25 +71,29 @@ final class RequestOwnership: @unchecked Sendable {
         let stopping: [Task<Void, Never>] = lock.withLock {
             guard let sessionId = sessions.removeValue(forKey: id) else { return [] }
             if inFlight[sessionId] == id { inFlight[sessionId] = nil }
-            return serving.removeValue(forKey: id) ?? []
+            return Array((serving.removeValue(forKey: id) ?? [:]).values)
         }
         stopping.forEach { $0.cancel() }
     }
 
-    /// `task` serves a request `owner` owns: it stops once `owner` is answered — at once
-    /// if it is already.
-    func track(_ task: Task<Void, Never>, ownedBy owner: JSONRPCID) {
+    /// `task` serves the request `key` names, which `owner` owns: it stops once `owner`
+    /// is answered — at once if it is already.
+    func track(_ task: Task<Void, Never>, as key: UUID, ownedBy owner: JSONRPCID) {
         let answered: Bool = lock.withLock {
             guard sessions[owner] != nil else { return true }
-            serving[owner, default: []].append(task)
+            serving[owner, default: [:]][key] = task
             return false
         }
         if answered { task.cancel() }
     }
 
-    /// `owner`'s request was answered: nothing of it is left to stop.
-    func untrack(_ owner: JSONRPCID) {
-        lock.withLock { _ = serving.removeValue(forKey: owner) }
+    /// The request `key` names was answered: nothing of it is left to stop. What serves
+    /// `owner`'s other requests still stops at its answer.
+    func untrack(_ key: UUID, ownedBy owner: JSONRPCID) {
+        lock.withLock {
+            serving[owner]?[key] = nil
+            if serving[owner]?.isEmpty == true { serving[owner] = nil }
+        }
     }
 
     /// The prompt the request about to be served belongs to — the first one read with

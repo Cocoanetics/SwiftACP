@@ -189,19 +189,24 @@ struct RequestOwnershipTests {
     /// A write whose permission is still being asked when the prompt's answer is read is
     /// stopped then — before the prompt's call resumes — as acpx aborts the owner at the
     /// answer and its handlers look again once asked. It is answered `Request cancelled`,
-    /// and nothing is written.
-    @Test(.timeLimit(.minutes(1)))
-    func aWriteAskedAboutAcrossTheAnswerIsNotDone() async throws {
+    /// and nothing is written. So too when a read of the same prompt was answered before:
+    /// answering one request leaves the prompt's others to be stopped.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func aWriteAskedAboutAcrossTheAnswerIsNotDone(afterARead: Bool) async throws {
         let (clientEnd, agentEnd) = LoopbackTransport.pair()
         let answers = Answers()
         let root = try ChildSpawnTests.workspace()
+        try "notes\n".write(toFile: root + "/notes.txt", atomically: true, encoding: .utf8)
         let write: JSONValue = .object([
             "sessionId": .string("s"), "path": .string(root + "/out.txt"), "content": .string("x")
         ])
+        let read: JSONValue = .object(["sessionId": .string("s"), "path": .string(root + "/notes.txt")])
         let (prompts, promptCame) = AsyncStream<JSONRPCID>.makeStream()
         let script = Script { prompt in
             promptCame.yield(prompt)
-            return [.request(id: "w1", method: "fs/write_text_file", params: write)]
+            let reading: [JSONRPCMessage] = afterARead
+                ? [.request(id: "r1", method: "fs/read_text_file", params: read)] : []
+            return [.request(id: "w1", method: "fs/write_text_file", params: write)] + reading
         }
         let agent = Task { try await Self.playAgent(on: agentEnd, answers: answers, script: script) }
         defer { agent.cancel() }
@@ -228,6 +233,9 @@ struct RequestOwnershipTests {
             break
         }
         for await _ in asking { break }
+        if afterARead, case .errorResponse(let refusal) = await answers.wait(for: "r1") {
+            Issue.record("The read was refused: \(refusal.error.message)")
+        }
         try agentEnd.send(try Self.answer(try #require(prompt)))
         _ = try await turn.value
 
