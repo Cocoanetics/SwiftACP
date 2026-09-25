@@ -97,19 +97,33 @@ enum Interrupts {
 /// The process's SIGINT, SIGTERM and SIGHUP, as Node's one-off listeners hear them: every
 /// listener present hears the first of them, once, and is gone. While any listens, the
 /// signals reach only them; with none left, their default actions are back.
-private final class SignalListeners: @unchecked Sendable {
-    static let shared = SignalListeners()
-    private static let signals = [SIGINT, SIGTERM, SIGHUP]
+final class SignalListeners: @unchecked Sendable {
+    static let shared = SignalListeners(catching: ProcessSignals())
+
+    /// Where the signals come from: caught while there are listeners, left alone when not.
+    protocol Catching: Sendable {
+        func start(_ heard: @escaping @Sendable () -> Void)
+        func stop()
+    }
+
+    private let catching: Catching
     private let lock = NSLock()
     private var listeners: [Int: @Sendable () -> Void] = [:]
     private var nextId = 0
-    private var sources: [DispatchSourceSignal] = []
+    private var caught = false
+
+    init(catching: Catching) {
+        self.catching = catching
+    }
 
     func add(_ listener: @escaping @Sendable () -> Void) -> Int {
         lock.withLock {
             defer { nextId += 1 }
             listeners[nextId] = listener
-            if sources.isEmpty { watch() }
+            if !caught {
+                caught = true
+                catching.start { [weak self] in self?.heard() }
+            }
             return nextId
         }
     }
@@ -117,39 +131,54 @@ private final class SignalListeners: @unchecked Sendable {
     func remove(_ id: Int) {
         lock.withLock {
             guard listeners.removeValue(forKey: id) != nil, listeners.isEmpty else { return }
-            unwatch()
+            release()
         }
     }
 
     /// A signal came: each listener hears it, once.
-    private func heard() {
+    func heard() {
         let heard: [@Sendable () -> Void] = lock.withLock {
             defer {
                 listeners = [:]
-                unwatch()
+                release()
             }
             return listeners.keys.sorted().compactMap { listeners[$0] }
         }
         for listener in heard { listener() }
     }
 
-    /// Catch the signals. Called with `lock` held.
-    private func watch() {
-        for number in Self.signals {
-            signal(number, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-            source.setEventHandler { [weak self] in self?.heard() }
-            sources.append(source)
-            source.resume()
+    /// Leave the signals to their default actions again. Called with `lock` held.
+    private func release() {
+        guard caught else { return }
+        caught = false
+        catching.stop()
+    }
+}
+
+/// The process's own signals, caught through dispatch sources.
+private final class ProcessSignals: SignalListeners.Catching, @unchecked Sendable {
+    private static let signals = [SIGINT, SIGTERM, SIGHUP]
+    private let lock = NSLock()
+    private var sources: [DispatchSourceSignal] = []
+
+    func start(_ heard: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            for number in Self.signals {
+                signal(number, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+                source.setEventHandler(handler: heard)
+                sources.append(source)
+                source.resume()
+            }
         }
     }
 
-    /// Leave the signals to their default actions again. Called with `lock` held.
-    private func unwatch() {
-        guard !sources.isEmpty else { return }
-        for source in sources { source.cancel() }
-        sources = []
-        for number in Self.signals { signal(number, SIG_DFL) }
+    func stop() {
+        lock.withLock {
+            for source in sources { source.cancel() }
+            sources = []
+            for number in Self.signals { signal(number, SIG_DFL) }
+        }
     }
 }
 
