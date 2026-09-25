@@ -72,7 +72,7 @@ extension ACPXDaemonBackend {
     }
 
     /// What holds `recordId`, put down under it: its agent held, or one still connecting.
-    private func putDown(_ recordId: String) async {
+    func putDown(_ recordId: String) async {
         await connecting[recordId]?.abandon()
         await evict(recordId)
     }

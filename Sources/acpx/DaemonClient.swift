@@ -295,12 +295,15 @@ enum DaemonClient {
     /// terminal output by `terminalOutputCeiling`, as it does a turn's: `0` for none,
     /// so its own never stands in.
     static func setMode(
-        sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?
+        sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
+        timeoutMs: Int?
     ) async throws -> SessionControlResult {
-        try await withClient {
-            try await $0.setMode(
-                sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        try await timingOut(after: timeoutMs) {
+            try await withClient {
+                try await $0.setMode(
+                    sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs)
+            }
         }
     }
 
@@ -319,29 +322,48 @@ enum DaemonClient {
     }
 
     /// Set a session's model on the live agent via the daemon (legacy set_model),
-    /// answering and capping as ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:)``.
+    /// answering and capping as ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:)``.
     static func setModel(
-        sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?
+        sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
+        timeoutMs: Int?
     ) async throws -> SessionControlResult {
-        try await withClient {
-            try await $0.setModel(
-                sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        try await timingOut(after: timeoutMs) {
+            try await withClient {
+                try await $0.setModel(
+                    sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs)
+            }
         }
     }
 
     /// Set a session config option on the live agent via the daemon: the agent's
     /// advertised config options after the change, and whether the session had to be
     /// taken back first. It answers and caps as
-    /// ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:)``.
+    /// ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:)``.
     static func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String,
-        terminalOutputCeiling: Int?
+        terminalOutputCeiling: Int?, timeoutMs: Int?
     ) async throws -> SessionControlResult {
-        try await withClient {
-            try await $0.setConfigOption(
-                sessionId: sessionId, configId: configId, value: value,
-                nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling ?? 0)
+        try await timingOut(after: timeoutMs) {
+            try await withClient {
+                try await $0.setConfigOption(
+                    sessionId: sessionId, configId: configId, value: value,
+                    nonInteractivePermissions: nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs)
+            }
+        }
+    }
+
+    /// A control the daemon ran under `timeoutMs`: one it failed as the timeout is the
+    /// ``TimeoutError`` it was, which acpx reports as `TIMEOUT` (exit 3), with its hint.
+    static func timingOut<T>(after timeoutMs: Int?, _ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let failure as DaemonControlFailure {
+            if let timeoutMs, timeoutMs > 0, failure.message == TimeoutError(milliseconds: timeoutMs).errorDescription {
+                throw TimeoutError(milliseconds: timeoutMs)
+            }
+            throw failure
         }
     }
 

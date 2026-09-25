@@ -28,8 +28,9 @@
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
 
-`slow-set-mode`: answers `session/set_mode` only after `RETRY_AGENT_DELAY_MS`, having
-first written a byte to the FIFO `RETRY_AGENT_MODE_SENT` names.
+`slow-set-mode`: answers `session/set_mode` only after `RETRY_AGENT_DELAY_MS`, or once
+the file `RETRY_AGENT_MODE_GATE` names exists, having first written a byte to the FIFO
+`RETRY_AGENT_MODE_SENT` names.
 
 `RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
 mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
@@ -188,7 +189,11 @@ for line in sys.stdin:
     elif method == "session/set_mode" and MODE == "slow-set-mode":
         with open(os.environ["RETRY_AGENT_MODE_SENT"], "w") as sent:
             sent.write("x")
-        time.sleep(int(os.environ.get("RETRY_AGENT_DELAY_MS", "400")) / 1000)
+        if os.environ.get("RETRY_AGENT_MODE_GATE"):
+            while not os.path.exists(os.environ["RETRY_AGENT_MODE_GATE"]):
+                time.sleep(0.01)
+        else:
+            time.sleep(int(os.environ.get("RETRY_AGENT_DELAY_MS", "400")) / 1000)
         send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/set_config_option":
         if MODE == "hang-%s" % params.get("configId"):

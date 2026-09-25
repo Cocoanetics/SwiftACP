@@ -134,15 +134,17 @@ public actor ACPXDaemon {
     ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
     ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
     ///     `0` is no cap; omitted, the daemon's own environment decides.
+    ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
+    ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
         try await backend.setMode(
             sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -159,17 +161,20 @@ public actor ACPXDaemon {
     ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
     ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
     ///     `0` is no cap; omitted, the daemon's own environment decides.
+    ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
+    ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
         try await backend.setConfigOption(
             sessionId: sessionId, configId: configId, value: value,
-            nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling)
+            nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
+            timeoutMs: timeoutMs)
     }
 
     /// Set a session's model on the live agent via the legacy `session/set_model`
@@ -186,15 +191,17 @@ public actor ACPXDaemon {
     ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
     ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
     ///     `0` is no cap; omitted, the daemon's own environment decides.
+    ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
+    ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
         try await backend.setModel(
             sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
     }
 
     /// Close a session: terminate its live agent (if held) and mark the record

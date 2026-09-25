@@ -70,8 +70,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once connecting has moved the record to what it connected, before
     /// the agent is held.
     var reconnected: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once an owned control's deadline has passed, before what it connects
+    /// or runs on is put down.
+    var deadlinePassed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a control over past its deadline begins to wait for what that
+    /// deadline puts down.
+    var controlOverdue: (@Sendable (_ recordId: String) async -> Void)?
 
-    private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
+    let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
     /// When true, spawned agents inherit the daemon's stderr — surfacing agent
     /// diagnostics (e.g. rate-limit messages) that otherwise stay hidden.
@@ -175,111 +181,6 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     // MARK: - Mutation tools
 
-    /// Run `body` holding the session's single turn slot, with a freshly-reloaded
-    /// record, then stamp `last_used_at` and persist it. Serializes the control op
-    /// against prompts and other control ops; reloading *after* acquiring means it
-    /// builds on (and persists on top of) whatever turn it queued behind, rather than
-    /// clobbering it. Also says whether connecting had to take the session back
-    /// (acpx's `resumed`).
-    ///
-    /// `replacing` is what the control changes, which a reconnect first leaves alone.
-    ///
-    /// An agent can ask the client for something while it answers a control, as while
-    /// it runs a turn. A control approves reads and asks about the rest, which no one
-    /// can answer here, so `nonInteractivePermissions` decides — acpx's direct controls
-    /// connect with `approve-reads` and the caller's non-interactive policy. Terminal
-    /// output is capped by the caller's `terminalOutputCeiling`, as a turn's is.
-    ///
-    /// A session a queue owner holds (``SessionOwner``) has the control on the owner's
-    /// agent, which stays. One no owner holds has it as acpx runs a control then —
-    /// directly (`withConnectedSession`): its agent connected for the control, and closed
-    /// once it is done, however it went.
-    private func withSessionTurn<T: Sendable>(
-        _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?,
-        _ body: (Live, inout SessionRecord) async throws -> T
-    ) async throws -> (value: T, resumed: Bool) {
-        let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
-        let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let recordId = initial.acpxRecordId
-        try await turnQueue.acquire(recordId, wait: true)
-        // `defer` can't await; the hop to the queue actor is safe because release
-        // hands the slot to the next FIFO waiter regardless of when it lands.
-        defer { Task { await turnQueue.release(recordId) } }
-        guard let current = findRecord(recordId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let direct = owners[recordId] == nil
-        // What connecting changes — a reconnect may move the record to a new session — goes
-        // into the record the control goes on with, as acpx's control goes on with the
-        // record it connected: the block a reconnect built anew keeps the places it holds
-        // for members still unset, which reading it back would lose.
-        let changes = RecordChanges()
-        let entry: Live, resumed: Bool
-        do {
-            (entry, resumed) = try await connect(
-                recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-                mcpServers: current.acpx?.mcpServers, control: true,
-                settings: CallerSettings(handlers: permissions.handlers, terminalOutputCeiling: ceiling),
-                replacing: replacing, onRecordChange: { changes.add($0) })
-        } catch {
-            // Connecting can fail after it moved the record — the daemon began stopping
-            // before the agent was held — and what it connected is saved all the same, as
-            // acpx saves the record its control connected on the way out.
-            if !changes.isEmpty {
-                var moved = current
-                changes.apply(to: &moved)
-                do {
-                    try SessionStore.writeRecord(moved)
-                } catch let writeError {
-                    log.warning("session record write failed after connecting for a control op: \(writeError)")
-                }
-            }
-            throw error
-        }
-        var connected = current
-        changes.apply(to: &connected)
-        var record = connected
-        let result: T
-        do {
-            result = try await body(entry, &record)
-        } catch {
-            // The agent may have gone meanwhile. How it is doing is saved whatever the
-            // control came to, as acpx's controls save it on their way out — but nothing
-            // of the control that failed.
-            // An agent whose connection is gone is ended first, as a turn's is: it can be
-            // running still, and its pid would be kept.
-            if direct || ACPAgentConnection.endedTheConnection(error) { await letGo(entry, of: recordId) }
-            connected.applyLifecycle(entry.agent.lifecycle)
-            do {
-                try SessionStore.writeRecord(connected)
-            } catch let writeError {
-                log.warning("session record write failed after a failed control op: \(writeError)")
-            }
-            throw error
-        }
-        if direct { await letGo(entry, of: recordId) }
-        record.applyLifecycle(entry.agent.lifecycle)
-        record.lastUsedAt = nowISO()
-        do {
-            // The control op already took effect on the live agent, so don't fail
-            // the call over a bookkeeping write — but don't hide it either.
-            try SessionStore.writeRecord(record)
-        } catch {
-            log.warning("session record write failed after control op: \(error)")
-        }
-        return (result, resumed)
-    }
-
-    /// Close `entry`'s agent, and hold it no longer.
-    private func letGo(_ entry: Live, of recordId: String) async {
-        if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
-        await entry.agent.close()
-    }
-
     /// A call's cap on terminal output: the caller's — bytes, `0` for none — else the
     /// daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`. A bad one is refused before the
     /// call waits for the session.
@@ -298,14 +199,17 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     needing confirmation meanwhile does.
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
+    ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
         let (_, resumed) = try await withSessionTurn(
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling) { entry, record in
-            try await entry.session.setMode(modeId)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
+            let session = entry.session
+            try await withTimeout(milliseconds: timeout) { try await session.setMode(modeId) }
             // Only the mode to put back, as acpx's `setDesiredModeId`: the current mode is
             // what the agent's `current_mode_update` of a turn says.
             var acpx = record.acpx ?? SessionAcpxState()
@@ -328,22 +232,28 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     needing confirmation meanwhile does.
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
+    ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
         let (options, resumed) = try await withSessionTurn(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling) { entry, record in
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
             var acpx = record.acpx ?? SessionAcpxState()
             // acpx's owner control: a value for the model's own option is a model id,
             // checked and resolved against the session's advertised models.
-            let response = try await ModelApplication.setConfigOption(
-                connection: entry.agent.connection, sessionId: entry.session.id, configId: configId,
-                value: value, models: ModelSupport.advertisedModelState(acpx), agentCommand: record.agentCommand)
+            let (connection, id) = (entry.agent.connection, entry.session.id)
+            let (models, agentCommand) = (ModelSupport.advertisedModelState(acpx), record.agentCommand)
+            let response = try await withTimeout(milliseconds: timeout) {
+                try await ModelApplication.setConfigOption(
+                    connection: connection, sessionId: id, configId: configId, value: value, models: models,
+                    agentCommand: agentCommand)
+            }
             ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
             record.acpx = acpx
             return response.configOptions ?? []
@@ -363,17 +273,23 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     needing confirmation meanwhile does.
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
+    ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
         let (_, resumed) = try await withSessionTurn(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling) { entry, record in
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
             var acpx = record.acpx ?? SessionAcpxState()
-            let response = try await ModelApplication.setModel(
-                connection: entry.agent.connection, sessionId: entry.session.id, modelId: modelId,
-                models: ModelSupport.advertisedModelState(acpx), agentCommand: record.agentCommand)
+            let (connection, id) = (entry.agent.connection, entry.session.id)
+            let (models, agentCommand) = (ModelSupport.advertisedModelState(acpx), record.agentCommand)
+            let response = try await withTimeout(milliseconds: timeout) {
+                try await ModelApplication.setModel(
+                    connection: connection, sessionId: id, modelId: modelId, models: models,
+                    agentCommand: agentCommand)
+            }
             ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
             record.acpx = acpx
         }
