@@ -318,9 +318,10 @@ import Testing
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            // Returns the agent's advertised options (none from the mock) and persists.
+            // Returns the options as the agent reported them — none: the mock's reply only
+            // acknowledges the value — and persists.
             let result = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "opus")
-            #expect(result.configOptions?.isEmpty == true)
+            #expect(result.configOptions == nil)
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpx?.desiredConfigOptions?["model"] == "opus")
         }

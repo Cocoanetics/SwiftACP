@@ -271,7 +271,8 @@ actor ACPXDaemonBackend: ACPXBackend {
                 var acpx = record.acpx ?? SessionAcpxState()
                 ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
                 record.acpx = acpx
-                return response.configOptions ?? []
+                // As the agent reported them: none, for a reply that only acknowledges.
+                return response.configOptions
             })
         let (options, resumed) = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
