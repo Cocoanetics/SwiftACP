@@ -42,14 +42,21 @@ public enum SessionStore {
     public static func readRecord(at url: URL, expecting recordId: String? = nil)
         -> SessionRecord? {
         guard let data = try? Data(contentsOf: url), let stored = WireJSON(parsing: data),
-            let parsed = SessionRecordParser.parse(stored),
+            let record = record(from: stored)
+        else { return nil }
+        if let recordId, record.acpxRecordId != recordId { return nil }
+        return record
+    }
+
+    /// The record `stored` holds, as acpx's parser reads it — an archive's `state`, say.
+    static func record(from stored: WireJSON) -> SessionRecord? {
+        guard let parsed = SessionRecordParser.parse(stored),
             var record = try? recordDiskDecoder.decode(
                 SessionRecord.self,
                 from: Data(SessionRecordParser.normalizedForModel(stored, parsed: parsed)
                     .replacingLoneSurrogates().stringified.utf8)),
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
-        if let recordId, record.acpxRecordId != recordId { return nil }
         record.parsedByAcpx = parsed
         return record
     }
