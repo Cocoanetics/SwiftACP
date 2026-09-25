@@ -97,7 +97,8 @@ public enum SessionJournal {
                 continue
             }
             var state = SegmentState()
-            try state.consume(data, recordId: recordId)
+            var none: Page?
+            try state.consume(data, recordId: recordId, page: &none)
             if path == active { activeState = state }
             if state.firstSequence != nil {
                 tail = state
@@ -106,32 +107,46 @@ public enum SessionJournal {
         }
         return Tail(
             sequence: tail.sequence, messageSequence: tail.firstSequence == nil ? nil : tail.messageSequence,
-            requestId: tail.requestId, activeSize: activeState.size, activeAnchored: activeState.firstSequence != nil,
-            activePartial: activeState.partial)
+            requestId: tail.requestId, activeSize: activeState.offset, activeAnchored: activeState.firstSequence != nil,
+            activePartial: !activeState.pending.isEmpty)
     }
 
-    /// What reading one segment found: acpx's `SegmentState`.
-    private struct SegmentState {
-        var size = 0
-        var partial = false
+    /// What reading one segment has found so far: acpx's `SegmentState`. A segment is read
+    /// on from where the last read left it; what came past its last complete line waits for
+    /// the rest of that line.
+    struct SegmentState {
+        /// How much of the segment has been read.
+        var offset = 0
+        /// What was read past the last complete line.
+        var pending = Data()
         /// The anchor's sequence, once the segment's anchor is read.
         var firstSequence: Int?
         var sequence = 0
         var messageSequence = 0
         var requestId: String?
 
-        mutating func consume(_ data: Data, recordId: String) throws {
-            size = data.count
-            var start = data.startIndex
-            while let end = data[start...].firstIndex(of: UInt8(ascii: "\n")) {
-                try consumeLine(String(decoding: data[start..<end], as: UTF8.self), recordId: recordId)
+        /// The segment's next `data`: its complete lines consumed, until `page` is full.
+        mutating func consume(_ data: Data, recordId: String, page: inout Page?) throws {
+            offset += data.count
+            pending.append(data)
+            try consumePending(recordId: recordId, page: &page)
+        }
+
+        /// acpx's `consumePending`: each complete line read so far, until `page` is full.
+        mutating func consumePending(recordId: String, page: inout Page?) throws {
+            var start = pending.startIndex
+            while let end = pending[start...].firstIndex(of: UInt8(ascii: "\n")) {
+                try consumeLine(
+                    String(decoding: pending[start..<end], as: UTF8.self), recordId: recordId, page: &page,
+                    bytes: end - start + 1)
                 start = end + 1
+                if page?.isFull == true { break }
             }
-            partial = start < data.endIndex
+            pending = Data(pending[start...])
         }
 
         /// acpx's `decodeJournalLine` and `consumeLine`.
-        private mutating func consumeLine(_ line: String, recordId: String) throws {
+        private mutating func consumeLine(_ line: String, recordId: String, page: inout Page?, bytes: Int) throws {
             let anchored = firstSequence != nil
             guard let value = try? WireJSON.parse(line) else {
                 if anchored { throw SessionJournalError.corrupt("Invalid complete line in session journal") }
@@ -141,16 +156,17 @@ public enum SessionJournal {
                 guard anchored else { return }
                 try advance()
                 messageSequence += 1
+                page?.add(sequence, of: recordId, bytes: bytes) { [requestId] in .message(requestId: requestId, value) }
                 return
             }
             if let marker = Marker(value) {
-                try consume(marker, recordId: recordId)
+                try consume(marker, recordId: recordId, page: &page, bytes: bytes)
             } else if anchored || value.hasMember("schema") {
                 throw SessionJournalError.corrupt("Invalid record in session journal")
             }
         }
 
-        private mutating func consume(_ marker: Marker, recordId: String) throws {
+        private mutating func consume(_ marker: Marker, recordId: String, page: inout Page?, bytes: Int) throws {
             if case let .segment(anchorRecordId, sequence, messageSequence, requestId) = marker {
                 guard firstSequence == nil, anchorRecordId == recordId else {
                     throw SessionJournalError.corrupt("Invalid session journal segment anchor")
@@ -166,10 +182,12 @@ public enum SessionJournal {
             switch marker {
             case .turnStarted(let id):
                 requestId = id
-            case .turnResult(let id):
+                page?.add(sequence, of: recordId, bytes: bytes) { .turnStarted(requestId: id) }
+            case .turnResult(let id, let result):
                 guard requestId == id else {
                     throw SessionJournalError.corrupt("Session journal result does not match the active request")
                 }
+                page?.add(sequence, of: recordId, bytes: bytes) { .turnResult(requestId: id, result) }
                 requestId = nil
             case .segment:
                 break
@@ -188,7 +206,7 @@ public enum SessionJournal {
     private enum Marker {
         case segment(recordId: String, sequence: Int, messageSequence: Int, requestId: String?)
         case turnStarted(String)
-        case turnResult(String)
+        case turnResult(String, WireJSON)
 
         static let maxSafeInteger = 9_007_199_254_740_991
 
@@ -211,7 +229,7 @@ public enum SessionJournal {
                 guard let id = value["request_id"]?.stringValue, !id.isEmpty,
                       let result = value["result"], Self.isResult(result)
                 else { return nil }
-                self = .turnResult(id)
+                self = .turnResult(id, result)
             default:
                 return nil
             }
@@ -260,6 +278,11 @@ public struct SessionJournalError: Error, OutputErrorMeta, LocalizedError, Equat
     /// `WATCH_JOURNAL_CORRUPT`, or another of acpx's `WATCH_*` codes.
     public let code: String
     public let message: String
+
+    public init(code: String, message: String) {
+        self.code = code
+        self.message = message
+    }
 
     static func corrupt(_ message: String) -> SessionJournalError {
         SessionJournalError(code: "WATCH_JOURNAL_CORRUPT", message: message)

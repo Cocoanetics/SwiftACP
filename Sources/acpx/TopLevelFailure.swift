@@ -24,7 +24,7 @@ enum TopLevelFailure {
             // An agent's error keeps its own code and message, its data merged in.
             out(JSONErrorLine.make(
                 outputCode: outputCode, detailCode: detailCode, origin: failure.origin, message: message,
-                sessionId: "unknown", acp: failure.acp) + "\n")
+                retryable: failure.retryable, sessionId: "unknown", acp: failure.acp) + "\n")
         case "quiet":
             // acpx's quiet formatter: the agent's `data.details`, when it gave some.
             let qualifier = detailCode.map { "\(outputCode) \($0)" } ?? outputCode
@@ -47,6 +47,8 @@ enum TopLevelFailure {
         var detailCode: String?
         var origin = "cli"
         var message: String
+        /// Whether the failure says it is worth retrying, when it says.
+        var retryable: Bool?
         /// The agent's error the failure is, when it is one (acpx's `extractAcpError`).
         var acp: AcpErrorPayload?
         var commandExitCode: Int32?
@@ -70,6 +72,7 @@ enum TopLevelFailure {
                 outputCode = meta.outputCode ?? outputCode
                 detailCode = meta.detailCode
                 origin = meta.origin ?? origin
+                retryable = meta.retryable
             default:
                 break
             }
