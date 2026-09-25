@@ -84,10 +84,11 @@ struct ExecTimeoutRetryTests {
         Step(mode: "hang-prompt", lastLine: "[client] session/new (running)")
     ])
     func aStepThatRunsOverTimesOut(step: Step) async throws {
-        let run = try await exec(step.mode, ["--timeout", "0.2"] + step.options, execOptions: step.execOptions)
+        // Long enough for every step before the held one, on a busy machine too.
+        let run = try await exec(step.mode, ["--timeout", "2"] + step.options, execOptions: step.execOptions)
         let mode = step.mode, lastLine = step.lastLine + "\n"
         #expect(run.code == 3)
-        #expect(run.err == "Timed out after 200ms\n\(Self.timeoutHint)\n")
+        #expect(run.err == "Timed out after 2000ms\n\(Self.timeoutHint)\n")
         #expect(run.out.hasSuffix(lastLine), "\(run.out)")
         #expect(run.attempts == (mode == "hang-prompt" ? 1 : 0))
         #expect(!isRunning(run.pid), "the agent outlived exec")
@@ -96,18 +97,18 @@ struct ExecTimeoutRetryTests {
     /// A timeout is reported in each format as acpx reports it, and never retried.
     @Test(.enabled(if: mockPythonAvailable))
     func aTimeoutIsReportedInEachFormatAndNotRetried() async throws {
-        let options = ["--timeout", "0.2", "--prompt-retries", "2"]
+        let options = ["--timeout", "2", "--prompt-retries", "2"]
         let json = try await exec("hang-prompt", options, format: "json")
         #expect(json.code == 3)
         #expect(json.out.hasSuffix(#"""
-            {"jsonrpc":"2.0","id":null,"error":{"code":-32070,"message":"Timed out after 200ms",\#
+            {"jsonrpc":"2.0","id":null,"error":{"code":-32070,"message":"Timed out after 2000ms",\#
             "data":{"acpxCode":"TIMEOUT","origin":"cli","sessionId":"unknown"}}}
 
             """#))
         #expect(json.err.isEmpty)
         let quiet = try await exec("hang-prompt", options, format: "quiet")
         #expect(quiet.code == 3)
-        #expect(quiet.err == "[acpx] error: TIMEOUT Timed out after 200ms\n")
+        #expect(quiet.err == "[acpx] error: TIMEOUT Timed out after 2000ms\n")
         #expect(quiet.attempts == 1)
     }
 
@@ -178,6 +179,22 @@ struct ExecTimeoutRetryTests {
         #expect(run.code == code)
         #expect(run.attempts == 2)
         #expect(run.err == "[acpx] prompt failed (Internal error), retrying in 1000ms (attempt 1/1)\n")
+    }
+
+    /// A question the agent asks during the pause is no effect, and the prompt goes again —
+    /// but it counts at the end, as acpx's client counts across its run: refused, the run
+    /// exits 5 though the retry was answered.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aQuestionDuringThePauseCountsAtTheEnd() async throws {
+        let options = ["--prompt-retries", "1", "--deny-all"]
+        let text = try await exec("fail-then-ask", options)
+        #expect(text.code == 5 && text.attempts == 2)
+        #expect(text.out == "[client] initialize (running)\n\n[client] session/new (running)\n\n"
+            + "[error] RUNTIME: model overloaded\n\n[client] session/request_permission (running)\nhello\n\n"
+            + "[done] end_turn\n")
+        let quiet = try await exec("fail-then-ask", options, format: "quiet")
+        #expect(quiet.code == 5)
+        #expect(quiet.err == "[acpx] error: PERMISSION_DENIED Permission request denied or cancelled\n")
     }
 
     /// Quiet output shows what the agent said before its prompt failed, then the error.

@@ -18,7 +18,7 @@ struct EventSubscriptionTests {
         Thread {
             for index in 0..<total {
                 sinks.yield(.inboundRequest(InboundRequest(method: String(index), sessionId: nil)))
-                if index % 50 == 0 { usleep(20) }
+                if index % 50 == 0 { Thread.sleep(forTimeInterval: 0.000_02) }
             }
             sinks.yield(.inboundRequest(InboundRequest(method: "end", sessionId: nil)))
         }.start()
