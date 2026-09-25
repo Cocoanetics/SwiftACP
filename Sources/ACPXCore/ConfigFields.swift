@@ -278,6 +278,30 @@ extension String {
     public var javaScriptTrimmed: String {
         trimmingCharacters(in: javaScriptWhitespace)
     }
+
+    /// `String.prototype.trimEnd`.
+    public var javaScriptTrimmedEnd: String {
+        var scalars = unicodeScalars[...]
+        while let last = scalars.last, javaScriptWhitespace.contains(last) { scalars = scalars.dropLast() }
+        return String(String.UnicodeScalarView(scalars))
+    }
+
+    /// `value.replace(/\s+/g, " ").trim()`: each run of JavaScript's whitespace one
+    /// space, and none at either end.
+    public var javaScriptCollapsed: String {
+        var collapsed = String.UnicodeScalarView()
+        var space = false
+        for scalar in unicodeScalars {
+            if javaScriptWhitespace.contains(scalar) {
+                space = !collapsed.isEmpty
+                continue
+            }
+            if space { collapsed.append(" ") }
+            space = false
+            collapsed.append(scalar)
+        }
+        return String(collapsed)
+    }
 }
 
 private let javaScriptWhitespace = CharacterSet(

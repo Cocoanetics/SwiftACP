@@ -83,17 +83,9 @@ enum ExecCommand {
         await handle.connection.setWireMessageObserver { sideEffects.observe($0, $1) }
         let session: ACPSession
         do {
-            let connection = handle.connection
-            let request = NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta)
-            let response = try await withTimeout(milliseconds: flags.timeoutMs) {
-                try await connection.newSession(request)
-            }
-            try await ModelApplication.applySessionControls(
-                connection: connection, session: response, model: flags.model,
-                configOptions: configOptions, agentCommand: agent.agentCommand,
-                timeoutMilliseconds: flags.timeoutMs,
-                onWarning: quietOutput(flags) ? nil : { Console.errLine("[acpx] warning: \($0)") })
-            session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
+            session = try await openSession(
+                on: handle, agent: agent, mcpServers: mcpServers, meta: meta, model: flags.model,
+                configOptions: configOptions, timeoutMs: flags.timeoutMs, quiet: quietOutput(flags))
         } catch {
             await handle.close()
             return reportFailure(error, renderer: renderer, format: flags.format)
@@ -122,6 +114,25 @@ enum ExecCommand {
             return reportFailure(PromptUnavailable(), renderer: renderer, format: flags.format)
         }
         return permissionExitCode(run.permissions, quiet: flags.format == "quiet")
+    }
+
+    /// The run's session, as acpx's `runOnce` opens it: `session/new` with the
+    /// invocation's session options (`meta`), then its model and config options — each
+    /// within `timeoutMs`. A warning about them goes to stderr, unless `quiet`.
+    static func openSession(
+        on handle: ACPAgent, agent: AgentInvocation, mcpServers: [MCPServerSpec], meta: JSONValue?,
+        model: String?, configOptions: [ModelApplication.ConfigOptionAssignment], timeoutMs: Int?, quiet: Bool
+    ) async throws -> ACPSession {
+        let connection = handle.connection
+        let request = NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta)
+        let response = try await withTimeout(milliseconds: timeoutMs) {
+            try await connection.newSession(request)
+        }
+        try await ModelApplication.applySessionControls(
+            connection: connection, session: response, model: model, configOptions: configOptions,
+            agentCommand: agent.agentCommand, timeoutMilliseconds: timeoutMs,
+            onWarning: quiet ? nil : { Console.errLine("[acpx] warning: \($0)") })
+        return ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
     }
 
     /// Launch the agent within `--timeout`, as acpx starts its client. At the deadline
