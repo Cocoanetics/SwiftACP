@@ -82,8 +82,7 @@ public enum SessionEngine {
             var acpx = SessionAcpxState()
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
             ModelSupport.applyConfigOptions(response.configOptions, to: &acpx)
-            ModelSupport.applyInitialModelSelection(
-                application, requestedModel: sessionOptions?.model, originalModels: advertised, to: &acpx)
+            ModelSupport.applyInitialModelSelection(application, originalModels: advertised, to: &acpx)
             acpx.mcpServers = sessionMcpServers
             // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
             // spawn: the daemon reconnects later and must advertise the same, or the

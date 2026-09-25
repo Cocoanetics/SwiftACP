@@ -51,16 +51,19 @@ public enum ModelApplication {
         public var errorDescription: String? { message }
     }
 
-    /// What applying a requested model came to — acpx's `{ applied, response }`.
+    /// What applying a requested model came to — acpx's `{ applied, modelId, response }`.
     public struct Application: Sendable {
         /// Whether the session is on the requested model now: it was asked for it, or
         /// was on it already. `false` when none was requested or none is advertised.
         public var applied: Bool
+        /// The model it is on, when applied: the one requested, trimmed.
+        public var modelId: String?
         /// The agent's reply, when the model went by its config option.
         public var response: SetSessionConfigOptionResponse?
 
-        public init(applied: Bool, response: SetSessionConfigOptionResponse? = nil) {
+        public init(applied: Bool, modelId: String? = nil, response: SetSessionConfigOptionResponse? = nil) {
             self.applied = applied
+            self.modelId = modelId
             self.response = response
         }
     }
@@ -84,7 +87,10 @@ public enum ModelApplication {
     ///
     /// The model goes first because an agent may re-advertise its options after a
     /// model change — a later option has to resolve against what the agent last
-    /// advertised, not against what `session/new` returned.
+    /// advertised, not against what `session/new` returned. Each selection is kept as
+    /// acpx 0.19.3 keeps it (`applyModelSelection`, `applyConfigOptionSelection`): a
+    /// reply that reports no options acknowledges the one set, and the options stay as
+    /// they were with that one's value updated.
     ///
     /// Each request goes within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     public static func applySessionControls(
@@ -97,23 +103,29 @@ public enum ModelApplication {
         onWarning: ((String) -> Void)? = nil
     ) async throws {
         guard model != nil || !configOptions.isEmpty else { return }
-        var state = ModelSupport.modelState(fromConfigOptions: session.configOptions)
+        let advertised = ModelSupport.modelState(fromConfigOptions: session.configOptions)
             ?? ModelSupport.modelState(fromLegacyModels: session.models)
-        let applied = try await applyRequestedModel(
+        // acpx's `controlState`: what the session advertises, as a record's `acpx` keeps it.
+        var control = SessionAcpxState()
+        if let advertised { ModelSupport.applyAdvertisedModelState(advertised, to: &control) }
+        ModelSupport.applyConfigOptions(session.configOptions ?? [], to: &control)
+        let application = try await applyRequestedModel(
             connection: connection, sessionId: session.sessionId, requestedModel: model,
-            models: state, agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds,
-            onWarning: onWarning
-        ).response
-        if let applied { state = advance(state, with: applied.configOptions) }
+            models: advertised, agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds,
+            onWarning: onWarning)
+        if application.applied, let modelId = application.modelId {
+            ModelSupport.applyModelSelection(modelId, response: application.response, to: &control)
+        }
         let sessionId = session.sessionId
         for option in configOptions {
-            let models = state
+            let models = ModelSupport.advertisedModelState(control)
             let result = try await withTimeout(milliseconds: timeoutMilliseconds) {
                 try await setConfigOption(
                     connection: connection, sessionId: sessionId, configId: option.configId,
                     value: option.value, models: models, agentCommand: agentCommand)
             }
-            state = advance(state, with: result.configOptions)
+            ModelSupport.applyConfigOptionSelection(
+                option.configId, value: option.value, response: result, to: &control)
         }
     }
 
@@ -159,13 +171,13 @@ public enum ModelApplication {
             onWarning?(warning)
         }
         guard let models else { return Application(applied: false) }
-        guard models.currentModelId != requested else { return Application(applied: true) }
+        guard models.currentModelId != requested else { return Application(applied: true, modelId: requested) }
         let response = try await withTimeout(milliseconds: timeoutMilliseconds) {
             try await setModel(
                 connection: connection, sessionId: sessionId, modelId: requested,
                 models: models, agentCommand: agentCommand)
         }
-        return Application(applied: true, response: response)
+        return Application(applied: true, modelId: requested, response: response)
     }
 
     /// Select `modelId`, through whichever control the agent advertises.
@@ -219,20 +231,6 @@ public enum ModelApplication {
             try await connection.setConfigOption(
                 SetSessionConfigOptionRequest(sessionId: sessionId, configId: configId, value: resolved))
         }
-    }
-
-    // MARK: - Advertised state
-
-    /// Fold a response's config options into the model state tracked across a
-    /// turn's setup, so a later option resolves against what the agent last
-    /// advertised. A response that derives no model state clears it, unless the
-    /// state came from legacy `models` metadata — which config options never
-    /// carried and so can't have withdrawn.
-    public static func advance(
-        _ state: ModelSupport.ModelState?, with configOptions: [JSONValue]?
-    ) -> ModelSupport.ModelState? {
-        if let derived = ModelSupport.modelState(fromConfigOptions: configOptions) { return derived }
-        return state?.configId == nil ? state : nil
     }
 
     // MARK: - Validation
