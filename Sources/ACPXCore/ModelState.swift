@@ -161,12 +161,10 @@ public enum ModelSupport {
     }
 
     /// A reply that does not report the options — `{}`, as SwiftACP's own agent bridge
-    /// answers — leaves the record's as they were, but with the option just set at the
-    /// value it was set to: the agent accepted it, as acpx takes the model a
-    /// `session/set_model` reply leaves current to be the one asked for. Otherwise a
-    /// later `--model` for the old value would be skipped as already current. (acpx
-    /// reads the missing list as no options at all, clearing the model state with it,
-    /// and fails outright on saved selections.)
+    /// answers — is an acknowledgement, not a withdrawal of the catalog, as acpx 0.19.3
+    /// takes it (`applyAcceptedConfigOptions`, #778): the record's options stay, the
+    /// first with the option's id at the value it was set to. Otherwise a later `--model`
+    /// for the old value would be skipped as already current.
     private static func noteAccepted(
         _ configId: String, value: String, unreportedBy response: SetSessionConfigOptionResponse?,
         in state: inout SessionAcpxState
@@ -177,6 +175,7 @@ public enum ModelSupport {
             else { continue }
             fields["currentValue"] = .string(value)
             options[index] = .object(fields)
+            break
         }
         state.configOptions = .array(options)
     }

@@ -141,10 +141,19 @@ enum ControlCommand {
         case .configOption:
             // acpx prints the user's original key, not the resolved config id.
             printSetConfig(
-                key: key, value: value, configOptions: result.configOptions ?? [], resumed: result.resumed,
-                record: updated, format: flags.format)
+                key: key, value: value, configOptions: reportedOptions(result, record: updated),
+                resumed: result.resumed, record: updated, format: flags.format)
         }
         return ExitCodes.success
+    }
+
+    /// The options a `set` reports: the agent's reply's, or — for a reply that only
+    /// acknowledges — the record's, as acpx 0.19.3 falls back
+    /// (`printSetConfigOptionResultByFormat`, #778).
+    static func reportedOptions(_ result: SessionControlResult, record: SessionRecord) -> [JSONValue] {
+        if let reported = result.configOptions { return reported }
+        guard case .array(let options)? = record.acpx?.configOptions else { return [] }
+        return options
     }
 
     private static func printSetConfig(
