@@ -55,6 +55,35 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A close called off before it began cancels nothing either: the prompt the session
+    /// runs goes on, and only its own cancel ends it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCloseCalledOffLeavesTheRunningPromptAlone() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ready = directory.appendingPathComponent("ready")
+        guard mkfifo(ready.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' ")
+            try session.set("stall-prompt")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let prompt = Task {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            }
+            try await Self.byteWritten(to: ready)
+            let close = Task { () async throws -> Bool in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await daemon.closeSession(sessionId: session.id)
+            }
+            await #expect(throws: CancellationError.self) { try await close.value }
+            #expect(await daemon.turns[session.id]?.cancelAsked == false)
+            #expect(try #require(SessionStore.loadRecord(session.id)).closed == false)
+            _ = try await daemon.cancelSession(sessionId: session.id)
+            _ = try? await prompt.value
+            await daemon.releaseAll()
+        }
+    }
+
     /// A control cut off by the daemon stopping once its reconnect started a new session
     /// leaves the record on that session all the same — acpx saves the record its control
     /// connected on the way out — and says how the agent it closed ended.

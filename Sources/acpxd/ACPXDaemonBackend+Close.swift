@@ -17,13 +17,16 @@ extension ACPXDaemonBackend {
     /// same, in its place in line, as acpx's drain waits once it has closed its client:
     /// whatever it writes comes before the close, not over it. A close called off while it
     /// waits — its caller gone — ends there, throwing `CancellationError`: nothing more is
-    /// forced down, and the session is not marked closed.
+    /// forced down, and the session is not marked closed. One called off before it began
+    /// does nothing at all, and cancels no prompt.
     ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
+        // Called off before it began, it does nothing at all: not even the prompt running is cancelled.
+        try Task.checkCancellation()
         _ = try? await cancelSession(sessionId: recordId)
         try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
         defer { Task { await turnQueue.release(recordId) } }
@@ -78,6 +81,9 @@ extension ACPXDaemonBackend {
                     await putDown(recordId)
                     try await slot.value
                 }
+                // A free slot is had at once, however the close was called off: once called off,
+                // it gives the slot back.
+                try Task.checkCancellation()
             } onCancel: {
                 slot.cancel()
             }
