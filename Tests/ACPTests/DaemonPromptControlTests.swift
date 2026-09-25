@@ -33,7 +33,9 @@ extension DaemonToolsTests {
             try await Self.byteWritten(to: ready)
 
             // Bounded, so that a control that waits for the prompt fails rather than hangs.
-            let result = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 10_000)
+            let result = try await withTimeout(milliseconds: 10_000) {
+                try await daemon.setMode(sessionId: session.id, modeId: "plan")
+            }
             #expect(!result.resumed)
             #expect(await daemon.turnQueue.isBusy(session.id), "the prompt runs on")
             #expect(try #require(SessionStore.loadRecord(session.id)).acpx?.desiredModeId == "plan")
@@ -65,7 +67,9 @@ extension DaemonToolsTests {
 
             // Bounded, so that a control left waiting fails rather than hangs.
             await #expect(throws: PromptEndedBeforeControls.self) {
-                _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 10_000)
+                _ = try await withTimeout(milliseconds: 10_000) {
+                    try await daemon.setMode(sessionId: session.id, modeId: "plan")
+                }
             }
             _ = try? await prompt.value
             #expect(try #require(SessionStore.loadRecord(session.id)).acpx?.desiredModeId == nil)
@@ -95,9 +99,12 @@ extension DaemonToolsTests {
             try await Self.byteWritten(to: ready)
 
             let control = Task { try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300) }
-            // The control's request reached the agent, which holds it past the deadline.
-            try await Self.byteWritten(to: modeSent)
-            await #expect(throws: TimeoutError(milliseconds: 300)) { _ = try await control.value }
+            // The control's request reached the agent, which holds it past the deadline. Each
+            // wait is bounded, so that a control that never goes out fails rather than hangs.
+            try await withTimeout(milliseconds: 10_000) { try await Self.byteWritten(to: modeSent) }
+            await #expect(throws: TimeoutError(milliseconds: 300)) {
+                _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
+            }
             // The prompt ends on its agent's end, not by running on.
             let promptEnded = await Task {
                 try await withTimeout(milliseconds: 10_000) { try await prompt.value }
