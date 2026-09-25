@@ -113,7 +113,9 @@ extension ACPXDaemonBackend {
         let result: T
         do {
             result = try await body(entry, &record, step)
-            deadline?.settle()
+            // An answer that came as the deadline passed is too late, as acpx's deadline
+            // settles first (`deadline.wait`): the control is timed out, and its agent put down.
+            if deadline?.settle() == false { throw TimeoutError(milliseconds: 0) }
         } catch {
             deadline?.settle()
             // The agent may have gone meanwhile. How it is doing is saved whatever the
@@ -192,13 +194,16 @@ final class ControlDeadline: @unchecked Sendable {
     /// Whether it passed before the control was over.
     var hasPassed: Bool { lock.withLock { passed } }
 
-    /// The control is over — acpx's `responseSettled` — and the deadline no longer passes.
-    func settle() {
-        let watch: Task<Void, Never>? = lock.withLock {
+    /// The control is over — acpx's `responseSettled` — and the deadline no longer
+    /// passes. Returns whether it was over in time: `false` once the deadline has passed.
+    @discardableResult
+    func settle() -> Bool {
+        let (watch, inTime): (Task<Void, Never>?, Bool) = lock.withLock {
             settled = true
-            return self.watch
+            return (self.watch, !passed)
         }
         watch?.cancel()
+        return inTime
     }
 
     private func pass() -> Bool {

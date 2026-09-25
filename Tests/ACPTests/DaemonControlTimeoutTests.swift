@@ -107,4 +107,23 @@ extension DaemonToolsTests {
             }
         }
     }
+
+    /// A control over before its deadline keeps it from passing: nothing is put down.
+    @Test func aDeadlineSettledInTimeNeverPasses() {
+        let deadline = ControlDeadline(after: 60_000) { Issue.record("the deadline passed") }
+        #expect(deadline.settle())
+        #expect(!deadline.hasPassed)
+    }
+
+    /// A control whose answer comes only once its deadline has passed is too late, as
+    /// acpx's deadline settles first: its settling says so, and the control times out.
+    @Test(.timeLimit(.minutes(1)))
+    func anAnswerAfterTheDeadlinePassedIsTooLate() async {
+        let (passed, passing) = AsyncStream<Void>.makeStream()
+        let deadline = ControlDeadline(after: 1) { passing.yield() }
+        var putDown = passed.makeAsyncIterator()
+        _ = await putDown.next()
+        #expect(deadline.hasPassed)
+        #expect(!deadline.settle())
+    }
 }
