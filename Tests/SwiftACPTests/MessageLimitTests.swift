@@ -12,15 +12,15 @@ import Testing
 struct MessageLimitTests {
     /// The line in progress is counted across chunks, as acpx's `countLineBytes` counts
     /// it; past the limit nothing more is read.
-    @Test func aLinePastTheLimitStopsTheReading() {
+    @Test func aLinePastTheLimitStopsTheReading() throws {
         let signal = MessageLimit.Signal()
         var framing = MessageLimit.Framing(LineFraming(), limit: 10, signal: signal)
-        #expect(framing.push(Data("abc\n0123".utf8)) == [Data("abc".utf8)])
-        #expect(framing.push(Data("456789".utf8)).isEmpty)
+        #expect(try framing.push(Data("abc\n0123".utf8)) == [Data("abc".utf8)])
+        #expect(try framing.push(Data("456789".utf8)).isEmpty)
         #expect(signal.exceeded == nil)
-        #expect(framing.push(Data("X\n{}\n".utf8)).isEmpty)
+        #expect(try framing.push(Data("X\n{}\n".utf8)).isEmpty)
         #expect(signal.exceeded == AcpMessageLimitError(limit: 10))
-        #expect(framing.push(Data("{}\n".utf8)).isEmpty)
+        #expect(try framing.push(Data("{}\n".utf8)).isEmpty)
     }
 
     /// The transport under it is closed, and its stream ends with the limit's error once
