@@ -56,6 +56,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run each time a turn's updates have gone quiet past its answer, before
     /// it looks for requests of the agent's.
     var afterUpdateDrain: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once the pause before a retry has begun, which a cancel from then on
+    /// cuts short.
+    var retryPaused: (@Sendable (_ recordId: String) async -> Void)?
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -195,8 +198,9 @@ actor ACPXDaemonBackend: ACPXBackend {
         }
         let (entry, resumed) = try await connect(
             recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-            mcpServers: current.acpx?.mcpServers, control: true, handlers: permissions.handlers,
-            terminalOutputCeiling: ceiling, replacing: replacing)
+            mcpServers: current.acpx?.mcpServers, control: true,
+            settings: CallerSettings(handlers: permissions.handlers, terminalOutputCeiling: ceiling),
+            replacing: replacing)
         // Read after connecting: a reconnect may have moved the record to a new session.
         var record = findRecord(recordId) ?? current
         let result: T

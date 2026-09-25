@@ -34,6 +34,7 @@ extension ACPXDaemonBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none —
     ///     omitted, the daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`.
     ///   - model: the turn's `--model`, put on the session before the prompt and pinned.
+    ///   - limits: the turn's `--timeout` and `--prompt-retries` (``PromptLimits``).
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -42,10 +43,17 @@ extension ACPXDaemonBackend {
         blocks: [PromptBlock]? = nil, content rawContent: [JSONValue]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        model: String? = nil
+        model: String? = nil, limits: PromptLimits? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
+        // acpx's queue owner refuses a negative retry count, and takes a timeout that is
+        // not positive as none. One longer than a timer takes is refused, as acpx's CLI
+        // refuses it: the owner's timer would fire at once.
+        let retries = limits?.promptRetries ?? 0
+        guard retries >= 0 else { throw DaemonError.invalidPromptRetries(retries) }
+        let timeout = limits?.timeoutMs.flatMap { $0 > 0 ? $0 : nil }
+        if let timeout, timeout > JavaScriptNumber.maxTimerDelayMs { throw DaemonError.invalidTimeout(timeout) }
         // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(
@@ -117,8 +125,8 @@ extension ACPXDaemonBackend {
             id: control.id, recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
             blocks: content,
             model: requestedModel?.isEmpty == false ? requestedModel : nil, permissions: permissions,
-            terminalOutputCeiling: ceiling, persister: persister, eventBuffer: eventBuffer,
-            streamWire: streamWire, errors: errors)
+            terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
+            persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
             try await attemptWithRetry(turn, wasHeld: wasHeld)
@@ -139,6 +147,10 @@ extension ACPXDaemonBackend {
         let permissions: TurnPermissions
         /// The caller's cap on terminal output, `nil` for none.
         let terminalOutputCeiling: Int?
+        /// The turn's `--timeout` for each of its steps, `nil` for none.
+        let timeoutMilliseconds: Int?
+        /// The turn's `--prompt-retries`.
+        let promptRetries: Int
         let persister: TurnPersister
         let eventBuffer: WireBuffer
         let streamWire: Bool
@@ -214,7 +226,7 @@ extension ACPXDaemonBackend {
     ///   not answered the attempt. It then throws ``RetriedOnAFreshLaunch``, and nothing
     ///   of the attempt is shown: it does not fail the turn.
     private func attemptPrompt(_ turn: Turn, retriesOnAFreshLaunch: Bool) async throws -> String {
-        let (recordId, blocks, permissions) = (turn.recordId, turn.blocks, turn.permissions)
+        let (recordId, permissions) = (turn.recordId, turn.permissions)
         let (persister, eventBuffer, errors) = (turn.persister, turn.eventBuffer, turn.errors)
         // Nothing an earlier attempt showed says how this one fails — not even when it
         // fails to connect at all.
@@ -231,7 +243,9 @@ extension ACPXDaemonBackend {
         // other turn can be reading them meanwhile.
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
-            handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
+            settings: CallerSettings(
+                handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
+                timeoutMilliseconds: turn.timeoutMilliseconds),
             requestedModel: turn.model, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
@@ -253,28 +267,10 @@ extension ACPXDaemonBackend {
         let wireFeed = TurnWireFeed(
             streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
         // The prompt's result as it crossed the wire: its usage and cost go to the
-        // client with the turn's end, in the shape the agent sent them. Its arrival marks
-        // the turn answered at once, from the reader's thread — before the connection has
-        // even handed it on — as acpx's client clears its active prompt at the answer.
+        // client with the turn's end, in the shape the agent sent them.
         let promptResult = PromptResultCapture()
         let turnId = turn.id
-        entry.agent.rawWire.set { [self] direction, body in
-            errors.observe(direction, body)
-            wireFeed.observe(direction, body)
-            if promptResult.observe(direction, body) {
-                Task { await self.promptAnswered(recordId: recordId, turn: turnId) }
-            }
-        }
-        // The note that the prompt went out comes from the writer's thread; it reaches
-        // this actor as the turn goes on, and is dropped once the turn has ended.
-        entry.agent.rawWire.onDelivery { [self] body, delivery in
-            guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
-            guard delivery == .writing else { return wrote.unmark() }
-            wrote.mark()
-            Task {
-                await self.promptWritten(recordId: recordId, turn: turnId, to: connection, sessionId: boundSessionId)
-            }
-        }
+        watchTheWire(of: entry, for: turn, feeding: wireFeed, result: promptResult, wrote: wrote)
         defer {
             entry.agent.rawWire.set(nil)
             entry.agent.rawWire.onDelivery(nil)
@@ -286,25 +282,32 @@ extension ACPXDaemonBackend {
 
         // Subscribe before prompting so no event is missed, then drain the
         // subscription deterministically: ending it (after `prompt` returns)
-        // finishes the stream, so the consumer task completes having sent every
-        // event — in order — and built the agent's message content for the turn.
-        let (subscriptionId, stream) = await connection.makeEventSubscription()
+        // finishes the stream, so the relay completes having sent every event — in
+        // order — and built the agent's message content for the turn.
         let announceAnswer = Self.announcingTheAnswer(as: sessionId, to: clientSession) { [self] in
             await self.promptAnswered(recordId: recordId, turn: turnId)
         }
-        let consumer = Task {
+        let relay = await TurnRelay(
+            connection: connection, sessionId: boundSessionId, logger: recordId, to: clientSession
+        ) { stream in
             await Self.relay(
                 stream, of: boundSessionId, as: sessionId, into: persister, to: clientSession,
                 onAnswered: announceAnswer)
         }
         do {
             if let model = turn.model {
-                try await applyPromptModel(model, to: entry, persister: persister, agentCommand: turn.agentCommand)
+                try await applyPromptModel(
+                    model, to: entry, persister: persister, agentCommand: turn.agentCommand,
+                    timeoutMilliseconds: turn.timeoutMilliseconds)
             }
-            let (response, sent) = try await sendPrompt(blocks, on: entry, recordId: recordId)
-            await connection.endSubscription(subscriptionId)
+            // The turn's permissions are those of every attempt at its prompt, and of the
+            // pauses between them, as acpx's client counts them across its run.
+            let countedBefore = await connection.permissionTotals(for: boundSessionId)
+            let outcome = try await promptWithRetries(turn, on: entry, relay: relay, wireFeed: wireFeed)
+            let response = outcome.response
+            await relay.end()
             await connection.setWireObserver(nil)
-            let fullText = await consumer.value
+            let fullText = await relay.text()
             // The exchange ends with the prompt's response; the turn's end follows it.
             await wireFeed.finish()
             // Capture the token breakdown the agent reports on the response (Claude
@@ -315,19 +318,22 @@ extension ACPXDaemonBackend {
             // including any wire lines still buffered for the event log.
             await persister.finish()
             // The turn's end goes last, its permissions read only now that it is over.
-            let permissions = sent ? await connection.permissionStats(for: boundSessionId) : PermissionStats()
+            let permissions = outcome.sent
+                ? await connection.permissionTotals(for: boundSessionId).counted(since: countedBefore)
+                : PermissionStats()
             await Self.announceTheEnd(
                 of: response, permissions: permissions, result: promptResult, as: sessionId, to: clientSession)
             return fullText
         } catch {
-            await connection.endSubscription(subscriptionId)
+            await relay.end()
             await connection.setWireObserver(nil)
             // Everything the agent said before failing still goes out, and is kept, as
             // acpx shows and records it — then the error itself.
-            _ = await consumer.value
+            _ = await relay.text()
             let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
                 ? AgentExitedBeforeTheTurn(underlying: error) : error
             let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
+                && turns[recordId]?.retried != true
             // How the agent ended, if it did, goes into the record the failure saves — once
             // it has: an agent whose connection is gone can still be running (its stdout
             // closed, say), and is ended before its pid would be kept.
@@ -340,16 +346,45 @@ extension ACPXDaemonBackend {
 }
 
 extension ACPXDaemonBackend {
+    /// Watch an attempt's exchange as it crosses the wire: for how it fails, for the
+    /// calling client, and for the prompt's answer — whose arrival marks the turn
+    /// answered at once, from the reader's thread, before the connection has even handed
+    /// it on, as acpx's client clears its active prompt at the answer. The note that the
+    /// prompt went out comes from the writer's thread; it reaches this actor as the turn
+    /// goes on, and is dropped once the turn has ended.
+    func watchTheWire(
+        of entry: Live, for turn: Turn, feeding wireFeed: TurnWireFeed, result promptResult: PromptResultCapture,
+        wrote: WriteMark
+    ) {
+        let (recordId, turnId, errors) = (turn.recordId, turn.id, turn.errors)
+        let (connection, sessionId) = (entry.agent.connection, entry.session.id)
+        entry.agent.rawWire.set { [self] direction, body in
+            errors.observe(direction, body)
+            wireFeed.observe(direction, body)
+            if promptResult.observe(direction, body) {
+                Task { await self.promptAnswered(recordId: recordId, turn: turnId) }
+            }
+        }
+        entry.agent.rawWire.onDelivery { [self] body, delivery in
+            guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
+            guard delivery == .writing else { return wrote.unmark() }
+            wrote.mark()
+            Task { await self.promptWritten(recordId: recordId, turn: turnId, to: connection, sessionId: sessionId) }
+        }
+    }
+
     /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
     /// before the prompt — checked against what the session advertises, not sent when
     /// it is already the current model — and is pinned in the record the turn saves.
     /// A model the session cannot take fails the turn before the prompt goes out.
     func applyPromptModel(
-        _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String
+        _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String,
+        timeoutMilliseconds: Int? = nil
     ) async throws {
         let application = try await ModelApplication.applyRequestedModel(
             connection: entry.agent.connection, sessionId: entry.session.id, requestedModel: model,
-            models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand)
+            models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand,
+            timeoutMilliseconds: timeoutMilliseconds)
         guard application.applied else { return }
         let response = application.response
         await persister.adopt { record in

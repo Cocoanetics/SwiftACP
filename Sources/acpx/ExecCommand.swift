@@ -95,20 +95,7 @@ enum ExecCommand {
     static func launchAgent(
         within milliseconds: Int?, _ launch: @escaping @Sendable () async throws -> ACPAgent
     ) async throws -> ACPAgent {
-        let launching = Task { try await launch() }
-        do {
-            return try await withTimeout(milliseconds: milliseconds) {
-                try await withTaskCancellationHandler {
-                    try await launching.value
-                } onCancel: {
-                    launching.cancel()
-                }
-            }
-        } catch {
-            launching.cancel()
-            if let late = try? await launching.value { await late.close() }
-            throw error
-        }
+        try await withTimeout(milliseconds: milliseconds, launch) { await $0.close() }
     }
 
     /// Report a failed run the way acpx does in `format`, returning its exit code.

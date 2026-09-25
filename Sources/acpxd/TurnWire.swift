@@ -94,6 +94,15 @@ final class TurnWireFeed: @unchecked Sendable {
         }
     }
 
+    /// Text output's error responses held so far, taken to go out now: a failed
+    /// attempt's, which the prompt's retry shows before what follows it.
+    func takeHeld() -> [WireMessageEvent] {
+        lock.withLock {
+            defer { held = [] }
+            return held
+        }
+    }
+
     /// The turn's exchange is over: send what was held back — unless `showingHeld` is
     /// false, for an attempt that is retried — and return once everything has gone out.
     func finish(showingHeld: Bool = true) async {
@@ -116,5 +125,67 @@ extension WireMessageEvent {
         self.init(
             wireDirection: direction == .outbound ? "outbound" : "inbound",
             wireLine: String(decoding: body, as: UTF8.self))
+    }
+}
+
+/// What a turn's event subscription carries, relayed to the calling client as the turn
+/// goes (``ACPXDaemonBackend/relay(_:of:as:into:to:onAnswered:)``), in phases: at a
+/// failed attempt the relay hands over to what follows at one point in the events, so
+/// that the attempt's own go out first, then its error, then the rest.
+actor TurnRelay {
+    typealias Relaying = @Sendable (AsyncStream<ConnectionEvent>) async -> String
+
+    private let connection: ACPAgentConnection
+    private let sessionId: SessionId
+    private let logger: String
+    private let clientSession: Session?
+    private let relaying: Relaying
+    private var subscription: UUID
+    /// The latest phase's relay, which waits for the phases before it; each returns the
+    /// agent's message text of the phases so far.
+    private var consumer: Task<String, Never>
+
+    /// Subscribe to `connection`'s events — before the turn sends anything, so that none
+    /// is missed — and relay them with `relaying`.
+    init(
+        connection: ACPAgentConnection, sessionId: SessionId, logger: String, to clientSession: Session?,
+        relaying: @escaping Relaying
+    ) async {
+        self.connection = connection
+        self.sessionId = sessionId
+        self.logger = logger
+        self.clientSession = clientSession
+        self.relaying = relaying
+        let (subscription, stream) = await connection.makeEventSubscription()
+        self.subscription = subscription
+        consumer = Task { await relaying(stream) }
+    }
+
+    /// End the phase at one point in the events — what the connection has read of the
+    /// session's updates handed on first — and relay what comes after once the phase's
+    /// events, and then `held`, have gone out.
+    func handOver(showing held: [WireMessageEvent]) async {
+        await connection.waitForSessionUpdatesHandled(sessionId: sessionId)
+        let (next, stream) = await connection.replaceEventSubscription(subscription)
+        subscription = next
+        let (previous, relaying, clientSession, logger) = (consumer, relaying, clientSession, logger)
+        consumer = Task {
+            let earlier = await previous.value
+            for message in held {
+                await clientSession?.sendLogNotification(
+                    LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
+            }
+            return earlier + (await relaying(stream))
+        }
+    }
+
+    /// End the subscription: nothing more is relayed.
+    func end() async {
+        await connection.endSubscription(subscription)
+    }
+
+    /// The agent's message text for the turn, once everything relayed has gone out.
+    func text() async -> String {
+        await consumer.value
     }
 }

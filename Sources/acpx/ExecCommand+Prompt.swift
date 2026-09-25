@@ -194,15 +194,3 @@ private final class PhaseEvents {
         await consumer?.value
     }
 }
-
-extension PermissionStats {
-    /// What these totals counted since `earlier`, an earlier look at them.
-    func counted(since earlier: PermissionStats) -> PermissionStats {
-        var since = self
-        since.requested -= earlier.requested
-        since.approved -= earlier.approved
-        since.denied -= earlier.denied
-        since.cancelled -= earlier.cancelled
-        return since
-    }
-}

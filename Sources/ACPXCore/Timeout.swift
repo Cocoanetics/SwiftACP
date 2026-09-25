@@ -38,7 +38,7 @@ public func withTimeout<T: Sendable>(
         }
     }
     let deadline = Task {
-        try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
+        try await Task.sleep(nanoseconds: nanoseconds(milliseconds))
         race.settle(.failure(TimeoutError(milliseconds: milliseconds)))
     }
     defer {
@@ -49,6 +49,36 @@ public func withTimeout<T: Sendable>(
         try await race.outcome()
     } onCancel: {
         race.settle(.failure(CancellationError()))
+    }
+}
+
+/// `milliseconds` in nanoseconds — the longest sleep there is, for more than fits.
+private func nanoseconds(_ milliseconds: Int) -> UInt64 {
+    let (product, overflow) = UInt64(milliseconds).multipliedReportingOverflow(by: 1_000_000)
+    return overflow ? .max : product
+}
+
+/// ``withTimeout(milliseconds:_:)`` for an operation that starts what its caller would
+/// have to put down — an agent's launch: at the deadline the operation is cancelled and
+/// waited for, as it puts down what it started on its way out (acpx closes the client it
+/// was starting), and what it came up with just then goes to `discard`.
+public func withTimeout<T: Sendable>(
+    milliseconds: Int?, _ operation: @escaping @Sendable () async throws -> T,
+    discardingLate discard: @escaping @Sendable (T) async -> Void
+) async throws -> T {
+    let running = Task { try await operation() }
+    do {
+        return try await withTimeout(milliseconds: milliseconds) {
+            try await withTaskCancellationHandler {
+                try await running.value
+            } onCancel: {
+                running.cancel()
+            }
+        }
+    } catch {
+        running.cancel()
+        if let late = try? await running.value { await discard(late) }
+        throw error
     }
 }
 

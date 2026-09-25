@@ -18,9 +18,14 @@
 - `fail-auth-once`: its first prompt fails with -32000 (authentication required).
 - `fail-after-updates`: sends twenty updates, then fails as `fail-once` does.
   `burst-then-hang` sends them and never answers.
+- `stall-prompt`: answers a prompt only once it is cancelled, with `cancelled`;
+  `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
+  after `RETRY_AGENT_DELAY_MS` (400 by default).
 
-Otherwise a prompt answers `hello`. Each prompt appends a line to the file
-`RETRY_AGENT_ATTEMPTS` names, and the agent writes its pid to `RETRY_AGENT_PID` on start.
+`RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
+mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
+Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
+writes its pid to `RETRY_AGENT_PID` on start.
 """
 import json
 import os
@@ -28,6 +33,8 @@ import sys
 import time
 
 MODE = os.environ.get("RETRY_AGENT_MODE", "ok")
+if os.environ.get("RETRY_AGENT_MODE_FILE") and os.path.exists(os.environ["RETRY_AGENT_MODE_FILE"]):
+    MODE = open(os.environ["RETRY_AGENT_MODE_FILE"]).read().strip() or MODE
 ATTEMPTS = os.environ.get("RETRY_AGENT_ATTEMPTS")
 if os.environ.get("RETRY_AGENT_PID"):
     with open(os.environ["RETRY_AGENT_PID"], "w") as handle:
@@ -40,6 +47,8 @@ OPTIONS = [
 ]
 cwd = None
 next_id = 1000
+# The prompt waiting for its cancel, under `stall-prompt` and `fail-on-cancel`.
+stalled = None
 
 
 def send(obj):
@@ -85,6 +94,12 @@ def prompt(req_id, session_id):
             update(session_id, "u%d " % index)
     if MODE in ("hang-prompt", "burst-then-hang"):
         time.sleep(60)
+    if MODE in ("stall-prompt", "fail-on-cancel"):
+        global stalled
+        stalled = req_id
+        return
+    if MODE == "slow-prompt":
+        time.sleep(int(os.environ.get("RETRY_AGENT_DELAY_MS", "400")) / 1000)
     if first or MODE == "fail-always":
         if MODE == "fail-after-update":
             update(session_id, "partial ")
@@ -138,5 +153,11 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"configOptions": OPTIONS}})
     elif method == "session/prompt":
         prompt(req_id, params.get("sessionId"))
+    elif method == "session/cancel" and stalled is not None:
+        if MODE == "fail-on-cancel":
+            fail(stalled)
+        else:
+            send({"jsonrpc": "2.0", "id": stalled, "result": {"stopReason": "cancelled"}})
+        stalled = None
     elif req_id is not None and method is not None:
         send({"jsonrpc": "2.0", "id": req_id, "result": {}})
