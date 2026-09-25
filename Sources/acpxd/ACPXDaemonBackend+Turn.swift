@@ -25,6 +25,9 @@ extension ACPXDaemonBackend {
         try? await entry.agent.connection.waitForSessionUpdateDrain(
             sessionId: entry.session.id, idleMilliseconds: drain.idleMilliseconds,
             timeoutMilliseconds: drain.timeoutMilliseconds)
+        // A request the agent made meanwhile is the turn's too: answered before the turn
+        // ends — under its handlers, counted in its permissions — as one made before it.
+        await entry.agent.connection.waitForRequestsAnswered(sessionId: entry.session.id)
         return (response, true)
     }
 

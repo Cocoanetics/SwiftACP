@@ -113,6 +113,61 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A request the agent makes after answering, while the turn waits for its updates to
+    /// go quiet, is the turn's: the turn ends once it is answered, not when the updates go
+    /// quiet. (The terminal it holds keeps it going until the test releases it.)
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aRequestAfterTheAnswerIsAnsweredBeforeTheTurnEnds() async throws {
+        let directory = try Self.scratchDirectory()
+        let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
+        defer {
+            Self.create(release)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let command = try Self.holdingMock(release, log: log, "MOCK_HOLD_TERMINAL_AFTER_ANSWER=1")
+        try await withIsolatedStore {
+            try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 300, timeoutMilliseconds: 5000)) {
+                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+                let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+                let client = CallingClient()
+                let (asked, ask) = AsyncStream<Void>.makeStream()
+                let (ends, end) = AsyncStream<Void>.makeStream()
+                client.observe { log in
+                    if let request = try? log.decoded(InboundRequest.self), request.method == "terminal/wait_for_exit",
+                       request.failure == nil { ask.yield() }
+                    if (try? log.decoded(TurnEndedEvent.self)) != nil { end.yield() }
+                }
+                let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
+                for await _ in asked { break }
+
+                // The updates go quiet 300 ms after the answer; the held request is still open.
+                let endedWhileHeld = await Self.first(of: ends, within: .seconds(1))
+                Self.create(release)
+                try await turn.value
+
+                #expect(!endedWhileHeld)
+                #expect(client.logs.contains { (try? $0.decoded(TurnEndedEvent.self)) != nil })
+            }
+        }
+    }
+
+    /// Whether `stream` yields within `limit`.
+    private static func first(of stream: AsyncStream<Void>, within limit: Duration) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in stream { return true }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// How the turn's permissions went — which decides the CLI's exit code — is read at
     /// the turn's end, not at its answer: a question the agent asks after answering, while
     /// the turn still waits on a request it left open, counts, as acpx reads the stats for

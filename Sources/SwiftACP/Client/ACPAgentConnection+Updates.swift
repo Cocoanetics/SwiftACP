@@ -95,6 +95,13 @@ extension ACPAgentConnection {
         replaySuppressed[sessionId] = count > 1 ? count - 1 : nil
     }
 
+    /// Wait until every request `sessionId`'s agent has made of this client is answered —
+    /// one it sends after a turn's answer, while the turn waits for its updates to go
+    /// quiet, as much as one sent before.
+    public func waitForRequestsAnswered(sessionId: SessionId) async {
+        await inboundRequests.waitUntilIdle(sessionId)
+    }
+
     /// Wait until no `session/update` for `sessionId` has arrived for
     /// `idleMilliseconds`, and every one that has has been handled — the history an
     /// agent replays for its `session/load` has stopped — as acpx's

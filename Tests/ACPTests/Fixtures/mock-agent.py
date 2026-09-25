@@ -69,6 +69,10 @@ HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
 # exist, then asks a permission question; answered, it creates MOCK_HOLD_TERMINAL itself.
 ASK_AFTER_ANSWER = os.environ.get("MOCK_ASK_AFTER_ANSWER")
 
+# With MOCK_HOLD_TERMINAL: the prompt is answered first, and the terminal opened 100 ms
+# after — its exit asked for while the client waits for the turn's updates to go quiet.
+HOLD_AFTER_ANSWER = bool(os.environ.get("MOCK_HOLD_TERMINAL_AFTER_ANSWER"))
+
 
 def wait_for(path):
     while not os.path.exists(path):
@@ -217,6 +221,8 @@ def main():
         if method is None and req_id == "mock-terminal-create":
             send({"jsonrpc": "2.0", "id": "mock-terminal-wait", "method": "terminal/wait_for_exit", "params": {
                 "sessionId": terminal_session, "terminalId": message.get("result", {}).get("terminalId")}})
+            if HOLD_AFTER_ANSWER:
+                continue
             respond(terminal_prompt, {"stopReason": "end_turn"})
             if ASK_AFTER_ANSWER:
                 wait_for(ASK_AFTER_ANSWER)
@@ -299,6 +305,9 @@ def main():
             if HOLD_TERMINAL:
                 terminal_prompt = req_id
                 terminal_session = message.get("params", {}).get("sessionId")
+                if HOLD_AFTER_ANSWER:
+                    respond(req_id, {"stopReason": "end_turn"})
+                    time.sleep(0.1)
                 send({"jsonrpc": "2.0", "id": "mock-terminal-create", "method": "terminal/create", "params": {
                     "sessionId": terminal_session, "command": "/bin/sh",
                     "args": ["-c", 'while [ ! -e "$1" ]; do sleep 0.02; done', "hold", HOLD_TERMINAL]}})
