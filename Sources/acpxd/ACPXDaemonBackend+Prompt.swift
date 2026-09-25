@@ -48,10 +48,12 @@ extension ACPXDaemonBackend {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
         // acpx's queue owner refuses a negative retry count, and takes a timeout that is
-        // not positive as none.
+        // not positive as none. One longer than a timer takes is refused, as acpx's CLI
+        // refuses it: the owner's timer would fire at once.
         let retries = limits?.promptRetries ?? 0
         guard retries >= 0 else { throw DaemonError.invalidPromptRetries(retries) }
         let timeout = limits?.timeoutMs.flatMap { $0 > 0 ? $0 : nil }
+        if let timeout, timeout > JavaScriptNumber.maxTimerDelayMs { throw DaemonError.invalidTimeout(timeout) }
         // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(

@@ -246,6 +246,18 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A timeout longer than a timer takes is refused, as acpx's CLI refuses it — and
+    /// never reaches a sleep it would overflow.
+    @Test func aTimeoutNoTimerTakesIsRefused() async throws {
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+        await #expect {
+            try await daemon.runPrompt(sessionId: "any", text: "hi", limits: PromptLimits(timeoutMs: Int.max))
+        } throws: { error in
+            guard case .invalidTimeout(Int.max)? = error as? DaemonError else { return false }
+            return true
+        }
+    }
+
     // MARK: - Support
 
     /// A session on `retry-agent.py`, created on a working agent, with `environment` as

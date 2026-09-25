@@ -19,6 +19,7 @@ enum DaemonError: LocalizedError {
     case invalidPermissionMode(String)
     case invalidNonInteractivePermissions(String)
     case invalidPromptRetries(Int)
+    case invalidTimeout(Int)
     case sessionResumeRequired(String, reason: String)
     case stopping
 
@@ -41,6 +42,8 @@ enum DaemonError: LocalizedError {
             return "invalid nonInteractivePermissions \"\(policy)\": expected deny or fail"
         case .invalidPromptRetries(let retries):
             return "invalid promptRetries \(retries): expected a non-negative integer"
+        case .invalidTimeout(let milliseconds):
+            return "invalid timeoutMs \(milliseconds): exceeds the maximum supported timer delay"
         case .sessionResumeRequired(let id, let reason):
             // npm acpx's SessionResumeRequiredError wording.
             return "Persistent ACP session \(id) could not be resumed: \(reason)"
