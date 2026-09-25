@@ -37,6 +37,10 @@ the file `RETRY_AGENT_MODE_GATE` names exists, having first written a byte to th
 
 `RETRY_AGENT_SET_MODE_ERROR`, a JSON-RPC error object, answers `session/set_mode` with it.
 
+`RETRY_AGENT_SET_MODE_GATE`, in any mode, answers `session/set_mode` only once the file it
+names exists, having first written a byte to the FIFO `RETRY_AGENT_SET_MODE_SENT` names, if
+one is named.
+
 `RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
 mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
 Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
@@ -196,6 +200,13 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "retry-session", "configOptions": OPTIONS}})
         if MODE == "die-after-new":
             os._exit(3)
+    elif method == "session/set_mode" and os.environ.get("RETRY_AGENT_SET_MODE_GATE"):
+        if os.environ.get("RETRY_AGENT_SET_MODE_SENT"):
+            with open(os.environ["RETRY_AGENT_SET_MODE_SENT"], "w") as sent:
+                sent.write("x")
+        while not os.path.exists(os.environ["RETRY_AGENT_SET_MODE_GATE"]):
+            time.sleep(0.01)
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/set_mode" and MODE == "refuse-set-mode":
         send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Invalid params"}})
     elif method == "session/set_mode" and MODE == "slow-set-mode":
