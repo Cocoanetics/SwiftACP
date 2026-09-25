@@ -129,6 +129,7 @@ enum ExecCommand {
         err: (String) -> Void = { Console.errLine($0) }
     ) -> Int32 {
         let failure = RunFailure(error)
+        renderer.flushText()
         switch format {
         case "json":
             if !agentErrorShown, !renderer.showedFailure(failure.message) {

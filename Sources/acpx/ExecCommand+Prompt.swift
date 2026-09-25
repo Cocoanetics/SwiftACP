@@ -79,11 +79,20 @@ extension ExecCommand {
                 if stats.promptUnavailable, !(error is TimeoutError) { throw PromptUnavailable(agentError: agentError) }
                 guard attempt < maxRetries, !sideEffects.any, PromptRetry.isRetryable(error) else { throw error }
                 let delay = PromptRetry.delayMilliseconds(afterAttempt: attempt)
+                // What the agent sends meanwhile is shown as it comes, as acpx's formatter
+                // shows it — and calls the retry off.
+                let pause = await AttemptEvents.start(of: session, renderer: renderer, sideEffects: sideEffects)
                 if !policy.quiet {
                     Console.errLine(PromptRetry.notice(
                         for: error, delayMilliseconds: delay, retry: attempt + 1, maxRetries: maxRetries))
                 }
-                try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+                } catch {
+                    await pause.finish()
+                    throw error
+                }
+                await pause.finish()
                 guard !sideEffects.any else { throw error }
                 attempt += 1
             }
@@ -91,11 +100,12 @@ extension ExecCommand {
     }
 }
 
-/// An attempt's events, rendered from a subscription of its own as they come: the
-/// session's updates, the agent's requests and the client's diagnostics, in wire order.
-/// Unlike ``ACPSession/run(_:meta:onUpdate:onClientOperation:onInboundRequest:)``, which
-/// hands them on until the prompt is over, it ends when told (``finish()``) — so a
-/// deadline can end it while the prompt is still out.
+/// An attempt's events — or those of the pause before the next — rendered from a
+/// subscription of its own as they come: the session's updates, the agent's requests and
+/// the client's diagnostics, in wire order. Unlike
+/// ``ACPSession/run(_:meta:onUpdate:onClientOperation:onInboundRequest:)``, which hands
+/// them on until the prompt is over, it ends when told (``finish()``) — so a deadline can
+/// end it while the prompt is still out.
 private struct AttemptEvents {
     let connection: ACPAgentConnection
     let subscription: UUID

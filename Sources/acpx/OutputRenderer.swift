@@ -170,6 +170,16 @@ final class OutputRenderer: @unchecked Sendable {
         }
     }
 
+    /// acpx's text formatter `flush()`, which a run ends with however it went: what the
+    /// agent was thinking is shown, and a line left open is ended.
+    func flushText() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard options.format == .text else { return }
+        flushThoughtBuffer()
+        if !atLineStart { write("\n") }
+    }
+
     /// Render a client-side ACP operation (e.g. `initialize`, `session/new`) as
     /// `[client] <method> (running)`. Mirrors acpx's `onClientOperation`, which
     /// keys off the outgoing request method observed on the wire.

@@ -147,13 +147,18 @@ struct ExecTimeoutRetryTests {
     }
 
     /// An update that comes during the pause calls the retry off: the notice has gone
-    /// out, but the prompt is not sent again.
+    /// out, but the prompt is not sent again. The update is shown as it came, after the
+    /// attempt's error, as acpx's formatter shows it.
     @Test(.enabled(if: mockPythonAvailable))
     func anUpdateDuringThePauseCallsTheRetryOff() async throws {
         let run = try await exec("fail-then-update", ["--prompt-retries", "2"])
         #expect(run.code == 1)
         #expect(run.attempts == 1)
         #expect(run.err == "[acpx] prompt failed (Internal error), retrying in 1000ms (attempt 1/2)\n")
+        #expect(run.out.hasSuffix("\n[error] RUNTIME: model overloaded\nlate \n"), "\(run.out)")
+        let quiet = try await exec("fail-then-update", ["--prompt-retries", "2"], format: "quiet")
+        #expect(quiet.out == "late \n")
+        #expect(quiet.err == "[acpx] error: RUNTIME model overloaded\n")
     }
 
     /// Neither a read the client refused for its path — acpx refuses it before reporting
