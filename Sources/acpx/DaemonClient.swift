@@ -182,7 +182,7 @@ enum DaemonClient {
     }
 
     /// Try to connect to `endpoint`; returns a connected proxy, or nil on any failure.
-    private static func tryConnect(
+    static func tryConnect(
         _ endpoint: MCPServerTcpConfig?, configure: @Sendable (MCPServerProxy) async -> Void
     ) async -> MCPServerProxy? {
         guard let endpoint else { return nil }

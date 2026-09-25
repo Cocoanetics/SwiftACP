@@ -23,6 +23,7 @@ import SwiftMCP
 ///   notification, and returning the agent's aggregate response text. The turn's
 ///   stop reason arrives as a final ``TurnEndedEvent`` log notification.
 /// - ``cancelSession(sessionId:)`` — cancel an in-flight prompt.
+/// - ``sessionStatus(sessionId:)`` — whether the daemon holds a session live.
 /// - ``listSessions(agentCommand:)`` / ``showSession(sessionId:)`` /
 ///   ``sessionHistory(sessionId:limit:)`` — read the persisted session store.
 /// - ``setSessionMcpServers(sessionId:mcpServers:)`` / ``setMode(sessionId:modeId:)`` /
@@ -285,6 +286,16 @@ public actor ACPXDaemon {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
             terminalOutputCeiling: terminalOutputCeiling, model: model)
+    }
+
+    /// Whether the daemon holds a session live — its agent connected and kept between
+    /// prompts, as acpx's queue owner keeps one — and the agent's process id while it
+    /// runs: what the CLI's prompt banner and `status` report. Connects nothing.
+    ///
+    /// - Parameter sessionId: the acpx record id or the ACP session id.
+    @MCPTool(readOnlyHint: true, idempotentHint: true)
+    func sessionStatus(sessionId: String) async -> LiveSessionStatus {
+        await backend.sessionStatus(sessionId: sessionId)
     }
 
     /// Cancel an in-flight prompt for a session.

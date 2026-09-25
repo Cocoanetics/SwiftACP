@@ -34,7 +34,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         let sessionSpecs: [MCPServerSpec]?
     }
 
-    /// Live sessions held open between prompts, keyed by ACP session id.
+    /// Live sessions held open between prompts, keyed by acpx record id.
     var live: [String: Live] = [:]
     /// Set once the daemon lets its agents go for good (``releaseAll()``): from then on
     /// no agent is started or held.
@@ -341,6 +341,16 @@ actor ACPXDaemonBackend: ACPXBackend {
         record.closedAt = nowISO()
         try SessionStore.writeRecord(record)
         return true
+    }
+
+    /// Whether this daemon holds a session live, and its agent's process while it runs:
+    /// the health of acpx's queue owner, which the prompt banner and `status` report.
+    func sessionStatus(sessionId: String) async -> LiveSessionStatus {
+        guard let record = findRecord(sessionId), let entry = live[record.acpxRecordId] else {
+            return LiveSessionStatus(live: false)
+        }
+        let lifecycle = entry.agent.lifecycle
+        return LiveSessionStatus(live: true, pid: lifecycle?.running == true ? lifecycle?.pid.map { Int($0) } : nil)
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the
