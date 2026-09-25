@@ -241,12 +241,14 @@ public actor TerminalManager: ACPTerminalHandler {
     /// every 25 ms, as acpx's `waitForCleanupAfterSignal` does.
     private func cleanedUp(_ terminal: ManagedTerminal) async -> Bool {
         let deadline = Date(timeIntervalSinceNow: killGrace)
-        while terminal.isRunning || hasLiveDescendants(terminal) {
+        while true {
+            // A condition list, not `||`: Swift 6.2 takes the operator's autoclosure for a
+            // closure that sends `terminal` across the pause below, and refuses to compile it.
+            if !terminal.isRunning, !hasLiveDescendants(terminal) { return true }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { return false }
             await Self.pause(min(0.025, remaining))
         }
-        return true
     }
 
     private func hasLiveDescendants(_ terminal: ManagedTerminal) -> Bool {
