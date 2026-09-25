@@ -380,9 +380,10 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///
     /// acpx's owner closes a session once drained (`closeActiveBackendSession` after
     /// `shutdown.drain()`): a prompt running is cancelled, and the turn or control holding
-    /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`) —
-    /// so that what it writes comes before the close, not over it. Past that, its agent is
-    /// closed under it.
+    /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
+    /// Past that, its agent is closed under it, and the close waits for it to end all the
+    /// same, as acpx's drain waits once it has closed its client — so that whatever it
+    /// writes comes before the close, not over it.
     ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
@@ -390,8 +391,11 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
         _ = try? await cancelSession(sessionId: recordId)
-        let holdsSlot = await takeSessionSlot(recordId, within: Self.closeGraceMilliseconds)
-        defer { if holdsSlot { Task { await turnQueue.release(recordId) } } }
+        if await !takeSessionSlot(recordId, within: Self.closeGraceMilliseconds) {
+            await evict(recordId)
+            try await turnQueue.acquire(recordId, wait: true)
+        }
+        defer { Task { await turnQueue.release(recordId) } }
         forgetOwner(recordId)
         await evict(recordId)
         // Re-read after the await: closing the agent suspends this actor, so another
