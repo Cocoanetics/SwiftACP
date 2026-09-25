@@ -47,6 +47,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     let turnQueue = SessionTurnQueue()
     /// The turn each session runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
+    var owners: [String: SessionOwner] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
     /// longer keep it from going out.
     var promptGoingOut: (@Sendable (_ recordId: String) async -> Void)?
@@ -59,6 +61,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once the pause before a retry has begun, which a cancel from then on
     /// cuts short.
     var retryPaused: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a session's owner has stopped, its agent closed and its record
+    /// written.
+    var ownerStopped: (@Sendable (_ recordId: String) async -> Void)?
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -341,6 +346,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
+        forgetOwner(initial.acpxRecordId)
         await evict(initial.acpxRecordId)
         // Re-read after the await: closing the agent suspends this actor, so another
         // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
@@ -355,16 +361,19 @@ actor ACPXDaemonBackend: ACPXBackend {
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
-    /// the health of acpx's queue owner, which the prompt banner and `status` report. An
-    /// entry whose agent has exited, or whose connection has closed, is only kept until
-    /// the next turn replaces it: nothing holds the session meanwhile.
+    /// the health of acpx's queue owner, which the prompt banner and `status` report. A
+    /// session is held while its owner holds it (``SessionOwner``) — its agent can be gone
+    /// meanwhile, closed after a prompt timed out or exited on its own, as acpx's owner
+    /// outlives its client's agent — and otherwise while its agent runs. An entry whose
+    /// agent has exited, or whose connection has closed, is only kept until the next turn
+    /// replaces it.
     func sessionStatus(sessionId: String) async -> LiveSessionStatus {
-        guard let record = findRecord(sessionId), let entry = live[record.acpxRecordId] else {
-            return LiveSessionStatus(live: false)
-        }
+        guard let record = findRecord(sessionId) else { return LiveSessionStatus(live: false) }
+        let owned = owners[record.acpxRecordId] != nil
+        guard let entry = live[record.acpxRecordId] else { return LiveSessionStatus(live: owned) }
         let lifecycle = entry.agent.lifecycle
         guard lifecycle?.running != false, await !entry.agent.connection.isClosed else {
-            return LiveSessionStatus(live: false)
+            return LiveSessionStatus(live: owned)
         }
         return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
@@ -383,6 +392,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     func releaseAll() async {
         // Before anything is let go: a turn whose agent this closes must not start another.
         stopping = true
+        for recordId in owners.keys { forgetOwner(recordId) }
         while let recordId = live.keys.first {
             guard let entry = live.removeValue(forKey: recordId) else { continue }
             await entry.agent.close()

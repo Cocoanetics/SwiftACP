@@ -462,8 +462,9 @@ public struct HistoryEntry: Codable, Sendable {
     }
 }
 
-/// acpx's `--timeout` and `--prompt-retries` for one turn, as its CLI sends them with each
-/// prompt it gives the queue owner (`timeoutMs`, `promptRetries`).
+/// acpx's `--timeout`, `--prompt-retries` and `--ttl` for one turn, as its CLI sends them
+/// with each prompt it gives, or starts, the queue owner (`timeoutMs`, `promptRetries`,
+/// `ttlMs`).
 @Schema
 public struct PromptLimits: Codable, Hashable, Sendable {
     /// How long each step of the turn may take, in milliseconds: each step of connecting
@@ -478,9 +479,16 @@ public struct PromptLimits: Codable, Hashable, Sendable {
     /// (the agent's `-32603` or `-32700`) and the turn has had no effect yet — each after
     /// a pause of a second, doubling up to ten. Omitted, none; not negative.
     public var promptRetries: Int?
+    /// acpx's `--ttl`: how long acpxd keeps the session once its turns are over, in
+    /// milliseconds, when this turn is the one that starts holding it. With no prompt for
+    /// that long its agent is closed, as acpx's queue owner stops after its TTL; a
+    /// session held already keeps the time it was started with. `0` keeps it; omitted
+    /// (or negative), five minutes; not past the maximum timer delay.
+    public var ttlMs: Int?
 
-    public init(timeoutMs: Int? = nil, promptRetries: Int? = nil) {
+    public init(timeoutMs: Int? = nil, promptRetries: Int? = nil, ttlMs: Int? = nil) {
         self.timeoutMs = timeoutMs
         self.promptRetries = promptRetries
+        self.ttlMs = ttlMs
     }
 }
