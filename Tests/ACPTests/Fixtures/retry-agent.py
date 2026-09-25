@@ -36,6 +36,9 @@ Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the age
 writes its pid to `RETRY_AGENT_PID` on start. `RETRY_AGENT_READY` names a FIFO it
 writes a byte to as each prompt arrives, before doing anything with it — and, in
 `hang-init` and `hang-new`, as `initialize` or `session/new` does.
+
+`RETRY_AGENT_CAN_CLOSE` makes it advertise `session/close`; `RETRY_AGENT_CLOSED` names a
+file it writes the session's id to when asked to close it.
 """
 import json
 import os
@@ -171,7 +174,8 @@ for line in sys.stdin:
         if MODE == "hang-init":
             signal_ready()
             time.sleep(60)
-        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": {}}})
+        capabilities = {"sessionCapabilities": {"close": {}}} if os.environ.get("RETRY_AGENT_CAN_CLOSE") else {}
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": capabilities}})
     elif method == "session/new":
         if MODE == "hang-new":
             signal_ready()
@@ -184,6 +188,11 @@ for line in sys.stdin:
         with open(os.environ["RETRY_AGENT_MODE_SENT"], "w") as sent:
             sent.write("x")
         time.sleep(int(os.environ.get("RETRY_AGENT_DELAY_MS", "400")) / 1000)
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/close":
+        if os.environ.get("RETRY_AGENT_CLOSED"):
+            with open(os.environ["RETRY_AGENT_CLOSED"], "w") as closed:
+                closed.write(params.get("sessionId", ""))
         send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/set_config_option":
         if MODE == "hang-%s" % params.get("configId"):

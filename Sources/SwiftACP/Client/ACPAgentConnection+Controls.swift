@@ -26,6 +26,15 @@ extension ACPAgentConnection {
         }
     }
 
+    /// Ask the agent to close a session (`session/close`), as acpx's client does: from
+    /// now on what the agent asks for it is answered cancelled, and what its prompt owns
+    /// is ended first.
+    public func closeSession(_ request: CloseSessionRequest) async throws {
+        cancellingSessionIds.insert(request.sessionId)
+        answerTurnRequestsCancelled(request.sessionId)
+        let _: EmptyResponse = try await send("session/close", request)
+    }
+
     /// Send a control whose answer can arrive before the answers to what the agent asked
     /// of the client meanwhile. Those of them a prompt would own are answered before this
     /// returns: afterwards they would be handled under whatever handlers the next caller

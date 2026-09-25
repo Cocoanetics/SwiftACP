@@ -273,6 +273,15 @@ public struct SessionMode: Codable, Hashable, Sendable {
     }
 }
 
+/// `session/close` (unstable): the agent is asked to close a session it advertises it
+/// can (``SessionCapabilities/close``).
+public struct CloseSessionRequest: Codable, Sendable {
+    public var sessionId: SessionId
+    public init(sessionId: SessionId) {
+        self.sessionId = sessionId
+    }
+}
+
 public struct SetSessionModeRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var modeId: String
