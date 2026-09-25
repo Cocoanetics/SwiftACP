@@ -313,33 +313,6 @@ public enum PromptBlockError: LocalizedError, Equatable {
     }
 }
 
-/// The turn's terminal event, streamed as a final MCP log notification.
-///
-/// The `runPrompt` tool result is the agent's aggregate response *text* (so an MCP
-/// client gets the actual answer, not a status token). The stop reason is therefore
-/// demoted to a streamed event: the daemon sends one ``TurnEndedEvent`` once the turn
-/// ends, right after the last `session/update` and before the tool returns.
-public struct TurnEndedEvent: Codable, Sendable {
-    /// The raw ACP stop reason (e.g. `end_turn`, `refusal`, `cancelled`).
-    public var stopReason: String
-    /// How the turn's permissions were settled, which decides the CLI's exit code
-    /// (`PERMISSION_DENIED`, 5). `nil` from a daemon that predates it.
-    public var permissions: PermissionStats?
-    /// The prompt response's `usage` and `cost` as the agent sent them, whatever their
-    /// shape — what acpx's quiet output reports after the reply.
-    public var usage: JSONValue?
-    public var cost: JSONValue?
-
-    public init(
-        stopReason: String, permissions: PermissionStats? = nil, usage: JSONValue? = nil, cost: JSONValue? = nil
-    ) {
-        self.stopReason = stopReason
-        self.permissions = permissions
-        self.usage = usage
-        self.cost = cost
-    }
-}
-
 /// One ACP message of a daemon turn as it went over the wire, streamed as a log
 /// notification: what acpx's formatter is fed. The daemon sends the messages of
 /// connecting the agent for the turn (`initialize`, `session/load` or the

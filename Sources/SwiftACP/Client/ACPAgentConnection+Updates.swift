@@ -20,9 +20,7 @@ extension ACPAgentConnection {
         for sink in updateSinks.values {
             sink.yield(notification)
         }
-        for sink in eventSinks.values {
-            sink.yield(.update(notification))
-        }
+        eventSinks.yield(.update(notification))
     }
 
     /// `session/load` as acpx's `loadSessionWithOptions` sends it: the request, then the
@@ -95,6 +93,20 @@ extension ACPAgentConnection {
     func endSuppressingReplay(of sessionId: SessionId) {
         guard let count = replaySuppressed[sessionId] else { return }
         replaySuppressed[sessionId] = count > 1 ? count - 1 : nil
+    }
+
+    /// How many requests `sessionId`'s agent has made of this client so far: compared
+    /// across a wait, whether one came — answered or not — meanwhile.
+    public func requestsArrived(sessionId: SessionId) -> Int {
+        inboundRequests.arrivalCount(sessionId)
+    }
+
+    /// Wait until every request `sessionId`'s agent has made of this client is answered —
+    /// one it sends after a turn's answer, while the turn waits for its updates to go
+    /// quiet, as much as one sent before. Returns whether any was still open.
+    @discardableResult
+    public func waitForRequestsAnswered(sessionId: SessionId) async -> Bool {
+        await inboundRequests.waitUntilIdle(sessionId)
     }
 
     /// Wait until no `session/update` for `sessionId` has arrived for

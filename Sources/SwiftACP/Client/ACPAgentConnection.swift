@@ -14,7 +14,14 @@ public actor ACPAgentConnection {
     var updateSinks: [UUID: AsyncStream<SessionNotification>.Continuation] = [:]
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
-    var eventSinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
+    let eventSinks = EventSinks()
+    /// What the wire hook announces as it reads it: requests arriving, prompts answered.
+    private let wireOrderedEvents = WireOrderedEvents()
+    /// For tests: runs once a prompt's answer is back with the call that sent it, and
+    /// before a request of the agent's is served — each can be well after the messages
+    /// that followed were read and handed on.
+    var afterPromptAnswer: (@Sendable () async -> Void)?
+    var beforeServingRequest: (@Sendable () async -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
@@ -168,11 +175,13 @@ public actor ACPAgentConnection {
         // Runs inline as each message is read, in order: an agent request is counted
         // here, before the peer hands it to its own task, so a turn that ends after
         // reading it is sure to wait for it.
-        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates] direction, message in
+        let (sinks, ordered) = (eventSinks, wireOrderedEvents)
+        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates, sinks, ordered] direction, message in
             if direction == .inbound, case .request(let request) = message,
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
                 inboundRequests.arrived(sessionId)
             }
+            ordered.observe(direction, message, announcingTo: sinks)
             if direction == .inbound, case .notification(let note) = message, note.method == "session/update",
                 let sessionId = InboundRequestLedger.sessionId(of: note.params) {
                 sessionUpdates.arrived(sessionId)
@@ -210,9 +219,8 @@ public actor ACPAgentConnection {
         if terminalHandler != nil { Task { await shutDownTerminals() } }
         isClosed = true
         for sink in updateSinks.values { sink.finish() }
-        for sink in eventSinks.values { sink.finish() }
+        eventSinks.finishAll()
         updateSinks.removeAll()
-        eventSinks.removeAll()
         Task { await rpc.close() }
     }
 
@@ -247,7 +255,7 @@ public actor ACPAgentConnection {
         let stream = AsyncStream<ConnectionEvent> { continuation in
             let id = UUID()
             capturedId = id
-            eventSinks[id] = continuation
+            eventSinks.add(continuation, as: id)
             continuation.onTermination = { [weak self] _ in
                 Task { await self?.removeSink(id) }
             }
@@ -264,12 +272,12 @@ public actor ACPAgentConnection {
     /// Finish a subscription's stream; the consumer still receives buffered values.
     public func endSubscription(_ id: UUID) {
         updateSinks[id]?.finish()
-        eventSinks[id]?.finish()
+        eventSinks.finish(id)
     }
 
     private func removeSink(_ id: UUID) {
         updateSinks[id] = nil
-        eventSinks[id] = nil
+        eventSinks.remove(id)
     }
 
     // MARK: - Agent methods
@@ -377,7 +385,10 @@ public actor ACPAgentConnection {
         // The turn is not over until the agent's requests from it are answered: one it
         // sent without awaiting would otherwise be counted against the next turn.
         return try await answeringItsRequests(in: request.sessionId) {
-            try await send("session/prompt", request)
+            let response: PromptResponse = try await send("session/prompt", request)
+            // The answer was announced as it was read (see `start`), not from here.
+            await afterPromptAnswer?()
+            return response
         }
     }
 

@@ -73,6 +73,10 @@ public enum ConnectionEvent: Sendable {
     case clientOperation(ClientOperation)
     /// A request the agent made of this client, as it arrived or as it was refused.
     case inboundRequest(InboundRequest)
+    /// The agent answered a session's prompt: after every update it sent before the
+    /// answer, before any it sends after. acpx's formatters mark the turn done at this
+    /// point in the wire.
+    case promptAnswered(SessionId, PromptResponse)
 }
 
 /// A request the agent made of this client — `fs/read_text_file`, `fs/write_text_file`,

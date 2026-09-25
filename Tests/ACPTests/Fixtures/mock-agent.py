@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import sys
+import time
 
 
 def send(obj):
@@ -57,6 +58,29 @@ LOAD_GATE = os.environ.get("MOCK_LOAD_GATE")
 
 # A prompt is held until `session/cancel` comes, then answered `cancelled`.
 HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
+
+# A path. A prompt opens a terminal that runs until the path exists, asks for the
+# terminal's exit without awaiting the answer, and then answers: the turn has a request of
+# the client open past its answer, until a test creates the path. (Files, not FIFOs: a
+# test creates one without blocking, so no step of it waits where cancelling cannot reach.)
+HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
+
+# A path, with MOCK_HOLD_TERMINAL. Once the prompt is answered, the agent waits for it to
+# exist, then asks a permission question; answered, it creates MOCK_HOLD_TERMINAL itself.
+ASK_AFTER_ANSWER = os.environ.get("MOCK_ASK_AFTER_ANSWER")
+
+# With MOCK_HOLD_TERMINAL: the prompt is answered first, and the terminal opened 100 ms
+# after — its exit asked for while the client waits for the turn's updates to go quiet.
+HOLD_AFTER_ANSWER = bool(os.environ.get("MOCK_HOLD_TERMINAL_AFTER_ANSWER"))
+
+# A path. The prompt is answered at once; then the agent waits for the path to exist,
+# asks a permission question, and once answered says "reaction".
+REACT_AFTER_GATE = os.environ.get("MOCK_REACT_AFTER_GATE")
+
+
+def wait_for(path):
+    while not os.path.exists(path):
+        time.sleep(0.02)
 
 # Each process names its sessions after itself, so a replacement session is
 # distinguishable from the one it replaced. Off: every session is mock-session-1.
@@ -166,6 +190,13 @@ def handle_prompt(req_id, params):
         },
     })
 
+    # MOCK_LATE_CHUNK: one more reply chunk, 200 ms after the answer.
+    late = os.environ.get("MOCK_LATE_CHUNK")
+    if late:
+        time.sleep(0.2)
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": late}})
+
 
 def main():
     # MOCK_ARGV_LOG: each launch appends the arguments it was given, so a test can see
@@ -176,6 +207,8 @@ def main():
             output.write(json.dumps(sys.argv[1:]) + "\n")
     prompts_answered = 0
     held_prompt = None
+    terminal_prompt, terminal_session = None, None
+    react_session = None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -188,6 +221,38 @@ def main():
         method = message.get("method")
         req_id = message.get("id")
         log_request(message)
+
+        # The answers to the agent's own requests (MOCK_HOLD_TERMINAL).
+        if method is None and req_id == "mock-terminal-create":
+            send({"jsonrpc": "2.0", "id": "mock-terminal-wait", "method": "terminal/wait_for_exit", "params": {
+                "sessionId": terminal_session, "terminalId": message.get("result", {}).get("terminalId")}})
+            if HOLD_AFTER_ANSWER:
+                continue
+            respond(terminal_prompt, {"stopReason": "end_turn"})
+            if ASK_AFTER_ANSWER:
+                wait_for(ASK_AFTER_ANSWER)
+                send({"jsonrpc": "2.0", "id": "mock-ask", "method": "session/request_permission", "params": {
+                    "sessionId": terminal_session,
+                    "toolCall": {"toolCallId": "call-ask", "title": "a question after the answer"},
+                    "options": [
+                        {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                        {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                    ]}})
+            continue
+        if method is None and req_id == "mock-ask":
+            open(HOLD_TERMINAL, "w", encoding="utf-8").close()
+            continue
+        if method is None and req_id == "mock-react-ask":
+            session_update(react_session, {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "reaction"}})
+            continue
+        if method is None and req_id == "mock-terminal-wait" and HOLD_AFTER_ANSWER:
+            # What an agent says once its command is done, after the turn's answer.
+            session_update(terminal_session, {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after the terminal"}})
+            continue
+        if method is None and str(req_id).startswith("mock-"):
+            continue
 
         if method == "initialize":
             respond(req_id, {
@@ -250,6 +315,25 @@ def main():
             prompts_answered += 1
             if HOLD_UNTIL_CANCEL:
                 held_prompt = req_id
+                continue
+            if REACT_AFTER_GATE:
+                react_session = message.get("params", {}).get("sessionId")
+                respond(req_id, {"stopReason": "end_turn"})
+                wait_for(REACT_AFTER_GATE)
+                send({"jsonrpc": "2.0", "id": "mock-react-ask", "method": "session/request_permission", "params": {
+                    "sessionId": react_session,
+                    "toolCall": {"toolCallId": "call-react", "title": "a question between drains"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]}})
+                continue
+            if HOLD_TERMINAL:
+                terminal_prompt = req_id
+                terminal_session = message.get("params", {}).get("sessionId")
+                if HOLD_AFTER_ANSWER:
+                    respond(req_id, {"stopReason": "end_turn"})
+                    time.sleep(0.1)
+                send({"jsonrpc": "2.0", "id": "mock-terminal-create", "method": "terminal/create", "params": {
+                    "sessionId": terminal_session, "command": "/bin/sh",
+                    "args": ["-c", 'while [ ! -e "$1" ]; do sleep 0.02; done', "hold", HOLD_TERMINAL]}})
                 continue
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:
