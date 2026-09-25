@@ -380,13 +380,29 @@ enum DaemonClient {
         }) ?? false
     }
 
+    /// What a running daemon made of being asked to let a session's agent go.
+    enum Release {
+        /// It did, saying whether it had the session.
+        case released(Bool)
+        /// None is running: nothing holds the session.
+        case noDaemon
+        /// One answered with an error — one from before the tool (#162), or one that failed
+        /// it — and may still hold the session.
+        case refused
+    }
+
     /// Ask a *running* daemon to let go of its live agent for `sessionId` without closing
-    /// the session (``ACPXDaemon/releaseSession(sessionId:)``). Returns whether it held
-    /// one. Never spawns a daemon; one from before the tool holds on, as it always did.
-    static func releaseSession(sessionId: String) async -> Bool {
-        (try? await withClient(spawnIfNeeded: false) {
-            try await $0.releaseSession(sessionId: sessionId)
-        }) ?? false
+    /// the session (``ACPXDaemon/releaseSession(sessionId:)``). Never spawns a daemon.
+    static func releaseSession(sessionId: String) async -> Release {
+        do {
+            return .released(try await withClient(spawnIfNeeded: false) {
+                try await $0.releaseSession(sessionId: sessionId)
+            })
+        } catch is DaemonUnavailable {
+            return .noDaemon
+        } catch {
+            return .refused
+        }
     }
 
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.

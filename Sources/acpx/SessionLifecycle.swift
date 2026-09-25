@@ -27,17 +27,15 @@ enum SessionLifecycle {
                 // no `session/close`, which could end the new session too — and the record
                 // is written once more, over whatever a turn of the old one saved on its
                 // way out, even one that was still connecting.
-                let recordId = record.acpxRecordId
-                _ = try runBlocking { await DaemonClient.releaseSession(sessionId: recordId) }
+                try release(record.acpxRecordId)
                 try SessionStore.writeRecord(record)
             } else if record.acpSessionId == replaced.acpSessionId {
                 // The agent gave the new session the ACP session the replaced record had
                 // moved to (a reconnect's fallback, an import): a `session/close` for it
                 // would reach the new session. A daemon holding the replaced one lets its
                 // agent go, and the replaced record is closed here.
-                let recordId = replaced.acpxRecordId
-                _ = try runBlocking { await DaemonClient.releaseSession(sessionId: recordId) }
-                _ = try markClosed(SessionStore.loadRecord(recordId) ?? replaced)
+                try release(replaced.acpxRecordId)
+                _ = try markClosed(SessionStore.loadRecord(replaced.acpxRecordId) ?? replaced)
             } else {
                 _ = try close(replaced)
             }
@@ -181,6 +179,16 @@ enum SessionLifecycle {
             return persisted
         }
         return try markClosed(record)
+    }
+
+    /// Have a running daemon let the session's agent go without closing the session. One
+    /// that refuses — an acpxd from before `releaseSession` (#162) — is asked to close it
+    /// instead, which lets the agent go too: holding on would send the next prompt to the
+    /// replaced session's agent. The caller writes the records it means to keep after.
+    private static func release(_ recordId: String) throws {
+        let outcome = try runBlocking { await DaemonClient.releaseSession(sessionId: recordId) }
+        guard case .refused = outcome else { return }
+        _ = try runBlocking { await DaemonClient.closeSession(sessionId: recordId) }
     }
 
     /// `record` marked closed, as the CLI closes a session no daemon holds.
