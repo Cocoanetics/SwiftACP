@@ -54,7 +54,8 @@ struct AcpxdCommand: AsyncParsableCommand {
         // CLI will connect to that one. A stale lock (crashed daemon) is reclaimed.
         let lock = DaemonLock()
         guard try lock.acquire() else {
-            log.notice("acpxd: another daemon is already running; exiting.")
+            let holder = lock.currentHolder().map { " (pid \($0.pid))" } ?? ""
+            log.notice("acpxd: another daemon\(holder) is already running; exiting.")
             return
         }
 

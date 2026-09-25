@@ -1,15 +1,16 @@
 import Foundation
+import SwiftACP
 
 /// Boot-time singleton guard for `acpxd`: at most one daemon may hold
 /// `~/.acpx/acpxd.lock` at a time, so concurrent `acpx` cold-starts can't leave two
 /// managers fighting over the same live sessions and records.
 ///
 /// The lock is acquired by atomically creating the file (`O_EXCL`, via
-/// `Data.write(options: .withoutOverwriting)`) carrying the holder's pid. A lock
-/// left behind by a process that's no longer alive is treated as stale and taken
-/// over; one held by a *live* pid refuses acquisition (the losing daemon exits).
-/// The owner removes the lock on graceful shutdown; a hard crash leaves a stale
-/// lock that the next daemon reclaims via the pid-liveness check.
+/// `Data.write(options: .withoutOverwriting)`) carrying the holder's pid and birth. A
+/// lock whose holder is gone is treated as stale and taken over; one held by a live
+/// holder refuses acquisition (the losing daemon exits). The owner removes the lock on
+/// graceful shutdown; a hard crash leaves a stale lock that the next daemon reclaims —
+/// even once another process has taken the dead holder's pid (``isHeld(_:)``).
 public struct DaemonLock: Sendable {
     /// The persisted lock contents.
     public struct Holder: Codable, Sendable {
@@ -18,11 +19,15 @@ public struct DaemonLock: Sendable {
         /// connect directly. Nil until then, or for an older lock without it.
         public var port: Int?
         public var startedAt: String
+        /// The holder's ``SwiftACP/ProcessBirth/identity(of:)``: a live pid with another
+        /// birth is another process. Nil in a lock written before it was recorded.
+        public var birth: String?
 
-        public init(pid: Int32, port: Int? = nil, startedAt: String) {
+        public init(pid: Int32, port: Int? = nil, startedAt: String, birth: String? = nil) {
             self.pid = pid
             self.port = port
             self.startedAt = startedAt
+            self.birth = birth
         }
     }
 
@@ -46,7 +51,7 @@ public struct DaemonLock: Sendable {
         // The lock exists. If it's unreadable/partial, assume a peer is mid-init and
         // back off rather than risk stealing a lock that's about to be live.
         guard let holder = currentHolder() else { return false }
-        if DaemonLock.isProcessAlive(holder.pid) { return false }
+        if DaemonLock.isHeld(holder) { return false }
         // Stale: the previous owner is gone. Reclaim it.
         try? FileManager.default.removeItem(at: url)
         return try create()
@@ -77,7 +82,8 @@ public struct DaemonLock: Sendable {
     /// Create the lock file atomically, writing this process's holder record.
     /// Returns `false` if it already exists.
     private func create() throws -> Bool {
-        let data = try JSONEncoder().encode(Holder(pid: pid, startedAt: nowISO()))
+        let holder = Holder(pid: pid, startedAt: nowISO(), birth: ProcessBirth.identity(of: pid))
+        let data = try JSONEncoder().encode(holder)
         do {
             try data.write(to: url, options: .withoutOverwriting)
             return true
@@ -89,6 +95,33 @@ public struct DaemonLock: Sendable {
     /// Overwrite the lock file with `holder` (the caller must own the lock).
     private func write(_ holder: Holder) throws {
         try JSONEncoder().encode(holder).write(to: url)
+    }
+
+    /// Whether `holder` still holds its lock: its pid names a live process, and that
+    /// process is the one that wrote the lock, as acpx tells its owner by its birth
+    /// (`observeProcessIncarnation`, 0.19.2) — a crashed daemon's pid may have been
+    /// taken since. A birth that cannot be read is taken at its word, as acpx takes an
+    /// `unknown` one. A lock from before births were recorded is judged by when it was
+    /// written: a process that started after that cannot have written it.
+    public static func isHeld(_ holder: Holder) -> Bool {
+        guard isProcessAlive(holder.pid) else { return false }
+        if let recorded = holder.birth {
+            guard let current = ProcessBirth.identity(of: holder.pid) else { return true }
+            return current == recorded
+        }
+        guard let started = ProcessBirth.date(of: holder.pid), let written = parseTimestamp(holder.startedAt) else {
+            return true
+        }
+        // `startedAt` is written after the holder started, and to the millisecond.
+        return started <= written.addingTimeInterval(1)
+    }
+
+    private static func parseTimestamp(_ text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: text) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
     }
 
     /// Whether `pid` names a live process. `kill(pid, 0)` succeeds for a signalable
