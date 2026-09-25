@@ -68,7 +68,11 @@ extension ExecCommand {
                 return PromptRun(response: response, permissions: permissions)
             } catch {
                 // What the attempt did comes out before its failure — at a deadline too,
-                // though the prompt is still out: nothing of it comes out after.
+                // though the prompt is still out: nothing of it comes out after. An update
+                // read before the deadline can still be on its way to the subscriptions, so
+                // what the connection has read is handed on first. (An agent's error is read
+                // only once the updates before it are handed on: the peer awaits each.)
+                await connection.waitForSessionUpdatesHandled(sessionId: session.id)
                 await events.finish()
                 let stats = await connection.permissionStats(for: session.id)
                 permissions.add(stats)

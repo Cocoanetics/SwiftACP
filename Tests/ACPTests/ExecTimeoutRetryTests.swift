@@ -238,6 +238,38 @@ struct ExecTimeoutRetryTests {
         #expect(written.value == atTheFailure)
     }
 
+    /// An update the connection read before the deadline is shown however late it is
+    /// handed on: the attempt's events end only once everything read of the agent has
+    /// been. Here its handling is held until the attempt's end waits for it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anUpdateReadBeforeTheDeadlineIsShownThoughHandedOnLate() async throws {
+        let agent = try await Self.launchFixture(mode: "burst-then-hang")
+        let written = Written()
+        let renderer = OutputRenderer(
+            options: RenderOptions(format: .text), out: { written.append($0) }, err: { _ in }, color: false)
+        let (released, release) = AsyncStream<Void>.makeStream()
+        await agent.connection.setBeforeHandlingUpdate { for await _ in released { break } }
+        await agent.connection.setOnUpdateWait { _ in release.finish() }
+        do {
+            let response = try await agent.connection.newSession(
+                NewSessionRequest(cwd: NSTemporaryDirectory(), mcpServers: []))
+            let session = ACPSession(id: response.sessionId, agent: agent)
+            let policy = ExecCommand.PromptPolicy(timeoutMilliseconds: 200, retries: 0, quiet: false)
+            await #expect(throws: TimeoutError(milliseconds: 200)) {
+                _ = try await ExecCommand.runPrompt(
+                    [.text("hi")], on: session, policy: policy, renderer: renderer, sideEffects: PromptSideEffects())
+            }
+        } catch {
+            release.finish()
+            await agent.close()
+            throw error
+        }
+        let shown = written.value
+        release.finish()
+        await agent.close()
+        #expect(shown.hasPrefix("u0 "), "\(shown)")
+    }
+
     /// An update that calls the retry off is shown however late the connection hands it
     /// on: the pause's events end only once everything the connection read of the agent
     /// has been handed on. Here its handling is held until the pause's end waits for it.
