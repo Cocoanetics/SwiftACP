@@ -4,7 +4,8 @@ import SwiftACP
 import Testing
 
 /// Reading a session's journal as acpx 0.19.1's `sessions watch` reads it (#59): its
-/// events from a cursor on, across its segments, then as they are written.
+/// events from a cursor on, across its segments, then as they are written — and, as
+/// 0.19.3's does, all of them before it stops (#719).
 @Suite(.serialized) struct SessionWatchTests {
     private func record(_ id: String, maxSegmentBytes: Int = 0, maxSegments: Int = 0) -> SessionRecord {
         let now = nowISO()
@@ -199,6 +200,53 @@ import Testing
             }
             #expect(kinds(events).suffix(2) == ["started req-2", "message req-2"])
             #expect(asked == [nil, "req-2"])
+        }
+    }
+
+    /// Told to stop, a watch reads once more before it does, as acpx 0.19.3 drains what the
+    /// journal still holds (#719): a turn's result written while it decided is still
+    /// handed on, and it asks again before it ends.
+    @Test func aResultWrittenAsTheWatchDecidesIsStillShown() async throws {
+        try await withIsolatedStore {
+            var seed = record("w-drain")
+            var writer = try SessionEventLogWriter.open(record: &seed)
+            try turn("req-1", [prompt], finished: false, writer: &writer, record: &seed)
+
+            var asked: [String?] = []
+            let events = try await watch("w-drain") { count, pending in
+                asked.append(pending)
+                if count == 1 {
+                    try writer.finishTurn("req-1", .settled(stopReason: "end_turn", meta: nil), into: &seed)
+                }
+                return false
+            }
+            #expect(kinds(events).last == "result req-1")
+            #expect(asked == ["req-1", nil])
+        }
+    }
+
+    /// An unknown outcome waits for the journal too: what it still holds is handed on
+    /// first, and the outcome is thrown once a read finds nothing more.
+    @Test func anUnknownOutcomeComesAfterWhatTheJournalStillHolds() async throws {
+        try await withIsolatedStore {
+            var seed = record("w-unknown")
+            var writer = try SessionEventLogWriter.open(record: &seed)
+            try turn("req-1", [prompt], finished: false, writer: &writer, record: &seed)
+
+            var looks = 0
+            var events: [SessionJournal.WatchEvent] = []
+            await expectWatchError("WATCH_OUTCOME_UNKNOWN") {
+                try await SessionJournal.watch(
+                    recordId: "w-unknown", maxSegments: 5, cursor: nil,
+                    continueWatching: { _ in
+                        looks += 1
+                        if looks == 1 { try writer.append([Data(answer.utf8)], into: &seed) }
+                        throw SessionJournalError(code: "WATCH_OUTCOME_UNKNOWN", message: "unknown")
+                    },
+                    onEvent: { events.append($0) })
+            }
+            #expect(kinds(events).suffix(2) == ["message req-1", "message req-1"])
+            #expect(looks == 2)
         }
     }
 
