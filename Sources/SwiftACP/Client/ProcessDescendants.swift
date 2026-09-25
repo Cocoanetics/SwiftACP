@@ -198,12 +198,11 @@ final class ProcessDescendants {
 
     /// Signal every process the snapshot just taken tracks: a saved pid is never
     /// signalled without its birth matching again, so a ``capture(rootIsRunning:)``
-    /// that succeeded comes first.
+    /// that succeeded comes first. A signal refused is no sign the process is gone:
+    /// only a fresh snapshot lets it go, as acpx 0.19.3 has it (#783).
     func signalTracked(_ signal: Int32) {
         guard !retired else { return }
-        for pid in identities.keys where kill(pid, signal) != 0 {
-            identities[pid] = nil
-        }
+        for pid in identities.keys { _ = kill(pid, signal) }
     }
 
     /// Whether any tracked process is still alive, as of the last snapshot.
