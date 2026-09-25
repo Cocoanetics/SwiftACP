@@ -56,7 +56,7 @@ enum PromptCommand {
                     sessionId: sessionId, content: try PromptInputResolver.jsonValues(promptBlocks), wait: wait,
                     permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                     permissionPolicy: permissionRules, terminalOutputCeiling: terminalOutputCeiling,
-                    model: flags.model,
+                    model: flags.model, sessionOptions: flags.promptSessionOptions,
                     limits: PromptLimits(
                         timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs),
                     renderer: renderer)

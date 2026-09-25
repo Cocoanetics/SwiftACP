@@ -61,19 +61,20 @@ extension ACPXDaemonBackend {
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, settings: CallerSettings = CallerSettings(),
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
-        turnAcpx: SessionAcpxState? = nil,
+        turnOptions: SessionAcpxState.SessionOptions? = nil, turnAcpx: SessionAcpxState? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil,
         onConnectWire: RawWireTap.Observer? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
             control: control, settings: settings, replacing: replacing, requestedModel: requestedModel,
-            turnAcpx: turnAcpx, onRecordChange: onRecordChange, onConnectOutput: onConnectOutput,
+            turnOptions: turnOptions, turnAcpx: turnAcpx, onRecordChange: onRecordChange,
+            onConnectOutput: onConnectOutput,
             onConnectWire: onConnectWire
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:settings:replacing:requestedModel:turnAcpx:onRecordChange:onConnectOutput:onConnectWire:)``,
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:settings:replacing:requestedModel:turnOptions:turnAcpx:onRecordChange:onConnectOutput:onConnectWire:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
     /// A session already held, or one a new session replaced, was not.
@@ -81,7 +82,7 @@ extension ACPXDaemonBackend {
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, settings: CallerSettings = CallerSettings(),
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
-        turnAcpx: SessionAcpxState? = nil,
+        turnOptions: SessionAcpxState.SessionOptions? = nil, turnAcpx: SessionAcpxState? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil,
         onConnectWire: RawWireTap.Observer? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
@@ -108,6 +109,10 @@ extension ACPXDaemonBackend {
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = turnAcpx ?? record?.acpx
         let desired = ReconnectReplay.Desired(record, replacing: replacing)
+        // The session's options, with the turn's over them, go out as `_meta` with
+        // whichever request gets the session: acpx 0.19.3 starts its client with them
+        // (`mergeSessionOptions(options.sessionOptions, sessionOptionsFromRecord(record))`, #778).
+        let sessionOptions = turnOptions.map { $0.merged(over: original?.sessionOptions) } ?? original?.sessionOptions
         let launch = config.agentLaunch(for: agentCommand)
         let command = launch.command
         let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
@@ -151,7 +156,7 @@ extension ACPXDaemonBackend {
             (session, loaded) = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
                 specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent,
-                requestedModel: requestedModel, timeoutMilliseconds: timeout)
+                sessionOptions: sessionOptions, timeoutMilliseconds: timeout)
             ReconnectReplay.applyLoaded(loaded, to: &state)
             let outcome = try await ReconnectReplay.replay(
                 desired, replacing: replacing, original: original, loaded: loaded, state: &state,
@@ -307,15 +312,19 @@ extension ACPXDaemonBackend {
     /// Returns the session, and how it came back.
     private func takeBackOrStartOver(
         _ handle: ACPAgent, recordId: String, sessionId: String, cwd: String, specs: [MCPServerSpec],
-        command: String, sameSessionOnly: Bool, requestedModel: String?, timeoutMilliseconds timeout: Int?
+        command: String, sameSessionOnly: Bool, sessionOptions: SessionAcpxState.SessionOptions?,
+        timeoutMilliseconds timeout: Int?
     ) async throws -> (session: ACPSession, loaded: ReconnectReplay.Loaded) {
+        // Every request that gets the session carries its options as `_meta`, as acpx
+        // 0.19.3's client sends them with `session/load` and `session/resume` too (#778).
+        let meta = SessionMeta.build(options: sessionOptions, agentCommand: command)
         do {
             // The history a `session/load` replays is the record's already: acpx neither
             // shows nor records it when it reconnects. Within the timeout, as each of
             // acpx's steps; one that runs out does not fall back to a new session.
             let session = try await withTimeout(milliseconds: timeout) {
                 try await handle.reconnectSession(
-                    id: sessionId, cwd: cwd, mcpServers: specs, suppressReplayUpdates: true)
+                    id: sessionId, cwd: cwd, mcpServers: specs, meta: meta, suppressReplayUpdates: true)
             }
             return (session, ReconnectReplay.Loaded(
                 sessionId: session.id, createdFreshSession: false, configOptions: session.configOptions,
@@ -329,17 +338,6 @@ extension ACPXDaemonBackend {
             case .refuse: throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error))
             case .startFresh: break
             }
-            // Falling back is a `session/new`, and a `session/new` carries the
-            // session's options as `_meta` — acpx builds every `createSession` from
-            // the options its client was made with, which on a reconnect come from the
-            // record — with a turn's `--model` over them. `session/load` and
-            // `session/resume` carry no `_meta` upstream.
-            var options = record?.acpx?.sessionOptions
-            if let requestedModel {
-                options = options ?? SessionAcpxState.SessionOptions()
-                options?.model = requestedModel
-            }
-            let meta = SessionMeta.build(options: options, agentCommand: command)
             let session = try await withTimeout(milliseconds: timeout) {
                 try await handle.newSession(cwd: cwd, mcpServers: specs, meta: meta)
             }
