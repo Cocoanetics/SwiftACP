@@ -6,6 +6,27 @@ import JSONFoundation
 //
 // Split from `ACPAgentConnection.swift` to keep each file inside the 500-line limit.
 extension ACPAgentConnection {
+    // MARK: - Permission stats
+
+    /// How the permissions asked for during `sessionId`'s latest turn were settled —
+    /// read it once the turn returns to decide the exit code, as acpx does.
+    public func permissionStats(for sessionId: SessionId) -> PermissionStats {
+        turnPermissionStats[sessionId] ?? PermissionStats()
+    }
+
+    /// Every permission `sessionId`'s turns on this connection settled, the latest's
+    /// included, and whatever was asked between them: a turn's count starts over, this
+    /// does not — as acpx's client counts across its run (`getPermissionStats`), a
+    /// prompt's retries and the pauses before them included. Its `promptUnavailable` is
+    /// the latest turn's.
+    public func permissionTotals(for sessionId: SessionId) -> PermissionStats {
+        let latest = permissionStats(for: sessionId)
+        var totals = earlierPermissionStats[sessionId] ?? PermissionStats()
+        totals.add(latest)
+        totals.promptUnavailable = latest.promptUnavailable
+        return totals
+    }
+
     // MARK: - Permission requests
 
     /// Answer a `session/request_permission` through the configured handler, with

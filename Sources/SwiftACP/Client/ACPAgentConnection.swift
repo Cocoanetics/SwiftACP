@@ -81,14 +81,10 @@ public actor ACPAgentConnection {
     var loadWaiters: [SessionId: [CheckedContinuation<Void, Never>]] = [:]
 
     /// How each session's latest turn settled its permissions; reset when a turn
-    /// starts. See ``permissionStats(for:)``.
+    /// starts, once added to the earlier turns'. See ``permissionStats(for:)``.
     var turnPermissionStats: [SessionId: PermissionStats] = [:]
-
-    /// How the permissions asked for during `sessionId`'s latest turn were settled —
-    /// read it once the turn returns to decide the exit code, as acpx does.
-    public func permissionStats(for sessionId: SessionId) -> PermissionStats {
-        turnPermissionStats[sessionId] ?? PermissionStats()
-    }
+    /// What each session's earlier turns settled (``permissionTotals(for:)``).
+    var earlierPermissionStats: [SessionId: PermissionStats] = [:]
     /// Sessions whose in-flight turn this client is cancelling (`session/cancel` asked
     /// for, prompt not yet returned): the agent's requests of it are answered as
     /// cancelled, and a refusal isn't explained — the caller is ending the turn itself.
@@ -379,6 +375,8 @@ public actor ACPAgentConnection {
         // cancelled either (the bookkeeping acpx does around its active prompt).
         cancellingSessionIds.remove(request.sessionId)
         promptingSessionIds.insert(request.sessionId)
+        earlierPermissionStats[request.sessionId, default: PermissionStats()]
+            .add(turnPermissionStats[request.sessionId] ?? PermissionStats())
         turnPermissionStats[request.sessionId] = PermissionStats()
         defer {
             promptingSessionIds.remove(request.sessionId)

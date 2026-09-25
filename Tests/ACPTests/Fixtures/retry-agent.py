@@ -12,7 +12,7 @@
   first sends an update, reads `<cwd>/notes.txt`, reads `notes.txt` (a path the client
   refuses), or asks permission to edit — then fails as `fail-once` does.
 - `fail-then-update`: fails as `fail-once` does, and sends an update 300 ms later —
-  inside the pause before a retry.
+  inside the pause before a retry. `fail-then-ask` asks permission to edit then instead.
 - `fail-auth-once`: its first prompt fails with -32000 (authentication required).
 - `fail-after-updates`: sends twenty updates, then fails as `fail-once` does.
   `burst-then-hang` sends them and never answers.
@@ -60,6 +60,13 @@ def update(session_id, text):
         "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
 
 
+def ask_to_edit(session_id):
+    ask("session/request_permission", {"sessionId": session_id, "toolCall": {
+        "toolCallId": "edit-1", "title": "Edit notes", "kind": "edit", "status": "pending"},
+        "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]})
+
+
 def fail(req_id, code=-32603, message="Internal error", details="model overloaded"):
     send({"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message,
                                                      "data": {"details": details}}})
@@ -87,10 +94,7 @@ def prompt(req_id, session_id):
         elif MODE == "fail-after-bad-read":
             ask("fs/read_text_file", {"sessionId": session_id, "path": "notes.txt"})
         elif MODE == "fail-after-permission":
-            ask("session/request_permission", {"sessionId": session_id, "toolCall": {
-                "toolCallId": "edit-1", "title": "Edit notes", "kind": "edit", "status": "pending"},
-                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
-                            {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]})
+            ask_to_edit(session_id)
         if MODE == "fail-auth-once":
             return fail(req_id, -32000, "Authentication required", "login first")
         if MODE.startswith("fail-"):
@@ -98,6 +102,9 @@ def prompt(req_id, session_id):
             if MODE == "fail-then-update":
                 time.sleep(0.3)
                 update(session_id, "late ")
+            elif MODE == "fail-then-ask":
+                time.sleep(0.3)
+                ask_to_edit(session_id)
             return
     update(session_id, "hello")
     send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})

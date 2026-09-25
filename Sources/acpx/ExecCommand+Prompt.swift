@@ -8,9 +8,9 @@ import SwiftACP
 // `ExecCommand.swift` to keep each file inside the 500-line limit.
 extension ExecCommand {
     /// What the prompt came to: the last attempt's outcome, with the permission counts
-    /// of every attempt — acpx's client counts across its run — and whether that last
-    /// attempt needed a permission question nobody could be asked (acpx drops that with
-    /// an attempt that fails).
+    /// of every attempt and of the pauses between them — acpx's client counts across its
+    /// run — and whether that last attempt needed a permission question nobody could be
+    /// asked (acpx drops that with an attempt that fails).
     struct PromptRun {
         var response: PromptResponse
         var permissions: PermissionStats
@@ -50,7 +50,7 @@ extension ExecCommand {
     ) async throws -> PromptRun {
         let connection = session.agent.connection
         let maxRetries = policy.retries
-        var permissions = PermissionStats()
+        let countedBefore = await connection.permissionTotals(for: session.id)
         sideEffects.begin()
         defer { sideEffects.end() }
         var attempt = 0
@@ -63,9 +63,7 @@ extension ExecCommand {
                     try await session.prompt(prompt)
                 }
                 await events.finish()
-                let last = await connection.permissionStats(for: session.id)
-                permissions.add(last)
-                permissions.promptUnavailable = last.promptUnavailable
+                let permissions = await connection.permissionTotals(for: session.id).counted(since: countedBefore)
                 return PromptRun(response: response, permissions: permissions)
             } catch {
                 // What the attempt did comes out before its failure — at a deadline too,
@@ -78,7 +76,6 @@ extension ExecCommand {
                 let pause = await events.handOver()
                 await events.finish()
                 let stats = await connection.permissionStats(for: session.id)
-                permissions.add(stats)
                 let agentError = error as? JSONRPCErrorBody
                 if let agentError { showAgentError(RunFailure(agentError), renderer: renderer) }
                 // acpx's client fails a prompt that needed a question nobody could be asked
@@ -192,11 +189,13 @@ private final class PhaseEvents {
 }
 
 extension PermissionStats {
-    /// Count `other`'s decisions in too, as acpx's client counts every attempt's.
-    mutating func add(_ other: PermissionStats) {
-        requested += other.requested
-        approved += other.approved
-        denied += other.denied
-        cancelled += other.cancelled
+    /// What these totals counted since `earlier`, an earlier look at them.
+    func counted(since earlier: PermissionStats) -> PermissionStats {
+        var since = self
+        since.requested -= earlier.requested
+        since.approved -= earlier.approved
+        since.denied -= earlier.denied
+        since.cancelled -= earlier.cancelled
+        return since
     }
 }
