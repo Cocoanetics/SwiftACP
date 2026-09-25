@@ -68,7 +68,7 @@ extension DaemonToolsTests {
         guard mkfifo(sent.path, 0o600) == 0 else { throw POSIXError(.EIO) }
         try await withIsolatedStore {
             let session = try await retrySession(
-                in: directory, environment: "RETRY_AGENT_DELAY_MS=1000 RETRY_AGENT_MODE_SENT='\(sent.path)' ")
+                in: directory, environment: "RETRY_AGENT_DELAY_MS=3000 RETRY_AGENT_MODE_SENT='\(sent.path)' ")
             try session.set("slow-set-mode")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = session.id
@@ -77,6 +77,8 @@ extension DaemonToolsTests {
             await #expect(throws: TimeoutError(milliseconds: 200)) {
                 _ = try await daemon.setMode(sessionId: id, modeId: "code", timeoutMs: 200)
             }
+            // It gave up waiting: the control it waited for still holds the session.
+            #expect(await daemon.turnQueue.isBusy(id))
             _ = try await holding
             #expect(try #require(SessionStore.loadRecord(id)).acpx?.desiredModeId == "plan")
             await daemon.releaseAll()
