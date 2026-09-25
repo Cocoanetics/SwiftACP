@@ -18,7 +18,8 @@ public actor TurnPersister {
     /// acpx's `DEFAULT_LIVE_CHECKPOINT_INTERVAL_MS`.
     public static let defaultIntervalNanos: UInt64 = 500_000_000
 
-    private var record: SessionRecord
+    /// The record the turn saves, as it stands.
+    public private(set) var record: SessionRecord
     private let intervalNanos: UInt64
     private let eventBuffer: WireBuffer?
     /// The turn's request id: what its journal records are keyed by, and the record's
@@ -97,6 +98,14 @@ public actor TurnPersister {
         change(&record)
         dirty = true
         flush()
+    }
+
+    /// Apply what a control sent during the turn changed, and save at once, as acpx's
+    /// control checkpoints the prompt's record (`acceptControl`).
+    public func control<Value: Sendable>(_ change: @Sendable (inout SessionRecord) -> Value) -> Value {
+        let value = change(&record)
+        checkpoint()
+        return value
     }
 
     /// Record the user's prompt as one `User` message, and save it at once, as acpx

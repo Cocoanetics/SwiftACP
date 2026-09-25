@@ -50,6 +50,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     let turnQueue = SessionTurnQueue()
     /// The turn each session runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
+    var tickets: [String: PromptControlTicket] = [:]
     /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
     var owners: [String: SessionOwner] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
@@ -76,6 +78,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once a control over past its deadline begins to wait for what that
     /// deadline puts down.
     var controlOverdue: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a control sent during a prompt is taken on the prompt's ticket,
+    /// before it waits for the prompt to go out.
+    var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -205,21 +210,25 @@ actor ACPXDaemonBackend: ACPXBackend {
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
-        let (_, resumed) = try await withSessionTurn(
-            sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
-            let session = entry.session
-            try await withTimeout(milliseconds: timeout) {
-                try await SessionControlError.wrapping("session/set_mode", context: "for mode \"\(modeId)\"") {
-                    try await session.setMode(modeId)
+        let step = ControlStep<Void, Void>(
+            request: { entry, _, timeout in
+                let session = entry.session
+                try await withTimeout(milliseconds: timeout) {
+                    try await SessionControlError.wrapping("session/set_mode", context: "for mode \"\(modeId)\"") {
+                        try await session.setMode(modeId)
+                    }
                 }
-            }
-            // Only the mode to put back, as acpx's `setDesiredModeId`: the current mode is
-            // what the agent's `current_mode_update` of a turn says.
-            var acpx = record.acpx ?? SessionAcpxState()
-            acpx.desiredModeId = modeId
-            record.acpx = acpx
-        }
+            },
+            apply: { _, record in
+                // Only the mode to put back, as acpx's `setDesiredModeId`: the current mode
+                // is what the agent's `current_mode_update` of a turn says.
+                var acpx = record.acpx ?? SessionAcpxState()
+                acpx.desiredModeId = modeId
+                record.acpx = acpx
+            })
+        let (_, resumed) = try await runControl(
+            sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
         return SessionControlResult(resumed: resumed)
     }
 
@@ -245,23 +254,28 @@ actor ACPXDaemonBackend: ACPXBackend {
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
-        let (options, resumed) = try await withSessionTurn(
+        let step = ControlStep(
+            request: { entry, record, timeout in
+                // acpx's owner control: a value for the model's own option is a model id,
+                // checked and resolved against the session's advertised models.
+                let (connection, id) = (entry.agent.connection, entry.session.id)
+                let models = ModelSupport.advertisedModelState(record.acpx ?? SessionAcpxState())
+                let agentCommand = record.agentCommand
+                return try await withTimeout(milliseconds: timeout) {
+                    try await ModelApplication.setConfigOption(
+                        connection: connection, sessionId: id, configId: configId, value: value, models: models,
+                        agentCommand: agentCommand)
+                }
+            },
+            apply: { (response: SetSessionConfigOptionResponse, record: inout SessionRecord) in
+                var acpx = record.acpx ?? SessionAcpxState()
+                ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
+                record.acpx = acpx
+                return response.configOptions ?? []
+            })
+        let (options, resumed) = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
-            var acpx = record.acpx ?? SessionAcpxState()
-            // acpx's owner control: a value for the model's own option is a model id,
-            // checked and resolved against the session's advertised models.
-            let (connection, id) = (entry.agent.connection, entry.session.id)
-            let (models, agentCommand) = (ModelSupport.advertisedModelState(acpx), record.agentCommand)
-            let response = try await withTimeout(milliseconds: timeout) {
-                try await ModelApplication.setConfigOption(
-                    connection: connection, sessionId: id, configId: configId, value: value, models: models,
-                    agentCommand: agentCommand)
-            }
-            ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
-            record.acpx = acpx
-            return response.configOptions ?? []
-        }
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
         return SessionControlResult(resumed: resumed, configOptions: options)
     }
 
@@ -283,20 +297,25 @@ actor ACPXDaemonBackend: ACPXBackend {
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
-        let (_, resumed) = try await withSessionTurn(
+        let step = ControlStep(
+            request: { entry, record, timeout in
+                let (connection, id) = (entry.agent.connection, entry.session.id)
+                let models = ModelSupport.advertisedModelState(record.acpx ?? SessionAcpxState())
+                let agentCommand = record.agentCommand
+                return try await withTimeout(milliseconds: timeout) {
+                    try await ModelApplication.setModel(
+                        connection: connection, sessionId: id, modelId: modelId, models: models,
+                        agentCommand: agentCommand)
+                }
+            },
+            apply: { (response: SetSessionConfigOptionResponse?, record: inout SessionRecord) in
+                var acpx = record.acpx ?? SessionAcpxState()
+                ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
+                record.acpx = acpx
+            })
+        let (_, resumed) = try await runControl(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
-            var acpx = record.acpx ?? SessionAcpxState()
-            let (connection, id) = (entry.agent.connection, entry.session.id)
-            let (models, agentCommand) = (ModelSupport.advertisedModelState(acpx), record.agentCommand)
-            let response = try await withTimeout(milliseconds: timeout) {
-                try await ModelApplication.setModel(
-                    connection: connection, sessionId: id, modelId: modelId, models: models,
-                    agentCommand: agentCommand)
-            }
-            ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
-            record.acpx = acpx
-        }
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
         return SessionControlResult(resumed: resumed)
     }
 

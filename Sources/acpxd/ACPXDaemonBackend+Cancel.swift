@@ -65,6 +65,9 @@ extension ACPXDaemonBackend {
     /// now on, and one asked before is sent now (acpx's `applyPendingCancel` once the
     /// prompt is active).
     func promptWritten(recordId: String, turn id: UUID, to connection: ACPAgentConnection, sessionId: SessionId) async {
+        // The prompt went out: the controls sent meanwhile run on its agent now, as acpx's
+        // owner publishes them (`onPromptActive`).
+        if turns[recordId]?.id == id { tickets[recordId]?.publish() }
         guard turns[recordId]?.id == id, turns[recordId]?.answered == false else { return }
         turns[recordId]?.prompt = (connection, sessionId)
         guard turns[recordId]?.cancelPending == true else { return }

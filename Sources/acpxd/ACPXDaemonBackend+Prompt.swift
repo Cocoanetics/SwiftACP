@@ -129,6 +129,15 @@ extension ACPXDaemonBackend {
         // The turn's journal records are keyed by its id, as acpx's by its queue request's.
         let persister = TurnPersister(
             record: prompted, eventBuffer: eventBuffer, requestId: control.id.uuidString.lowercased())
+        // A control sent from now on is the turn's, as acpx's owner takes it on the turn's
+        // ticket (`beginPrompt`): it runs on the prompt's agent once the prompt goes out. A
+        // turn that ends before then fails those still waiting.
+        let ticket = PromptControlTicket(persister: persister)
+        tickets[recordId] = ticket
+        defer {
+            ticket.seal()
+            if tickets[recordId] === ticket { tickets[recordId] = nil }
+        }
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
@@ -324,6 +333,9 @@ extension ACPXDaemonBackend {
             let countedBefore = await connection.permissionTotals(for: boundSessionId)
             let outcome = try await promptWithRetries(turn, on: entry, relay: relay, wireFeed: wireFeed)
             let response = outcome.response
+            // The controls the turn took are done before its last save, what they said part of
+            // its exchange (acpx's `seal`, `onPromptFinalizing`).
+            await sealControls(of: recordId)
             await relay.end()
             let fullText = await relay.text()
             // The exchange ends with the prompt's response; the turn's end follows it.
@@ -351,21 +363,9 @@ extension ACPXDaemonBackend {
             // The prompt is over, and its end said all it has to.
             throw unwritten
         } catch {
-            await relay.end()
-            // Everything the agent said before failing still goes out, and is kept, as
-            // acpx shows and records it — then the error itself.
-            _ = await relay.text()
-            let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
-                ? AgentExitedBeforeTheTurn(underlying: error) : error
-            let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
-                && turns[recordId]?.retried != true
-            // How the agent ended, if it did, goes into the record the failure saves — once
-            // it has: an agent whose connection is gone can still be running (its stdout
-            // closed, say), and is ended before its pid would be kept.
-            if ACPAgentConnection.endedTheConnection(error) { await entry.agent.close() }
-            await persister.applyLifecycle(entry.agent.lifecycle)
-            await wireFeed.finish(showingHeld: !retried)
-            throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
+            throw await failedAttempt(
+                error, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
+                wireFeed: wireFeed, recordId: recordId, persister: persister)
         }
     }
 }
@@ -460,32 +460,4 @@ struct TurnPermissions: Sendable {
         handlers = .standard(
             permission: policy, nonInteractivePermissions: unanswerable, terminal: .none, rules: rules)
     }
-}
-
-/// The held agent had exited before any of the turn reached it: its connection was
-/// already closed when the prompt was sent. Nothing was seen by it, so the turn can go
-/// to a fresh launch. Reads as the closed connection it is.
-struct AgentExitedBeforeTheTurn: LocalizedError {
-    let underlying: Error
-    var errorDescription: String? { underlying.localizedDescription }
-}
-
-/// Set once anything is written to the agent. Marked from the transport's writer
-/// task, so lock-protected.
-final class WriteMark: @unchecked Sendable {
-    private let lock = NSLock()
-    private var marked = false
-
-    func mark() {
-        lock.withLock { marked = true }
-    }
-
-    func unmark() {
-        lock.withLock { marked = false }
-    }
-
-    var happened: Bool {
-        lock.withLock { marked }
-    }
-
 }
