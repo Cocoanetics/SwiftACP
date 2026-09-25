@@ -54,7 +54,10 @@ extension DaemonToolsTests {
             #expect(turn.contains("wire:outbound:session/cancel"))
             #expect(turn.last == "failed:TIMEOUT")
             #expect(session.prompts == 1)
-            #expect(await daemon.sessionStatus(sessionId: session.id).live == false)
+            #expect(await daemon.heldConnection(session.id) == nil)
+            // Its owner still holds the session, as acpx's outlives its client's agent.
+            let status = await daemon.sessionStatus(sessionId: session.id)
+            #expect(status.live && status.pid == nil)
             await daemon.releaseAll()
         }
     }
@@ -96,7 +99,7 @@ extension DaemonToolsTests {
                     daemon, session.id, limits: PromptLimits(timeoutMs: 300), client: CallingClient())
             }
             #expect(session.prompts == 0)
-            #expect(await daemon.sessionStatus(sessionId: session.id).live == false)
+            #expect(await daemon.heldConnection(session.id) == nil)
             await daemon.releaseAll()
         }
     }
@@ -262,7 +265,7 @@ extension DaemonToolsTests {
 
     /// A session on `retry-agent.py`, created on a working agent, with `environment` as
     /// `NAME=value ` pairs.
-    private func retrySession(in directory: URL, environment: String = "") async throws -> RetrySession {
+    func retrySession(in directory: URL, environment: String = "") async throws -> RetrySession {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/retry-agent.py")
@@ -280,7 +283,7 @@ extension DaemonToolsTests {
 
     /// Run one turn with `limits` as a calling client's request, answered on `client`.
     @discardableResult
-    private func limitedPrompt(
+    func limitedPrompt(
         _ daemon: ACPXDaemonBackend, _ sessionId: String, limits: PromptLimits, model: String? = nil,
         streamWire: Bool = false, client: CallingClient
     ) async throws -> String {

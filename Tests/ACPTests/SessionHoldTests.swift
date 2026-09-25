@@ -44,10 +44,12 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A session whose agent has exited is not held, though the daemon keeps its entry
-    /// until the next turn: the banner and `status` would say the agent is there.
+    /// A session whose agent has exited on its own is still held: acpx's queue owner
+    /// outlives its client's agent, so the next prompt's banner says `connected` and
+    /// `status` says `running` (npm acpx 0.19.1 on `mock-agent.py` with
+    /// `MOCK_EXIT_AFTER_PROMPTS=1`) — with no agent pid to show.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aSessionWhoseAgentExitedIsNotHeld() async throws {
+    func aSessionWhoseAgentExitedIsStillHeld() async throws {
         let command = "/usr/bin/env MOCK_EXIT_AFTER_PROMPTS=1 " + (try #require(mockCommand()))
         try await withIsolatedStore {
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
@@ -64,7 +66,8 @@ extension DaemonToolsTests {
             let hold = await DaemonClient.sessionHold(on: proxy, sessionId: id)
             await proxy.disconnect()
 
-            #expect(hold == .notHeld)
+            #expect(hold == .held(pid: nil))
+            await backend.releaseAll()
         }
     }
 

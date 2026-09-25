@@ -49,6 +49,11 @@ actor SessionTurnQueue {
         if !acquired { throw CancellationError() }
     }
 
+    /// Whether a turn or control holds the slot for `sessionId`.
+    func isBusy(_ sessionId: String) -> Bool {
+        running.contains(sessionId)
+    }
+
     /// Release the slot for `sessionId`, handing it straight to the next queued
     /// waiter (if any) so ownership passes without a gap another caller could win.
     func release(_ sessionId: String) {

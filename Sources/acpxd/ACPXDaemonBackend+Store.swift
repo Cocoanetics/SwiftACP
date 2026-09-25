@@ -98,6 +98,7 @@ extension ACPXDaemonBackend {
         if !dryRun {
             for record in candidates {
                 // Terminate any live agent before removing its record.
+                forgetOwner(record.acpxRecordId)
                 await evict(record.acpxRecordId)
                 bytesFreed += SessionStore.deleteRecord(
                     record.acpxRecordId, includeHistory: includeHistory)
