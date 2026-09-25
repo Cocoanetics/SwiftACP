@@ -12,12 +12,18 @@ public final class PromptResultCapture: @unchecked Sendable {
 
     public init() {}
 
-    /// Look at a message as it crossed the wire.
-    public func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+    /// Look at a message as it crossed the wire. Returns whether it is the prompt's
+    /// result, arrived: the prompt is answered.
+    @discardableResult
+    public func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) -> Bool {
         guard direction == .inbound, let message = WireJSON(parsing: body), !message.hasMember("method"),
               let result = message["result"], result["stopReason"]?.stringValue != nil
-        else { return }
-        lock.withLock { if captured == nil { captured = result } }
+        else { return false }
+        return lock.withLock {
+            guard captured == nil else { return false }
+            captured = result
+            return true
+        }
     }
 
     /// The prompt's result, once it has arrived.

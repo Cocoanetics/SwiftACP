@@ -28,18 +28,18 @@ extension DaemonToolsTests {
     }
 
     /// The methods of the `session/*` requests `log` holds.
-    private static func requests(_ log: URL) -> [String] {
+    static func requests(_ log: URL) -> [String] {
         let text = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
         return text.split(separator: "\n").compactMap { WireJSON(parsing: Data($0.utf8))?["method"]?.stringValue }
     }
 
     /// How the calling client was told the turn ended.
-    private static func stopReason(_ client: CallingClient) -> String? {
+    static func stopReason(_ client: CallingClient) -> String? {
         client.logs.lazy.compactMap { try? $0.decoded(TurnEndedEvent.self) }.first?.stopReason
     }
 
     /// A fresh directory for a test's files.
-    private static func scratchDirectory() throws -> URL {
+    static func scratchDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("cancel-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory

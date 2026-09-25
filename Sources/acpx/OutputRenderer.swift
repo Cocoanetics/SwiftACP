@@ -50,6 +50,9 @@ final class OutputRenderer: @unchecked Sendable {
 
     // Quiet-mode buffer
     var quietChunks: [String] = []
+    /// Whether the turn's end was rendered: acpx's formatters mark it at the prompt's
+    /// answer, and render what comes after as it comes — but quiet mode none of its text.
+    private var finished = false
 
     // JSON wire-mode state
     private var sanitizer: JSONMessageSanitizer
@@ -151,6 +154,8 @@ final class OutputRenderer: @unchecked Sendable {
     func finish(stopReason: StopReason) {
         lock.lock()
         defer { lock.unlock() }
+        guard !finished else { return }
+        finished = true
         switch options.format {
         case .json:
             // The exchange already ended with the prompt's response.
@@ -259,13 +264,15 @@ final class OutputRenderer: @unchecked Sendable {
     // MARK: Quiet mode
 
     private func renderQuiet(_ update: SessionUpdate) {
-        if case .agentMessageChunk(let block) = update, let text = block.text {
+        if case .agentMessageChunk(let block) = update, let text = block.text, !finished {
             quietChunks.append(text)
         }
     }
 
     private func flushQuiet() {
         let text = quietChunks.joined()
+        // Written once: acpx's `flushBufferedOutput` empties what it wrote.
+        quietChunks = []
         out(text.hasSuffix("\n") ? text : text + "\n")
     }
 

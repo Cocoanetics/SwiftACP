@@ -22,18 +22,32 @@ extension DaemonToolsTests {
         func start() async throws {}
         func run() async throws {}
         func stop() async throws {}
+        private var observer: (@Sendable (JSONValue) -> Void)?
+
         func send(_ data: Data) async throws {
-            lock.withLock { sent.append(data) }
+            let observer = lock.withLock {
+                sent.append(data)
+                return self.observer
+            }
+            if let observer, let log = Self.log(data) { observer(log) }
+        }
+
+        /// Hand each log to `observer` as it is sent.
+        func observe(_ observer: @escaping @Sendable (JSONValue) -> Void) {
+            lock.withLock { self.observer = observer }
         }
 
         var logs: [JSONValue] {
-            lock.withLock { sent }.compactMap { data -> JSONValue? in
-                guard let message = try? JSONDecoder().decode(JSONValue.self, from: data),
-                      case .object(let fields) = message, fields["method"] == .string("notifications/message"),
-                      case .object(let params)? = fields["params"]
-                else { return nil }
-                return params["data"]
-            }
+            lock.withLock { sent }.compactMap(Self.log)
+        }
+
+        /// The log `data` sends, if it is one.
+        private static func log(_ data: Data) -> JSONValue? {
+            guard let message = try? JSONDecoder().decode(JSONValue.self, from: data),
+                  case .object(let fields) = message, fields["method"] == .string("notifications/message"),
+                  case .object(let params)? = fields["params"]
+            else { return nil }
+            return params["data"]
         }
 
         /// What each log is: `update:<text>` for a reply chunk, `wire:<direction>` for

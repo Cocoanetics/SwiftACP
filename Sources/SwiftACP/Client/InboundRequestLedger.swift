@@ -26,7 +26,10 @@ import JSONFoundation
 final class InboundRequestLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var inFlight: [SessionId: Int] = [:]
-    private var idleWaiters: [SessionId: [CheckedContinuation<Void, Never>]] = [:]
+    /// How many requests have arrived for each session, ever — so a caller can tell one
+    /// came and went since it last looked.
+    private var arrivals: [SessionId: Int] = [:]
+    private var idleWaiters: [SessionId: [CheckedContinuation<Bool, Never>]] = [:]
     /// Called when ``waitUntilIdle(_:)`` has to wait — lets a test release a request
     /// it is holding at exactly that point instead of guessing with a sleep.
     private var onWait: (@Sendable (SessionId) -> Void)?
@@ -44,11 +47,19 @@ final class InboundRequestLedger: @unchecked Sendable {
     }
 
     func arrived(_ sessionId: SessionId) {
-        lock.withLock { inFlight[sessionId, default: 0] += 1 }
+        lock.withLock {
+            inFlight[sessionId, default: 0] += 1
+            arrivals[sessionId, default: 0] += 1
+        }
+    }
+
+    /// How many requests have arrived for `sessionId` so far.
+    func arrivalCount(_ sessionId: SessionId) -> Int {
+        lock.withLock { arrivals[sessionId] ?? 0 }
     }
 
     func finished(_ sessionId: SessionId) {
-        let released: [CheckedContinuation<Void, Never>] = lock.withLock {
+        let released: [CheckedContinuation<Bool, Never>] = lock.withLock {
             let remaining = (inFlight[sessionId] ?? 1) - 1
             if remaining > 0 {
                 inFlight[sessionId] = remaining
@@ -57,18 +68,20 @@ final class InboundRequestLedger: @unchecked Sendable {
             inFlight[sessionId] = nil
             return idleWaiters.removeValue(forKey: sessionId) ?? []
         }
-        released.forEach { $0.resume() }
+        released.forEach { $0.resume(returning: true) }
     }
 
-    /// Return once every request that has arrived for `sessionId` has been answered.
-    func waitUntilIdle(_ sessionId: SessionId) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    /// Return once every request that has arrived for `sessionId` has been answered —
+    /// whether any was still open, and so waited for.
+    @discardableResult
+    func waitUntilIdle(_ sessionId: SessionId) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let (idle, hook): (Bool, (@Sendable (SessionId) -> Void)?) = lock.withLock {
                 guard (inFlight[sessionId] ?? 0) > 0 else { return (true, nil) }
                 idleWaiters[sessionId, default: []].append(continuation)
                 return (false, onWait)
             }
-            if idle { continuation.resume() } else { hook?(sessionId) }
+            if idle { continuation.resume(returning: false) } else { hook?(sessionId) }
         }
     }
 }
