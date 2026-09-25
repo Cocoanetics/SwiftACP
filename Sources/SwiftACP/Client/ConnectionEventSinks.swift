@@ -51,7 +51,7 @@ final class EventSinks: @unchecked Sendable {
 }
 
 /// What the connection announces from the peer's wire hook, as the messages it is about
-/// are read: a request of the agent's arriving, and a prompt's answer. The peer hands
+/// are read: a request of the agent's arriving, and a prompt's answer or failure. The peer hands
 /// each notification on before it reads the next message, so every update the agent
 /// sent before either has been handed on by then, and none it sent after has been yet:
 /// each keeps its place among them, as acpx's formatter sees every message in order.
@@ -76,8 +76,9 @@ final class WireOrderedEvents: @unchecked Sendable {
             else { return }
             sinks.yield(.promptAnswered(sessionId, answer))
         case (.inbound, .errorResponse(let failure)):
-            guard let id = failure.id else { return }
-            lock.withLock { _ = sessions.removeValue(forKey: id) }
+            guard let id = failure.id, let sessionId = lock.withLock({ sessions.removeValue(forKey: id) })
+            else { return }
+            sinks.yield(.promptFailed(sessionId, failure.error))
         default:
             break
         }

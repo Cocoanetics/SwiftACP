@@ -178,7 +178,7 @@ struct WriteGateTests {
                     }
                 case .clientOperation(let operation):
                     run.operations.append(operation)
-                case .promptAnswered:
+                case .promptAnswered, .promptFailed:
                     break
                 }
             }
@@ -298,7 +298,7 @@ struct WriteGateTests {
                     }
                 case .inboundRequest(let request):
                     seen.append(request.failure.map { "refused:\($0)" } ?? "request:\(request.method)")
-                case .clientOperation, .promptAnswered:
+                case .clientOperation, .promptAnswered, .promptFailed:
                     break
                 }
             }

@@ -177,7 +177,7 @@ struct PermissionRefusalTests {
                     if case .agentMessageChunk(let block) = note.update, let chunk = block.text { text += chunk }
                 case .clientOperation(let operation):
                     operations.append(operation)
-                case .inboundRequest, .promptAnswered:
+                case .inboundRequest, .promptAnswered, .promptFailed:
                     break
                 }
             }

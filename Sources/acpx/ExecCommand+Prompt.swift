@@ -66,27 +66,31 @@ extension ExecCommand {
                 let permissions = await connection.permissionTotals(for: session.id).counted(since: countedBefore)
                 return PromptRun(response: response, permissions: permissions)
             } catch {
-                // What the attempt did comes out before its failure — at a deadline too,
-                // though the prompt is still out. An update read before the deadline can
-                // still be on its way to the subscriptions, so what the connection has read
-                // is handed on first. (An agent's error is read only once the updates before
-                // it are handed on: the peer awaits each.) What comes after is the pause's,
-                // and is not shown unless there is one.
+                // What the attempt did comes out before its failure — the agent's error where
+                // it came in the wire (``PhaseEvents``) — and at a deadline too, though the
+                // prompt is still out. An update read before the deadline can still be on its
+                // way to the subscriptions, so what the connection has read is handed on
+                // first. What comes after is the pause's.
                 await connection.waitForSessionUpdatesHandled(sessionId: session.id)
                 let pause = await events.handOver()
                 await events.finish()
                 let stats = await connection.permissionStats(for: session.id)
                 let agentError = error as? JSONRPCErrorBody
-                if let agentError { showAgentError(RunFailure(agentError), renderer: renderer) }
+                // The run fails here: what the agent sent since is shown too, as acpx's
+                // formatter shows it until the client closes.
+                func failing(_ failure: Error) async -> Error {
+                    await connection.waitForSessionUpdatesHandled(sessionId: session.id)
+                    pause.render(with: renderer)
+                    await pause.finish()
+                    return failure
+                }
                 // acpx's client fails a prompt that needed a question nobody could be asked
                 // with that, in place of what else failed it — and that is not retried.
                 if stats.promptUnavailable, !(error is TimeoutError) {
-                    await pause.finish()
-                    throw PromptUnavailable(agentError: agentError)
+                    throw await failing(PromptUnavailable(agentError: agentError))
                 }
                 guard attempt < maxRetries, !sideEffects.any, PromptRetry.isRetryable(error) else {
-                    await pause.finish()
-                    throw error
+                    throw await failing(error)
                 }
                 let delay = PromptRetry.delayMilliseconds(afterAttempt: attempt)
                 if !policy.quiet {
@@ -122,8 +126,9 @@ extension ExecCommand {
 }
 
 /// The events of one phase of the prompt — an attempt, or the pause before the next —
-/// from a subscription of its own: the session's updates, the agent's requests and the
-/// client's diagnostics, in wire order, rendered once told to (``render(with:)``). A phase
+/// from a subscription of its own: the session's updates, the agent's requests, the
+/// client's diagnostics and the agent's error failing the prompt, in wire order, rendered
+/// once told to (``render(with:)``). A phase
 /// hands over to the next at one point in the events (``handOver()``), so none falls
 /// between the two. Unlike ``ACPSession/run(_:meta:onUpdate:onClientOperation:onInboundRequest:)``,
 /// which hands them on until the prompt is over, it ends when told (``finish()``) — so a
@@ -166,6 +171,8 @@ private final class PhaseEvents {
                     renderer.clientOperation(operation)
                 case .inboundRequest(let request) where request.sessionId == nil || request.sessionId == sessionId:
                     renderer.inboundRequest(request)
+                case .promptFailed(let failed, let error) where failed == sessionId:
+                    ExecCommand.showAgentError(ExecCommand.RunFailure(error), renderer: renderer)
                 default:
                     break
                 }

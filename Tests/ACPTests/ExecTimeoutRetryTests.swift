@@ -213,6 +213,21 @@ struct ExecTimeoutRetryTests {
         #expect(quiet.err == "[acpx] error: PERMISSION_PROMPT_UNAVAILABLE \(unavailable)\n")
     }
 
+    /// An update the agent sends right after failing its prompt is shown after the error,
+    /// where it came — and, read before the retry is decided, calls it off, as acpx's catch
+    /// has seen it by then (whether the notice went out first depends on that timing, in
+    /// acpx too).
+    @Test(.enabled(if: mockPythonAvailable))
+    func anUpdateRightAfterTheFailureIsShownAfterIt() async throws {
+        let text = try await exec("fail-then-update-at-once", ["--prompt-retries", "1"])
+        #expect(text.code == 1 && text.attempts == 1)
+        #expect(text.out == "[client] initialize (running)\n\n[client] session/new (running)\n\n"
+            + "[error] RUNTIME: model overloaded\nlate \n", "\(text.out)")
+        let quiet = try await exec("fail-then-update-at-once", ["--prompt-retries", "1"], format: "quiet")
+        #expect(quiet.out == "late \n")
+        #expect(quiet.err == "[acpx] error: RUNTIME model overloaded\n")
+    }
+
     /// Quiet output shows what the agent said before its prompt failed, then the error.
     @Test(.enabled(if: mockPythonAvailable))
     func quietOutputShowsWhatCameBeforeTheFailure() async throws {
