@@ -70,6 +70,12 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once connecting has moved the record to what it connected, before
     /// the agent is held.
     var reconnected: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once an owned control's deadline has passed, before what it connects
+    /// or runs on is put down.
+    var deadlinePassed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a control over past its deadline begins to wait for what that
+    /// deadline puts down.
+    var controlOverdue: (@Sendable (_ recordId: String) async -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 

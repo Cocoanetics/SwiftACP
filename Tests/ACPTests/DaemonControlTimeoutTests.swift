@@ -10,11 +10,13 @@ import Testing
 /// by one deadline, at which its agent is let go. Either way, its wait for the session is
 /// bounded too, and it fails as `TIMEOUT`.
 extension DaemonToolsTests {
-    /// A retry-agent session whose agent answers `session/set_mode` only after `delay`.
-    private func slowModeSession(in directory: URL, delay: Int) async throws -> RetrySession {
+    /// A retry-agent session whose agent answers `session/set_mode` only after `delay`, or
+    /// once there is a file at `gate`.
+    private func slowModeSession(in directory: URL, delay: Int, gate: URL? = nil) async throws -> RetrySession {
         let sent = directory.appendingPathComponent("mode-sent")
         let session = try await retrySession(
-            in: directory, environment: "RETRY_AGENT_DELAY_MS=\(delay) RETRY_AGENT_MODE_SENT='\(sent.path)' ")
+            in: directory, environment: "RETRY_AGENT_DELAY_MS=\(delay) RETRY_AGENT_MODE_SENT='\(sent.path)' "
+                + (gate.map { "RETRY_AGENT_MODE_GATE='\($0.path)' " } ?? ""))
         try session.set("slow-set-mode")
         return session
     }
@@ -115,6 +117,39 @@ extension DaemonToolsTests {
         #expect(!deadline.hasPassed)
     }
 
+    /// A control answered once its deadline has passed, before what the deadline puts down
+    /// is down, ends only once that is down, as acpx's control waits for its client's close
+    /// (`await retirement`): its agent no longer held, and its pid not saved. Past that, the
+    /// session's next turn would find the agent being put down, or have its own put down.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aControlAnsweredAsItsDeadlinePassesEndsOnceItsAgentIsDown() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let answer = directory.appendingPathComponent("answer")
+        defer { FileManager.default.createFile(atPath: answer.path, contents: nil) }
+        try await withIsolatedStore {
+            let session = try await slowModeSession(in: directory, delay: 0, gate: answer)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            let (overdue, noteOverdue) = AsyncStream<Void>.makeStream()
+            // As the deadline passes the agent answers, and the agent is put down only once
+            // the control waits for that — or, should it not wait, once it has ended.
+            await daemon.setDeadlineHooks(passed: { _ in
+                FileManager.default.createFile(atPath: answer.path, contents: nil)
+                for await _ in overdue { break }
+            }, overdue: { _ in noteOverdue.yield() })
+            await #expect(throws: TimeoutError(milliseconds: 300)) {
+                _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300)
+            }
+            let held = await daemon.heldConnection(session.id)
+            let pid = try #require(SessionStore.loadRecord(session.id)).pid
+            noteOverdue.finish()
+            #expect(held == nil)
+            #expect(pid == nil)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A control whose answer comes only once its deadline has passed is too late, as
     /// acpx's deadline settles first: its settling says so, and the control times out.
     @Test(.timeLimit(.minutes(1)))
@@ -125,5 +160,15 @@ extension DaemonToolsTests {
         _ = await putDown.next()
         #expect(deadline.hasPassed)
         #expect(!deadline.settle())
+    }
+}
+
+extension ACPXDaemonBackend {
+    func setDeadlineHooks(
+        passed: (@Sendable (_ recordId: String) async -> Void)?,
+        overdue: (@Sendable (_ recordId: String) async -> Void)?
+    ) {
+        deadlinePassed = passed
+        controlOverdue = overdue
     }
 }

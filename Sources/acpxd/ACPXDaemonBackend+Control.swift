@@ -58,7 +58,7 @@ extension ACPXDaemonBackend {
         let direct = owners[recordId] == nil
         let deadline = direct ? nil : timeout.map { milliseconds in
             ControlDeadline(after: milliseconds - Self.milliseconds(since: arrived)) { [self] in
-                await putDown(recordId)
+                await deadlinePasses(recordId)
             }
         }
         defer { deadline?.settle() }
@@ -93,6 +93,7 @@ extension ACPXDaemonBackend {
                 mcpServers: current.acpx?.mcpServers, control: true, settings: settings,
                 replacing: replacing, onRecordChange: { changes.add($0) })
         } catch {
+            await settle(deadline, of: recordId)
             // Connecting can fail after it moved the record — the daemon began stopping
             // before the agent was held — and what it connected is saved all the same, as
             // acpx saves the record its control connected on the way out.
@@ -117,7 +118,7 @@ extension ACPXDaemonBackend {
             // settles first (`deadline.wait`): the control is timed out, and its agent put down.
             if deadline?.settle() == false { throw TimeoutError(milliseconds: 0) }
         } catch {
-            deadline?.settle()
+            await settle(deadline, of: recordId)
             // The agent may have gone meanwhile. How it is doing is saved whatever the
             // control came to, as acpx's controls save it on their way out — but nothing
             // of the control that failed.
@@ -143,6 +144,22 @@ extension ACPXDaemonBackend {
             log.warning("session record write failed after control op: \(error)")
         }
         return (result, resumed)
+    }
+
+    /// An owned control's deadline passed: what the control connects or runs on is put down.
+    private func deadlinePasses(_ recordId: String) async {
+        await deadlinePassed?(recordId)
+        await putDown(recordId)
+    }
+
+    /// The control is over. Should its deadline have passed, what the deadline puts down
+    /// is down before the control goes on, as acpx's control waits for its client's close
+    /// (`await retirement`) before it saves the record and ends: the agent's pid is gone
+    /// from what is saved, and nothing is put down once the session is another's turn.
+    private func settle(_ deadline: ControlDeadline?, of recordId: String) async {
+        guard let deadline, !deadline.settle() else { return }
+        await controlOverdue?(recordId)
+        await deadline.finished()
     }
 
     /// Take the session's slot within `timeout`, as acpx bounds a control's wait for the
@@ -195,15 +212,21 @@ final class ControlDeadline: @unchecked Sendable {
     var hasPassed: Bool { lock.withLock { passed } }
 
     /// The control is over — acpx's `responseSettled` — and the deadline no longer
-    /// passes. Returns whether it was over in time: `false` once the deadline has passed.
+    /// passes. Returns whether it was over in time: `false` once the deadline has passed,
+    /// when what it puts down is left to be done (``finished()``).
     @discardableResult
     func settle() -> Bool {
         let (watch, inTime): (Task<Void, Never>?, Bool) = lock.withLock {
             settled = true
             return (self.watch, !passed)
         }
-        watch?.cancel()
+        if inTime { watch?.cancel() }
         return inTime
+    }
+
+    /// Wait until what the deadline passing puts down is down: at once when it did not pass.
+    func finished() async {
+        await lock.withLock { watch }?.value
     }
 
     private func pass() -> Bool {
