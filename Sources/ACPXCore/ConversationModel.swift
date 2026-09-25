@@ -69,14 +69,19 @@ public enum ConversationModel {
         }
     }
 
-    /// Apply one streamed `session/update` to the conversation.
+    /// Apply one streamed `session/update` to the conversation. Returns whether it was
+    /// applied: a `usage_update` acpx's SDK drops (``SwiftACP/UsageUpdate/reachesACPX``)
+    /// never reaches acpx's handler, so it leaves the record as it was, not even stamped.
+    @discardableResult
     public static func recordSessionUpdate(
         into record: inout SessionRecord, notification: SessionNotification,
         timestamp: String = nowISO()
-    ) {
+    ) -> Bool {
+        if case .usageUpdate(let usage) = notification.update, !usage.reachesACPX { return false }
         applySessionUpdate(into: &record, update: notification.update)
         record.updatedAt = timestamp
         trimForRuntime(&record)
+        return true
     }
 
     /// Record the token breakdown an agent reports on the *prompt response* into
@@ -221,19 +226,12 @@ public enum ConversationModel {
     /// The token breakdown under `_meta.usage`, accepting both snake_case and
     /// camelCase keys (as acpx's `numberField` does). Returns nil when the agent
     /// sent no breakdown (e.g. Codex, which sends only `used` / `size`).
+    ///
+    /// acpx's `usageToTokenUsage` falls back to the update itself, but its SDK has stripped
+    /// every key of it but `used`, `size`, `cost` and `_meta` by then, so counts reported
+    /// there are never read (``SwiftACP/UsageUpdate/acpxTokenUsage``).
     private static func tokenUsage(from update: UsageUpdate) -> SessionTokenUsage? {
-        // `_meta.usage` when the adapter nests it there, else the update itself — acpx's
-        // `usageToTokenUsage` (`asRecord(usageMeta) ?? updateRecord`), so an adapter that
-        // reports the breakdown at the top level is captured too. A bare `used`/`size`
-        // update still yields nothing: none of those keys is a token field.
-        let source: [String: JSONValue]
-        if case .object(let meta)? = update.meta, case .object(let nested)? = meta["usage"] {
-            source = nested
-        } else if case .object(let body)? = update.raw {
-            source = body
-        } else {
-            return nil
-        }
+        guard let source = update.acpxTokenUsage else { return nil }
         var usage = SessionTokenUsage()
         usage.inputTokens = number(source, ["input_tokens", "inputTokens"])
         usage.outputTokens = number(source, ["output_tokens", "outputTokens"])
@@ -250,9 +248,14 @@ public enum ConversationModel {
         return fields.contains { $0 != nil } ? usage : nil
     }
 
+    /// acpx's `usageCost`, on the cost its SDK passes on: the amount if it is finite and not
+    /// negative, the currency if it is not blank, and no cost when neither is.
     private static func usageCost(from update: UsageUpdate) -> SessionUsageCost? {
-        guard let cost = update.cost, cost.amount != nil || cost.currency != nil else { return nil }
-        return SessionUsageCost(amount: cost.amount, currency: cost.currency)
+        guard let (amount, currency) = update.acpxCost else { return nil }
+        let cost = SessionUsageCost(
+            amount: amount.isFinite && amount >= 0 ? amount : nil,
+            currency: currency.javaScriptTrimmed.isEmpty ? nil : currency)
+        return cost.amount != nil || cost.currency != nil ? cost : nil
     }
 
     /// First numeric value among `keys` in `object`.
@@ -264,6 +267,7 @@ public enum ConversationModel {
             let candidate: Double?
             switch object[key] {
             case .integer(let value): candidate = Double(value)
+            case .unsignedInteger(let value): candidate = Double(value)
             case .double(let value): candidate = value
             default: candidate = nil
             }

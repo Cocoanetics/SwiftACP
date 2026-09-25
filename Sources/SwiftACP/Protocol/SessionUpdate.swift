@@ -118,10 +118,9 @@ public struct UsageUpdate: Codable, Sendable {
     public var cost: UsageCost?
     /// `_meta`, which may carry a `usage` token breakdown.
     public var meta: JSONValue?
-    /// The update exactly as received. Some adapters report the token breakdown on the
-    /// update itself rather than under `_meta.usage`, and the modelled fields above
-    /// would drop it — acpx reads `_meta.usage` *or* the update record
-    /// (`usageToTokenUsage`), so the raw object is kept for ``ConversationModel``.
+    /// The update exactly as received, the modelled fields above being read leniently: a
+    /// field of another type is left out of them rather than failing the update. What an
+    /// ACP client makes of such an update is its own to decide from this.
     public var raw: JSONValue?
 
     /// A cost amount plus its currency code.
@@ -147,10 +146,10 @@ public struct UsageUpdate: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        used = try container.decodeIfPresent(Int.self, forKey: .used)
-        size = try container.decodeIfPresent(Int.self, forKey: .size)
-        cost = try container.decodeIfPresent(UsageCost.self, forKey: .cost)
-        meta = try container.decodeIfPresent(JSONValue.self, forKey: .meta)
+        used = try? container.decodeIfPresent(Int.self, forKey: .used)
+        size = try? container.decodeIfPresent(Int.self, forKey: .size)
+        cost = try? container.decodeIfPresent(UsageCost.self, forKey: .cost)
+        meta = try? container.decodeIfPresent(JSONValue.self, forKey: .meta)
         raw = try? JSONValue(from: decoder)
     }
 

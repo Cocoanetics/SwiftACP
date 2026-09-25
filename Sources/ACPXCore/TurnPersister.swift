@@ -124,9 +124,10 @@ public actor TurnPersister {
 
     /// Fold one streamed `session/update` into the conversation, then schedule a save.
     public func apply(_ update: SessionUpdate) {
-        ConversationModel.recordSessionUpdate(
+        guard ConversationModel.recordSessionUpdate(
             into: &record,
             notification: SessionNotification(sessionId: record.acpSessionId, update: update))
+        else { return }
         request()
     }
 
