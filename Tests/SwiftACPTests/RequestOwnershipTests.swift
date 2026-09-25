@@ -45,6 +45,8 @@ struct RequestOwnershipTests {
         var onPrompt: @Sendable (JSONRPCID) throws -> [JSONRPCMessage]
         var onAnswer: @Sendable (JSONRPCID, JSONRPCMessage, JSONRPCID) throws -> [JSONRPCMessage] = { _, _, _ in [] }
         var onCancel: @Sendable (JSONRPCID) throws -> [JSONRPCMessage] = { _ in [] }
+        /// Given `session/close`'s id, what to send, its answer included.
+        var onClose: @Sendable (JSONRPCID) throws -> [JSONRPCMessage] = { [.response(id: $0, result: .object([:]))] }
     }
 
     /// Plays the agent on `agent`: answers the handshake and a new session (`s`), and
@@ -63,6 +65,8 @@ struct RequestOwnershipTests {
                 case "session/prompt":
                     prompt = request.id
                     for next in try script.onPrompt(request.id) { try agent.send(next) }
+                case "session/close":
+                    for next in try script.onClose(request.id) { try agent.send(next) }
                 default: try agent.send(.response(id: request.id, result: .object([:])))
                 }
             case .notification(let note) where note.method == "session/cancel":
