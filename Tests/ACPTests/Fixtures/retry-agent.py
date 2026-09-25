@@ -25,12 +25,15 @@
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
 
+`slow-set-mode`: answers `session/set_mode` only after `RETRY_AGENT_DELAY_MS`, having
+first written a byte to the FIFO `RETRY_AGENT_MODE_SENT` names.
+
 `RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
 mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
 Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
 writes its pid to `RETRY_AGENT_PID` on start. `RETRY_AGENT_READY` names a FIFO it
 writes a byte to as each prompt arrives, before doing anything with it — and, in
-`hang-new`, as `session/new` does.
+`hang-init` and `hang-new`, as `initialize` or `session/new` does.
 """
 import json
 import os
@@ -155,6 +158,7 @@ for line in sys.stdin:
     method, req_id, params = message.get("method"), message.get("id"), message.get("params", {})
     if method == "initialize":
         if MODE == "hang-init":
+            signal_ready()
             time.sleep(60)
         send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": {}}})
     elif method == "session/new":
@@ -165,6 +169,11 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "retry-session", "configOptions": OPTIONS}})
         if MODE == "die-after-new":
             os._exit(3)
+    elif method == "session/set_mode" and MODE == "slow-set-mode":
+        with open(os.environ["RETRY_AGENT_MODE_SENT"], "w") as sent:
+            sent.write("x")
+        time.sleep(int(os.environ.get("RETRY_AGENT_DELAY_MS", "400")) / 1000)
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/set_config_option":
         if MODE == "hang-%s" % params.get("configId"):
             time.sleep(60)
