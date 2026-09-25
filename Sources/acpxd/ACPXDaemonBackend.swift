@@ -36,6 +36,9 @@ actor ACPXDaemonBackend: ACPXBackend {
 
     /// Live sessions held open between prompts, keyed by acpx record id.
     var live: [String: Live] = [:]
+    /// Agents being connected, until held, by record: what a close past its grace puts
+    /// down (``ConnectingAgent``).
+    var connecting: [String: ConnectingAgent] = [:]
     /// Set once the daemon lets its agents go for good (``releaseAll()``): from then on
     /// no agent is started or held.
     var stopping = false
@@ -64,6 +67,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once a session's owner has stopped, its agent closed and its record
     /// written.
     var ownerStopped: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once connecting has moved the record to what it connected, before
+    /// the agent is held.
+    var reconnected: (@Sendable (_ recordId: String) async -> Void)?
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -183,6 +189,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// can answer here, so `nonInteractivePermissions` decides — acpx's direct controls
     /// connect with `approve-reads` and the caller's non-interactive policy. Terminal
     /// output is capped by the caller's `terminalOutputCeiling`, as a turn's is.
+    ///
+    /// A session a queue owner holds (``SessionOwner``) has the control on the owner's
+    /// agent, which stays. One no owner holds has it as acpx runs a control then —
+    /// directly (`withConnectedSession`): its agent connected for the control, and closed
+    /// once it is done, however it went.
     private func withSessionTurn<T: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
         terminalOutputCeiling: Int?,
@@ -201,13 +212,37 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let current = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
-        let (entry, resumed) = try await connect(
-            recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-            mcpServers: current.acpx?.mcpServers, control: true,
-            settings: CallerSettings(handlers: permissions.handlers, terminalOutputCeiling: ceiling),
-            replacing: replacing)
-        // Read after connecting: a reconnect may have moved the record to a new session.
-        var record = findRecord(recordId) ?? current
+        let direct = owners[recordId] == nil
+        // What connecting changes — a reconnect may move the record to a new session — goes
+        // into the record the control goes on with, as acpx's control goes on with the
+        // record it connected: the block a reconnect built anew keeps the places it holds
+        // for members still unset, which reading it back would lose.
+        let changes = RecordChanges()
+        let entry: Live, resumed: Bool
+        do {
+            (entry, resumed) = try await connect(
+                recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
+                mcpServers: current.acpx?.mcpServers, control: true,
+                settings: CallerSettings(handlers: permissions.handlers, terminalOutputCeiling: ceiling),
+                replacing: replacing, onRecordChange: { changes.add($0) })
+        } catch {
+            // Connecting can fail after it moved the record — the daemon began stopping
+            // before the agent was held — and what it connected is saved all the same, as
+            // acpx saves the record its control connected on the way out.
+            if !changes.isEmpty {
+                var moved = current
+                changes.apply(to: &moved)
+                do {
+                    try SessionStore.writeRecord(moved)
+                } catch let writeError {
+                    log.warning("session record write failed after connecting for a control op: \(writeError)")
+                }
+            }
+            throw error
+        }
+        var connected = current
+        changes.apply(to: &connected)
+        var record = connected
         let result: T
         do {
             result = try await body(entry, &record)
@@ -215,18 +250,18 @@ actor ACPXDaemonBackend: ACPXBackend {
             // The agent may have gone meanwhile. How it is doing is saved whatever the
             // control came to, as acpx's controls save it on their way out — but nothing
             // of the control that failed.
-            var unchanged = findRecord(recordId) ?? current
             // An agent whose connection is gone is ended first, as a turn's is: it can be
             // running still, and its pid would be kept.
-            if ACPAgentConnection.endedTheConnection(error) { await entry.agent.close() }
-            unchanged.applyLifecycle(entry.agent.lifecycle)
+            if direct || ACPAgentConnection.endedTheConnection(error) { await letGo(entry, of: recordId) }
+            connected.applyLifecycle(entry.agent.lifecycle)
             do {
-                try SessionStore.writeRecord(unchanged)
+                try SessionStore.writeRecord(connected)
             } catch let writeError {
                 log.warning("session record write failed after a failed control op: \(writeError)")
             }
             throw error
         }
+        if direct { await letGo(entry, of: recordId) }
         record.applyLifecycle(entry.agent.lifecycle)
         record.lastUsedAt = nowISO()
         do {
@@ -237,6 +272,12 @@ actor ACPXDaemonBackend: ACPXBackend {
             log.warning("session record write failed after control op: \(error)")
         }
         return (result, resumed)
+    }
+
+    /// Close `entry`'s agent, and hold it no longer.
+    private func letGo(_ entry: Live, of recordId: String) async {
+        if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
+        await entry.agent.close()
     }
 
     /// A call's cap on terminal output: the caller's — bytes, `0` for none — else the
@@ -337,27 +378,6 @@ actor ACPXDaemonBackend: ACPXBackend {
             record.acpx = acpx
         }
         return SessionControlResult(resumed: resumed)
-    }
-
-    /// Close a session: terminate its live agent (if held) and mark the record
-    /// closed — mirrors the CLI's `sessions close`.
-    ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
-    /// - Returns: `false` if no such session exists.
-    func closeSession(sessionId: String) async throws -> Bool {
-        guard let initial = findRecord(sessionId) else { return false }
-        forgetOwner(initial.acpxRecordId)
-        await evict(initial.acpxRecordId)
-        // Re-read after the await: closing the agent suspends this actor, so another
-        // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
-        // here to unblock) may have persisted changes meanwhile. Writing the
-        // pre-suspension snapshot would silently revert them.
-        var record = findRecord(initial.acpxRecordId) ?? initial
-        record.pid = nil
-        record.closed = true
-        record.closedAt = nowISO()
-        try SessionStore.writeRecord(record)
-        return true
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
