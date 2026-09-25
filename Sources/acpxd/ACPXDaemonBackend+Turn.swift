@@ -158,6 +158,27 @@ extension ACPXDaemonBackend {
                     usage: result.usage, cost: result.cost, unanswered: unanswered))))
     }
 
+    /// Start the turn's journal before connecting, as acpx's prompt does. A journal it
+    /// cannot write lets the session's agent go, as acpx retires its client then.
+    func beginTurn(on persister: TurnPersister, recordId: String) async throws {
+        do {
+            try await persister.beginTurn()
+        } catch let error as SessionJournalWriteError {
+            await evict(recordId)
+            throw error
+        }
+    }
+
+    /// An answered turn's result as its journal records it: the stop reason and `_meta` of
+    /// the answer as it crossed the wire (acpx's `settledWatchResult`). A turn cancelled
+    /// with no answer — before its prompt went out, or between attempts — is cancelled.
+    static func journalResult(of response: PromptResponse, answer: PromptResultCapture) -> SessionJournal.TurnResult {
+        guard let result = answer.result, let stopReason = result["stopReason"]?.stringValue else {
+            return .settled(stopReason: response.stopReason.rawValue, meta: nil)
+        }
+        return .settled(stopReason: stopReason, meta: result.hasMember("_meta") ? result["_meta"] : nil)
+    }
+
     /// What tells the calling client the prompt was answered: in order with the updates
     /// before it — acpx's formatters mark the turn done there — and before what the agent
     /// sends after it. The turn is marked answered first (`markAnswered`), so a cancel

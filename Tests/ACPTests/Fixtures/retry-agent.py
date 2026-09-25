@@ -21,6 +21,7 @@
 - `stall-prompt`: answers a prompt only once it is cancelled, with `cancelled`;
   `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
   after `RETRY_AGENT_DELAY_MS` (400 by default).
+- `meta-answer`: answers with a `_meta` of `{"z": 1, "a": "\u00e9"}`.
 
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
@@ -148,6 +149,9 @@ def prompt(req_id, session_id):
                                            "content": "x"})
             return
     update(session_id, "hello")
+    if MODE == "meta-answer":
+        meta = {"z": 1, "a": "\u00e9"}
+        return send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn", "_meta": meta}})
     send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
 
 

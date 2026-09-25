@@ -132,7 +132,7 @@ public enum SessionArchive {
 
     /// fs-safe's `statRegularFile`: whether a segment is there, a regular file, or not
     /// (`ENOENT`, `ENOTDIR`). Anything else at its path fails.
-    private static func isPresentSegment(_ path: String) throws -> Bool {
+    static func isPresentSegment(_ path: String) throws -> Bool {
         var status = stat()
         guard lstat(path, &status) == 0 else {
             let code = errno
