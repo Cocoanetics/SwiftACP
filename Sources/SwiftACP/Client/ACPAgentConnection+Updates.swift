@@ -95,6 +95,12 @@ extension ACPAgentConnection {
         replaySuppressed[sessionId] = count > 1 ? count - 1 : nil
     }
 
+    /// How many requests `sessionId`'s agent has made of this client so far: compared
+    /// across a wait, whether one came — answered or not — meanwhile.
+    public func requestsArrived(sessionId: SessionId) -> Int {
+        inboundRequests.arrivalCount(sessionId)
+    }
+
     /// Wait until every request `sessionId`'s agent has made of this client is answered —
     /// one it sends after a turn's answer, while the turn waits for its updates to go
     /// quiet, as much as one sent before. Returns whether any was still open.

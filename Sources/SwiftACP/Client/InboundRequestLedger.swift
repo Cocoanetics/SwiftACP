@@ -26,6 +26,9 @@ import JSONFoundation
 final class InboundRequestLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var inFlight: [SessionId: Int] = [:]
+    /// How many requests have arrived for each session, ever — so a caller can tell one
+    /// came and went since it last looked.
+    private var arrivals: [SessionId: Int] = [:]
     private var idleWaiters: [SessionId: [CheckedContinuation<Bool, Never>]] = [:]
     /// Called when ``waitUntilIdle(_:)`` has to wait — lets a test release a request
     /// it is holding at exactly that point instead of guessing with a sleep.
@@ -44,7 +47,15 @@ final class InboundRequestLedger: @unchecked Sendable {
     }
 
     func arrived(_ sessionId: SessionId) {
-        lock.withLock { inFlight[sessionId, default: 0] += 1 }
+        lock.withLock {
+            inFlight[sessionId, default: 0] += 1
+            arrivals[sessionId, default: 0] += 1
+        }
+    }
+
+    /// How many requests have arrived for `sessionId` so far.
+    func arrivalCount(_ sessionId: SessionId) -> Int {
+        lock.withLock { arrivals[sessionId] ?? 0 }
     }
 
     func finished(_ sessionId: SessionId) {

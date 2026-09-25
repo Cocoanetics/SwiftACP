@@ -158,6 +158,55 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A request the agent makes once the turn's updates have gone quiet, and that is
+    /// answered before the turn looks for requests, still keeps the turn going: the agent
+    /// has not had the answer yet, and what it says once it has is the turn's.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aRequestAnsweredBeforeTheTurnLooksStillKeepsIt() async throws {
+        let directory = try Self.scratchDirectory()
+        let (log, gate) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("gate"))
+        defer {
+            Self.create(gate)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let command = try #require(mockCommand())
+        let mock = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' "
+            + "MOCK_REACT_AFTER_GATE='\(gate.path)' \(command)"
+        try await withIsolatedStore {
+            try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 100, timeoutMilliseconds: 5000)) {
+                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+                let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
+                let client = CallingClient()
+                let (asked, ask) = AsyncStream<Void>.makeStream()
+                client.observe { log in
+                    if let request = try? log.decoded(InboundRequest.self),
+                       request.method == "session/request_permission", request.failure == nil { ask.yield() }
+                }
+                let once = OnceFlag()
+                // Once the updates first go quiet: the agent asks, and the turn looks only
+                // once the question is answered — before the answer can reach the agent.
+                await daemon.setAfterUpdateDrain { recordId in
+                    guard once.claim() else { return }
+                    Self.create(gate)
+                    for await _ in asked { break }
+                    if let (connection, sessionId) = await daemon.agentConnection(for: recordId) {
+                        await connection.waitForRequestsAnswered(sessionId: sessionId)
+                    }
+                }
+
+                try await prompt(daemon, id, text: "hi", client: client)
+
+                let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
+                let reaction = client.logs.firstIndex { log in
+                    guard let note = try? log.decoded(SessionNotification.self),
+                          case .agentMessageChunk(let block) = note.update else { return false }
+                    return block.text == "reaction"
+                }
+                #expect(try #require(reaction) < #require(ended))
+            }
+        }
+    }
+
     /// Whether `stream` yields within `limit`.
     private static func first(of stream: AsyncStream<Void>, within limit: Duration) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
@@ -207,6 +256,30 @@ extension DaemonToolsTests {
             #expect(ended.permissions?.requested == 1)
             #expect(ended.permissions?.approved == 1)
         }
+    }
+}
+
+/// True the first time it is claimed, false after.
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            defer { claimed = true }
+            return !claimed
+        }
+    }
+}
+
+extension ACPXDaemonBackend {
+    func setAfterUpdateDrain(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
+        afterUpdateDrain = hook
+    }
+
+    /// The connection and ACP session of the agent this daemon holds for `recordId`.
+    func agentConnection(for recordId: String) -> (ACPAgentConnection, SessionId)? {
+        live[recordId].map { ($0.agent.connection, $0.session.id) }
     }
 }
 

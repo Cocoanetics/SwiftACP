@@ -73,6 +73,10 @@ ASK_AFTER_ANSWER = os.environ.get("MOCK_ASK_AFTER_ANSWER")
 # after — its exit asked for while the client waits for the turn's updates to go quiet.
 HOLD_AFTER_ANSWER = bool(os.environ.get("MOCK_HOLD_TERMINAL_AFTER_ANSWER"))
 
+# A path. The prompt is answered at once; then the agent waits for the path to exist,
+# asks a permission question, and once answered says "reaction".
+REACT_AFTER_GATE = os.environ.get("MOCK_REACT_AFTER_GATE")
+
 
 def wait_for(path):
     while not os.path.exists(path):
@@ -204,6 +208,7 @@ def main():
     prompts_answered = 0
     held_prompt = None
     terminal_prompt, terminal_session = None, None
+    react_session = None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -236,6 +241,10 @@ def main():
             continue
         if method is None and req_id == "mock-ask":
             open(HOLD_TERMINAL, "w", encoding="utf-8").close()
+            continue
+        if method is None and req_id == "mock-react-ask":
+            session_update(react_session, {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "reaction"}})
             continue
         if method is None and req_id == "mock-terminal-wait" and HOLD_AFTER_ANSWER:
             # What an agent says once its command is done, after the turn's answer.
@@ -306,6 +315,15 @@ def main():
             prompts_answered += 1
             if HOLD_UNTIL_CANCEL:
                 held_prompt = req_id
+                continue
+            if REACT_AFTER_GATE:
+                react_session = message.get("params", {}).get("sessionId")
+                respond(req_id, {"stopReason": "end_turn"})
+                wait_for(REACT_AFTER_GATE)
+                send({"jsonrpc": "2.0", "id": "mock-react-ask", "method": "session/request_permission", "params": {
+                    "sessionId": react_session,
+                    "toolCall": {"toolCallId": "call-react", "title": "a question between drains"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]}})
                 continue
             if HOLD_TERMINAL:
                 terminal_prompt = req_id
