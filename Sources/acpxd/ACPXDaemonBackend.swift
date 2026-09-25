@@ -78,6 +78,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once a control over past its deadline begins to wait for what that
     /// deadline puts down.
     var controlOverdue: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a control sent during a prompt is taken on the prompt's ticket,
+    /// before it waits for the prompt to go out.
+    var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 

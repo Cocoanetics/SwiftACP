@@ -18,6 +18,12 @@ extension DaemonToolsTests {
         return path
     }
 
+    /// Wait for the agent to signal on `fifo` — bounded, so that a signal that never comes
+    /// fails the test rather than hangs it.
+    private func signalled(_ fifo: URL) async throws {
+        try await withTimeout(milliseconds: 10_000) { try await Self.byteWritten(to: fifo) }
+    }
+
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aControlDuringAPromptRunsOnItsAgentAtOnce() async throws {
         let directory = try Self.scratchDirectory()
@@ -30,7 +36,7 @@ extension DaemonToolsTests {
             let prompt = Task {
                 try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             }
-            try await Self.byteWritten(to: ready)
+            try await signalled(ready)
 
             // Bounded, so that a control that waits for the prompt fails rather than hangs.
             let result = try await withTimeout(milliseconds: 10_000) {
@@ -54,22 +60,31 @@ extension DaemonToolsTests {
         let directory = try Self.scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let ready = try fifo("ready", in: directory)
+        let pidFile = directory.appendingPathComponent("pid")
         try await withIsolatedStore {
-            let session = try await retrySession(in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' ")
-            // The prompt's agent never answers `session/new`: the prompt times out connecting.
+            let session = try await retrySession(
+                in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' RETRY_AGENT_PID='\(pidFile.path)' ")
+            // The prompt's agent never answers `session/new`, so the prompt never goes out.
             try session.set("hang-new")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (taken, taking) = AsyncStream<Void>.makeStream()
+            await daemon.setControlTakenHook { _ in taking.yield() }
             let prompt = Task {
-                try await limitedPrompt(
-                    daemon, session.id, limits: PromptLimits(timeoutMs: 500), client: CallingClient())
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             }
-            try await Self.byteWritten(to: ready)
+            try await signalled(ready)
+            let control = Task { try await daemon.setMode(sessionId: session.id, modeId: "plan") }
 
-            // Bounded, so that a control left waiting fails rather than hangs.
+            // Once the control waits on the prompt, the prompt's agent goes: the prompt ends
+            // before it went out. Bounded, so that a control never taken fails rather than
+            // hangs.
+            try await withTimeout(milliseconds: 10_000) {
+                var waiting = taken.makeAsyncIterator()
+                _ = await waiting.next()
+            }
+            kill(try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8))), SIGKILL)
             await #expect(throws: PromptEndedBeforeControls.self) {
-                _ = try await withTimeout(milliseconds: 10_000) {
-                    try await daemon.setMode(sessionId: session.id, modeId: "plan")
-                }
+                _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
             }
             _ = try? await prompt.value
             #expect(try #require(SessionStore.loadRecord(session.id)).acpx?.desiredModeId == nil)
@@ -96,12 +111,11 @@ extension DaemonToolsTests {
             let prompt = Task {
                 try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             }
-            try await Self.byteWritten(to: ready)
+            try await signalled(ready)
 
             let control = Task { try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300) }
-            // The control's request reached the agent, which holds it past the deadline. Each
-            // wait is bounded, so that a control that never goes out fails rather than hangs.
-            try await withTimeout(milliseconds: 10_000) { try await Self.byteWritten(to: modeSent) }
+            // The control's request reached the agent, which holds it past the deadline.
+            try await signalled(modeSent)
             await #expect(throws: TimeoutError(milliseconds: 300)) {
                 _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
             }
@@ -114,5 +128,11 @@ extension DaemonToolsTests {
             #expect(await daemon.heldConnection(session.id) == nil)
             await daemon.releaseAll()
         }
+    }
+}
+
+extension ACPXDaemonBackend {
+    func setControlTakenHook(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
+        controlTakenDuringPrompt = hook
     }
 }

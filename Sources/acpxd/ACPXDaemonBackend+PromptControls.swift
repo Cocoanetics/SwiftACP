@@ -66,6 +66,7 @@ extension ACPXDaemonBackend {
             return await persister.control { step.apply(response, &$0) }
         }
         ticket.tail = Task { _ = await operation.result }
+        await controlTakenDuringPrompt?(recordId)
         guard let timeout else { return try await operation.value }
         do {
             return try await withTimeout(milliseconds: timeout) { try await operation.value }
