@@ -29,6 +29,8 @@
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
 
+`refuse-set-mode`: answers `session/set_mode` with `Invalid params` (-32602).
+
 `slow-set-mode`: answers `session/set_mode` only after `RETRY_AGENT_DELAY_MS`, or once
 the file `RETRY_AGENT_MODE_GATE` names exists, having first written a byte to the FIFO
 `RETRY_AGENT_MODE_SENT` names.
@@ -192,6 +194,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "retry-session", "configOptions": OPTIONS}})
         if MODE == "die-after-new":
             os._exit(3)
+    elif method == "session/set_mode" and MODE == "refuse-set-mode":
+        send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Invalid params"}})
     elif method == "session/set_mode" and MODE == "slow-set-mode":
         with open(os.environ["RETRY_AGENT_MODE_SENT"], "w") as sent:
             sent.write("x")
