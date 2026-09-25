@@ -180,7 +180,8 @@ final class RunCapture: @unchecked Sendable {
         if let subscription { await connection.endSubscription(subscription) }
         await consumer?.value
         if let sessionId {
-            let stats = await connection.permissionStats(for: sessionId)
+            // Every attempt's, and the pauses', as acpx's client counts them.
+            let stats = await connection.permissionTotals(for: sessionId)
             lock.withLock { self.stats = stats }
         }
     }

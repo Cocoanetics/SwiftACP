@@ -83,6 +83,16 @@ struct CompareRunOnceTests {
         #expect(compared.rows.first?["final_message"] as? String == "hello")
     }
 
+    /// A row counts every permission of its run, as acpx's client counts them
+    /// (`getPermissionStats`): one asked in the pause before a retry too.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aRowCountsThePermissionsOfEveryAttempt() async throws {
+        let compared = try await compare(["fail-then-ask"], ["--prompt-retries", "1"])
+        #expect(compared.code == ExitCodes.success)
+        #expect(compared.rows.first?["status"] as? String == "ok")
+        #expect(compared.rows.first?["permission_requests"] as? Int == 1)
+    }
+
     /// acpx's `buildErrorRow`: the text so far, and the error's own message.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anErrorRowKeepsWhatTheAgentSaidAndTheErrorsMessage() async throws {
