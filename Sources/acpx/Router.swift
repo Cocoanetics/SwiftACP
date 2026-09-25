@@ -78,6 +78,12 @@ enum Router {
         case .helpAsError(let path):
             if !help.quiet { Console.err(help.render(path)) }
             return ExitCodes.error
+        case .helpCommandMisuse(let path):
+            // commander's `help({ error: true })`: the help first, then the error it ends
+            // on, whose message is commander's own `(outputHelp)`, reported as acpx
+            // reports any usage error (acpx 0.19.3).
+            if !help.quiet { Console.err(help.render(path)) }
+            throw InvalidArgumentError("(outputHelp)")
         case .run(let levels, let arguments):
             return try run(levels: levels, arguments: arguments, config: config, help: help)
         }

@@ -9,7 +9,9 @@ import Testing
 /// in the fixture was run through npm acpx 0.19.1 with a preload that prints, in place of
 /// running the command, what commander parsed — the command path, the arguments, and
 /// each level's options as given. The rest — errors, help, version — are acpx's own
-/// output, with the cwd shown as `<cwd>`.
+/// output, with the cwd shown as `<cwd>`, as acpx 0.19.3 prints it: 0.19.1's build with
+/// 0.19.3's one change to how acpx parses, the root's `help [command]` (#778), which
+/// reproduces every earlier case byte for byte unpatched.
 ///
 /// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
 @Suite(.serialized) struct CommanderTests {

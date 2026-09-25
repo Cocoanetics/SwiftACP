@@ -140,6 +140,29 @@ struct HelpTests {
 
     // MARK: boxWrap algorithm
 
+    /// acpx 0.19.3's root has commander's `help [command]` (`helpCommand(true)`, #778): it
+    /// lists it last, and `acpx help [command]` shows the named command's help. A name
+    /// that is no command shows the root's as an error; `flow`'s keeps commander's own
+    /// exit, and an agent's `help` stays its prompt.
+    @Test func theRootHasAHelpCommand() throws {
+        #expect(HelpCatalog.root(cwd: "/tmp").subcommands.last.map { [$0.term, $0.desc] }
+            == ["help [command]", "display help for command"])
+        let root = CommandTree.acpx(agents: ["codex"])
+        func outcome(_ args: [String]) throws -> String { "\(try Commander.parse(args, root: root))" }
+        #expect(try outcome(["help"]) == "\(Commander.Outcome.help(path: []))")
+        #expect(try outcome(["help", "sessions", "extra"]) == "\(Commander.Outcome.help(path: ["sessions"]))")
+        #expect(try outcome(["--verbose", "help", "codex"]) == "\(Commander.Outcome.help(path: ["codex"]))")
+        #expect(try outcome(["help", "nope"]) == "\(Commander.Outcome.helpCommandMisuse(path: []))")
+        #expect(try outcome(["help", "--help"]) == "\(Commander.Outcome.helpCommandMisuse(path: []))")
+        #expect(try outcome(["flow", "help", "nope"]) == "\(Commander.Outcome.helpAsError(path: ["flow"]))")
+        guard case .run(let levels, let arguments) = try Commander.parse(["codex", "help"], root: root) else {
+            Issue.record("`acpx codex help` is not a prompt")
+            return
+        }
+        #expect(levels.map(\.spec.name) == ["acpx", "codex"])
+        #expect(arguments == ["help"])
+    }
+
     @Test func boxWrapGreedilyBreaksAtWordBoundaries() {
         // width 48 fills exactly to "another" (48 chars) before breaking.
         let wrapped = HelpRenderer.boxWrap(

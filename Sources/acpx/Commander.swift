@@ -27,6 +27,9 @@ enum Commander {
         case help(path: [String])
         /// Print the help for `path` as an error: `flow` with nothing to run.
         case helpAsError(path: [String])
+        /// The root's `help` given a name that is no command: its help as an error, then
+        /// commander's `(outputHelp)` through acpx's handler, as a usage error.
+        case helpCommandMisuse(path: [String])
         /// `-V`/`--version`, which commander answers as soon as it parses it.
         case version
     }
@@ -66,8 +69,10 @@ enum Commander {
             // `_dispatchHelpCommand`: the named subcommand's help; for a name that is not
             // one, this command's help as an error.
             guard operands.count > 1 else { return .help(path: path) }
-            return spec.subcommand(operands[1]) != nil
-                ? .help(path: path + [operands[1]]) : .helpAsError(path: path)
+            if spec.subcommand(operands[1]) != nil { return .help(path: path + [operands[1]]) }
+            // The root exits through acpx's handler (`handleProgramParseError`); `flow`,
+            // through commander's own.
+            return isRoot ? .helpCommandMisuse(path: path) : .helpAsError(path: path)
         }
         if !spec.subcommands.isEmpty, args.isEmpty, !spec.hasAction {
             return .helpAsError(path: path)

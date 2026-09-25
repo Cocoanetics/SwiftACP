@@ -32,10 +32,15 @@ struct CommandSpec {
         options.first { $0.matches(arg) }
     }
 
-    /// commander's implicit `help` command, which it adds only to a command that has
-    /// subcommands and no action — in acpx, `flow`. The root has the bare-prompt action,
-    /// so `acpx help` is a prompt (openclaw/acpx#763).
-    var hasHelpCommand: Bool { !subcommands.isEmpty && !hasAction }
+    /// commander's `helpCommand(true)`: a `help [command]` command whatever else the
+    /// command has, as acpx 0.19.3 gives its root (openclaw/acpx#763). Unset, commander's
+    /// own rule decides (``hasHelpCommand``).
+    var helpCommand: Bool?
+
+    /// Whether the command has commander's `help [command]` command: the root since
+    /// acpx 0.19.3 (``helpCommand``), and otherwise, commander's implicit one, only a
+    /// command that has subcommands and no action — in acpx, `flow`.
+    var hasHelpCommand: Bool { helpCommand ?? (!subcommands.isEmpty && !hasAction) }
 }
 
 /// acpx 0.19.1's commander tree as `configurePublicCli` leaves it: the root, with the
@@ -45,9 +50,12 @@ struct CommandSpec {
 /// `CommandTreeTests` compares it with a dump of npm acpx's own tree.
 enum CommandTree {
     static func acpx(agents: [String]) -> CommandSpec {
-        CommandSpec(
+        var root = CommandSpec(
             name: "acpx", options: [versionOption] + Flags.globalSpecs, arguments: [promptArgument],
             subcommands: agents.map(agent) + verbs + [config, compare, flow])
+        // `configurePublicCli`: `acpx help [command]` shows usage (acpx 0.19.3, #778).
+        root.helpCommand = true
+        return root
     }
 
     /// The agent commands acpx registers: the built-ins and the config's
