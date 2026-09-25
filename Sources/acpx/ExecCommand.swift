@@ -68,13 +68,13 @@ enum ExecCommand {
             let run: PromptRun
             do {
                 run = try await runPrompt(
-                    prompt, on: session, flags: flags, renderer: renderer, sideEffects: sideEffects)
+                    prompt, on: session, policy: PromptPolicy(flags), renderer: renderer, sideEffects: sideEffects)
             } catch {
                 await handle.close()
                 return reportFailure(
                     error, renderer: renderer, format: flags.format, agentErrorShown: showsAgentError(error))
             }
-            renderer.finish(stopReason: run.outcome.stopReason)
+            renderer.finish(stopReason: run.response.stopReason)
             renderer.promptMetadata(usage: promptResult.result?["usage"], cost: promptResult.result?["cost"])
             await handle.close()
             if run.permissions.promptUnavailable, flags.format != "quiet",
@@ -218,7 +218,7 @@ enum ExecCommand {
         var agentError: JSONRPCErrorBody?
     }
 
-    /// Whether `error`, thrown by ``runPrompt(_:on:flags:renderer:sideEffects:)``, came
+    /// Whether `error`, thrown by ``runPrompt(_:on:policy:renderer:sideEffects:)``, came
     /// with the agent's error response, which the output shows already.
     static func showsAgentError(_ error: Error) -> Bool {
         error is JSONRPCErrorBody || (error as? PromptUnavailable)?.agentError != nil

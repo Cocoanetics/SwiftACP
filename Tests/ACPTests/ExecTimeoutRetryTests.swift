@@ -198,18 +198,61 @@ struct ExecTimeoutRetryTests {
         #expect(!json.out.contains("acpxCode"), "\(json.out)")
     }
 
-    /// A failed turn hands on every update the agent sent before failing, and only then
-    /// throws — so what reports the failure comes after them.
+    /// An attempt cut off by the deadline shows everything the agent sent before it,
+    /// before the timeout is thrown — and nothing after: its events end with it, though
+    /// the prompt is still out. The output here is slower than the agent's burst.
     @Test(.enabled(if: mockPythonAvailable))
-    func aFailedTurnHandsOnItsUpdatesBeforeItThrows() async throws {
+    func aTimedOutAttemptShowsItsEventsBeforeItsFailure() async throws {
+        let agent = try await Self.launchFixture(mode: "burst-then-hang")
+        let written = Written()
+        let renderer = OutputRenderer(
+            options: RenderOptions(format: .text), out: { text in
+                usleep(20_000)
+                written.append(text)
+            }, err: { _ in }, color: false)
+        do {
+            let response = try await agent.connection.newSession(
+                NewSessionRequest(cwd: NSTemporaryDirectory(), mcpServers: []))
+            let session = ACPSession(id: response.sessionId, agent: agent)
+            let policy = ExecCommand.PromptPolicy(timeoutMilliseconds: 200, retries: 0, quiet: false)
+            await #expect(throws: TimeoutError(milliseconds: 200)) {
+                _ = try await ExecCommand.runPrompt(
+                    [.text("hi")], on: session, policy: policy, renderer: renderer, sideEffects: PromptSideEffects())
+            }
+        } catch {
+            await agent.close()
+            throw error
+        }
+        let atTheFailure = written.value
+        await agent.close()
+        #expect(atTheFailure.contains("u0 ") && atTheFailure.contains("u19 "), "\(atTheFailure)")
+        #expect(written.value == atTheFailure)
+    }
+
+    /// The fixture agent in `mode`, launched.
+    private static func launchFixture(mode: String) async throws -> ACPAgent {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/retry-agent.py")
         var environment = ProcessInfo.processInfo.environment
-        environment["RETRY_AGENT_MODE"] = "fail-after-updates"
-        let agent = try await ACPAgent.launch(
+        environment["RETRY_AGENT_MODE"] = mode
+        return try await ACPAgent.launch(
             agent: "'\(python)' '\(fixture.path)'", cwd: NSTemporaryDirectory(), permission: .approveAll,
             environment: environment, inheritStderr: false)
+    }
+
+    private final class Written: @unchecked Sendable {
+        private let lock = NSLock()
+        private var text = ""
+        var value: String { lock.withLock { text } }
+        func append(_ more: String) { lock.withLock { text += more } }
+    }
+
+    /// A failed turn hands on every update the agent sent before failing, and only then
+    /// throws — so what reports the failure comes after them.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aFailedTurnHandsOnItsUpdatesBeforeItThrows() async throws {
+        let agent = try await Self.launchFixture(mode: "fail-after-updates")
         let seen = Counter()
         do {
             let response = try await agent.connection.newSession(

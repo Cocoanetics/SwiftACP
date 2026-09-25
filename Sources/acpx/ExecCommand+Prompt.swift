@@ -12,45 +12,64 @@ extension ExecCommand {
     /// attempt needed a permission question nobody could be asked (acpx drops that with
     /// an attempt that fails).
     struct PromptRun {
-        var outcome: PromptOutcome
+        var response: PromptResponse
         var permissions: PermissionStats
     }
 
-    /// Send `prompt`, each attempt within `flags.timeoutMs`, and again — up to
-    /// `flags.promptRetries` times, after acpx's pause — while it fails the way a passing
-    /// fault does and the turn has had no effect yet (`preparePromptRetry`). An effect
-    /// during the pause calls the retry off.
+    /// How `exec` sends its prompt: acpx's `--timeout` for each attempt, its
+    /// `--prompt-retries`, and whether the retry notice stays off stderr — under quiet
+    /// output and `--json-strict`, as acpx's `suppressSdkConsoleErrors`.
+    struct PromptPolicy {
+        var timeoutMilliseconds: Int?
+        var retries: Int
+        var quiet: Bool
+
+        init(timeoutMilliseconds: Int?, retries: Int, quiet: Bool) {
+            self.timeoutMilliseconds = timeoutMilliseconds
+            self.retries = retries
+            self.quiet = quiet
+        }
+
+        init(_ flags: GlobalFlags) {
+            self.init(
+                timeoutMilliseconds: flags.timeoutMs, retries: flags.promptRetries ?? 0, quiet: quietOutput(flags))
+        }
+    }
+
+    /// Send `prompt`, each attempt within the policy's deadline, and again — up to its
+    /// retries, after acpx's pause — while it fails the way a passing fault does and the
+    /// turn has had no effect yet (`preparePromptRetry`). An effect during the pause
+    /// calls the retry off.
     ///
     /// Text output shows each attempt's error from the agent as it comes, after what the
     /// attempt did, the way acpx's formatter shows the error response. Such an error
     /// thrown from here is therefore shown already (``showsAgentError(_:)``).
     static func runPrompt(
-        _ prompt: [ContentBlock], on session: ACPSession, flags: GlobalFlags,
+        _ prompt: [ContentBlock], on session: ACPSession, policy: PromptPolicy,
         renderer: OutputRenderer, sideEffects: PromptSideEffects
     ) async throws -> PromptRun {
         let connection = session.agent.connection
-        let maxRetries = flags.promptRetries ?? 0
+        let maxRetries = policy.retries
         var permissions = PermissionStats()
         sideEffects.begin()
         defer { sideEffects.end() }
         var attempt = 0
         while true {
             renderer.promptAttemptStarts()
+            let events = await AttemptEvents.start(of: session, renderer: renderer, sideEffects: sideEffects)
             do {
-                let outcome = try await withTimeout(milliseconds: flags.timeoutMs) {
-                    try await session.run(
-                        prompt, onUpdate: { renderer.render($0) },
-                        onClientOperation: {
-                            sideEffects.clientOperation()
-                            renderer.clientOperation($0)
-                        },
-                        onInboundRequest: { renderer.inboundRequest($0) })
+                let response = try await withTimeout(milliseconds: policy.timeoutMilliseconds) {
+                    try await session.prompt(prompt)
                 }
+                await events.finish()
                 let last = await connection.permissionStats(for: session.id)
                 permissions.add(last)
                 permissions.promptUnavailable = last.promptUnavailable
-                return PromptRun(outcome: outcome, permissions: permissions)
+                return PromptRun(response: response, permissions: permissions)
             } catch {
+                // What the attempt did comes out before its failure — at a deadline too,
+                // though the prompt is still out: nothing of it comes out after.
+                await events.finish()
                 let stats = await connection.permissionStats(for: session.id)
                 permissions.add(stats)
                 let agentError = error as? JSONRPCErrorBody
@@ -60,7 +79,7 @@ extension ExecCommand {
                 if stats.promptUnavailable, !(error is TimeoutError) { throw PromptUnavailable(agentError: agentError) }
                 guard attempt < maxRetries, !sideEffects.any, PromptRetry.isRetryable(error) else { throw error }
                 let delay = PromptRetry.delayMilliseconds(afterAttempt: attempt)
-                if !quietOutput(flags) {
+                if !policy.quiet {
                     Console.errLine(PromptRetry.notice(
                         for: error, delayMilliseconds: delay, retry: attempt + 1, maxRetries: maxRetries))
                 }
@@ -69,6 +88,48 @@ extension ExecCommand {
                 attempt += 1
             }
         }
+    }
+}
+
+/// An attempt's events, rendered from a subscription of its own as they come: the
+/// session's updates, the agent's requests and the client's diagnostics, in wire order.
+/// Unlike ``ACPSession/run(_:meta:onUpdate:onClientOperation:onInboundRequest:)``, which
+/// hands them on until the prompt is over, it ends when told (``finish()``) — so a
+/// deadline can end it while the prompt is still out.
+private struct AttemptEvents {
+    let connection: ACPAgentConnection
+    let subscription: UUID
+    let consumer: Task<Void, Never>
+
+    static func start(
+        of session: ACPSession, renderer: OutputRenderer, sideEffects: PromptSideEffects
+    ) async -> AttemptEvents {
+        let connection = session.agent.connection
+        let (subscription, stream) = await connection.makeEventSubscription()
+        let sessionId = session.id
+        let consumer = Task {
+            for await event in stream {
+                switch event {
+                case .update(let note) where note.sessionId == sessionId:
+                    renderer.render(note.update)
+                case .clientOperation(let operation)
+                    where operation.sessionId == nil || operation.sessionId == sessionId:
+                    sideEffects.clientOperation()
+                    renderer.clientOperation(operation)
+                case .inboundRequest(let request) where request.sessionId == nil || request.sessionId == sessionId:
+                    renderer.inboundRequest(request)
+                default:
+                    break
+                }
+            }
+        }
+        return AttemptEvents(connection: connection, subscription: subscription, consumer: consumer)
+    }
+
+    /// End the subscription, and return once everything it had was rendered.
+    func finish() async {
+        await connection.endSubscription(subscription)
+        await consumer.value
     }
 }
 

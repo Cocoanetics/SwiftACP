@@ -15,6 +15,7 @@
   inside the pause before a retry.
 - `fail-auth-once`: its first prompt fails with -32000 (authentication required).
 - `fail-after-updates`: sends twenty updates, then fails as `fail-once` does.
+  `burst-then-hang` sends them and never answers.
 
 Otherwise a prompt answers `hello`. Each prompt appends a line to the file
 `RETRY_AGENT_ATTEMPTS` names, and the agent writes its pid to `RETRY_AGENT_PID` on start.
@@ -70,7 +71,10 @@ def prompt(req_id, session_id):
         first = not os.path.exists(ATTEMPTS)
         with open(ATTEMPTS, "a") as handle:
             handle.write("prompt\n")
-    if MODE == "hang-prompt":
+    if MODE == "burst-then-hang":
+        for index in range(20):
+            update(session_id, "u%d " % index)
+    if MODE in ("hang-prompt", "burst-then-hang"):
         time.sleep(60)
     if first or MODE == "fail-always":
         if MODE == "fail-after-update":
