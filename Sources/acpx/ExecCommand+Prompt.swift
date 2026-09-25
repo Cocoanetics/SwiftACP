@@ -123,12 +123,12 @@ private struct AttemptEvents {
         let sessionId = session.id
         let consumer = Task {
             for await event in stream {
+                await renderer.beforeRenderingEvent?()
                 switch event {
                 case .update(let note) where note.sessionId == sessionId:
                     renderer.render(note.update)
                 case .clientOperation(let operation)
                     where operation.sessionId == nil || operation.sessionId == sessionId:
-                    sideEffects.clientOperation()
                     renderer.clientOperation(operation)
                 case .inboundRequest(let request) where request.sessionId == nil || request.sessionId == sessionId:
                     renderer.inboundRequest(request)

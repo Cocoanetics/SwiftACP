@@ -39,7 +39,13 @@ struct ExecTimeoutRetryTests {
             + ["exec"] + execOptions + ["hi"]
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code = Console.$capture.withValue(capture) { runCommandLine(arguments) }
+            // `exec` blocks its thread until it is done, as the CLI does; a thread of its own
+            // keeps that off the tasks' pool, which other tests go on sharing.
+            let code: Int32 = await withCheckedContinuation { continuation in
+                Thread {
+                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
+                }.start()
+            }
             let prompts = (try? String(contentsOf: attempts, encoding: .utf8))?.split(separator: "\n").count ?? 0
             let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0) }
             return Run(out: capture.out, err: capture.err, code: code, attempts: prompts, pid: pid)
@@ -211,10 +217,8 @@ struct ExecTimeoutRetryTests {
         let agent = try await Self.launchFixture(mode: "burst-then-hang")
         let written = Written()
         let renderer = OutputRenderer(
-            options: RenderOptions(format: .text), out: { text in
-                usleep(20_000)
-                written.append(text)
-            }, err: { _ in }, color: false)
+            options: RenderOptions(format: .text), out: { written.append($0) }, err: { _ in }, color: false)
+        renderer.beforeRenderingEvent = { try? await Task.sleep(for: .milliseconds(20)) }
         do {
             let response = try await agent.connection.newSession(
                 NewSessionRequest(cwd: NSTemporaryDirectory(), mcpServers: []))
@@ -300,7 +304,7 @@ struct ExecTimeoutRetryTests {
             await #expect(throws: JSONRPCErrorBody.self) {
                 try await session.run([.text("hi")]) { _ in
                     // Slower than the agent: the updates are still coming when it fails.
-                    usleep(5_000)
+                    usleep(2_000)
                     seen.add()
                 }
             }
@@ -379,11 +383,13 @@ struct ExecTimeoutRetryTests {
         // A permission question is none, nor is any other request or response.
         #expect(!effects([request("session/request_permission"), answer]))
         #expect(!effects([(.inbound, #"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#)]))
-        // A permission notice is one.
-        let notice = PromptSideEffects()
-        notice.begin()
-        notice.clientOperation()
-        #expect(notice.any)
+        // A permission notice is one, as the answer that carries it goes out.
+        let refusal = #"{"outcome":{"outcome":"selected","optionId":"reject"}"#
+        let noticed = (JSONRPCPeer.WireDirection.outbound,
+                       #"{"jsonrpc":"2.0","id":7,"result":\#(refusal),"_meta":{"acpx":{"permissionNotice":"n"}}}}"#)
+        let plain = (JSONRPCPeer.WireDirection.outbound, #"{"jsonrpc":"2.0","id":7,"result":\#(refusal)}}"#)
+        #expect(effects([request("session/request_permission"), noticed]))
+        #expect(!effects([request("session/request_permission"), plain]))
     }
 
     /// The prefixes the path refusals are recognized by are the client's own.

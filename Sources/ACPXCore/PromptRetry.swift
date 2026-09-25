@@ -36,13 +36,17 @@ public enum PromptRetry {
 /// Fed each message as the connection reads or writes it (``observe(_:_:)``, from its
 /// wire message observer): in order, and once the connection has it — where acpx's SDK
 /// hands a message to its handlers. An update the agent sent before its error counts
-/// before the decision, as it does in acpx.
+/// before the decision, as it does in acpx. A permission notice counts as the answer
+/// that carries it (`_meta.acpx.permissionNotice`) goes out, by when the connection has
+/// reported it.
 public final class PromptSideEffects: @unchecked Sendable {
     private let lock = NSLock()
     private var active = false
     private var happened = false
     /// The agent's file and terminal requests being served, by id.
     private var serving: [JSONRPCID: String] = [:]
+    /// The agent's permission questions not answered yet.
+    private var questions: Set<JSONRPCID> = []
 
     public init() {}
 
@@ -56,6 +60,7 @@ public final class PromptSideEffects: @unchecked Sendable {
         lock.withLock {
             active = false
             serving = [:]
+            questions = []
         }
     }
 
@@ -63,11 +68,6 @@ public final class PromptSideEffects: @unchecked Sendable {
     /// still being served (acpx reports a `terminal/wait_for_exit` only once it is over).
     public var any: Bool {
         lock.withLock { happened || serving.values.contains { $0 != "terminal/wait_for_exit" } }
-    }
-
-    /// A client operation the connection reported — a permission notice.
-    public func clientOperation() {
-        lock.withLock { if active { happened = true } }
     }
 
     /// Look at a message as it crossed the wire.
@@ -79,10 +79,15 @@ public final class PromptSideEffects: @unchecked Sendable {
                 happened = true
             case (.inbound, .request(let request)) where Self.operations.contains(request.method):
                 serving[request.id] = request.method
+            case (.inbound, .request(let request)) where request.method == "session/request_permission":
+                questions.insert(request.id)
             case (.outbound, .response(let response)):
                 if serving.removeValue(forKey: response.id) != nil { happened = true }
+                if questions.remove(response.id) != nil, Self.carriesNotice(response.result) { happened = true }
             case (.outbound, .errorResponse(let failure)):
-                guard let id = failure.id, let method = serving.removeValue(forKey: id) else { return }
+                guard let id = failure.id else { return }
+                questions.remove(id)
+                guard let method = serving.removeValue(forKey: id) else { return }
                 if !Self.refusedBeforeReporting(method, failure.error) { happened = true }
             default:
                 break
@@ -94,6 +99,13 @@ public final class PromptSideEffects: @unchecked Sendable {
     public func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
         guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: body) else { return }
         observe(direction, message)
+    }
+
+    /// Whether a permission answer carries the notice acpx reports as a client operation
+    /// (`explainPermissionRefusal`).
+    static func carriesNotice(_ result: JSONValue?) -> Bool {
+        guard let result, let answer = try? result.decoded(RequestPermissionResponse.self) else { return false }
+        return answer.permissionNotice != nil
     }
 
     /// The agent's requests acpx's file-system and terminal handlers report as
