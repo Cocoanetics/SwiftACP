@@ -77,12 +77,13 @@ public enum SessionEngine {
             }
             record.title = nil
 
+            // In acpx's order (`createSessionRecordWithClient`): the session options on a new
+            // block, then the options the session reported, then the model it was asked for.
             var acpx = SessionAcpxState()
-            ModelSupport.applySessionModelState(
-                configOptions: response.configOptions, models: response.models, to: &acpx)
+            if let sessionOptions { acpx.sessionOptions = sessionOptions }
+            ModelSupport.applyConfigOptions(response.configOptions, to: &acpx)
             ModelSupport.applyInitialModelSelection(
                 application, requestedModel: sessionOptions?.model, originalModels: advertised, to: &acpx)
-            if let sessionOptions { acpx.sessionOptions = sessionOptions }
             acpx.mcpServers = sessionMcpServers
             // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
             // spawn: the daemon reconnects later and must advertise the same, or the

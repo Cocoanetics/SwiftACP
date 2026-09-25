@@ -58,6 +58,10 @@ public enum SessionStore {
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
         record.parsedByAcpx = parsed
+        // The block's members in the places acpx's parser gives them.
+        if case .object(let members)? = parsed["acpx"] {
+            record.acpx?.slots = members.map { String(decoding: $0.key, as: UTF16.self) }
+        }
         return record
     }
 

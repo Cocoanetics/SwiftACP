@@ -17,7 +17,9 @@ what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_M
 names a file: while it exists, the next model request removes it and the agent exits
 without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_option` with
 `{}`, reporting no options back. `MODEL_AGENT_EXTRA_OPTION` names one more select to
-advertise after `effort`, with the values `x` (current) and `y`.
+advertise after `effort`, with the values `x` (current) and `y`. During a prompt,
+`MODEL_AGENT_COMMANDS=1` sends an `available_commands_update` and `MODEL_AGENT_MODE_UPDATE`
+a `current_mode_update` to the mode it names, before the answer.
 """
 import json
 import os
@@ -116,6 +118,17 @@ def main():
             CURRENT["model"] = message.get("params", {}).get("modelId", CURRENT["model"])
             send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         elif method == "session/prompt":
+            session_id = message.get("params", {}).get("sessionId")
+            if os.environ.get("MODEL_AGENT_COMMANDS") == "1":
+                send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": session_id, "update": {
+                        "sessionUpdate": "available_commands_update",
+                        "availableCommands": [{"name": "debug", "description": "Debug the session"}]}}})
+            if os.environ.get("MODEL_AGENT_MODE_UPDATE"):
+                send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": session_id, "update": {
+                        "sessionUpdate": "current_mode_update",
+                        "currentModeId": os.environ["MODEL_AGENT_MODE_UPDATE"]}}})
             send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
         elif method == "session/cancel":
             pass

@@ -36,6 +36,15 @@ enum SessionRecordSerializer {
             document = inStoredOrder(
                 document, stored: read, topLevel: true, rebuilt: Set(rebuilt.keys.map { Array($0.utf16) }))
         }
+        if let acpx = record.acpx {
+            // The block's members in the places acpx's object gives them (``SessionAcpxState/slots``),
+            // SwiftACP's own after; `session_options` as acpx always builds it.
+            document = document.mapping("acpx") { block in
+                MessageOrder.ordered(block, by: acpx.slots).mapping("session_options") {
+                    MessageOrder.ordered($0, by: ["model", "allowed_tools", "max_turns", "system_prompt", "env"])
+                }
+            }
+        }
         return Data((document.stringified(indent: 2) + "\n").utf8)
     }
 
