@@ -16,7 +16,8 @@ that list instead, read at launch, so a test can change what a later launch offe
 what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
 names a file: while it exists, the next model request removes it and the agent exits
 without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_option` with
-`{}`, reporting no options back. `MODEL_AGENT_EXTRA_OPTION` names one more select to
+`{}`, reporting no options back. `MODEL_AGENT_ANNOUNCE_MODEL` names a model the first
+`session/set_config_option` adds, announced in a `config_option_update` sent before the reply. `MODEL_AGENT_EXTRA_OPTION` names one more select to
 advertise after `effort`, with the values `x` (current) and `y`. During a prompt,
 `MODEL_AGENT_COMMANDS=1` sends an `available_commands_update` and `MODEL_AGENT_MODE_UPDATE`
 a `current_mode_update` to the mode it names, before the answer.
@@ -37,6 +38,7 @@ NAMES = {"m1": "One", "m2": "Two"}
 EXIT_ON_MODEL = os.environ.get("MODEL_AGENT_EXIT_ON_MODEL")
 EMPTY_REPLIES = os.environ.get("MODEL_AGENT_EMPTY_REPLIES") == "1"
 EXTRA = os.environ.get("MODEL_AGENT_EXTRA_OPTION")
+ANNOUNCE = os.environ.get("MODEL_AGENT_ANNOUNCE_MODEL")
 if EXTRA:
     CURRENT[EXTRA] = "x"
 
@@ -110,6 +112,11 @@ def main():
             params = message.get("params", {})
             if params.get("configId") in CURRENT:
                 CURRENT[params["configId"]] = params.get("value")
+            if ANNOUNCE and ANNOUNCE not in MODELS:
+                MODELS.append(ANNOUNCE)
+                send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": params.get("sessionId"),
+                    "update": {"sessionUpdate": "config_option_update", "configOptions": config_options()}}})
             send({"jsonrpc": "2.0", "id": req_id,
                   "result": {} if LEGACY or EMPTY_REPLIES else {"configOptions": config_options()}})
         elif method == "session/set_mode":

@@ -87,10 +87,12 @@ public enum ModelApplication {
     ///
     /// The model goes first because an agent may re-advertise its options after a
     /// model change — a later option has to resolve against what the agent last
-    /// advertised, not against what `session/new` returned. Each selection is kept as
-    /// acpx 0.19.3 keeps it (`applyModelSelection`, `applyConfigOptionSelection`): a
-    /// reply that reports no options acknowledges the one set, and the options stay as
-    /// they were with that one's value updated.
+    /// advertised, not against what `session/new` returned. Each selection is kept in
+    /// `control` as acpx 0.19.3 keeps it (`applyModelSelection`,
+    /// `applyConfigOptionSelection`): a reply that reports no options acknowledges the
+    /// one set, and the options stay as they were with that one's value updated. What
+    /// the agent announces meanwhile reaches `control` through its
+    /// ``ControlState/observe(_:_:)``, when the caller hands it the connection's messages.
     ///
     /// Each request goes within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     public static func applySessionControls(
@@ -100,32 +102,63 @@ public enum ModelApplication {
         configOptions: [ConfigOptionAssignment],
         agentCommand: String?,
         timeoutMilliseconds: Int? = nil,
+        control: ControlState = ControlState(),
         onWarning: ((String) -> Void)? = nil
     ) async throws {
         guard model != nil || !configOptions.isEmpty else { return }
         let advertised = ModelSupport.modelState(fromConfigOptions: session.configOptions)
             ?? ModelSupport.modelState(fromLegacyModels: session.models)
-        // acpx's `controlState`: what the session advertises, as a record's `acpx` keeps it.
-        var control = SessionAcpxState()
-        if let advertised { ModelSupport.applyAdvertisedModelState(advertised, to: &control) }
-        ModelSupport.applyConfigOptions(session.configOptions ?? [], to: &control)
+        control.update { state in
+            if let advertised { ModelSupport.applyAdvertisedModelState(advertised, to: &state) }
+            ModelSupport.applyConfigOptions(session.configOptions ?? [], to: &state)
+        }
         let application = try await applyRequestedModel(
             connection: connection, sessionId: session.sessionId, requestedModel: model,
             models: advertised, agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds,
             onWarning: onWarning)
         if application.applied, let modelId = application.modelId {
-            ModelSupport.applyModelSelection(modelId, response: application.response, to: &control)
+            control.update { ModelSupport.applyModelSelection(modelId, response: application.response, to: &$0) }
         }
         let sessionId = session.sessionId
         for option in configOptions {
-            let models = ModelSupport.advertisedModelState(control)
+            let models = ModelSupport.advertisedModelState(control.state)
             let result = try await withTimeout(milliseconds: timeoutMilliseconds) {
                 try await setConfigOption(
                     connection: connection, sessionId: sessionId, configId: option.configId,
                     value: option.value, models: models, agentCommand: agentCommand)
             }
-            ModelSupport.applyConfigOptionSelection(
-                option.configId, value: option.value, response: result, to: &control)
+            control.update {
+                ModelSupport.applyConfigOptionSelection(option.configId, value: option.value, response: result, to: &$0)
+            }
+        }
+    }
+
+    /// acpx's `controlState` in `runOnce`: what a run's session advertises, as a record's
+    /// `acpx` keeps it, with each selection folded in as its reply comes, and each
+    /// `config_option_update` the agent sends as it arrives.
+    public final class ControlState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current = SessionAcpxState()
+
+        public init() {}
+
+        var state: SessionAcpxState { lock.withLock { current } }
+
+        func update(_ change: (inout SessionAcpxState) -> Void) {
+            lock.withLock { change(&current) }
+        }
+
+        /// A message crossing the wire: an agent's `config_option_update` replaces the
+        /// options, as acpx's `onSessionUpdate` does. Handed each message in order before it
+        /// is handled, a selection's reply builds on what the agent announced before it.
+        public func observe(_ direction: JSONRPCPeer.WireDirection, _ message: JSONRPCMessage) {
+            guard direction == .inbound, case .notification(let note) = message, note.method == "session/update",
+                  case .object(let params)? = note.params, case .object(let announced)? = params["update"],
+                  announced["sessionUpdate"] == .string("config_option_update")
+            else { return }
+            var options: [JSONValue] = []
+            if case .array(let reported)? = announced["configOptions"] { options = reported }
+            update { ModelSupport.applyConfigOptions(options, to: &$0) }
         }
     }
 
