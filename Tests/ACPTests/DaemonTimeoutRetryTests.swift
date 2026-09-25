@@ -54,7 +54,10 @@ extension DaemonToolsTests {
             #expect(turn.contains("wire:outbound:session/cancel"))
             #expect(turn.last == "failed:TIMEOUT")
             #expect(session.prompts == 1)
-            #expect(await daemon.sessionStatus(sessionId: session.id).live == false)
+            #expect(await daemon.heldConnection(session.id) == nil)
+            // Its owner still holds the session, as acpx's outlives its client's agent.
+            let status = await daemon.sessionStatus(sessionId: session.id)
+            #expect(status.live && status.pid == nil)
             await daemon.releaseAll()
         }
     }
@@ -96,7 +99,7 @@ extension DaemonToolsTests {
                     daemon, session.id, limits: PromptLimits(timeoutMs: 300), client: CallingClient())
             }
             #expect(session.prompts == 0)
-            #expect(await daemon.sessionStatus(sessionId: session.id).live == false)
+            #expect(await daemon.heldConnection(session.id) == nil)
             await daemon.releaseAll()
         }
     }
