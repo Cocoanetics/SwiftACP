@@ -31,10 +31,11 @@ extension ACPAgentConnection {
         }
         // Every answer is counted, whichever way it was reached — acpx's
         // `finishPermissionRequest` classifies the response that actually went back. One
-        // the turn's cancel answered first was counted as cancelled then.
+        // the turn's cancel answered first was counted as cancelled then. One served for
+        // its prompt counts once it goes back (``PermissionTally``).
         guard !Task.isCancelled else { return response }
-        turnPermissionStats[request.sessionId, default: PermissionStats()]
-            .record(PermissionStats.classify(request, response))
+        note(PermissionTally.Note(decision: PermissionStats.classify(request, response)), in: request.sessionId)
+        // acpx notes this in the handler (`handleModePermissionError`), ahead of the answer.
         if promptUnavailable { turnPermissionStats[request.sessionId]?.promptUnavailable = true }
         return response
     }
@@ -66,12 +67,17 @@ extension ACPAgentConnection {
     }
 
     /// Report a permission notice to the event subscriptions, ahead of anything the
-    /// agent sends in reaction to the answer.
+    /// agent sends in reaction to the answer — for a question served for its prompt, only
+    /// with the answer it explains, once that is the one that goes back (``PermissionTally``).
     private func announce(_ notice: String, sessionId: SessionId, escalation: PermissionEscalation? = nil) {
         let operation = ClientOperation(
             method: ClientOperation.requestPermission, status: .completed, summary: notice,
             sessionId: sessionId, escalation: escalation)
-        eventSinks.yield(.clientOperation(operation))
+        if let tally = PermissionTally.current {
+            tally.announce(operation)
+        } else {
+            eventSinks.yield(.clientOperation(operation))
+        }
     }
 
     /// Whether a handler cancelled outright although the agent offered a refusal it

@@ -4,15 +4,15 @@ import JSONFoundation
 import Testing
 
 /// What the agent asks of the client while it answers a turn or a control belongs to
-/// that exchange: it is answered, under the handlers of the caller who started it,
-/// before the exchange returns.
+/// that exchange: it is answered — a turn's owned requests still open at its answer as
+/// cancelled — before the exchange returns.
 extension WriteGateTests {
     /// An agent can ask for a write and end its turn without awaiting the answer. The
-    /// peer runs each request on its own task, so without care the write could be
-    /// handled after the turn returned — under the *next* turn's handlers (a `deny-all`
-    /// turn's write approved by a following `approve-all`), and counted against that
-    /// turn. The turn must not end until its requests are answered.
-    @Test func aTurnWaitsForARequestItsAgentDidNotAwait() async throws {
+    /// write belongs to the prompt in flight when it was read, and ends with it, as
+    /// acpx's `clearActivePrompt` ends it (#130): at the answer it is answered `Request
+    /// cancelled` — not decided after the turn returned, under the *next* turn's
+    /// handlers — and it is neither counted nor written.
+    @Test func aRequestItsAgentDidNotAwaitEndsWithTheTurn() async throws {
         struct FireAndForgetWriter: ACPAgentHandler {
             var path: String
             var requestRead: Signal
@@ -35,14 +35,12 @@ extension WriteGateTests {
 
         let root = try workspace()
         let requestRead = Signal()
+        let cancelledSent = Signal()
         let release = Signal()
-        let answered = Signal()
         var handlers = ACPClientHandlers.standard(permission: .denyAll)
         handlers.authorizeWrite = { _ in
-            // Held until the turn is waiting for it. Without that wait nothing releases
-            // it before `prompt` returns, so the check below would find it unanswered.
+            // Held past the answer: the write is still being served when the prompt ends.
             await release.wait()
-            answered.fire()
             throw FileSystemPermissionError.denied
         }
 
@@ -54,19 +52,18 @@ extension WriteGateTests {
         let client = ACPAgentConnection(transport: clientTransport, handlers: handlers)
         await client.setWireObserver { line in
             if line.contains("\"method\":\"fs/write_text_file\"") { requestRead.fire() }
+            if line.contains("\"code\":-32800") { cancelledSent.fire() }
         }
-        await client.inboundRequests.setOnWait { _ in release.fire() }
         await client.start()
         _ = try await client.initialize(capabilities: .headlessController, clientInfo: .acpx)
         let session = try await client.newSession(NewSessionRequest(cwd: root))
 
         _ = try await client.prompt(PromptRequest(sessionId: session.sessionId, prompt: [.text("go")]))
-        // By the time the turn is over, its request has been answered — under this
-        // turn's handlers — and counted in this turn.
-        #expect(answered.isFired)
-        #expect(await client.permissionStats(for: session.sessionId).denied == 1)
+        // The write was answered cancelled — the agent is told so — and not counted or done.
+        await cancelledSent.wait()
+        #expect(await client.permissionStats(for: session.sessionId).requested == 0)
+        release.fire()
         #expect(!FileManager.default.fileExists(atPath: root + "/a.txt"))
-        release.fire()  // let a still-held handler finish before closing, should this fail
         await client.close()
         serverTask.cancel()
     }
