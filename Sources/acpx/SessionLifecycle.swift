@@ -20,10 +20,19 @@ enum SessionLifecycle {
         let record = try createSession(
             agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
         if let replaced {
-            // A new session under the replaced one's id is that record, made anew — the
-            // agent gave the same id — so closing it would close the new session. acpx
-            // 0.19.3 spares only a resume of it (openclaw/acpx#805).
-            if record.acpxRecordId != replaced.acpxRecordId { _ = try close(replaced) }
+            if record.acpxRecordId != replaced.acpxRecordId {
+                _ = try close(replaced)
+            } else {
+                // The agent gave the new session the replaced one's id: the record is the new
+                // session's, and closing it would close that (openclaw/acpx#805; acpx 0.19.3
+                // spares only a resume). A daemon holding the old one lets its agent go —
+                // no `session/close`, which could end the new session too — and the record
+                // is written once more over whatever the old turn saved on its way out.
+                let acpSessionId = record.acpSessionId
+                if try runBlocking({ await DaemonClient.releaseSession(sessionId: acpSessionId) }) {
+                    try SessionStore.writeRecord(record)
+                }
+            }
             if flags.verbose {
                 Console.errLine("[acpx] soft-closed prior session: \(replaced.acpxRecordId)")
             }

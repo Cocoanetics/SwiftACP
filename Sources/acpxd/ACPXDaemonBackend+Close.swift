@@ -45,6 +45,25 @@ extension ACPXDaemonBackend {
         return true
     }
 
+    /// Let go of the session's live agent without closing the session, for `sessions new`
+    /// when the agent gave the new session the replaced one's id (openclaw/acpx#805): the
+    /// prompt running cancelled, the owner retired and its agent ended, as
+    /// ``closeSession(sessionId:)`` does — but no `session/close`, which could end the new
+    /// session under the same id, and the record, now the new session's, left as it is.
+    /// Returns whether an agent was held.
+    func releaseSession(sessionId: String) async throws -> Bool {
+        guard let initial = findRecord(sessionId) else { return false }
+        let recordId = initial.acpxRecordId
+        try Task.checkCancellation()
+        let held = live[recordId] != nil
+        _ = try? await cancelSession(sessionId: recordId)
+        try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
+        defer { Task { await turnQueue.release(recordId) } }
+        forgetOwner(recordId)
+        await evict(recordId)
+        return held
+    }
+
     /// Ask the agent that the session's owner holds to close the session, when it
     /// advertises it can, as acpx's owner does once drained (`closeActiveBackendSession`):
     /// best effort, as acpx's close goes on whatever comes of it.

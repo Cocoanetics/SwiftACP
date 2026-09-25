@@ -380,6 +380,15 @@ enum DaemonClient {
         }) ?? false
     }
 
+    /// Ask a *running* daemon to let go of its live agent for `sessionId` without closing
+    /// the session (``ACPXDaemon/releaseSession(sessionId:)``). Returns whether it held
+    /// one. Never spawns a daemon; one from before the tool holds on, as it always did.
+    static func releaseSession(sessionId: String) async -> Bool {
+        (try? await withClient(spawnIfNeeded: false) {
+            try await $0.releaseSession(sessionId: sessionId)
+        }) ?? false
+    }
+
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel. A daemon
