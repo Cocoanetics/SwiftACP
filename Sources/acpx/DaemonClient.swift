@@ -148,9 +148,9 @@ enum DaemonClient {
         liveHolder().flatMap(endpoint)
     }
 
-    /// The daemon holding the lock, when its process is alive.
+    /// The daemon holding the lock, while it still does (``DaemonLock/isHeld(_:)``).
     static func liveHolder() -> DaemonLock.Holder? {
-        guard let holder = DaemonLock().currentHolder(), DaemonLock.isProcessAlive(holder.pid) else { return nil }
+        guard let holder = DaemonLock().currentHolder(), DaemonLock.isHeld(holder) else { return nil }
         return holder
     }
 
