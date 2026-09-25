@@ -48,8 +48,8 @@ import Testing
     @Test func eventLogsAreOwnerOnly() async throws {
         try await withIsolatedStore {
             var seed = record(id: "log-1")
-            var writer = SessionEventLogWriter(record: seed)
-            writer.append([#"{"jsonrpc":"2.0","method":"session/update"}"#], into: &seed)
+            var writer = try SessionEventLogWriter.open(record: &seed)
+            try writer.append([Data(#"{"jsonrpc":"2.0","method":"session/update"}"#.utf8)], into: &seed)
 
             let logMode = try mode(of: ACPXPaths.sessionStreamPath("log-1"))
             let directoryMode = try mode(of: ACPXPaths.sessionsDir)

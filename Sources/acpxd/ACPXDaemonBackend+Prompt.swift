@@ -126,7 +126,9 @@ extension ACPXDaemonBackend {
         // (`preparePromptConversation`).
         var prompted = record
         prompted.acpx = record.acpx?.cloned()
-        let persister = TurnPersister(record: prompted, eventBuffer: eventBuffer)
+        // The turn's journal records are keyed by its id, as acpx's by its queue request's.
+        let persister = TurnPersister(
+            record: prompted, eventBuffer: eventBuffer, requestId: control.id.uuidString.lowercased())
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
@@ -139,7 +141,8 @@ extension ACPXDaemonBackend {
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
-            try await attemptWithRetry(turn, wasHeld: wasHeld)
+            try await beginTurn(on: persister, recordId: recordId)
+            return try await attemptWithRetry(turn, wasHeld: wasHeld)
         }
     }
 
@@ -167,9 +170,10 @@ extension ACPXDaemonBackend {
         let errors: TurnErrorWatch
     }
 
-    /// Run `body`; when it fails, tell the calling client how, the way acpx's queue
-    /// owner tells its CLI — a ``TurnFailedEvent`` — and save the turn so far, then
-    /// rethrow.
+    /// Run `body`; when it fails, save the turn so far and end its journal with the
+    /// failure, then tell the calling client how, the way acpx's queue owner tells its
+    /// CLI — a ``TurnFailedEvent`` — and rethrow. A journal that cannot be ended fails
+    /// the turn in its place, as acpx's does.
     func reportingFailure<T>(
         of recordId: String, errors: TurnErrorWatch, saving persister: TurnPersister? = nil,
         _ body: () async throws -> T
@@ -177,11 +181,13 @@ extension ACPXDaemonBackend {
         do {
             return try await body()
         } catch {
-            let event = TurnFailure.event(for: error, shown: errors.match(error), sessionId: recordId)
+            await persister?.finish()
+            var failure = error
+            if let unwritten = await persister?.endTurn(TurnFailure.journalResult(for: error)) { failure = unwritten }
+            let event = TurnFailure.event(for: failure, shown: errors.match(failure), sessionId: recordId)
             await Session.current?.sendLogNotification(
                 LogMessage(level: .info, logger: recordId, data: toJSONValue(event)))
-            await persister?.finish()
-            throw error
+            throw failure
         }
     }
 
@@ -258,7 +264,10 @@ extension ACPXDaemonBackend {
                 timeoutMilliseconds: turn.timeoutMilliseconds),
             requestedModel: turn.model, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
-            onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
+            onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),
+            // acpx logs the exchange that connects the agent with the turn — all of it,
+            // a reconnect the agent refused too.
+            onConnectWire: { _, body in eventBuffer.append(body) })
         // The attempt proper starts once connected: a restore the agent refused while
         // connecting is on the wire, but it is not how this attempt fails.
         errors.reset()
@@ -286,10 +295,6 @@ extension ACPXDaemonBackend {
             entry.agent.rawWire.onDelivery(nil)
         }
 
-        // Tee every JSON-RPC line on the wire into the buffer; the persister drains
-        // it into the event log on each checkpoint. Cleared when the turn ends.
-        await connection.setWireObserver { line in eventBuffer.append(line) }
-
         // Subscribe before prompting so no event is missed, then drain the
         // subscription deterministically: ending it (after `prompt` returns)
         // finishes the stream, so the relay completes having sent every event — in
@@ -312,13 +317,14 @@ extension ACPXDaemonBackend {
                 // The model's request is shown before what the prompt says, as acpx shows it.
                 await wireFeed.drain()
             }
+            // Connected: saved before the prompt goes out, as acpx saves then.
+            await persister.checkpoint()
             // The turn's permissions are those of every attempt at its prompt, and of the
             // pauses between them, as acpx's client counts them across its run.
             let countedBefore = await connection.permissionTotals(for: boundSessionId)
             let outcome = try await promptWithRetries(turn, on: entry, relay: relay, wireFeed: wireFeed)
             let response = outcome.response
             await relay.end()
-            await connection.setWireObserver(nil)
             let fullText = await relay.text()
             // The exchange ends with the prompt's response; the turn's end follows it.
             await wireFeed.finish()
@@ -327,8 +333,13 @@ extension ACPXDaemonBackend {
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
             await persister.applyLifecycle(entry.agent.lifecycle)
             // Final checkpoint: stamp timestamps and flush the completed turn —
-            // including any wire lines still buffered for the event log.
+            // including any messages still buffered for the event log.
             await persister.finish()
+            // The journal has the turn's result before the calling client hears of it, as
+            // acpx's has. One it cannot write fails the turn.
+            if let unwritten = await persister.endTurn(Self.journalResult(of: response, answer: promptResult)) {
+                throw unwritten
+            }
             // The turn's end goes last, its permissions read only now that it is over.
             let permissions = outcome.sent
                 ? await connection.permissionTotals(for: boundSessionId).counted(since: countedBefore)
@@ -336,9 +347,11 @@ extension ACPXDaemonBackend {
             await Self.announceTheEnd(
                 of: response, permissions: permissions, result: promptResult, as: sessionId, to: clientSession)
             return fullText
+        } catch let unwritten as SessionJournalWriteError {
+            // The prompt is over, and its end said all it has to.
+            throw unwritten
         } catch {
             await relay.end()
-            await connection.setWireObserver(nil)
             // Everything the agent said before failing still goes out, and is kept, as
             // acpx shows and records it — then the error itself.
             _ = await relay.text()
@@ -370,7 +383,10 @@ extension ACPXDaemonBackend {
     ) {
         let (recordId, turnId, errors) = (turn.recordId, turn.id, turn.errors)
         let (connection, sessionId) = (entry.agent.connection, entry.session.id)
+        let eventBuffer = turn.eventBuffer
         entry.agent.rawWire.set { [self] direction, body in
+            // Into the event log with the turn's next save, as the bytes the message was.
+            eventBuffer.append(body)
             errors.observe(direction, body)
             wireFeed.observe(direction, body)
             if promptResult.observe(direction, body) {
