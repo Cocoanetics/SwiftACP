@@ -50,12 +50,14 @@ extension ACPXDaemonBackend {
     /// prompt running cancelled, the owner retired and its agent ended, as
     /// ``closeSession(sessionId:)`` does — but no `session/close`, which could end the new
     /// session under the same id, and the record, now the new session's, left as it is.
-    /// Returns whether an agent was held.
+    /// Returns whether the daemon had anything of the session's: an agent held or still
+    /// connecting, a turn, or an owner.
     func releaseSession(sessionId: String) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
         try Task.checkCancellation()
-        let held = live[recordId] != nil
+        let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
+            || owners[recordId] != nil
         _ = try? await cancelSession(sessionId: recordId)
         try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
         defer { Task { await turnQueue.release(recordId) } }

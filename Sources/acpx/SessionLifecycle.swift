@@ -27,11 +27,11 @@ enum SessionLifecycle {
                 // session's, and closing it would close that (openclaw/acpx#805; acpx 0.19.3
                 // spares only a resume). A daemon holding the old one lets its agent go —
                 // no `session/close`, which could end the new session too — and the record
-                // is written once more over whatever the old turn saved on its way out.
+                // is written once more, over whatever a turn of the old one saved on its
+                // way out, even one that was still connecting.
                 let acpSessionId = record.acpSessionId
-                if try runBlocking({ await DaemonClient.releaseSession(sessionId: acpSessionId) }) {
-                    try SessionStore.writeRecord(record)
-                }
+                _ = try runBlocking { await DaemonClient.releaseSession(sessionId: acpSessionId) }
+                try SessionStore.writeRecord(record)
             }
             if flags.verbose {
                 Console.errLine("[acpx] soft-closed prior session: \(replaced.acpxRecordId)")
