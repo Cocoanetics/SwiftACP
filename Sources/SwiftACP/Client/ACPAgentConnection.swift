@@ -17,11 +17,14 @@ public actor ACPAgentConnection {
     let eventSinks = EventSinks()
     /// What the wire hook announces as it reads it: requests arriving, prompts answered.
     private let wireOrderedEvents = WireOrderedEvents()
-    /// For tests: runs once a prompt's answer is back with the call that sent it, and
-    /// before a request of the agent's is served — each can be well after the messages
-    /// that followed were read and handed on.
+    /// For tests: runs once a prompt's answer is back with the call that sent it, before
+    /// a request of the agent's is served, once a request its prompt owns is taken up for
+    /// it, and once such a request is served and before it is answered — each can be well
+    /// after the messages that followed were read and handed on.
     var afterPromptAnswer: (@Sendable () async -> Void)?
     var beforeServingRequest: (@Sendable () async -> Void)?
+    var afterClaimingOwnedRequest: (@Sendable () async -> Void)?
+    var afterServingOwnedRequest: (@Sendable () async -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
@@ -119,6 +122,9 @@ public actor ACPAgentConnection {
     /// The agent's requests that arrived and are not yet answered, per session — what
     /// a turn waits for before it ends. See ``InboundRequestLedger``.
     let inboundRequests = InboundRequestLedger()
+    /// Which prompt each of the agent's owned requests belongs to (see
+    /// ``RequestOwnership``).
+    let requestOwnership = RequestOwnership()
 
     private var onClientRequest: (@Sendable (String) -> Void)?
 
@@ -172,28 +178,33 @@ public actor ACPAgentConnection {
 
     /// Wire inbound routing and begin reading. Call once before any request.
     public func start() async {
-        // Runs inline as each message is read, in order: an agent request is counted
-        // here, before the peer hands it to its own task, so a turn that ends after
-        // reading it is sure to wait for it.
-        let (sinks, ordered) = (eventSinks, wireOrderedEvents)
-        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates, sinks, ordered] direction, message in
+        // Runs inline as each message is read, in order: an owned request of the agent's
+        // is counted here, before the peer hands it to its own task, so a turn that ends
+        // after reading it is sure to wait for it — and told which prompt it belongs to.
+        let wire = (
+            requests: inboundRequests, ownership: requestOwnership, ordered: wireOrderedEvents, sinks: eventSinks,
+            updates: sessionUpdates, observer: wireObserver)
+        await rpc.setWireLog { [wire] direction, message in
             if direction == .inbound, case .request(let request) = message,
+                RequestOwnership.ownedMethods.contains(request.method),
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
-                inboundRequests.arrived(sessionId)
+                wire.requests.arrived(sessionId)
             }
-            ordered.observe(direction, message, announcingTo: sinks)
+            wire.ownership.observe(direction, message)
+            wire.ordered.observe(direction, message, announcingTo: wire.sinks)
             if direction == .inbound, case .notification(let note) = message, note.method == "session/update",
                 let sessionId = InboundRequestLedger.sessionId(of: note.params) {
-                sessionUpdates.arrived(sessionId)
+                wire.updates.arrived(sessionId)
             }
-            if let observer = wireObserver.current, let line = try? message.encodedString() {
+            if let observer = wire.observer.current, let line = try? message.encodedString() {
                 observer(line)
             }
         }
         await rpc.setHandlers(
             request: { [weak self, inboundRequests] method, params in
                 defer {
-                    if let sessionId = InboundRequestLedger.sessionId(of: params) {
+                    if RequestOwnership.ownedMethods.contains(method),
+                        let sessionId = InboundRequestLedger.sessionId(of: params) {
                         inboundRequests.finished(sessionId)
                     }
                 }
@@ -382,54 +393,28 @@ public actor ACPAgentConnection {
             cancellingSessionIds.remove(request.sessionId)
             cancelSends[request.sessionId] = nil
         }
-        // The turn is not over until the agent's requests from it are answered: one it
-        // sent without awaiting would otherwise be counted against the next turn.
-        return try await answeringItsRequests(in: request.sessionId) {
+        // At its answer, what the prompt owns is over, as acpx's `clearActivePrompt` ends
+        // it: an owned request still open is answered cancelled (``answerTurnRequestsCancelled(_:)``),
+        // and the rest of the terminal requests go on. The turn is not over until those
+        // it owns are answered: one sent without awaiting would otherwise be counted
+        // against the next turn.
+        do {
             let response: PromptResponse = try await send("session/prompt", request)
             // The answer was announced as it was read (see `start`), not from here.
             await afterPromptAnswer?()
+            answerTurnRequestsCancelled(request.sessionId)
+            await inboundRequests.waitUntilIdle(request.sessionId)
             return response
-        }
-    }
-
-    public func setMode(_ request: SetSessionModeRequest) async throws {
-        try await answeringItsRequests(in: request.sessionId) {
-            let _: EmptyResponse = try await send("session/set_mode", request)
-        }
-    }
-
-    @discardableResult
-    public func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
-        -> SetSessionConfigOptionResponse {
-        try await answeringItsRequests(in: request.sessionId) {
-            try await send("session/set_config_option", request)
-        }
-    }
-
-    public func setModel(_ request: SetSessionModelRequest) async throws {
-        try await answeringItsRequests(in: request.sessionId) {
-            let _: EmptyResponse = try await send("session/set_model", request)
-        }
-    }
-
-    /// Send a request whose answer can arrive before the answers to what the agent asked
-    /// of the client meanwhile — a turn, or a control. Those requests belong to it, and
-    /// are answered before this returns: afterwards they would be handled under
-    /// whatever handlers the next caller put in place.
-    private func answeringItsRequests<T>(in sessionId: SessionId, _ body: () async throws -> T) async throws -> T {
-        do {
-            let value = try await body()
-            await inboundRequests.waitUntilIdle(sessionId)
-            return value
         } catch {
-            await inboundRequests.waitUntilIdle(sessionId)
+            answerTurnRequestsCancelled(request.sessionId)
+            await inboundRequests.waitUntilIdle(request.sessionId)
             throw error
         }
     }
 
     // MARK: - Request plumbing
 
-    private func send<P: Encodable, R: Decodable>(_ method: String, _ params: P) async throws -> R {
+    func send<P: Encodable, R: Decodable>(_ method: String, _ params: P) async throws -> R {
         onClientRequest?(method)
         let paramsValue = try JSONValue(encoding: params)
         let result = try await rpc.sendRequest(method: method, params: paramsValue)
