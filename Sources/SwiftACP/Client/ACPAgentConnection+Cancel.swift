@@ -55,11 +55,19 @@ extension ACPAgentConnection {
         if requestOwnership.isAnswered(owner) || cancellingSessionIds.contains(sessionId) {
             return Self.cancelledAnswer(to: method)
         }
+        await afterClaimingOwnedRequest?()
         let key = UUID()
         let result = await withCheckedContinuation { continuation in
             let request = TurnRequest(method: method, continuation: continuation)
             turnRequests[sessionId, default: [:]][key] = request
             let serving = Task {
+                // Its prompt was answered as it was taken up — `track` stopped it before it
+                // started: answered cancelled without being served, and not counted, as acpx
+                // answers a request whose owner is no longer active.
+                guard !Task.isCancelled else {
+                    request.answer(Self.cancelledAnswer(to: method))
+                    return
+                }
                 let tally = PermissionTally()
                 let answer = await PermissionTally.$current.withValue(tally) {
                     await self.handleIncomingRequest(method: method, params: params)
