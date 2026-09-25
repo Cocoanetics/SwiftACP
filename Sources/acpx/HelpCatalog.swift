@@ -44,7 +44,9 @@ enum HelpCatalog {
             HelpSubcommand("sessions [options]", topDescription("sessions")),
             HelpSubcommand("config", topDescription("config")),
             HelpSubcommand("compare [options] <args...>", topDescription("compare")),
-            HelpSubcommand("flow", topDescription("flow"))
+            HelpSubcommand("flow", topDescription("flow")),
+            // `helpCommand(true)` (acpx 0.19.3).
+            HelpSubcommand("help [command]", "display help for command")
         ]
         return HelpScreen(
             usagePath: "",
