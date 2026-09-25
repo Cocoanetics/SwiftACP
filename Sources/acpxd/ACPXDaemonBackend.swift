@@ -251,6 +251,24 @@ actor ACPXDaemonBackend: ACPXBackend {
         return (result, resumed)
     }
 
+    /// How long a close waits for the turn or control that holds the session
+    /// (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
+    static let closeGraceMilliseconds = 750
+
+    /// Take the session's slot within `milliseconds`: whether it was taken. One that comes
+    /// only later is given back at once.
+    private func takeSessionSlot(_ recordId: String, within milliseconds: Int) async -> Bool {
+        let queue = turnQueue
+        do {
+            try await withTimeout(milliseconds: milliseconds, {
+                try await queue.acquire(recordId, wait: true)
+            }, discardingLate: { await queue.release(recordId) })
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Close `entry`'s agent, and hold it no longer.
     private func letGo(_ entry: Live, of recordId: String) async {
         if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
@@ -360,12 +378,22 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Close a session: terminate its live agent (if held) and mark the record
     /// closed — mirrors the CLI's `sessions close`.
     ///
+    /// acpx's owner closes a session once drained (`closeActiveBackendSession` after
+    /// `shutdown.drain()`): a prompt running is cancelled, and the turn or control holding
+    /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`) —
+    /// so that what it writes comes before the close, not over it. Past that, its agent is
+    /// closed under it.
+    ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
-        forgetOwner(initial.acpxRecordId)
-        await evict(initial.acpxRecordId)
+        let recordId = initial.acpxRecordId
+        _ = try? await cancelSession(sessionId: recordId)
+        let holdsSlot = await takeSessionSlot(recordId, within: Self.closeGraceMilliseconds)
+        defer { if holdsSlot { Task { await turnQueue.release(recordId) } } }
+        forgetOwner(recordId)
+        await evict(recordId)
         // Re-read after the await: closing the agent suspends this actor, so another
         // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
         // here to unblock) may have persisted changes meanwhile. Writing the

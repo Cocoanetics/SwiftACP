@@ -1,5 +1,6 @@
 @testable import ACPXCore
 @testable import acpxd
+import Dispatch
 import Foundation
 import JSONFoundation
 import SwiftACP
@@ -42,6 +43,49 @@ extension DaemonToolsTests {
             #expect(await daemon.heldConnection(session.id) === held)
             #expect(try #require(SessionStore.loadRecord(session.id)).pid != nil)
             await daemon.releaseAll()
+        }
+    }
+
+    /// A close that comes while a control runs waits for it, as acpx's close drains its
+    /// owner first: what the control writes comes before the close, not over it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCloseWaitsForTheControlThatHoldsTheSession() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sent = directory.appendingPathComponent("mode-sent")
+        guard mkfifo(sent.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        try await withIsolatedStore {
+            let session = try await retrySession(
+                in: directory, environment: "RETRY_AGENT_DELAY_MS=300 RETRY_AGENT_MODE_SENT='\(sent.path)' ")
+            try session.set("slow-set-mode")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = session.id
+            async let control = daemon.setMode(sessionId: id, modeId: "plan")
+            try await Self.byteWritten(to: sent)
+            #expect(try await daemon.closeSession(sessionId: id))
+            _ = try await control
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.closed == true)
+            #expect(record.acpx?.desiredModeId == "plan")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// Return once a byte is written to the FIFO at `path`: opened for reading and
+    /// writing, so that neither side waits for the other.
+    static func byteWritten(to path: URL) async throws {
+        let fd = open(path.path, O_RDWR | O_NONBLOCK)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        await withCheckedContinuation { (written: CheckedContinuation<Void, Never>) in
+            let reader = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
+            reader.setEventHandler {
+                var byte: UInt8 = 0
+                guard read(fd, &byte, 1) > 0 else { return }
+                reader.cancel()
+                written.resume()
+            }
+            reader.setCancelHandler { close(fd) }
+            reader.resume()
         }
     }
 
