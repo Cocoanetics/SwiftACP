@@ -160,9 +160,10 @@ public actor ACPAgentConnection {
     }
 
     /// Whether `error` is this layer reporting the connection ended — a request sent
-    /// after, or pending when, the agent exited or the connection was closed.
+    /// after, or pending when, the agent exited or the connection was closed — or stands
+    /// for such an error (``ErrorWithCause``).
     public static func isConnectionClosed(_ error: Error) -> Bool {
-        (error as? JSONRPCPeerError) == .closed || error is AgentDisconnectedError
+        causes(of: error).contains { ($0 as? JSONRPCPeerError) == .closed || $0 is AgentDisconnectedError }
     }
 
     /// Whether `error` came of the connection ending: it closed
@@ -170,7 +171,14 @@ public actor ACPAgentConnection {
     /// (``AcpMessageLimitError``). The agent can still be running then, until what ends
     /// it — `ACPAgent.close()` awaits that — is done.
     public static func endedTheConnection(_ error: Error) -> Bool {
-        isConnectionClosed(error) || error is AcpMessageLimitError
+        isConnectionClosed(error) || causes(of: error).contains { $0 is AcpMessageLimitError }
+    }
+
+    /// `error`, and what it stands for, a few levels down.
+    private static func causes(of error: Error) -> [Error] {
+        var chain = [error]
+        while chain.count < 5, let cause = (chain.last as? ErrorWithCause)?.cause { chain.append(cause) }
+        return chain
     }
 
     /// Forget that the connection ended, as if its end had been read but not yet

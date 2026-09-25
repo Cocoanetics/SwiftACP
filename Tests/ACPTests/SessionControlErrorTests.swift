@@ -58,6 +58,16 @@ struct SessionControlErrorTests {
         #expect(said(rejected).hasPrefix(#"Agent rejected session/set_model for model "b": "#))
     }
 
+    /// A connection that ended under a control still ended: the wrapped error keeps what it
+    /// came of as its cause, as acpx's does, and the connection's checks look through it.
+    @Test func aConnectionThatEndedUnderAControlStillEnded() {
+        let closed = SessionControlError.model(JSONRPCPeerError.closed, method: "session/set_model", modelId: "b")
+        #expect(ACPAgentConnection.isConnectionClosed(closed))
+        #expect(ACPAgentConnection.endedTheConnection(closed))
+        let boom = SessionControlError.model(agentError(-32000, "boom"), method: "session/set_model", modelId: "b")
+        #expect(!ACPAgentConnection.endedTheConnection(boom))
+    }
+
     /// A control called off is still just called off.
     @Test func aCancelledControlIsNotWrapped() async {
         await #expect(throws: CancellationError.self) {

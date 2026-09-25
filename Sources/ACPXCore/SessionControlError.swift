@@ -4,11 +4,13 @@ import SwiftACP
 /// A session control the agent turned down — a mode, a model or a config option — as
 /// acpx's client reports it (`src/acp/session-control-errors.ts`, 0.19.1). Its message
 /// names the control; the agent's error it wraps stays its ACP error (acpx's
-/// `wrapped.acp`), which output reports as the failure's own.
-public struct SessionControlError: Error, LocalizedError, Equatable {
+/// `wrapped.acp`), which output reports as the failure's own, and what it wraps stays its
+/// cause, so a connection that ended under it is still one that ended.
+public struct SessionControlError: ErrorWithCause, LocalizedError {
     public let message: String
     /// The agent's error, when the control failed with one.
     public let acp: AcpErrorPayload?
+    public let cause: Error?
 
     public var errorDescription: String? { message }
 
@@ -50,7 +52,7 @@ public struct SessionControlError: Error, LocalizedError, Equatable {
         return SessionControlError(
             message: "Agent rejected \(method) \(context): \(summary(acp)). "
                 + "The adapter may not implement \(method), or the requested value is not supported.",
-            acp: acp)
+            acp: acp, cause: error)
     }
 
     /// acpx's `throwSessionModelError`: wrapped as ``wrap(_:method:context:)`` wraps, or
@@ -62,7 +64,7 @@ public struct SessionControlError: Error, LocalizedError, Equatable {
         let acp = TurnFailure.payload(of: error)
         return SessionControlError(
             message: "Failed \(method) for model \"\(modelId)\": \(acp.map(summary) ?? TurnFailure.message(of: error))",
-            acp: acp)
+            acp: acp, cause: error)
     }
 
     /// acpx's `isLikelySessionControlUnsupportedError`: method not found, invalid params,
