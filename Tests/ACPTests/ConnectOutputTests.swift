@@ -108,6 +108,9 @@ extension DaemonToolsTests {
         let resume = #"{"jsonrpc":"2.0","id":1,"method":"session/resume","params":{}}"#
         #expect(flushed([(.outbound, load), (.inbound, loaded), (.outbound, resume), (.inbound, loadFailed)])
             == [load, loaded])
+        // A request the agent sends is never taken for a reconnect, whatever its method.
+        let agentLoad = #"{"jsonrpc":"2.0","id":1,"method":"session/load","params":{}}"#
+        #expect(flushed([(.inbound, agentLoad), (.inbound, loadFailed)]) == [agentLoad, loadFailed])
         // An error once the load was answered is paired with nothing.
         #expect(flushed([(.outbound, load), (.inbound, loaded), (.inbound, loadFailed)]) == [load, loaded, loadFailed])
     }
