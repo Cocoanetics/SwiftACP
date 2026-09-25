@@ -87,6 +87,9 @@ public actor TurnPersister {
     /// The `acpx` state of the record the turn saves, as it stands.
     public var acpx: SessionAcpxState? { record.acpx }
 
+    /// Whether a save is scheduled: for tests.
+    var saveScheduled: Bool { timer != nil }
+
     /// Apply a change a reconnect made — the session it moved the record to, what that
     /// session advertises, what the replay put back — to the record the turn saves,
     /// and save it at once: any later save would otherwise write the old state back.

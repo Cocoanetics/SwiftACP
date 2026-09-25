@@ -215,6 +215,30 @@ import Testing
         }
     }
 
+    /// The prompt is saved at once, as acpx writes the prompt's record, and no save is
+    /// scheduled: what goes out next reaches the log with the save an update asks for,
+    /// the checkpoint before the prompt, or the turn's end — as in acpx, where a prompt no
+    /// update followed is not in the log of a daemon that went down.
+    @Test func thePromptIsSavedAtOnceAndNoSaveScheduled() async throws {
+        try await withIsolatedStore {
+            let seed = record("j-save")
+            try SessionStore.writeRecord(seed)
+            let buffer = WireBuffer()
+            let persister = TurnPersister(record: seed, eventBuffer: buffer, requestId: "req-1")
+            await persister.recordPrompt("hi")
+            #expect(SessionStore.loadRecord("j-save")?.messages.count == 1)
+            #expect(await persister.saveScheduled == false)
+
+            try await persister.beginTurn()
+            buffer.append(body(prompt))
+            #expect(await persister.saveScheduled == false)
+            await persister.apply(.agentMessageChunk(ContentBlock.text("ok")))
+            #expect(await persister.saveScheduled)
+            await persister.checkpoint()
+            #expect(try lines("j-save").last == prompt)
+        }
+    }
+
     /// A journal that cannot be written fails the turn: its start, or — once a write has
     /// failed — its end.
     @Test func aJournalThatCannotBeWrittenFailsTheTurn() async throws {
