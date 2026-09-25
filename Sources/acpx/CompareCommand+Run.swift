@@ -191,7 +191,7 @@ final class RunCapture: @unchecked Sendable {
         switch update {
         case .agentMessageChunk(.text(let content)):
             lock.withLock { chunks += content.text }
-        case .usageUpdate(let usage):
+        case .usageUpdate(let usage) where usage.reachesACPX:
             let captured = Self.usage(of: usage)
             lock.withLock { lastUsage = captured }
         default:
@@ -201,15 +201,14 @@ final class RunCapture: @unchecked Sendable {
 
     /// acpx's `captureUsage`: `_meta.usage` in snake or camel case. Its fallback, the
     /// update itself, never has any: acpx's SDK keeps only `used`, `size`, `cost` and
-    /// `_meta` of a `usage_update` (#155).
+    /// `_meta` of a `usage_update`, and drops one without `used` and `size` (#155).
     private static func usage(of update: UsageUpdate) -> CompareCommand.TokenUsage {
-        guard case .object(let meta)? = update.meta, case .object(let usage)? = meta["usage"] else {
-            return CompareCommand.TokenUsage()
-        }
+        guard let usage = update.acpxTokenUsage else { return CompareCommand.TokenUsage() }
         func number(_ keys: [String]) -> Double? {
             for key in keys {
                 switch usage[key] {
                 case .integer(let value)?: return Double(value)
+                case .unsignedInteger(let value)?: return Double(value)
                 case .double(let value)? where value.isFinite: return value
                 default: continue
                 }

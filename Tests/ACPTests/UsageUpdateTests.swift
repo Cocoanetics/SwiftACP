@@ -3,9 +3,11 @@ import Foundation
 import SwiftACP
 import Testing
 
-/// Where a `usage_update`'s token breakdown is read from. acpx takes `_meta.usage` when
-/// the adapter nests it there and otherwise the update record itself, so an adapter that
-/// reports the breakdown at the top level is captured too (acpx 0.11.2, issue #28).
+/// What a `usage_update` records, as acpx 0.19.1 records it: only what its ACP SDK
+/// (`@agentclientprotocol/sdk` 1.5.0, `zUsageUpdate`) lets through (#155). The SDK drops an
+/// update whose `used` or `size` is not a number, and strips every key but `used`, `size`,
+/// `cost` and `_meta`, so the token counts come from `_meta.usage` alone. It keeps a cost
+/// only with a number `amount` and a string `currency`.
 struct UsageUpdateTests {
     private func record(id: String) -> SessionRecord {
         let now = nowISO()
@@ -22,38 +24,61 @@ struct UsageUpdateTests {
             into: &record, notification: SessionNotification(sessionId: "u", update: update))
     }
 
-    @Test func breakdownReportedOnTheUpdateItselfIsCaptured() throws {
-        var session = record(id: "flat")
-        try apply(
-            #"{"sessionUpdate":"usage_update","used":10,"size":100,"#
-                + #""inputTokens":800,"outputTokens":400,"totalTokens":1200}"#,
-            to: &session)
-
-        #expect(session.cumulativeTokenUsage?.inputTokens == 800)
-        #expect(session.cumulativeTokenUsage?.outputTokens == 400)
-        #expect(session.cumulativeTokenUsage?.totalTokens == 1200)
-        #expect(session.requestTokenUsage?.values.first?.inputTokens == 800)
+    /// One update as the agent sends it, and what acpx records of it.
+    struct Case: Sendable, CustomTestStringConvertible {
+        var name: String
+        var update: String
+        var inputTokens: Double?
+        var cost: SessionUsageCost?
+        var testDescription: String { name }
     }
 
-    @Test func nestedMetaUsageStillWins() throws {
-        var session = record(id: "nested")
-        // Both present: `_meta.usage` is the documented location and takes precedence.
-        try apply(
-            #"{"sessionUpdate":"usage_update","inputTokens":1,"#
-                + #""_meta":{"usage":{"inputTokens":800,"outputTokens":400}}}"#,
-            to: &session)
+    /// Each checked against acpx 0.19.1, the agent sending the update in a turn.
+    static let cases: [Case] = [
+        Case(name: "the breakdown under _meta.usage", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"_meta":{"usage":{"inputTokens":7}}}"#,
+            inputTokens: 7),
+        Case(name: "counts on the update itself", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"inputTokens":3,"output_tokens":4}"#),
+        Case(name: "no used or size", update:
+            #"{"sessionUpdate":"usage_update","cost":{"amount":1,"currency":"USD"},"#
+                + #""_meta":{"usage":{"input_tokens":1}}}"#),
+        Case(name: "a size that is a string", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":"100","_meta":{"usage":{"input_tokens":8}}}"#),
+        Case(name: "a fractional used", update:
+            #"{"sessionUpdate":"usage_update","used":5.5,"size":100,"_meta":{"usage":{"input_tokens":2}}}"#,
+            inputTokens: 2),
+        Case(name: "an amount that is a string", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"cost":{"amount":"x","currency":"USD"},"#
+                + #""_meta":{"usage":{"input_tokens":3}}}"#,
+            inputTokens: 3),
+        Case(name: "a cost without its currency", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"cost":{"amount":0.5},"#
+                + #""_meta":{"usage":{"input_tokens":4}}}"#,
+            inputTokens: 4),
+        Case(name: "a cost", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"cost":{"amount":0.25,"currency":"USD"}}"#,
+            cost: SessionUsageCost(amount: 0.25, currency: "USD")),
+        Case(name: "a negative amount", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"cost":{"amount":-1,"currency":"USD"}}"#,
+            cost: SessionUsageCost(currency: "USD")),
+        Case(name: "a blank currency", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"cost":{"amount":0.5,"currency":"  "}}"#,
+            cost: SessionUsageCost(amount: 0.5)),
+        Case(name: "a _meta that is not an object", update:
+            #"{"sessionUpdate":"usage_update","used":5,"size":100,"_meta":"x","inputTokens":6}"#),
+        Case(name: "only the context window", update: #"{"sessionUpdate":"usage_update","used":50,"size":1000}"#)
+    ]
 
-        #expect(session.cumulativeTokenUsage?.inputTokens == 800)
-        #expect(session.cumulativeTokenUsage?.outputTokens == 400)
-    }
+    @Test(arguments: cases)
+    func anUpdateRecordsWhatAcpxRecordsOfIt(_ given: Case) throws {
+        var session = record(id: "usage")
+        try apply(given.update, to: &session)
 
-    @Test func aBareContextUpdateStillRecordsNoBreakdown() throws {
-        var session = record(id: "bare")
-        // Codex-shaped: context window only, no token fields anywhere — unchanged.
-        try apply(#"{"sessionUpdate":"usage_update","used":50,"size":1000}"#, to: &session)
-
-        #expect(session.cumulativeTokenUsage == nil)
-        #expect(session.cumulativeCost == nil)
+        #expect(session.cumulativeTokenUsage?.inputTokens == given.inputTokens)
+        #expect(session.requestTokenUsage?.values.first?.inputTokens == given.inputTokens)
+        #expect(session.cumulativeCost?.amount == given.cost?.amount)
+        #expect(session.cumulativeCost?.currency == given.cost?.currency)
     }
 
     // MARK: Usage on the prompt response

@@ -64,6 +64,18 @@ struct CompareRunOnceTests {
         #expect(row["final_message"] as? String == "hello")
     }
 
+    /// A `usage_update` without `used` and `size` counts for nothing: acpx's SDK drops it
+    /// before `captureUsage` sees it (#155).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aUsageUpdateWithoutItsSizesCountsForNothing() async throws {
+        let compared = try await compare(["usage-nosize"])
+        let row = try #require(compared.rows.first)
+        #expect(compared.code == ExitCodes.success)
+        #expect(row["input_tokens"] is NSNull)
+        #expect(row["total_tokens"] is NSNull)
+        #expect(row["final_message"] as? String == "hello")
+    }
+
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aRunPastTheTimeoutIsACancelledRow() async throws {
         let compared = try await compare(["hang-prompt", "ok"], ["--timeout", "0.3"])
