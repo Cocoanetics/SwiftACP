@@ -69,8 +69,8 @@ extension DaemonToolsTests {
     }
 
     /// With no daemon, nothing holds a session. A daemon that holds the lock but does not
-    /// answer is taken as acpx takes an owner whose socket cannot be reached; one from
-    /// before it could say cannot.
+    /// answer — or stops answering once connected — is taken as acpx takes an owner whose
+    /// socket cannot be reached; one from before it could say cannot.
     @Test func withoutADaemonThatAnswers() async throws {
         try await withIsolatedStore {
             let none = await DaemonClient.sessionHold(sessionId: "s")
@@ -85,10 +85,12 @@ extension DaemonToolsTests {
             try await legacy.connect()
             let older = await DaemonClient.sessionHold(on: legacy, sessionId: "s")
             await legacy.disconnect()
+            let dropped = await DaemonClient.sessionHold(on: legacy, sessionId: "s")
 
             #expect(none == .notHeld)
             #expect(silent == .unreachable)
             #expect(older == .unknown)
+            #expect(dropped == .unreachable)
         }
     }
 }

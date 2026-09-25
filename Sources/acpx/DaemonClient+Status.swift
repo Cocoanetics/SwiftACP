@@ -30,11 +30,17 @@ extension DaemonClient {
         return hold
     }
 
-    /// Whether the daemon `proxy` is connected to holds `sessionId`.
+    /// Whether the daemon `proxy` is connected to holds `sessionId`. A daemon that answers
+    /// without saying — one from before the tool, which does not know it — cannot say; one
+    /// that stopped answering once connected is one that does not answer.
     static func sessionHold(on proxy: MCPServerProxy, sessionId: String) async -> SessionHold {
-        guard let status = try? await ACPXDaemon.Client(proxy: proxy).sessionStatus(sessionId: sessionId) else {
+        do {
+            let status = try await ACPXDaemon.Client(proxy: proxy).sessionStatus(sessionId: sessionId)
+            return status.live ? .held(pid: status.pid) : .notHeld
+        } catch MCPServerProxyError.toolError, is DecodingError {
             return .unknown
+        } catch {
+            return .unreachable
         }
-        return status.live ? .held(pid: status.pid) : .notHeld
     }
 }
