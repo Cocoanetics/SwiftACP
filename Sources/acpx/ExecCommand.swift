@@ -31,61 +31,92 @@ enum ExecCommand {
             if renderer.streamsWireJSON { renderer.acpMessage(direction, body) }
         }
         let auth = context.config.auth
+        // acpx's `withInterrupt`: a signal puts the run down as its `handleInterrupt` does,
+        // and unless the run ended first, the CLI exits `INTERRUPTED` without a word.
+        let interrupt = RunInterrupt()
 
         return try runBlocking {
-            let handle: ACPAgent
             do {
-                handle = try await launchAgent(within: flags.timeoutMs) {
-                    try await ACPAgent.launch(
-                        agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd, permission: permission,
-                        nonInteractivePermissions: flags.nonInteractivePolicy, permissionRules: permissionRules,
-                        capabilities: flags.clientCapabilities, authCredentials: auth, authPolicy: flags.authPolicy,
-                        inheritStderr: flags.verbose, onClientRequest: onClientRequest, onRawWire: onRawWire)
-                }
-            } catch {
-                return reportFailure(error, renderer: renderer, format: flags.format)
+                return try await Interrupts.withInterrupt({
+                    let handle: ACPAgent
+                    do {
+                        handle = try await interrupt.launch {
+                            try await launchAgent(within: flags.timeoutMs) {
+                                try await ACPAgent.launch(
+                                    agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd,
+                                    permission: permission, nonInteractivePermissions: flags.nonInteractivePolicy,
+                                    permissionRules: permissionRules, capabilities: flags.clientCapabilities,
+                                    authCredentials: auth, authPolicy: flags.authPolicy, inheritStderr: flags.verbose,
+                                    onClientRequest: onClientRequest, onRawWire: onRawWire)
+                            }
+                        }
+                    } catch {
+                        return reportFailure(error, renderer: renderer, format: flags.format)
+                    }
+                    return await run(
+                        prompt, on: handle, agent: agent, mcpServers: mcpServers, meta: meta,
+                        configOptions: configOptions, flags: flags, renderer: renderer, promptResult: promptResult,
+                        interrupt: interrupt)
+                }, onInterrupt: { await interrupt.putDown() })
+            } catch is InterruptedError {
+                renderer.flushText()
+                renderer.flushQuietText()
+                return ExitCodes.interrupted
             }
-            // Whether the prompt may go again depends on what the connection had of the
-            // agent meanwhile.
-            let sideEffects = PromptSideEffects()
-            await handle.connection.setWireMessageObserver { sideEffects.observe($0, $1) }
-            let session: ACPSession
-            do {
-                let connection = handle.connection
-                let request = NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta)
-                let response = try await withTimeout(milliseconds: flags.timeoutMs) {
-                    try await connection.newSession(request)
-                }
-                try await ModelApplication.applySessionControls(
-                    connection: connection, session: response, model: flags.model,
-                    configOptions: configOptions, agentCommand: agent.agentCommand,
-                    timeoutMilliseconds: flags.timeoutMs,
-                    onWarning: quietOutput(flags) ? nil : { Console.errLine("[acpx] warning: \($0)") })
-                session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
-            } catch {
-                await handle.close()
-                return reportFailure(error, renderer: renderer, format: flags.format)
-            }
-            let run: PromptRun
-            do {
-                run = try await runPrompt(
-                    prompt, on: session, policy: PromptPolicy(flags), renderer: renderer, sideEffects: sideEffects)
-            } catch {
-                await handle.close()
-                return reportFailure(
-                    error, renderer: renderer, format: flags.format, agentErrorShown: showsAgentError(error))
-            }
-            renderer.finish(stopReason: run.response.stopReason)
-            renderer.promptMetadata(usage: promptResult.result?["usage"], cost: promptResult.result?["cost"])
-            await handle.close()
-            if run.permissions.promptUnavailable, flags.format != "quiet",
-                !renderer.showedFailure(FileSystemPermissionError.promptUnavailable.description) {
-                // acpx rethrows this after the turn; its top-level handler reports it
-                // unless the stream already shows the client's refusal saying the same.
-                return reportFailure(PromptUnavailable(), renderer: renderer, format: flags.format)
-            }
-            return permissionExitCode(run.permissions, quiet: flags.format == "quiet")
         }
+    }
+
+    /// The run once its agent is up: a session with the invocation's model and options,
+    /// then the prompt — each within `--timeout` — reported as acpx reports it.
+    private static func run(
+        _ prompt: [ContentBlock], on handle: ACPAgent, agent: AgentInvocation, mcpServers: [MCPServerSpec],
+        meta: JSONValue?, configOptions: [ModelApplication.ConfigOptionAssignment], flags: GlobalFlags,
+        renderer: OutputRenderer, promptResult: PromptResultCapture, interrupt: RunInterrupt
+    ) async -> Int32 {
+        // Whether the prompt may go again depends on what the connection had of the
+        // agent meanwhile.
+        let sideEffects = PromptSideEffects()
+        await handle.connection.setWireMessageObserver { sideEffects.observe($0, $1) }
+        let session: ACPSession
+        do {
+            let connection = handle.connection
+            let request = NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta)
+            let response = try await withTimeout(milliseconds: flags.timeoutMs) {
+                try await connection.newSession(request)
+            }
+            try await ModelApplication.applySessionControls(
+                connection: connection, session: response, model: flags.model,
+                configOptions: configOptions, agentCommand: agent.agentCommand,
+                timeoutMilliseconds: flags.timeoutMs,
+                onWarning: quietOutput(flags) ? nil : { Console.errLine("[acpx] warning: \($0)") })
+            session = ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
+        } catch {
+            await handle.close()
+            return reportFailure(error, renderer: renderer, format: flags.format)
+        }
+        interrupt.opened(session.id)
+        let run: PromptRun
+        do {
+            run = try await runPrompt(
+                prompt, on: session, policy: PromptPolicy(flags), renderer: renderer, sideEffects: sideEffects)
+        } catch {
+            await handle.close()
+            // The connection ended with the prompt out — the agent gone, or an interrupt's
+            // close: acpx has nothing more to show for it (`outputAlreadyEmitted`).
+            return reportFailure(
+                error, renderer: renderer, format: flags.format, agentErrorShown: showsAgentError(error),
+                shown: ACPAgentConnection.isConnectionClosed(error))
+        }
+        renderer.finish(stopReason: run.response.stopReason)
+        renderer.promptMetadata(usage: promptResult.result?["usage"], cost: promptResult.result?["cost"])
+        await handle.close()
+        if run.permissions.promptUnavailable, flags.format != "quiet",
+            !renderer.showedFailure(FileSystemPermissionError.promptUnavailable.description) {
+            // acpx rethrows this after the turn; its top-level handler reports it
+            // unless the stream already shows the client's refusal saying the same.
+            return reportFailure(PromptUnavailable(), renderer: renderer, format: flags.format)
+        }
+        return permissionExitCode(run.permissions, quiet: flags.format == "quiet")
     }
 
     /// Launch the agent within `--timeout`, as acpx starts its client. At the deadline
@@ -105,6 +136,8 @@ enum ExecCommand {
     ///   line; never anything on stderr.
     /// - `agentErrorShown`: the failure came with the agent's error response, which the
     ///   output shows — acpx's `markOutputAlreadyEmitted`.
+    /// - `shown`: acpx's `outputAlreadyEmitted` from the start, as for an agent gone with
+    ///   the prompt out — nothing at all is printed for it, in any format.
     /// - quiet: acpx's quiet formatter — what the agent said so far, then one stderr
     ///   line: the code qualified by any detail code, the agent's `data.details` in place
     ///   of the message when given.
@@ -114,10 +147,15 @@ enum ExecCommand {
     ///   stderr bare, with its hints, as acpx's top-level handler prints it.
     static func reportFailure(
         _ error: Error, renderer: OutputRenderer, format: String, agentErrorShown: Bool = false,
-        err: (String) -> Void = { Console.errLine($0) }
+        shown: Bool = false, err: (String) -> Void = { Console.errLine($0) }
     ) -> Int32 {
         let failure = RunFailure(error)
         renderer.flushText()
+        // `shown`: nothing is shown for it in any format, what the agent said aside.
+        if shown {
+            renderer.flushQuietText()
+            return exitCode(forOutputCode: failure.outputCode)
+        }
         switch format {
         case "json":
             if !agentErrorShown, !renderer.showedFailure(failure.message) {
@@ -156,7 +194,7 @@ enum ExecCommand {
         renderer.renderError(code: "RUNTIME", failure.acpDetails ?? failure.message)
     }
 
-    /// ``reportFailure(_:renderer:format:agentErrorShown:err:)`` in JSON mode.
+    /// ``reportFailure(_:renderer:format:agentErrorShown:shown:err:)`` in JSON mode.
     static func reportJSONFailure(_ error: Error, renderer: OutputRenderer) -> Int32 {
         reportFailure(error, renderer: renderer, format: "json")
     }

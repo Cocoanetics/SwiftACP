@@ -97,6 +97,20 @@ extension ACPAgentConnection {
         return result
     }
 
+    /// Whether `sessionId` has a prompt out, not answered yet — acpx's active prompt,
+    /// which an interrupt cancels (`cancelActivePrompt`).
+    public func hasPromptInFlight(sessionId: SessionId) -> Bool {
+        promptingSessionIds.contains(sessionId)
+    }
+
+    /// Return once `sessionId` has no prompt out — at once when it has none, else when its
+    /// prompt settles — saying whether its latest prompt was answered, rather than failed;
+    /// `nil` when it has sent none.
+    public func waitForPromptToSettle(sessionId: SessionId) async -> Bool? {
+        guard promptingSessionIds.contains(sessionId) else { return latestPromptAnswered[sessionId] }
+        return await withCheckedContinuation { promptSettledWaiters[sessionId, default: []].append($0) }
+    }
+
     /// End what `sessionId`'s prompt in flight owns, and leave the prompt out — as acpx
     /// aborts the requests of a prompt that ran past its deadline (`abortTimedOutRequests`)
     /// while it waits to see whether an answer comes: an owned request still open is

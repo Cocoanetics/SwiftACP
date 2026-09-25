@@ -65,6 +65,11 @@ public actor ACPAgentConnection {
 
     /// Sessions with a `session/prompt` in flight.
     var promptingSessionIds: Set<SessionId> = []
+    /// Who waits for each session's prompt in flight to settle (``waitForPromptToSettle(sessionId:)``),
+    /// told whether it was answered.
+    var promptSettledWaiters: [SessionId: [CheckedContinuation<Bool, Never>]] = [:]
+    /// Whether each session's latest prompt was answered, once it settled.
+    var latestPromptAnswered: [SessionId: Bool] = [:]
     /// The `session/cancel` of each session's prompt in flight, sent once however often
     /// the turn is cancelled (see ``cancel(sessionId:)``).
     var cancelSends: [SessionId: Task<Void, any Error>] = [:]
@@ -339,8 +344,13 @@ public actor ACPAgentConnection {
         turnPermissionStats[request.sessionId] = PermissionStats()
         turnPermissionStats[request.sessionId]?.promptUnavailable =
             previous.promptUnavailable && unavailableAtTurnEnd[request.sessionId] != true
+        var answered = false
         defer {
             promptingSessionIds.remove(request.sessionId)
+            latestPromptAnswered[request.sessionId] = answered
+            for waiter in promptSettledWaiters.removeValue(forKey: request.sessionId) ?? [] {
+                waiter.resume(returning: answered)
+            }
             cancellingSessionIds.remove(request.sessionId)
             cancelSends[request.sessionId] = nil
             unavailableAtTurnEnd[request.sessionId] = turnPermissionStats[request.sessionId]?.promptUnavailable
@@ -352,6 +362,7 @@ public actor ACPAgentConnection {
         // against the next turn.
         do {
             let response: PromptResponse = try await send("session/prompt", request)
+            answered = true
             // The answer was announced as it was read (see `start`), not from here.
             await afterPromptAnswer?()
             answerTurnRequestsCancelled(request.sessionId)
