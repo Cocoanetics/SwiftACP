@@ -8,7 +8,8 @@ import Testing
 /// `exec` interrupted, as acpx 0.19.1's `runOnce` is (`withInterrupt`, #147): at the first
 /// SIGINT, SIGTERM or SIGHUP the prompt out is cancelled and given 2.5 s, then the agent
 /// is closed; unless the run ended by then, it exits `INTERRUPTED` (130) without a word.
-/// Each expected output is what acpx printed for the same agent (`Fixtures/retry-agent.py`).
+/// Each expected output is what acpx printed for the same agent (`Fixtures/retry-agent.py`),
+/// 0.19.3 for an agent gone with the prompt out.
 /// A signal is stood in for by ``Interrupts/Source``, fired as the agent gets its prompt.
 struct ExecInterruptTests {
     struct Run {
@@ -30,14 +31,19 @@ struct ExecInterruptTests {
     }
 
     /// An agent that does not answer is closed once 2.5 s have passed. That fails the
-    /// prompt, which ends the run — with nothing shown for it, as acpx shows nothing for
-    /// an agent gone with the prompt out.
+    /// prompt, which ends the run reported, once, as acpx 0.19.3 reports an agent gone with
+    /// the prompt out (#778). Which of the connection's end and its close fails the prompt
+    /// first decides SwiftACP's words. acpx's are always `ACP agent disconnected during
+    /// request (process_exit, exit=null, signal=SIGTERM)`, as it ends the agent's process
+    /// before it closes the connection, which #142 tracks.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anAgentThatDoesNotAnswerIsClosed() async throws {
         let run = try await exec("hang-prompt")
         #expect(run.code == 1)
         #expect(run.out == "[client] initialize (running)\n\n[client] session/new (running)\n")
-        #expect(run.err.isEmpty, "\(run.err)")
+        #expect(run.err == "ACP connection closed\n" || run.err.hasPrefix("ACP agent disconnected during request ("),
+                "\(run.err)")
+        #expect(run.err.components(separatedBy: "\n").count == 2, "\(run.err)")
         #expect(!isRunning(run.pid))
     }
 
@@ -65,27 +71,43 @@ struct ExecInterruptTests {
     }
 
     /// An agent gone before any prompt went out is reported, as acpx reports it: the
-    /// connection closed, in its SDK's words.
+    /// connection closed, in its SDK's words. Should the prompt beat the agent's exit onto
+    /// the wire, the run is the agent's disconnect instead, reported just as once (#778);
+    /// which comes first is up to the two processes, in acpx as here.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anAgentGoneBeforeThePromptIsReported() async throws {
+        let disconnect = "ACP agent disconnected during request (process_exit, exit=3, signal=null)"
         let text = try await exec("die-after-new", interrupting: false)
         #expect(text.code == 1)
-        #expect(text.err == "ACP connection closed\n")
+        #expect(["ACP connection closed\n", disconnect + "\n"].contains(text.err), "\(text.err)")
         let quiet = try await exec("die-after-new", format: "quiet", interrupting: false)
-        #expect(quiet.err == "[acpx] error: RUNTIME ACP connection closed\n")
+        #expect([
+            "[acpx] error: RUNTIME ACP connection closed\n",
+            "[acpx] error: RUNTIME AGENT_DISCONNECTED \(disconnect)\n"
+        ].contains(quiet.err), "\(quiet.err)")
     }
 
-    /// An agent that goes with the prompt out ends the run with nothing more shown, in any
-    /// format: acpx's error carries `outputAlreadyEmitted`.
+    /// An agent that goes with the prompt out ends the run reported once, in any format,
+    /// after what it said: acpx 0.19.3 marks an error shown only when the output shows the
+    /// agent's error (`markOutputAlreadyEmitted`, #778), where 0.19.1 showed nothing.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["text", "quiet", "json"])
-    func anAgentGoneWithThePromptOutIsNotReported(format: String) async throws {
+    func anAgentGoneWithThePromptOutIsReportedOnce(format: String) async throws {
         let run = try await exec("die-in-prompt", format: format, interrupting: false)
+        let disconnect = "ACP agent disconnected during request (process_exit, exit=3, signal=null)"
         #expect(run.code == 1)
-        #expect(run.err.isEmpty)
+        #expect((run.out + run.err).components(separatedBy: disconnect).count == 2, "\(run.out)\(run.err)")
         switch format {
-        case "text": #expect(run.out.hasSuffix("[client] session/new (running)\npartial \n"), "\(run.out)")
-        case "quiet": #expect(run.out == "partial \n")
-        default: #expect(!run.out.contains("\"error\""), "\(run.out)")
+        case "text":
+            #expect(run.out.hasSuffix("[client] session/new (running)\npartial \n"), "\(run.out)")
+            #expect(run.err == disconnect + "\n")
+        case "quiet":
+            #expect(run.out == "partial \n")
+            #expect(run.err == "[acpx] error: RUNTIME AGENT_DISCONNECTED \(disconnect)\n")
+        default:
+            #expect(run.err.isEmpty)
+            #expect(run.out.hasSuffix(#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":""#
+                + disconnect + #"","data":{"acpxCode":"RUNTIME","detailCode":"AGENT_DISCONNECTED","origin":"acp","#
+                + #""sessionId":"unknown"}}}"# + "\n"), "\(run.out)")
         }
     }
 
