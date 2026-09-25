@@ -71,9 +71,7 @@ extension ACPAgentConnection {
         let operation = ClientOperation(
             method: ClientOperation.requestPermission, status: .completed, summary: notice,
             sessionId: sessionId, escalation: escalation)
-        for sink in eventSinks.values {
-            sink.yield(.clientOperation(operation))
-        }
+        eventSinks.yield(.clientOperation(operation))
     }
 
     /// Whether a handler cancelled outright although the agent offered a refusal it

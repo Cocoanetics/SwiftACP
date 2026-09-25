@@ -24,7 +24,7 @@ extension ACPAgentConnection {
     }
 
     func publish(_ event: ConnectionEvent) {
-        for sink in eventSinks.values { sink.yield(event) }
+        eventSinks.yield(event)
     }
 
     /// The ACP SDK's `RequestError.methodNotFound(method)`: how acpx refuses a method it

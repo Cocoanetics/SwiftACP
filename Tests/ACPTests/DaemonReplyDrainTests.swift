@@ -12,12 +12,17 @@ import Testing
 /// part of the turn, the answer is announced as it comes and the turn's end after it all,
 /// and a cancel meanwhile finds its prompt answered.
 extension DaemonToolsTests {
-    /// The mock agent, holding a terminal of the turn open past its answer until `fifo` is
-    /// written, logging the `session/*` requests it gets to `log`, and started with `options`.
-    private static func holdingMock(_ fifo: URL, log: URL, _ options: String = "") throws -> String {
+    /// The mock agent, holding a terminal of the turn open past its answer until `release`
+    /// exists, logging the `session/*` requests it gets to `log`, and started with `options`.
+    private static func holdingMock(_ release: URL, log: URL, _ options: String = "") throws -> String {
         let command = try #require(mockCommand())
-        return "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_HOLD_TERMINAL='\(fifo.path)' MOCK_REQUEST_LOG='\(log.path)' "
+        return "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_HOLD_TERMINAL='\(release.path)' MOCK_REQUEST_LOG='\(log.path)' "
             + "\(options) \(command)"
+    }
+
+    /// Create `file`, which the mock agent waits for.
+    private static func create(_ file: URL) {
+        FileManager.default.createFile(atPath: file.path, contents: nil)
     }
 
     /// A stream that yields each time `client` is told a prompt was answered.
@@ -83,10 +88,13 @@ extension DaemonToolsTests {
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCancelAfterTheAnswerSendsNothing() async throws {
         let directory = try Self.scratchDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let (log, terminal) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("t"))
-        #expect(mkfifo(terminal.path, 0o600) == 0)
-        let command = try Self.holdingMock(terminal, log: log)
+        let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
+        // However the test ends, the agent's terminal does, and with it the turn.
+        defer {
+            Self.create(release)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let command = try Self.holdingMock(release, log: log)
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
@@ -96,8 +104,8 @@ extension DaemonToolsTests {
             for await _ in answers { break }
 
             #expect(try await daemon.cancelSession(sessionId: id))
-            // The terminal ends — and with it the turn — once its FIFO is written.
-            close(await Self.openForWriting(terminal))
+            // The terminal ends — and with it the turn — once its file is there.
+            Self.create(release)
             try await turn.value
 
             #expect(!Self.requests(log).contains("session/cancel"))
@@ -112,11 +120,14 @@ extension DaemonToolsTests {
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aPermissionAskedAfterTheAnswerCounts() async throws {
         let directory = try Self.scratchDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let (log, terminal) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("t"))
+        let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
         let gate = directory.appendingPathComponent("gate")
-        #expect(mkfifo(terminal.path, 0o600) == 0 && mkfifo(gate.path, 0o600) == 0)
-        let command = try Self.holdingMock(terminal, log: log, "MOCK_ASK_AFTER_ANSWER='\(gate.path)'")
+        defer {
+            Self.create(gate)
+            Self.create(release)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let command = try Self.holdingMock(release, log: log, "MOCK_ASK_AFTER_ANSWER='\(gate.path)'")
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
@@ -125,9 +136,9 @@ extension DaemonToolsTests {
             let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
             for await _ in answers { break }
 
-            // The agent asks once its gate opens — after the answer went out — and then
+            // The agent asks once its gate is there — after the answer went out — and then
             // lets its terminal end.
-            close(await Self.openForWriting(gate))
+            Self.create(gate)
             try await turn.value
 
             let ended = try #require(client.logs.lazy.compactMap { try? $0.decoded(TurnEndedEvent.self) }.first)

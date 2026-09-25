@@ -47,7 +47,7 @@ extension DaemonToolsTests {
 
     /// `fifo` opened to write, which waits for its reader — on a thread of its own, not
     /// one of Swift's.
-    static func openForWriting(_ fifo: URL) async -> Int32 {
+    private static func openForWriting(_ fifo: URL) async -> Int32 {
         await withCheckedContinuation { continuation in
             Thread { continuation.resume(returning: open(fifo.path, O_WRONLY)) }.start()
         }

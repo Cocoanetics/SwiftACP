@@ -20,9 +20,7 @@ extension ACPAgentConnection {
         for sink in updateSinks.values {
             sink.yield(notification)
         }
-        for sink in eventSinks.values {
-            sink.yield(.update(notification))
-        }
+        eventSinks.yield(.update(notification))
     }
 
     /// `session/load` as acpx's `loadSessionWithOptions` sends it: the request, then the
