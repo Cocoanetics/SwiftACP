@@ -344,13 +344,18 @@ actor ACPXDaemonBackend: ACPXBackend {
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
-    /// the health of acpx's queue owner, which the prompt banner and `status` report.
+    /// the health of acpx's queue owner, which the prompt banner and `status` report. An
+    /// entry whose agent has exited, or whose connection has closed, is only kept until
+    /// the next turn replaces it: nothing holds the session meanwhile.
     func sessionStatus(sessionId: String) async -> LiveSessionStatus {
         guard let record = findRecord(sessionId), let entry = live[record.acpxRecordId] else {
             return LiveSessionStatus(live: false)
         }
         let lifecycle = entry.agent.lifecycle
-        return LiveSessionStatus(live: true, pid: lifecycle?.running == true ? lifecycle?.pid.map { Int($0) } : nil)
+        guard lifecycle?.running != false, await !entry.agent.connection.isClosed else {
+            return LiveSessionStatus(live: false)
+        }
+        return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the

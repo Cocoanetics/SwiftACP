@@ -44,6 +44,30 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A session whose agent has exited is not held, though the daemon keeps its entry
+    /// until the next turn: the banner and `status` would say the agent is there.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aSessionWhoseAgentExitedIsNotHeld() async throws {
+        let command = "/usr/bin/env MOCK_EXIT_AFTER_PROMPTS=1 " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await backend.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let proxy = MCPServerProxy(config: .stdioHandles(server: ACPXDaemon(backend: backend)))
+            try await proxy.connect()
+            _ = try await DaemonClient.runPrompt(
+                on: proxy, stopReason: StopReasonBox(), sessionId: id,
+                content: [.object(["type": .string("text"), "text": .string("hi")])], wait: true,
+                permissionMode: "approve-all", nonInteractivePermissions: "deny")
+
+            let connection = try #require(await backend.heldConnection(id))
+            await connection.waitUntilClosed()
+            let hold = await DaemonClient.sessionHold(on: proxy, sessionId: id)
+            await proxy.disconnect()
+
+            #expect(hold == .notHeld)
+        }
+    }
+
     /// With no daemon, nothing holds a session. A daemon that holds the lock but does not
     /// answer is taken as acpx takes an owner whose socket cannot be reached; one from
     /// before it could say cannot.
@@ -66,6 +90,13 @@ extension DaemonToolsTests {
             #expect(silent == .unreachable)
             #expect(older == .unknown)
         }
+    }
+}
+
+extension ACPXDaemonBackend {
+    /// The connection of the agent this daemon holds for `recordId`, if it holds one.
+    func heldConnection(_ recordId: String) -> ACPAgentConnection? {
+        live[recordId]?.agent.connection
     }
 }
 
