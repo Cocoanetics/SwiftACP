@@ -56,7 +56,9 @@ enum PromptCommand {
                     sessionId: sessionId, content: try PromptInputResolver.jsonValues(promptBlocks), wait: wait,
                     permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                     permissionPolicy: permissionRules, terminalOutputCeiling: terminalOutputCeiling,
-                    model: flags.model, renderer: renderer)
+                    model: flags.model,
+                    limits: PromptLimits(timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries),
+                    renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {
@@ -66,7 +68,7 @@ enum PromptCommand {
                 throw turnFailure(error, renderer: renderer)
             }
         }
-        renderer.finish(stopReason: turn.stopReason)
+        renderer.finish(stopReason: turn.stopReason, answered: !turn.unanswered)
         renderer.promptMetadata(usage: turn.usage.map(WireJSON.init), cost: turn.cost.map(WireJSON.init))
         let permissions = turn.permissions ?? PermissionStats()
         if permissions.promptUnavailable { renderer.permissionPromptUnavailable(sessionId: record.acpxRecordId) }

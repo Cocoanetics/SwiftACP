@@ -39,6 +39,16 @@ public struct PermissionStats: Codable, Sendable, Equatable {
         cancelled += other.cancelled
     }
 
+    /// What these totals counted since `earlier`, an earlier look at them.
+    public func counted(since earlier: PermissionStats) -> PermissionStats {
+        var since = self
+        since.requested -= earlier.requested
+        since.approved -= earlier.approved
+        since.denied -= earlier.denied
+        since.cancelled -= earlier.cancelled
+        return since
+    }
+
     enum Decision { case approved, denied, cancelled }
 
     mutating func record(_ decision: Decision) {

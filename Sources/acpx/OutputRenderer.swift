@@ -159,7 +159,7 @@ final class OutputRenderer: @unchecked Sendable {
         if let line = QuietMetadata.costLine(cost) { err(line + "\n") }
     }
 
-    func finish(stopReason: StopReason) {
+    func finish(stopReason: StopReason, answered: Bool = true) {
         lock.lock()
         defer { lock.unlock() }
         guard !finished else { return }
@@ -172,8 +172,12 @@ final class OutputRenderer: @unchecked Sendable {
             flushQuiet()
         case .text:
             flushThoughtBuffer()
-            beginSection()
-            writeLine(dim("[done] \(stopReason.rawValue)"))
+            // acpx marks a turn done at its answer: one that ended without, cancelled before
+            // its prompt went out or between attempts, is not marked.
+            if answered {
+                beginSection()
+                writeLine(dim("[done] \(stopReason.rawValue)"))
+            }
             if !atLineStart { write("\n") }
         }
     }

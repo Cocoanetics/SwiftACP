@@ -271,6 +271,9 @@ public actor ACPXDaemon {
     ///   - model: acpx's `--model` for this turn: put on the session before the prompt,
     ///     through the control it advertises, and pinned as the session's model. The
     ///     turn fails before the prompt if the session cannot take it.
+    ///   - limits: acpx's `--timeout` and `--prompt-retries` for this turn: how long each
+    ///     of its steps may take, and how often a prompt that failed the way a passing
+    ///     fault does is sent again. See ``PromptLimits``. Omitted, neither.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -279,13 +282,13 @@ public actor ACPXDaemon {
         sessionId: String, text: String, blocks: [PromptBlock]? = nil, content: [JSONValue]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        model: String? = nil
+        model: String? = nil, limits: PromptLimits? = nil
     ) async throws -> String {
         try await backend.runPrompt(
             sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
-            terminalOutputCeiling: terminalOutputCeiling, model: model)
+            terminalOutputCeiling: terminalOutputCeiling, model: model, limits: limits)
     }
 
     /// Whether the daemon holds a session live — its agent connected and kept between

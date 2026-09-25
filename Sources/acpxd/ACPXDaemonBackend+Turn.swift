@@ -12,15 +12,18 @@ extension ACPXDaemonBackend {
     /// (`runPromptWithRetries`) — the user's message kept; one asked from then on waits
     /// for it to go out. Once answered, the turn goes on until the session's updates have
     /// gone quiet, as acpx's does, so that what the agent sends after its answer is part
-    /// of it.
+    /// of it. The answer is waited for within `timeout` (``answer(to:on:recordId:within:)``).
     func sendPrompt(
-        _ blocks: [ContentBlock], on entry: Live, recordId: String
+        _ blocks: [ContentBlock], on entry: Live, recordId: String, within timeout: Int? = nil
     ) async throws -> (response: PromptResponse, sent: Bool) {
         guard turns[recordId]?.cancelPending != true else { return (PromptResponse(stopReason: .cancelled), false) }
         await promptGoingOut?(recordId)
-        let response = try await entry.session.prompt(blocks)
+        let (response, recovered) = try await answer(to: blocks, on: entry, recordId: recordId, within: timeout)
         turns[recordId]?.prompt = nil
         turns[recordId]?.answered = true
+        // An answer that came while a timed-out prompt's updates went quiet stands as it
+        // is, as acpx's `recoveredSessionResult` does: they have gone quiet already.
+        if recovered { return (response, true) }
         // A request the agent made meanwhile is the turn's too: answered before the turn
         // ends — under its handlers, counted in its permissions — as one made before it.
         // What the agent sends once it has the answer to it is the turn's as well, so the
@@ -42,6 +45,51 @@ extension ACPXDaemonBackend {
             arrived = now
         }
         return (response, true)
+    }
+
+    /// How long acpx waits for a prompt it cancels to settle before it closes the client
+    /// (`INTERRUPT_CANCEL_WAIT_MS`).
+    static let cancelWaitMilliseconds = 2_500
+
+    /// The prompt's answer within `timeout` — acpx's `runPromptTurn`. Past the deadline
+    /// the prompt's own requests end (``ACPAgentConnection/abandonTurnRequests(sessionId:)``),
+    /// but the prompt stays out while the session's updates go quiet, and an answer that
+    /// came meanwhile stands (`recovered`). Otherwise the prompt is cancelled, given a
+    /// moment to settle, and its agent let go — acpx's `cleanupPrompt` retires a client
+    /// whose prompt is still out, so the next turn connects afresh — and the turn fails
+    /// with ``TimeoutError``.
+    private func answer(
+        to blocks: [ContentBlock], on entry: Live, recordId: String, within timeout: Int?
+    ) async throws -> (response: PromptResponse, recovered: Bool) {
+        let session = entry.session
+        guard let timeout, timeout > 0 else { return (try await session.prompt(blocks), false) }
+        let settled = SettledAnswer()
+        let prompting = Task {
+            let response = try await session.prompt(blocks)
+            settled.settle(response)
+            return response
+        }
+        do {
+            let response = try await withTaskCancellationHandler {
+                try await withTimeout(milliseconds: timeout) { try await prompting.value }
+            } onCancel: {
+                prompting.cancel()
+            }
+            return (response, false)
+        } catch let timedOut as TimeoutError {
+            let connection = entry.agent.connection
+            await connection.abandonTurnRequests(sessionId: session.id)
+            let drain = TurnReplyDrain.current
+            try? await connection.waitForSessionUpdateDrain(
+                sessionId: session.id, idleMilliseconds: drain.idleMilliseconds,
+                timeoutMilliseconds: drain.timeoutMilliseconds)
+            if let response = settled.response { return (response, true) }
+            try? await connection.cancel(sessionId: session.id)
+            _ = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) { try await prompting.value }
+            if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
+            await entry.agent.close()
+            throw timedOut
+        }
     }
 
     /// What one attempt's event subscription carries, relayed as the turn goes: each of
@@ -99,12 +147,15 @@ extension ACPXDaemonBackend {
         of response: PromptResponse, permissions: PermissionStats, result: PromptResultCapture,
         as sessionId: String, to clientSession: Session?
     ) async {
+        // No answer crossed the wire: the turn was cancelled before its prompt went out, or
+        // between attempts at it — nothing marks it done.
+        let unanswered: Bool? = result.result == nil ? true : nil
         await clientSession?.sendLogNotification(
             LogMessage(
                 level: .info, logger: sessionId,
                 data: toJSONValue(TurnEndedEvent(
                     stopReason: response.stopReason.rawValue, permissions: permissions,
-                    usage: result.usage, cost: result.cost))))
+                    usage: result.usage, cost: result.cost, unanswered: unanswered))))
     }
 
     /// What tells the calling client the prompt was answered: in order with the updates
@@ -122,5 +173,19 @@ extension ACPXDaemonBackend {
                     level: .info, logger: sessionId,
                     data: toJSONValue(TurnAnsweredEvent(answeredStopReason: response.stopReason.rawValue))))
         }
+    }
+}
+
+/// A prompt's answer once it has come — looked at without waiting for it.
+final class SettledAnswer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settled: PromptResponse?
+
+    func settle(_ response: PromptResponse) {
+        lock.withLock { settled = response }
+    }
+
+    var response: PromptResponse? {
+        lock.withLock { settled }
     }
 }

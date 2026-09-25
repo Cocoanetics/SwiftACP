@@ -52,6 +52,30 @@ public func withTimeout<T: Sendable>(
     }
 }
 
+/// ``withTimeout(milliseconds:_:)`` for an operation that starts what its caller would
+/// have to put down — an agent's launch: at the deadline the operation is cancelled and
+/// waited for, as it puts down what it started on its way out (acpx closes the client it
+/// was starting), and what it came up with just then goes to `discard`.
+public func withTimeout<T: Sendable>(
+    milliseconds: Int?, _ operation: @escaping @Sendable () async throws -> T,
+    discardingLate discard: @escaping @Sendable (T) async -> Void
+) async throws -> T {
+    let running = Task { try await operation() }
+    do {
+        return try await withTimeout(milliseconds: milliseconds) {
+            try await withTaskCancellationHandler {
+                try await running.value
+            } onCancel: {
+                running.cancel()
+            }
+        }
+    } catch {
+        running.cancel()
+        if let late = try? await running.value { await discard(late) }
+        throw error
+    }
+}
+
 /// The first of an operation's result and its deadline, handed to whoever waits for it.
 private final class DeadlineRace<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()

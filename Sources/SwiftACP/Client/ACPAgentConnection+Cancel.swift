@@ -97,6 +97,17 @@ extension ACPAgentConnection {
         return result
     }
 
+    /// End what `sessionId`'s prompt in flight owns, and leave the prompt out — as acpx
+    /// aborts the requests of a prompt that ran past its deadline (`abortTimedOutRequests`)
+    /// while it waits to see whether an answer comes: an owned request still open is
+    /// answered cancelled, and so is one read later, until the prompt ends. No
+    /// `session/cancel` goes out.
+    public func abandonTurnRequests(sessionId: SessionId) {
+        guard promptingSessionIds.contains(sessionId) else { return }
+        cancellingSessionIds.insert(sessionId)
+        answerTurnRequestsCancelled(sessionId)
+    }
+
     /// Answer `sessionId`'s owned requests still being served as cancelled, and stop
     /// serving them.
     func answerTurnRequestsCancelled(_ sessionId: SessionId) {

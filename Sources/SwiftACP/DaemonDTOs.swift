@@ -461,3 +461,24 @@ public struct HistoryEntry: Codable, Sendable {
         self.textPreview = textPreview
     }
 }
+
+/// acpx's `--timeout` and `--prompt-retries` for one turn, as its CLI sends them with each
+/// prompt it gives the queue owner (`timeoutMs`, `promptRetries`).
+@Schema
+public struct PromptLimits: Codable, Hashable, Sendable {
+    /// How long each step of the turn may take, in milliseconds: each step of connecting
+    /// the agent — its launch, getting the session back or starting one, each selection
+    /// put back — putting the turn's model on the session, and each attempt at the
+    /// prompt. A step that runs over fails the turn with `TIMEOUT`. Omitted, or not
+    /// positive, no step has a limit.
+    public var timeoutMs: Int?
+    /// How many more times the prompt is sent when it fails the way a passing fault does
+    /// (the agent's `-32603` or `-32700`) and the turn has had no effect yet — each after
+    /// a pause of a second, doubling up to ten. Omitted, none; not negative.
+    public var promptRetries: Int?
+
+    public init(timeoutMs: Int? = nil, promptRetries: Int? = nil) {
+        self.timeoutMs = timeoutMs
+        self.promptRetries = promptRetries
+    }
+}

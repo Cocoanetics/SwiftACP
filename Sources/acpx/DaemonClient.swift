@@ -17,11 +17,14 @@ actor StopReasonBox {
     /// The prompt response's `usage` and `cost`, as the agent sent them.
     private(set) var usage: JSONValue?
     private(set) var cost: JSONValue?
+    /// Whether the turn ended with no answer to its prompt (``TurnEndedEvent/unanswered``).
+    private(set) var unanswered = false
     func set(_ ended: TurnEndedEvent) {
         value = StopReason(rawValue: ended.stopReason)
         permissions = ended.permissions
         usage = ended.usage
         cost = ended.cost
+        unanswered = ended.unanswered ?? false
     }
 
     func fail(_ event: TurnFailedEvent) {
@@ -44,6 +47,8 @@ struct DaemonTurn {
     /// The prompt response's `usage` and `cost`, for quiet output.
     var usage: JSONValue?
     var cost: JSONValue?
+    /// No answer to the prompt came, so nothing marks the turn done.
+    var unanswered = false
 }
 
 /// Renders streamed session updates that arrive from the daemon as MCP log
@@ -79,7 +84,8 @@ final class PromptLogRenderer: MCPServerProxyLogNotificationHandling, @unchecked
         // here when there was no answer to mark it at — or no daemon that announces one.
         if let ended = try? message.data.decoded(TurnEndedEvent.self) {
             await stopReason.set(ended)
-            renderer.finish(stopReason: StopReason(rawValue: ended.stopReason) ?? .endTurn)
+            renderer.finish(
+                stopReason: StopReason(rawValue: ended.stopReason) ?? .endTurn, answered: ended.unanswered != true)
             return
         }
         // A request the agent made of the daemon's client, or its refusal — acpx
@@ -227,7 +233,8 @@ enum DaemonClient {
     static func runPrompt(
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
-        terminalOutputCeiling: Int? = nil, model: String? = nil, renderer: OutputRenderer
+        terminalOutputCeiling: Int? = nil, model: String? = nil, limits: PromptLimits? = nil,
+        renderer: OutputRenderer
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
@@ -238,7 +245,7 @@ enum DaemonClient {
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
-            streamWire: renderer.streamsWireJSON)
+            limits: limits, streamWire: renderer.streamsWireJSON)
     }
 
     /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
@@ -246,7 +253,7 @@ enum DaemonClient {
         on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, content: [JSONValue],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, model: String? = nil,
-        streamWire: Bool = false
+        limits: PromptLimits? = nil, streamWire: Bool = false
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
@@ -258,7 +265,7 @@ enum DaemonClient {
                 sessionId: sessionId, text: "", content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 streamWire: streamWire, permissionPolicy: permissionPolicy,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model)
+                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model, limits: limits)
         } catch is DecodingError {
             // The turn succeeded; only its ignored text did not decode. SwiftMCP's typed
             // client turns a plain-text result into a JSON string by wrapping it in
@@ -273,7 +280,7 @@ enum DaemonClient {
         // result resumed this call; default defensively if it somehow wasn't.
         return DaemonTurn(
             stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions,
-            usage: await stopReason.usage, cost: await stopReason.cost)
+            usage: await stopReason.usage, cost: await stopReason.cost, unanswered: await stopReason.unanswered)
     }
 
     /// A control the daemon ran for this CLI failed, for the reason in `message`.

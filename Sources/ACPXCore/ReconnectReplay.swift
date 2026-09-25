@@ -174,15 +174,18 @@ public enum ReconnectReplay {
 
     /// Put `desired` back on the session `loaded` describes, recording each
     /// acknowledgement in `state`. `original` is the record's state before connecting,
-    /// whose model option a control replacing the model may name.
+    /// whose model option a control replacing the model may name. Each selection goes
+    /// within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     ///
     /// - Throws: ``SessionReplayError`` for the first selection that failed.
     public static func replay(
         _ desired: Desired, replacing: Replacing?, original: SessionAcpxState?, loaded: Loaded,
         state: inout SessionAcpxState?, connection: ACPAgentConnection, agentCommand: String,
-        onWarning: ((String) -> Void)? = nil
+        timeoutMilliseconds: Int? = nil, onWarning: ((String) -> Void)? = nil
     ) async throws -> Outcome {
-        let target = Target(connection: connection, sessionId: loaded.sessionId, agentCommand: agentCommand)
+        let target = Target(
+            connection: connection, sessionId: loaded.sessionId, agentCommand: agentCommand,
+            timeoutMilliseconds: timeoutMilliseconds)
         let mode = loaded.createdFreshSession ? try await replayMode(desired.modeId, state: state, on: target) : nil
         let models = mode.map(\.models) ?? loaded.models
 
@@ -209,11 +212,12 @@ public enum ReconnectReplay {
         return Outcome(models: finalModels, configOptionsPresent: optionsPresent)
     }
 
-    /// Where the replay goes.
-    private struct Target {
+    /// Where the replay goes, and how long each selection may take.
+    private struct Target: Sendable {
         let connection: ACPAgentConnection
         let sessionId: String
         let agentCommand: String
+        let timeoutMilliseconds: Int?
     }
 
     /// What replaying the mode left: acpx's `modeMetadata`.
@@ -240,7 +244,9 @@ public enum ReconnectReplay {
     ) async throws -> ModeReplay? {
         guard let modeId else { return nil }
         do {
-            try await target.connection.setMode(SetSessionModeRequest(sessionId: target.sessionId, modeId: modeId))
+            try await withTimeout(milliseconds: target.timeoutMilliseconds) {
+                try await target.connection.setMode(SetSessionModeRequest(sessionId: target.sessionId, modeId: modeId))
+            }
         } catch {
             throw SessionReplayError(.mode, """
                 Failed to replay saved session mode \(modeId) on fresh ACP session \(target.sessionId): \
@@ -263,9 +269,11 @@ public enum ReconnectReplay {
                 onWarning?(warning)
             }
             guard let models else { return nil }
-            let response = try await ModelApplication.setModel(
-                connection: target.connection, sessionId: target.sessionId, modelId: modelId, models: models,
-                agentCommand: target.agentCommand)
+            let response = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
+                try await ModelApplication.setModel(
+                    connection: target.connection, sessionId: target.sessionId, modelId: modelId, models: models,
+                    agentCommand: target.agentCommand)
+            }
             var acpx = state ?? SessionAcpxState()
             ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
             state = acpx
@@ -299,9 +307,12 @@ public enum ReconnectReplay {
             if configId == replacingKey { continue }
             if let accepted, !acceptsSavedValue(value, of: configId, in: accepted) { continue }
             do {
-                let response = try await ModelApplication.setConfigOption(
-                    connection: target.connection, sessionId: target.sessionId, configId: configId, value: value,
-                    models: ModelSupport.advertisedModelState(state), agentCommand: target.agentCommand)
+                let models = ModelSupport.advertisedModelState(state)
+                let response = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
+                    try await ModelApplication.setConfigOption(
+                        connection: target.connection, sessionId: target.sessionId, configId: configId, value: value,
+                        models: models, agentCommand: target.agentCommand)
+                }
                 var acpx = state ?? SessionAcpxState()
                 ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
                 state = acpx

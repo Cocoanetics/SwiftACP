@@ -48,8 +48,9 @@ public enum ReconnectFallback {
     /// - Parameter sessionHasAgentMessages: whether the record holds any agent reply —
     ///   a session with nothing to lose may be replaced after a generic internal error.
     public static func shouldStartFresh(after error: Error, sessionHasAgentMessages: Bool) -> Bool {
-        // A cancelled reconnect is not the agent's answer about the session.
-        if error is CancellationError { return false }
+        // A cancelled reconnect is not the agent's answer about the session, nor is one
+        // that ran out of time (acpx's `isHardReconnectFailure`).
+        if error is CancellationError || error is TimeoutError { return false }
         let code = (error as? JSONRPCErrorBody)?.code
         if isResourceNotFound(error) { return true }
         if let code, unsupportedLoadCodes.contains(code) { return true }

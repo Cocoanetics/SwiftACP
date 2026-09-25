@@ -24,14 +24,20 @@ public struct TurnEndedEvent: Codable, Sendable {
     /// shape — what acpx's quiet output reports after the reply.
     public var usage: JSONValue?
     public var cost: JSONValue?
+    /// No answer to the prompt came: the turn was cancelled before its prompt went out, or
+    /// between attempts at it. acpx's formatters mark a turn done only at the answer, so
+    /// nothing is marked done. `nil` from a daemon that predates it.
+    public var unanswered: Bool?
 
     public init(
-        stopReason: String, permissions: PermissionStats? = nil, usage: JSONValue? = nil, cost: JSONValue? = nil
+        stopReason: String, permissions: PermissionStats? = nil, usage: JSONValue? = nil, cost: JSONValue? = nil,
+        unanswered: Bool? = nil
     ) {
         self.stopReason = stopReason
         self.permissions = permissions
         self.usage = usage
         self.cost = cost
+        self.unanswered = unanswered
     }
 }
 
