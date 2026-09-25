@@ -130,6 +130,12 @@ def handle_prompt(req_id, params):
             "code": -32002, "message": "Resource not found: session %s" % session_id}})
         return
 
+    # "auth turn": the agent's error saying it needs credentials, as `-32000`.
+    if text.strip() == "auth turn":
+        send({"jsonrpc": "2.0", "id": req_id, "error": {
+            "code": -32000, "message": "Authentication required", "data": {"details": "login first"}}})
+        return
+
     # "fail turn": a partial reply, then the agent's error response, with details.
     if text.strip() == "fail turn":
         session_update(session_id, {
@@ -269,8 +275,13 @@ def main():
                         "audio": False,
                     },
                 },
-                "authMethods": [],
+                # MOCK_AUTH_METHODS: the auth method ids to advertise, comma-separated.
+                "authMethods": [{"id": method, "name": method}
+                                for method in os.environ.get("MOCK_AUTH_METHODS", "").split(",") if method],
             })
+        elif method == "session/new" and os.environ.get("MOCK_NEW_ERROR"):
+            # MOCK_NEW_ERROR: the JSON-RPC error (JSON) to answer `session/new` with.
+            send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["MOCK_NEW_ERROR"])})
         elif method == "session/new":
             # MOCK_NEW_META / MOCK_LOAD_META: the `_meta` (JSON) of the replies that
             # open a session, where an agent names its own session id.

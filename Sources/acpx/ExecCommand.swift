@@ -111,7 +111,7 @@ enum ExecCommand {
                 err(failure.message)
                 for hint in remediationHints(
                     code: failure.outputCode, origin: failure.origin, detailCode: failure.detailCode,
-                    message: failure.message, acpCode: nil) {
+                    message: failure.message, acp: TurnFailure.payload(of: error)) {
                     err(hint)
                 }
             }
@@ -143,6 +143,8 @@ enum ExecCommand {
                     let trimmed = details.trimmingCharacters(in: .whitespacesAndNewlines)
                     acpDetails = trimmed.isEmpty ? nil : trimmed
                 }
+                // `resolveDetailCode`: the agent's error saying it needs credentials.
+                if TurnFailure.payload(of: rpc)?.saysAuthRequired == true { detailCode = "AUTH_REQUIRED" }
             case let meta as OutputErrorMeta:
                 outputCode = meta.outputCode ?? outputCode
                 detailCode = meta.detailCode
