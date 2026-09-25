@@ -54,9 +54,10 @@ extension ExecCommand {
         sideEffects.begin()
         defer { sideEffects.end() }
         var attempt = 0
+        var events = await PhaseEvents.subscribe(to: session)
         while true {
             renderer.promptAttemptStarts()
-            let events = await AttemptEvents.start(of: session, renderer: renderer, sideEffects: sideEffects)
+            events.render(with: renderer)
             do {
                 let response = try await withTimeout(milliseconds: policy.timeoutMilliseconds) {
                     try await session.prompt(prompt)
@@ -68,11 +69,13 @@ extension ExecCommand {
                 return PromptRun(response: response, permissions: permissions)
             } catch {
                 // What the attempt did comes out before its failure — at a deadline too,
-                // though the prompt is still out: nothing of it comes out after. An update
-                // read before the deadline can still be on its way to the subscriptions, so
-                // what the connection has read is handed on first. (An agent's error is read
-                // only once the updates before it are handed on: the peer awaits each.)
+                // though the prompt is still out. An update read before the deadline can
+                // still be on its way to the subscriptions, so what the connection has read
+                // is handed on first. (An agent's error is read only once the updates before
+                // it are handed on: the peer awaits each.) What comes after is the pause's,
+                // and is not shown unless there is one.
                 await connection.waitForSessionUpdatesHandled(sessionId: session.id)
+                let pause = await events.handOver()
                 await events.finish()
                 let stats = await connection.permissionStats(for: session.id)
                 permissions.add(stats)
@@ -80,59 +83,82 @@ extension ExecCommand {
                 if let agentError { showAgentError(RunFailure(agentError), renderer: renderer) }
                 // acpx's client fails a prompt that needed a question nobody could be asked
                 // with that, in place of what else failed it — and that is not retried.
-                if stats.promptUnavailable, !(error is TimeoutError) { throw PromptUnavailable(agentError: agentError) }
-                guard attempt < maxRetries, !sideEffects.any, PromptRetry.isRetryable(error) else { throw error }
+                if stats.promptUnavailable, !(error is TimeoutError) {
+                    await pause.finish()
+                    throw PromptUnavailable(agentError: agentError)
+                }
+                guard attempt < maxRetries, !sideEffects.any, PromptRetry.isRetryable(error) else {
+                    await pause.finish()
+                    throw error
+                }
                 let delay = PromptRetry.delayMilliseconds(afterAttempt: attempt)
-                // What the agent sends meanwhile is shown as it comes, as acpx's formatter
-                // shows it — and calls the retry off.
-                let pause = await AttemptEvents.start(of: session, renderer: renderer, sideEffects: sideEffects)
                 if !policy.quiet {
                     Console.errLine(PromptRetry.notice(
                         for: error, delayMilliseconds: delay, retry: attempt + 1, maxRetries: maxRetries))
                 }
+                // What the agent sends meanwhile is shown as it comes, as acpx's formatter
+                // shows it — and calls the retry off.
+                pause.render(with: renderer)
                 do {
                     try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
                 } catch {
                     await pause.finish()
                     throw error
                 }
-                // What calls the retry off has been handled — shown — before the pause's
-                // events end: each update the connection has read is handed on first. And
-                // what was handed on counts: an update is read before its effect is noted,
-                // so the effects are looked at again until a drain leaves them as they were.
-                var calledOff = sideEffects.any
-                while true {
-                    await connection.waitForSessionUpdatesHandled(sessionId: session.id)
-                    let now = sideEffects.any
-                    if now == calledOff { break }
-                    calledOff = now
-                }
+                // The pause ends at one point in the events, which decides, as acpx looks
+                // once as its pause ends: what came before is shown, and counts; what comes
+                // after is the next attempt's.
+                let next = await pause.handOver()
                 await pause.finish()
-                guard !calledOff else { throw error }
+                if sideEffects.any {
+                    // What called the retry off is handed on, and shown, before the failure.
+                    await connection.waitForSessionUpdatesHandled(sessionId: session.id)
+                    next.render(with: renderer)
+                    await next.finish()
+                    throw error
+                }
+                events = next
                 attempt += 1
             }
         }
     }
 }
 
-/// An attempt's events — or those of the pause before the next — rendered from a
-/// subscription of its own as they come: the session's updates, the agent's requests and
-/// the client's diagnostics, in wire order. Unlike
-/// ``ACPSession/run(_:meta:onUpdate:onClientOperation:onInboundRequest:)``, which hands
-/// them on until the prompt is over, it ends when told (``finish()``) — so a deadline can
-/// end it while the prompt is still out.
-private struct AttemptEvents {
-    let connection: ACPAgentConnection
-    let subscription: UUID
-    let consumer: Task<Void, Never>
+/// The events of one phase of the prompt — an attempt, or the pause before the next —
+/// from a subscription of its own: the session's updates, the agent's requests and the
+/// client's diagnostics, in wire order, rendered once told to (``render(with:)``). A phase
+/// hands over to the next at one point in the events (``handOver()``), so none falls
+/// between the two. Unlike ``ACPSession/run(_:meta:onUpdate:onClientOperation:onInboundRequest:)``,
+/// which hands them on until the prompt is over, it ends when told (``finish()``) — so a
+/// deadline can end an attempt while its prompt is still out.
+private final class PhaseEvents {
+    private let connection: ACPAgentConnection
+    private let sessionId: SessionId
+    private let subscription: UUID
+    private let stream: AsyncStream<ConnectionEvent>
+    private var consumer: Task<Void, Never>?
 
-    static func start(
-        of session: ACPSession, renderer: OutputRenderer, sideEffects: PromptSideEffects
-    ) async -> AttemptEvents {
+    private init(
+        connection: ACPAgentConnection, sessionId: SessionId, subscription: UUID,
+        stream: AsyncStream<ConnectionEvent>
+    ) {
+        self.connection = connection
+        self.sessionId = sessionId
+        self.subscription = subscription
+        self.stream = stream
+    }
+
+    static func subscribe(to session: ACPSession) async -> PhaseEvents {
         let connection = session.agent.connection
         let (subscription, stream) = await connection.makeEventSubscription()
-        let sessionId = session.id
-        let consumer = Task {
+        return PhaseEvents(connection: connection, sessionId: session.id, subscription: subscription, stream: stream)
+    }
+
+    /// Render the phase's events — those that came so far, and those to come — until it
+    /// ends.
+    func render(with renderer: OutputRenderer) {
+        let (stream, sessionId) = (stream, sessionId)
+        consumer = Task {
             for await event in stream {
                 await renderer.beforeRenderingEvent?()
                 switch event {
@@ -148,13 +174,20 @@ private struct AttemptEvents {
                 }
             }
         }
-        return AttemptEvents(connection: connection, subscription: subscription, consumer: consumer)
     }
 
-    /// End the subscription, and return once everything it had was rendered.
+    /// End this phase at one point in the events, and begin the next with every event
+    /// after it.
+    func handOver() async -> PhaseEvents {
+        let (next, stream) = await connection.replaceEventSubscription(subscription)
+        return PhaseEvents(connection: connection, sessionId: sessionId, subscription: next, stream: stream)
+    }
+
+    /// End the phase, and return once everything it rendered is out. What a phase never
+    /// rendered is not shown.
     func finish() async {
         await connection.endSubscription(subscription)
-        await consumer.value
+        await consumer?.value
     }
 }
 

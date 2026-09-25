@@ -13,8 +13,22 @@ final class EventSinks: @unchecked Sendable {
         lock.withLock { sinks[id] = sink }
     }
 
+    /// Hand `event` to every subscription — under the lock, so each event falls on one
+    /// side of a ``replace(_:with:as:)``.
     func yield(_ event: ConnectionEvent) {
-        for sink in lock.withLock({ Array(sinks.values) }) { sink.yield(event) }
+        lock.withLock {
+            for sink in sinks.values { sink.yield(event) }
+        }
+    }
+
+    /// Put `sink` in place of subscription `old`: `old`'s stream ends with what was
+    /// yielded before, and `sink` gets what is yielded after — none missed, none twice.
+    func replace(_ old: UUID, with sink: AsyncStream<ConnectionEvent>.Continuation, as id: UUID) {
+        let previous: AsyncStream<ConnectionEvent>.Continuation? = lock.withLock {
+            sinks[id] = sink
+            return sinks.removeValue(forKey: old)
+        }
+        previous?.finish()
     }
 
     /// End one subscription's stream. It is removed once the stream has ended.

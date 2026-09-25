@@ -121,6 +121,18 @@ extension ACPAgentConnection {
         wireObserver.setMessages(observer)
     }
 
+    /// End event subscription `id` and open another in its place, at one point in the
+    /// events: `id`'s stream ends with every event before it, and the new stream carries
+    /// every event after — none missed, none twice.
+    public func replaceEventSubscription(_ id: UUID) -> (id: UUID, stream: AsyncStream<ConnectionEvent>) {
+        let replacement = UUID()
+        let stream = AsyncStream<ConnectionEvent> { continuation in
+            continuation.onTermination = { [eventSinks] _ in eventSinks.remove(replacement) }
+            eventSinks.replace(id, with: continuation, as: replacement)
+        }
+        return (replacement, stream)
+    }
+
     /// Return once every `session/update` for `sessionId` the connection has read has
     /// been handled — handed on to the subscriptions: what the agent sent so far can be
     /// seen by then.
