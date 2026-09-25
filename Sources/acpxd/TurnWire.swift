@@ -36,9 +36,10 @@ final class TurnErrorWatch: @unchecked Sendable {
 
 /// What of a turn's exchange goes to the calling client, as log notifications. With
 /// `streamWire` (`--format json`) that is every message as it crosses the wire, in
-/// order, as acpx prints them. Otherwise it is only the agent's error responses, which
-/// acpx's text output shows as errors: they wait for ``finish()``, so the updates before
-/// them, which reach the client another way, are out first.
+/// order, as acpx prints them. Otherwise it is the client's own requests — the turn's
+/// `--model` — which acpx's text output shows as `[client] <method> (running)`, and the
+/// agent's error responses, which it shows as errors: those wait for ``finish()``, so the
+/// updates before them, which reach the client another way, are out first.
 ///
 /// An attempt a fresh launch may retry is `provisional` until the agent answers it with
 /// anything but an error — an update, a request of its own, a result (``agentAnswered``).
@@ -46,9 +47,15 @@ final class TurnErrorWatch: @unchecked Sendable {
 /// dropped by ``finish(showingHeld:)``: a retried attempt did not happen, as far as the
 /// output goes. Once the agent answers, what was held goes out, and the rest streams.
 final class TurnWireFeed: @unchecked Sendable {
+    /// A message to send, or a point to tell someone the ones before it have gone out.
+    private enum Item {
+        case message(WireMessageEvent)
+        case sent(CheckedContinuation<Void, Never>)
+    }
+
     private let streamWire: Bool
     private let provisional: Bool
-    private let feed: AsyncStream<WireMessageEvent>.Continuation
+    private let feed: AsyncStream<Item>.Continuation
     private let forwarder: Task<Void, Never>
     private let lock = NSLock()
     /// Text output's error responses, until the turn's exchange is over.
@@ -58,14 +65,19 @@ final class TurnWireFeed: @unchecked Sendable {
     private var answered = false
 
     init(streamWire: Bool, provisional: Bool = false, logger: String, to clientSession: Session?) {
-        let (messages, feed) = AsyncStream<WireMessageEvent>.makeStream()
+        let (items, feed) = AsyncStream<Item>.makeStream()
         self.streamWire = streamWire
         self.provisional = provisional
         self.feed = feed
         forwarder = Task {
-            for await message in messages {
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
+            for await item in items {
+                switch item {
+                case .message(let message):
+                    await clientSession?.sendLogNotification(
+                        LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
+                case .sent(let waiter):
+                    waiter.resume()
+                }
             }
         }
     }
@@ -78,19 +90,30 @@ final class TurnWireFeed: @unchecked Sendable {
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
         let message = WireMessageEvent(direction, body)
         let isError = direction == .inbound && Self.isErrorResponse(body)
+        let shown = streamWire || Self.isClientRequest(direction, body)
         lock.withLock {
             if direction == .inbound, !isError, !answered {
                 answered = true
-                for earlier in pending { feed.yield(earlier) }
+                for earlier in pending { feed.yield(.message(earlier)) }
                 pending = []
             }
-            if !streamWire {
-                if isError { held.append(message) }
+            if !streamWire, isError {
+                held.append(message)
+            } else if !shown {
+                return
             } else if provisional, !answered {
                 pending.append(message)
             } else {
-                feed.yield(message)
+                feed.yield(.message(message))
             }
+        }
+    }
+
+    /// Return once what was handed on so far has gone out: the client's `--model` request,
+    /// shown before anything the prompt that follows it says.
+    func drain() async {
+        await withCheckedContinuation { waiter in
+            if case .terminated = feed.yield(.sent(waiter)) { waiter.resume() }
         }
     }
 
@@ -107,10 +130,17 @@ final class TurnWireFeed: @unchecked Sendable {
     /// false, for an attempt that is retried — and return once everything has gone out.
     func finish(showingHeld: Bool = true) async {
         if showingHeld {
-            for message in lock.withLock({ pending + held }) { feed.yield(message) }
+            for message in lock.withLock({ pending + held }) { feed.yield(.message(message)) }
         }
         feed.finish()
         await forwarder.value
+    }
+
+    /// A request or notification of the client's own that acpx's text output shows as
+    /// `[client] <method> (running)`: any it sends but the prompt, its cancel and updates.
+    static func isClientRequest(_ direction: JSONRPCPeer.WireDirection, _ body: Data) -> Bool {
+        guard direction == .outbound, let method = WireJSON(parsing: body)?["method"]?.stringValue else { return false }
+        return !["session/prompt", "session/cancel", "session/update"].contains(method)
     }
 
     /// A JSON-RPC error response: an `error` member, and no `method`.

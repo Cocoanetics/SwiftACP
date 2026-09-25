@@ -309,6 +309,8 @@ extension ACPXDaemonBackend {
                 try await applyPromptModel(
                     model, to: entry, persister: persister, agentCommand: turn.agentCommand,
                     timeoutMilliseconds: turn.timeoutMilliseconds)
+                // The model's request is shown before what the prompt says, as acpx shows it.
+                await wireFeed.drain()
             }
             // The turn's permissions are those of every attempt at its prompt, and of the
             // pauses between them, as acpx's client counts them across its run.
