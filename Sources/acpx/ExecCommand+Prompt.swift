@@ -97,9 +97,16 @@ extension ExecCommand {
                     throw error
                 }
                 // What calls the retry off has been handled — shown — before the pause's
-                // events end: each update the connection has read is handed on first.
-                let calledOff = sideEffects.any
-                await connection.waitForSessionUpdatesHandled(sessionId: session.id)
+                // events end: each update the connection has read is handed on first. And
+                // what was handed on counts: an update is read before its effect is noted,
+                // so the effects are looked at again until a drain leaves them as they were.
+                var calledOff = sideEffects.any
+                while true {
+                    await connection.waitForSessionUpdatesHandled(sessionId: session.id)
+                    let now = sideEffects.any
+                    if now == calledOff { break }
+                    calledOff = now
+                }
                 await pause.finish()
                 guard !calledOff else { throw error }
                 attempt += 1
