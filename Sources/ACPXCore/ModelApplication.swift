@@ -85,25 +85,34 @@ public enum ModelApplication {
     /// The model goes first because an agent may re-advertise its options after a
     /// model change — a later option has to resolve against what the agent last
     /// advertised, not against what `session/new` returned.
+    ///
+    /// Each request goes within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     public static func applySessionControls(
         connection: ACPAgentConnection,
         session: NewSessionResponse,
         model: String?,
         configOptions: [ConfigOptionAssignment],
         agentCommand: String?,
+        timeoutMilliseconds: Int? = nil,
         onWarning: ((String) -> Void)? = nil
     ) async throws {
         guard model != nil || !configOptions.isEmpty else { return }
         var state = ModelSupport.modelState(fromConfigOptions: session.configOptions)
             ?? ModelSupport.modelState(fromLegacyModels: session.models)
-        let applied = try await applyRequestedModelIfAdvertised(
+        let applied = try await applyRequestedModel(
             connection: connection, sessionId: session.sessionId, requestedModel: model,
-            models: state, agentCommand: agentCommand, onWarning: onWarning)
+            models: state, agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds,
+            onWarning: onWarning
+        ).response
         if let applied { state = advance(state, with: applied.configOptions) }
+        let sessionId = session.sessionId
         for option in configOptions {
-            let result = try await setConfigOption(
-                connection: connection, sessionId: session.sessionId, configId: option.configId,
-                value: option.value, models: state, agentCommand: agentCommand)
+            let models = state
+            let result = try await withTimeout(milliseconds: timeoutMilliseconds) {
+                try await setConfigOption(
+                    connection: connection, sessionId: sessionId, configId: option.configId,
+                    value: option.value, models: models, agentCommand: agentCommand)
+            }
             state = advance(state, with: result.configOptions)
         }
     }
@@ -132,12 +141,15 @@ public enum ModelApplication {
 
     /// ``applyRequestedModelIfAdvertised(connection:sessionId:requestedModel:models:agentCommand:onWarning:)``
     /// with whether the model was applied, as acpx's function returns it.
+    ///
+    /// The request goes within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     public static func applyRequestedModel(
         connection: ACPAgentConnection,
         sessionId: SessionId,
         requestedModel: String?,
         models: ModelSupport.ModelState?,
         agentCommand: String?,
+        timeoutMilliseconds: Int? = nil,
         onWarning: ((String) -> Void)? = nil
     ) async throws -> Application {
         let requested = requestedModel?.javaScriptTrimmed ?? ""
@@ -148,9 +160,11 @@ public enum ModelApplication {
         }
         guard let models else { return Application(applied: false) }
         guard models.currentModelId != requested else { return Application(applied: true) }
-        let response = try await setModel(
-            connection: connection, sessionId: sessionId, modelId: requested,
-            models: models, agentCommand: agentCommand)
+        let response = try await withTimeout(milliseconds: timeoutMilliseconds) {
+            try await setModel(
+                connection: connection, sessionId: sessionId, modelId: requested,
+                models: models, agentCommand: agentCommand)
+        }
         return Application(applied: true, response: response)
     }
 

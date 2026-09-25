@@ -167,8 +167,10 @@ public struct ACPSession: Sendable {
                 stopReason: response.stopReason, text: collector.text, usage: response.usage,
                 clientOperations: collector.operations)
         } catch {
+            // A failed turn hands on what it did too before it throws: whatever reports
+            // the failure then comes after it.
             await agent.connection.endSubscription(subscriptionId)
-            consumer.cancel()
+            await consumer.value
             throw error
         }
     }

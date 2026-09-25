@@ -39,6 +39,17 @@ extension OutputRenderer {
         }
     }
 
+    /// Quiet output's text so far, before a failure is reported: acpx's quiet formatter
+    /// `flush()`es what the agent said, if anything, ahead of its error line.
+    func flushQuietText() {
+        guard options.format == .quiet else { return }
+        lock.withLock {
+            let text = quietChunks.joined()
+            quietChunks = []
+            if !text.isEmpty { out(text.hasSuffix("\n") ? text : text + "\n") }
+        }
+    }
+
     /// Whether the stream has already shown the failure described by `failureText`:
     /// acpx then prints nothing more for it.
     func showedFailure(_ failureText: String) -> Bool {
