@@ -78,17 +78,12 @@ public enum ModelSupport {
         return ModelState(configId: nil, currentModelId: current, availableModels: parsed)
     }
 
-    /// Apply config-option models, falling back to the legacy `models` field, into
-    /// a record's `acpx` block (`session/new` response).
-    public static func applySessionModelState(
-        configOptions: [JSONValue]?, models: JSONValue?, to state: inout SessionAcpxState
-    ) {
-        if let configOptions {
-            state.configOptions = .array(configOptions)
-        }
-        let derived =
-            modelState(fromConfigOptions: configOptions) ?? modelState(fromLegacyModels: models)
-        if let derived { applyAdvertisedModelState(derived, to: &state) }
+    /// acpx's `applyConfigOptionsToRecord`: the config options a session reported, when
+    /// it reported any, on the block built anew (a clone) — with the model state they carry.
+    public static func applyConfigOptions(_ configOptions: [JSONValue]?, to state: inout SessionAcpxState) {
+        guard let configOptions else { return }
+        state = state.cloned()
+        applyConfigOptionsModelState(configOptions, to: &state)
     }
 
     /// acpx's `applyAdvertisedModelState`: the session's current model, the models it
@@ -135,6 +130,7 @@ public enum ModelSupport {
             state.rebuiltOrders["desired_config_options"]?.removeAll { $0 == configId }
             if state.desiredConfigOptions?.isEmpty == true {
                 state.desiredConfigOptions = nil
+                state.forget("desired_config_options")
                 state.rebuiltOrders["desired_config_options"] = nil
             }
         }
@@ -153,6 +149,7 @@ public enum ModelSupport {
             applyModelSelection(value, response: response, to: &state)
             return
         }
+        state = state.cloned()
         var desired = state.desiredConfigOptions ?? [:]
         desired[configId] = value
         state.desiredConfigOptions = desired
@@ -191,6 +188,7 @@ public enum ModelSupport {
     static func applyAcceptedConfigOptions(
         _ response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
     ) {
+        state = state.cloned()
         guard let reported = response?.configOptions else { return }
         applyConfigOptionsModelState(reported, to: &state)
         guard let desired = state.desiredConfigOptions else { return }
@@ -204,16 +202,20 @@ public enum ModelSupport {
             }
         }
         state.desiredConfigOptions = kept.isEmpty ? nil : kept
+        if kept.isEmpty { state.forget("desired_config_options") }
         state.rebuiltOrders["desired_config_options"] = kept.isEmpty ? nil : WireJSON.propertyOrder(order)
     }
 
-    /// acpx's `clearAdvertisedModelState`.
+    /// acpx's `clearAdvertisedModelState`, which deletes the members.
     static func clearAdvertisedModelState(_ state: inout SessionAcpxState) {
         state.currentModelId = nil
         state.availableModels = nil
         state.availableModelNames = nil
         state.rebuiltOrders["available_model_names"] = nil
         state.modelControl = nil
+        for key in ["current_model_id", "available_models", "available_model_names", "model_control"] {
+            state.forget(key)
+        }
     }
 
     /// acpx's `applyConfigOptionsModelState`: the config options the agent reported
@@ -244,12 +246,14 @@ public enum ModelSupport {
         to state: inout SessionAcpxState
     ) {
         let replied = application.response?.configOptions
-        if let replied { applyConfigOptionsModelState(replied, to: &state) }
+        applyConfigOptions(replied, to: &state)
         if let models = application.response != nil ? modelState(fromConfigOptions: replied) : originalModels {
             applyAdvertisedModelState(models, to: &state)
         }
         guard application.applied else { return }
         let current = modelState(fromConfigOptions: replied)?.currentModelId ?? requestedModel
         state.currentModelId = current.flatMap { $0.javaScriptTrimmed.isEmpty ? nil : $0.javaScriptTrimmed }
+        // acpx's `setCurrentModelId` deletes the member for a blank model.
+        if state.currentModelId == nil { state.forget("current_model_id") }
     }
 }

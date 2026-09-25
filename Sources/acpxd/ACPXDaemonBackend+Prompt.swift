@@ -104,7 +104,11 @@ extension ACPXDaemonBackend {
         // (acpx's live checkpoint), draining the wire buffer into the event log on each
         // save. A session-gone retry reuses both, so the prompt isn't double-recorded.
         let eventBuffer = WireBuffer()
-        let persister = TurnPersister(record: record, eventBuffer: eventBuffer)
+        // Each prompt builds the record's `acpx` block anew, as acpx's does
+        // (`preparePromptConversation`).
+        var prompted = record
+        prompted.acpx = record.acpx?.cloned()
+        let persister = TurnPersister(record: prompted, eventBuffer: eventBuffer)
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
@@ -228,7 +232,7 @@ extension ACPXDaemonBackend {
         let entry = try await ensure(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
             handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
-            requestedModel: turn.model,
+            requestedModel: turn.model, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors))
         // The attempt proper starts once connected: a restore the agent refused while

@@ -131,7 +131,8 @@ public enum ReconnectReplay {
     /// acpx's `applyConfigOptionsToRecord` and `applyReconnectedModelState`.
     public static func applyLoaded(_ loaded: Loaded, to state: inout SessionAcpxState?) {
         if let configOptions = loaded.configOptions {
-            var acpx = state ?? SessionAcpxState()
+            // On the block built anew — a clone, or a new block when there was none.
+            var acpx = state?.cloned() ?? SessionAcpxState()
             ModelSupport.applyConfigOptionsModelState(configOptions, to: &acpx)
             state = acpx
         }
@@ -149,7 +150,10 @@ public enum ReconnectReplay {
         _ models: ModelSupport.ModelState?, configOptionsPresent: Bool, legacyModelMetadataPresent: Bool,
         createdFreshSession: Bool, to state: inout SessionAcpxState?
     ) {
-        if createdFreshSession, !configOptionsPresent, state != nil { state?.configOptions = nil }
+        if createdFreshSession, !configOptionsPresent, state != nil {
+            state?.configOptions = nil
+            state?.forget("config_options")
+        }
         guard let models else {
             if legacyModelMetadataPresent || createdFreshSession, var acpx = state {
                 ModelSupport.clearAdvertisedModelState(&acpx)
