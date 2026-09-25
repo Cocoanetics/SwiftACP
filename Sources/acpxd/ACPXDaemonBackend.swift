@@ -276,15 +276,16 @@ actor ACPXDaemonBackend: ACPXBackend {
     static let closeGraceMilliseconds = 750
 
     /// Take the session's slot within `milliseconds`: whether it was taken. One that comes
-    /// only later is given back at once.
-    private func takeSessionSlot(_ recordId: String, within milliseconds: Int) async -> Bool {
+    /// only later is given back at once. A wait called off — its caller gone — throws: a
+    /// close nobody waits for any more does not force the session's agent down.
+    private func takeSessionSlot(_ recordId: String, within milliseconds: Int) async throws -> Bool {
         let queue = turnQueue
         do {
             try await withTimeout(milliseconds: milliseconds, {
                 try await queue.acquire(recordId, wait: true)
             }, discardingLate: { await queue.release(recordId) })
             return true
-        } catch {
+        } catch is TimeoutError {
             return false
         }
     }
@@ -403,7 +404,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
     /// Past that, its agent is closed under it, and the close waits for it to end all the
     /// same, as acpx's drain waits once it has closed its client — so that whatever it
-    /// writes comes before the close, not over it.
+    /// writes comes before the close, not over it. A close called off while it waits — its
+    /// caller gone — ends there, throwing `CancellationError`: nothing is forced down, and
+    /// the session is not marked closed.
     ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
@@ -411,7 +414,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
         _ = try? await cancelSession(sessionId: recordId)
-        if await !takeSessionSlot(recordId, within: Self.closeGraceMilliseconds) {
+        if try await !takeSessionSlot(recordId, within: Self.closeGraceMilliseconds) {
             await evict(recordId)
             try await turnQueue.acquire(recordId, wait: true)
         }

@@ -29,6 +29,32 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A close called off before it has the session — its caller gone — ends there: the
+    /// agent the session's owner holds is not forced down, and the record is not closed.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCloseCalledOffForcesNothing() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            let held = try #require(await daemon.heldConnection(session.id))
+            // The close starts only once it is called off.
+            let (gate, opening) = AsyncStream<Void>.makeStream()
+            let close = Task {
+                for await _ in gate { break }
+                return try await daemon.closeSession(sessionId: session.id)
+            }
+            close.cancel()
+            opening.finish()
+            await #expect(throws: CancellationError.self) { try await close.value }
+            #expect(await daemon.heldConnection(session.id) === held)
+            #expect(try #require(SessionStore.loadRecord(session.id)).closed == false)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A control cut off by the daemon stopping once its reconnect started a new session
     /// leaves the record on that session all the same — acpx saves the record its control
     /// connected on the way out — and says how the agent it closed ended.
