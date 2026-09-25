@@ -24,12 +24,24 @@ struct ConversationModelTrimmingTests {
     }
 
     /// Past 8,000 UTF-16 units an agent's text keeps its first 7,997 and `...`. 5,000
-    /// emoji are 10,000 units: cut through the 3,999th's surrogate pair, whose half
-    /// left becomes U+FFFD — acpx 0.19.1 keeps it as a lone `\ud83d`.
+    /// emoji are 10,000 units: a cut there would split the 3,999th's surrogate pair, so it
+    /// keeps one unit less and leaves the pair out, as acpx 0.19.3 cuts it (7,999 units,
+    /// what its `trimRuntimeText` makes of the same text).
     @Test func textPastTheLimitIsCutInUTF16Units() throws {
         let text = try #require(Self.agentText(after: [String(repeating: "😀", count: 5_000)]))
-        #expect(text == String(repeating: "😀", count: 3_998) + "\u{FFFD}...")
-        #expect(text.utf16.count == 8_000)
+        #expect(text == String(repeating: "😀", count: 3_998) + "...")
+        #expect(text.utf16.count == 7_999)
+    }
+
+    /// Only a cut after a pair's first half steps back: `a😀` repeated puts that half at
+    /// the cut in one place of three, and a letter or a whole pair is kept as it is.
+    @Test func onlyACutThroughAPairStepsBack() throws {
+        let text = try #require(Self.agentText(after: [String(repeating: "a😀", count: 5_000)]))
+        #expect(text == String(repeating: "a😀", count: 2_665) + "a...")
+        #expect(text.utf16.count == 7_999)
+        let pairs = try #require(Self.agentText(after: ["a" + String(repeating: "😀", count: 5_000)]))
+        #expect(pairs == "a" + String(repeating: "😀", count: 3_998) + "...")
+        #expect(pairs.utf16.count == 8_000)
     }
 
     /// A character of two units counts as two: 5,000 accented letters, written as a letter

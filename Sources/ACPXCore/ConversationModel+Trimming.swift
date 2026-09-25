@@ -81,12 +81,16 @@ extension ConversationModel {
     }
 
     /// `trimRuntimeText`: a text longer than `maxChars` UTF-16 code units — JavaScript's
-    /// `length` — cut to its first `maxChars - 3` of them, `...` added. A cut through a
-    /// surrogate pair leaves half of it, which a Swift string cannot hold: it becomes
-    /// U+FFFD, where acpx keeps the lone surrogate (openclaw/acpx#774).
+    /// `length` — cut to its first `maxChars - 3` of them, `...` added. A cut that would
+    /// split a surrogate pair keeps one unit less, the whole pair out, as acpx 0.19.3 cuts
+    /// it (openclaw/acpx#774).
     static func trimRuntimeText(_ value: String, _ maxChars: Int) -> String {
         let units = value.utf16
         guard units.count > maxChars else { return value }
-        return String(decoding: Array(units.prefix(max(0, maxChars - 3))), as: UTF16.self) + "..."
+        var end = units.index(units.startIndex, offsetBy: max(0, maxChars - 3))
+        if end > units.startIndex, UTF16.isLeadSurrogate(units[units.index(before: end)]) {
+            end = units.index(before: end)
+        }
+        return String(decoding: units[..<end], as: UTF16.self) + "..."
     }
 }
