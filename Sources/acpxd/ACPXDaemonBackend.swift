@@ -209,7 +209,11 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
             let session = entry.session
-            try await withTimeout(milliseconds: timeout) { try await session.setMode(modeId) }
+            try await withTimeout(milliseconds: timeout) {
+                try await SessionControlError.wrapping("session/set_mode", context: "for mode \"\(modeId)\"") {
+                    try await session.setMode(modeId)
+                }
+            }
             // Only the mode to put back, as acpx's `setDesiredModeId`: the current mode is
             // what the agent's `current_mode_update` of a turn says.
             var acpx = record.acpx ?? SessionAcpxState()

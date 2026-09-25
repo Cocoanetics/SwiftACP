@@ -245,7 +245,10 @@ public enum ReconnectReplay {
         guard let modeId else { return nil }
         do {
             try await withTimeout(milliseconds: target.timeoutMilliseconds) {
-                try await target.connection.setMode(SetSessionModeRequest(sessionId: target.sessionId, modeId: modeId))
+                try await SessionControlError.wrapping("session/set_mode", context: "for mode \"\(modeId)\"") {
+                    try await target.connection.setMode(
+                        SetSessionModeRequest(sessionId: target.sessionId, modeId: modeId))
+                }
             }
         } catch {
             throw SessionReplayError(.mode, """
