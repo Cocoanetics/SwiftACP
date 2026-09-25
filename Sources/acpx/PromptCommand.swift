@@ -98,25 +98,36 @@ enum PromptCommand {
             "⚠ No acpx session found (searched up to \(walkBoundary)).\nCreate one: \(createCmd)")
     }
 
+    /// acpx's `printPromptSessionBanner`: the session, and whether its agent is held —
+    /// acpxd asked, as acpx probes the session's queue owner, without starting it.
     static func printSessionBanner(_ record: SessionRecord, cwd: String, flags: GlobalFlags) {
         if flags.format == "quiet" || (flags.jsonStrict && flags.format == "json") { return }
+        let id = record.acpxRecordId
+        let hold = (try? runBlocking { await DaemonClient.sessionHold(sessionId: id) }) ?? .unknown
+        Console.errLine(sessionBanner(record, cwd: cwd, status: connectionStatus(hold)))
+    }
+
+    /// acpx's `classifySessionConnectionStatus`: `connected` while acpxd holds the
+    /// session, `needs reconnect` when a daemon holds the lock and does not answer — or
+    /// cannot say — and `starting` when nothing holds it.
+    static func connectionStatus(_ hold: DaemonClient.SessionHold) -> String {
+        switch hold {
+        case .held: return "connected"
+        case .notHeld: return "starting"
+        case .unreachable, .unknown: return "needs reconnect"
+        }
+    }
+
+    /// acpx's `formatPromptSessionBannerLine`.
+    static func sessionBanner(_ record: SessionRecord, cwd: String, status: String) -> String {
         let label = record.name ?? "cwd"
         let sessionCwd = ACPXPaths.resolve(record.cwd, base: "/")
-        // The banner prints before the daemon is contacted, so it doesn't know
-        // whether acpxd still holds this agent live — report the conservative
-        // "needs reconnect" (matching upstream acpx, whose CLI process never has
-        // a live agent at this point either) rather than paying a daemon
-        // round-trip just for the banner.
-        let status = "needs reconnect"
-        if sessionCwd == cwd {
-            Console.errLine(
-                "[acpx] session \(label) (\(record.acpxRecordId)) · \(sessionCwd) · agent \(status)")
-        } else {
-            let routedFrom = routedFromPath(sessionCwd: sessionCwd, currentCwd: cwd)
-            Console.errLine(
-                "[acpx] session \(label) (\(record.acpxRecordId)) · \(sessionCwd) "
-                    + "(routed from \(routedFrom)) · agent \(status)")
+        guard sessionCwd != cwd else {
+            return "[acpx] session \(label) (\(record.acpxRecordId)) · \(sessionCwd) · agent \(status)"
         }
+        let routedFrom = routedFromPath(sessionCwd: sessionCwd, currentCwd: cwd)
+        return "[acpx] session \(label) (\(record.acpxRecordId)) · \(sessionCwd) "
+            + "(routed from \(routedFrom)) · agent \(status)"
     }
 
     private static func routedFromPath(sessionCwd: String, currentCwd: String) -> String {

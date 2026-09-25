@@ -43,4 +43,12 @@ public protocol ACPXBackend: Sendable {
         permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, model: String?
     ) async throws -> String
     func cancelSession(sessionId: String) async throws -> Bool
+    func sessionStatus(sessionId: String) async -> LiveSessionStatus
+}
+
+extension ACPXBackend {
+    /// A backend that holds no agents live holds none of its sessions.
+    public func sessionStatus(sessionId: String) async -> LiveSessionStatus {
+        LiveSessionStatus(live: false)
+    }
 }
