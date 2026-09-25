@@ -120,9 +120,11 @@ extension SessionRecordParser {
         return false
     }
 
-    /// `isSessionMessageImage`: a source, and a size (when given) of finite numbers.
+    /// `isSessionMessageImage`: a source, a MIME type (when given) that is a string, as
+    /// acpx 0.19.3 checks it (openclaw/acpx#766), and a size (when given) of finite numbers.
     static func isImage(_ image: WireJSON) -> Bool {
-        guard case .object = image, image["source"]?.stringValue != nil else { return false }
+        guard case .object = image, image["source"]?.stringValue != nil, isOptionalString(image["mime_type"])
+        else { return false }
         guard let size = image["size"], size != .null else { return true }
         guard case .object = size, case .number(let width)? = size["width"],
             case .number(let height)? = size["height"]
@@ -195,15 +197,11 @@ extension SessionRecordParser {
     }
 
     /// ``isUserContent(_:)``'s choice: text when it is a string, else whichever of a
-    /// mention, an image or an audio clip comes first. An image's `mime_type`, which
-    /// only SwiftACP writes, stays only when it is a string.
+    /// mention, an image or an audio clip comes first.
     static func modelUserContent(_ content: WireJSON) -> WireJSON {
         if let text = content["Text"], text.stringValue != nil { return object([("Text", text)]) }
         if let mention = content["Mention"] { return object([("Mention", mention)]) }
-        if let image = content["Image"] {
-            let unreadableMimeType = image["mime_type"].map { $0.stringValue == nil } ?? false
-            return object([("Image", unreadableMimeType ? image.removing("mime_type") : image)])
-        }
+        if let image = content["Image"] { return object([("Image", image)]) }
         if let audio = content["Audio"] { return object([("Audio", audio)]) }
         return content
     }

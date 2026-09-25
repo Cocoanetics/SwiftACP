@@ -32,11 +32,9 @@ public enum ConversationModel {
     /// mapping each ACP content block onto the persisted thread schema. Returns the
     /// message id, or nil when no block contributed content.
     ///
-    /// Attachment *payloads* are deliberately not persisted: acpx writes an image's
-    /// full base64 into the record, which inflates every session file by the size of
-    /// the image and then prints it as the history preview. The bytes are already in
-    /// the turn's wire log if anyone needs them, so the record keeps the MIME type
-    /// and drops the data.
+    /// An image or an audio clip is recorded with its data and MIME type, as acpx 0.19.3
+    /// records it (openclaw/acpx#766). History previews name it by its type instead
+    /// (``SessionUserContent/previewText``).
     @discardableResult
     public static func recordPromptSubmission(
         into record: inout SessionRecord, prompt: [ContentBlock], timestamp: String = nowISO()
@@ -56,9 +54,9 @@ public enum ConversationModel {
         case .text(let value):
             return .text(trimRuntimeText(value.text, maxRuntimeAgentTextChars))
         case .image(let image):
-            return .image(SessionMessageImage(source: "", size: .null, mimeType: image.mimeType))
+            return .image(SessionMessageImage(source: image.data, mimeType: .value(image.mimeType), size: .null))
         case .audio(let audio):
-            return .audio(SessionMessageAudio(source: "", mimeType: audio.mimeType))
+            return .audio(SessionMessageAudio(source: audio.data, mimeType: audio.mimeType))
         case .resourceLink(let link):
             return .mention(uri: link.uri, content: link.title ?? link.name)
         case .resource(let resource):
