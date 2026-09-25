@@ -24,13 +24,10 @@ enum ExecCommand {
         let renderer = OutputRenderer(options: options)
         let onClientRequest = clientOperationObserver(renderer)
         // JSON mode prints the exchange from the handshake on, so the tap goes in at launch.
-        // Quiet mode reads the prompt response's usage and cost off the wire, as acpx does,
-        // and whether the prompt may go again depends on what crossed it meanwhile.
+        // Quiet mode reads the prompt response's usage and cost off the wire, as acpx does.
         let promptResult = PromptResultCapture()
-        let sideEffects = PromptSideEffects()
         let onRawWire: RawWireTap.Observer = { direction, body in
             promptResult.observe(direction, body)
-            sideEffects.observe(direction, body)
             if renderer.streamsWireJSON { renderer.acpMessage(direction, body) }
         }
         let auth = context.config.auth
@@ -48,6 +45,10 @@ enum ExecCommand {
             } catch {
                 return reportFailure(error, renderer: renderer, format: flags.format)
             }
+            // Whether the prompt may go again depends on what the connection had of the
+            // agent meanwhile.
+            let sideEffects = PromptSideEffects()
+            await handle.connection.setWireMessageObserver { sideEffects.observe($0, $1) }
             let session: ACPSession
             do {
                 let connection = handle.connection

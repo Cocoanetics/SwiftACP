@@ -33,15 +33,16 @@ public enum PromptRetry {
 /// request of the agent's, reported once it passes the handler's checks, and the notice
 /// of a refused permission. A permission question alone is not one.
 ///
-/// Fed each message as it crosses the wire (``observe(_:_:)``, from the raw tap): in read
-/// order, and ahead of the prompt's answer — so an update the agent sent before its
-/// error, or in the same read, counts before the decision, as it does in acpx.
+/// Fed each message as the connection reads or writes it (``observe(_:_:)``, from its
+/// wire message observer): in order, and once the connection has it — where acpx's SDK
+/// hands a message to its handlers. An update the agent sent before its error counts
+/// before the decision, as it does in acpx.
 public final class PromptSideEffects: @unchecked Sendable {
     private let lock = NSLock()
     private var active = false
     private var happened = false
-    /// The agent's file and terminal requests being served, by id as it was written.
-    private var serving: [String: String] = [:]
+    /// The agent's file and terminal requests being served, by id.
+    private var serving: [JSONRPCID: String] = [:]
 
     public init() {}
 
@@ -70,27 +71,29 @@ public final class PromptSideEffects: @unchecked Sendable {
     }
 
     /// Look at a message as it crossed the wire.
-    public func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        guard lock.withLock({ active }), let message = WireJSON(parsing: body) else { return }
-        let method = message["method"]?.stringValue
-        let id = message["id"]?.stringified
+    public func observe(_ direction: JSONRPCPeer.WireDirection, _ message: JSONRPCMessage) {
         lock.withLock {
-            switch (direction, method, id) {
-            case (.inbound, "session/update"?, nil):
+            guard active else { return }
+            switch (direction, message) {
+            case (.inbound, .notification(let note)) where note.method == "session/update":
                 happened = true
-            case (.inbound, let method?, let id?) where Self.operations.contains(method):
-                serving[id] = method
-            case (.outbound, nil, let id?):
-                guard let method = serving.removeValue(forKey: id) else { return }
-                if let error = message["error"] {
-                    if !Self.refusedBeforeReporting(method, error) { happened = true }
-                } else {
-                    happened = true
-                }
+            case (.inbound, .request(let request)) where Self.operations.contains(request.method):
+                serving[request.id] = request.method
+            case (.outbound, .response(let response)):
+                if serving.removeValue(forKey: response.id) != nil { happened = true }
+            case (.outbound, .errorResponse(let failure)):
+                guard let id = failure.id, let method = serving.removeValue(forKey: id) else { return }
+                if !Self.refusedBeforeReporting(method, failure.error) { happened = true }
             default:
                 break
             }
         }
+    }
+
+    /// ``observe(_:_:)`` of a message's body, as written.
+    public func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+        guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: body) else { return }
+        observe(direction, message)
     }
 
     /// The agent's requests acpx's file-system and terminal handlers report as
@@ -108,10 +111,15 @@ public final class PromptSideEffects: @unchecked Sendable {
     /// not serve, params it does not take, a path it will not resolve, or a terminal it
     /// does not know (for all but `terminal/release`, which reports first). A
     /// `terminal/wait_for_exit` is reported only once it is answered.
-    static func refusedBeforeReporting(_ method: String, _ error: WireJSON) -> Bool {
+    static func refusedBeforeReporting(_ method: String, _ error: JSONRPCError) -> Bool {
         if method == "terminal/wait_for_exit" { return true }
-        if case .number(let code)? = error["code"], code == -32601 || code == -32602 { return true }
-        let details = error["data"]?["details"]?.stringValue ?? error["message"]?.stringValue ?? ""
+        if error.code == -32601 || error.code == -32602 { return true }
+        let details: String
+        if case .object(let data)? = error.data, case .string(let text)? = data["details"] {
+            details = text
+        } else {
+            details = error.message
+        }
         if method.hasPrefix("fs/") { return pathRefusals.contains { details.hasPrefix($0) } }
         if method != "terminal/create", method != "terminal/release" {
             return details.hasPrefix(TerminalError.unknownTerminal("").description)

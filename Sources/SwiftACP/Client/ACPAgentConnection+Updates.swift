@@ -1,6 +1,7 @@
 import Dispatch
 import Foundation
 import JSONFoundation
+import JSONRPCPeer
 
 // The agent's `session/update`s: fanned out to the subscriptions — except a
 // session's while its `session/load` replays history the caller already has — and
@@ -15,6 +16,7 @@ extension ACPAgentConnection {
         guard method == "session/update" else { return }
         let sessionId = InboundRequestLedger.sessionId(of: params)
         defer { if let sessionId { sessionUpdates.finished(sessionId) } }
+        await beforeHandlingUpdate?()
         guard let params, let notification = try? params.decoded(SessionNotification.self) else { return }
         if replaySuppressed[notification.sessionId] != nil { return }
         for sink in updateSinks.values {
@@ -107,6 +109,23 @@ extension ACPAgentConnection {
     @discardableResult
     public func waitForRequestsAnswered(sessionId: SessionId) async -> Bool {
         await inboundRequests.waitUntilIdle(sessionId)
+    }
+
+    /// Hand every JSON-RPC message to `observer` as it crosses the wire, decoded, with
+    /// its direction: in order, and before it is handled — a request of the agent's is
+    /// announced on the event stream, and an update counted, before `observer` sees it.
+    /// The closure runs synchronously, so it must be fast. Pass `nil` to stop.
+    public func setWireMessageObserver(
+        _ observer: (@Sendable (JSONRPCPeer.WireDirection, JSONRPCMessage) -> Void)?
+    ) async {
+        wireObserver.setMessages(observer)
+    }
+
+    /// Return once every `session/update` for `sessionId` the connection has read has
+    /// been handled — handed on to the subscriptions: what the agent sent so far can be
+    /// seen by then.
+    public func waitForSessionUpdatesHandled(sessionId: SessionId) async {
+        await sessionUpdates.waitUntilHandled(sessionId)
     }
 
     /// Wait until no `session/update` for `sessionId` has arrived for

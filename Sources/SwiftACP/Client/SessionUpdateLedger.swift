@@ -19,6 +19,14 @@ final class SessionUpdateLedger: @unchecked Sendable {
     private var arrivals: [SessionId: UInt64] = [:]
     private var handled: [SessionId: UInt64] = [:]
     private var lastArrival: [SessionId: UInt64] = [:]
+    private var waiters: [SessionId: [CheckedContinuation<Void, Never>]] = [:]
+    /// Called when ``waitUntilHandled(_:)`` has to wait — lets a test release an update
+    /// it is holding at exactly that point.
+    private var onWait: (@Sendable (SessionId) -> Void)?
+
+    func setOnWait(_ hook: (@Sendable (SessionId) -> Void)?) {
+        lock.withLock { onWait = hook }
+    }
 
     func arrived(_ sessionId: SessionId) {
         let now = DispatchTime.now().uptimeNanoseconds
@@ -29,7 +37,24 @@ final class SessionUpdateLedger: @unchecked Sendable {
     }
 
     func finished(_ sessionId: SessionId) {
-        lock.withLock { handled[sessionId, default: 0] += 1 }
+        let released: [CheckedContinuation<Void, Never>] = lock.withLock {
+            handled[sessionId, default: 0] += 1
+            guard handled[sessionId, default: 0] >= arrivals[sessionId, default: 0] else { return [] }
+            return waiters.removeValue(forKey: sessionId) ?? []
+        }
+        released.forEach { $0.resume() }
+    }
+
+    /// Return once every update read for `sessionId` has been handled.
+    func waitUntilHandled(_ sessionId: SessionId) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let (done, hook): (Bool, (@Sendable (SessionId) -> Void)?) = lock.withLock {
+                guard arrivals[sessionId, default: 0] > handled[sessionId, default: 0] else { return (true, nil) }
+                waiters[sessionId, default: []].append(continuation)
+                return (false, onWait)
+            }
+            if done { continuation.resume() } else { hook?(sessionId) }
+        }
     }
 
     /// When `sessionId`'s latest update arrived, in `DispatchTime` nanoseconds, and

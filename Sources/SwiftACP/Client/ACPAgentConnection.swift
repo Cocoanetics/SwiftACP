@@ -22,6 +22,8 @@ public actor ACPAgentConnection {
     /// that followed were read and handed on.
     var afterPromptAnswer: (@Sendable () async -> Void)?
     var beforeServingRequest: (@Sendable () async -> Void)?
+    /// For tests: runs before a `session/update` read is handled.
+    var beforeHandlingUpdate: (@Sendable () async -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
@@ -115,7 +117,7 @@ public actor ACPAgentConnection {
 
     /// The caller's wire observer; the peer's wire hook (installed once, in `start`)
     /// forwards to it, since it also counts the agent's requests as they arrive.
-    private let wireObserver = WireObserverBox()
+    let wireObserver = WireObserverBox()
     /// The agent's requests that arrived and are not yet answered, per session — what
     /// a turn waits for before it ends. See ``InboundRequestLedger``.
     let inboundRequests = InboundRequestLedger()
@@ -189,6 +191,7 @@ public actor ACPAgentConnection {
             if let observer = wireObserver.current, let line = try? message.encodedString() {
                 observer(line)
             }
+            wireObserver.currentMessages?(direction, message)
         }
         await rpc.setHandlers(
             request: { [weak self, inboundRequests] method, params in
