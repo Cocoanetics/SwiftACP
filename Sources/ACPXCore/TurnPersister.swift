@@ -106,9 +106,10 @@ public actor TurnPersister {
         checkpoint()
     }
 
-    /// Record a structured prompt (text plus attachments) as the turn's user message.
+    /// Record a structured prompt (text plus attachments) as the turn's user message —
+    /// the one the response's usage is attributed to.
     public func recordPrompt(_ blocks: [ContentBlock]) {
-        ConversationModel.recordPromptSubmission(into: &record, prompt: blocks)
+        promptMessageId = ConversationModel.recordPromptSubmission(into: &record, prompt: blocks)
         checkpoint()
     }
 

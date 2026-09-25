@@ -117,8 +117,10 @@ struct UsageUpdateTests {
     }
 
     /// The wiring, not just the parameter: the persister must remember the turn's own
-    /// prompt, because a user message can be appended before the response lands.
-    @Test func thePersisterAttributesUsageToItsOwnPrompt() async throws {
+    /// prompt, because a user message can be appended before the response lands — the
+    /// prompt given as text, or as the blocks the daemon records (#154).
+    @Test(arguments: [false, true])
+    func thePersisterAttributesUsageToItsOwnPrompt(asBlocks: Bool) async throws {
         try await withIsolatedStore {
             let now = nowISO()
             let seed = SessionRecord(
@@ -127,7 +129,11 @@ struct UsageUpdateTests {
             try SessionStore.writeRecord(seed)
 
             let persister = TurnPersister(record: seed, intervalNanos: 20_000_000)
-            await persister.recordPrompt("the turn's prompt")
+            if asBlocks {
+                await persister.recordPrompt([ContentBlock.text("the turn's prompt")])
+            } else {
+                await persister.recordPrompt("the turn's prompt")
+            }
             // The agent echoes the user's message back mid-turn, appending a second one.
             await persister.apply(
                 .userMessageChunk(ContentBlock.text("echoed back")))
