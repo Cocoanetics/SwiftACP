@@ -78,8 +78,8 @@ public actor ACPAgentConnection {
     /// The agent's requests of each session's prompt in flight still being served,
     /// answered as cancelled when the turn is.
     var turnRequests: [SessionId: [UUID: TurnRequest]] = [:]
-    /// Those read with no prompt in flight still being served, answered as cancelled when
-    /// their session is closed.
+    /// Those read with no prompt in flight still being served, answered as cancelled at
+    /// their session's next cancel, the end of its next prompt, or its close.
     var unownedRequests: [SessionId: [UUID: TurnRequest]] = [:]
 
     /// Sessions whose `session/update`s are not delivered — their `session/load` is
@@ -361,20 +361,21 @@ public actor ACPAgentConnection {
             unavailableAtTurnEnd[request.sessionId] = turnPermissionStats[request.sessionId]?.promptUnavailable
         }
         // At its answer, what the prompt owns is over, as acpx's `clearActivePrompt` ends
-        // it: an owned request still open is answered cancelled (``answerTurnRequestsCancelled(_:)``),
-        // and the rest of the terminal requests go on. The turn is not over until those
-        // it owns are answered: one sent without awaiting would otherwise be counted
-        // against the next turn.
+        // it: an owned request still open is answered cancelled, and so is one the agent
+        // asked with no prompt in flight, as the session's fallback controller is aborted
+        // there too (``answerSessionRequestsCancelled(_:)``). The rest of the terminal
+        // requests go on. The turn is not over until those it owns are answered: one sent
+        // without awaiting would otherwise be counted against the next turn.
         do {
             let response: PromptResponse = try await send("session/prompt", request)
             answered = true
             // The answer was announced as it was read (see `start`), not from here.
             await afterPromptAnswer?()
-            answerTurnRequestsCancelled(request.sessionId)
+            answerSessionRequestsCancelled(request.sessionId)
             await inboundRequests.waitUntilIdle(request.sessionId)
             return response
         } catch {
-            answerTurnRequestsCancelled(request.sessionId)
+            answerSessionRequestsCancelled(request.sessionId)
             await inboundRequests.waitUntilIdle(request.sessionId)
             throw error
         }

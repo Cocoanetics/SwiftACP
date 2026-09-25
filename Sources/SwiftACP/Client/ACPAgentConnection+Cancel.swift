@@ -12,7 +12,12 @@ extension ACPAgentConnection {
     /// again (acpx's `cancelPromise`). The agent's requests of the turn are answered as
     /// cancelled from then on (``servingUnlessCancelled(_:_:sessionId:)``). With no
     /// prompt in flight the notification just goes out.
+    ///
+    /// Either way, what the agent asked with no prompt in flight and is still being served
+    /// is ended too, as acpx aborts the session's fallback controller at every cancel
+    /// (`takePermissionAbortController`).
     public func cancel(sessionId: SessionId) async throws {
+        answerUnownedRequestsCancelled(sessionId)
         guard promptingSessionIds.contains(sessionId) else {
             try await sendCancel(sessionId)
             return
@@ -45,8 +50,10 @@ extension ACPAgentConnection {
     ///
     /// Those read with no prompt in flight are served as they come too, but not for a
     /// session being closed: acpx asks of each, owned by a prompt or not, that its session
-    /// is not being cancelled or closed (`assertActive`), and a close ends those still
-    /// being served (`abortSessionRequests`, ``answerSessionRequestsCancelled(_:)``).
+    /// is not being cancelled or closed (`assertActive`). What serves them listens to the
+    /// session's fallback controller, which acpx aborts at the session's next cancel, the end
+    /// of its next prompt and its close. Those still being served then are ended
+    /// (``answerUnownedRequestsCancelled(_:)``).
     func servingUnlessCancelled(
         _ method: String, _ params: JSONValue?, sessionId: SessionId?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
@@ -144,9 +151,17 @@ extension ACPAgentConnection {
 
     /// Answer every request of `sessionId`'s still being served as cancelled, those read
     /// with no prompt in flight too, and stop serving them: acpx ends them all at a close
-    /// (`abortSessionRequests`).
+    /// (`abortSessionRequests`) and at a prompt's end (`clearActivePrompt`).
     func answerSessionRequestsCancelled(_ sessionId: SessionId) {
         answerTurnRequestsCancelled(sessionId)
+        answerUnownedRequestsCancelled(sessionId)
+    }
+
+    /// Answer `sessionId`'s requests read with no prompt in flight and still being served
+    /// as cancelled, and stop serving them: acpx aborts the session's fallback controller,
+    /// which they listen to, at every cancel, a prompt's end and a close
+    /// (`takePermissionAbortController`).
+    func answerUnownedRequestsCancelled(_ sessionId: SessionId) {
         answerCancelled(unownedRequests.removeValue(forKey: sessionId), in: sessionId)
     }
 
