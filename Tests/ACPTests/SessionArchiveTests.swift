@@ -11,7 +11,7 @@ import Testing
 ///
 /// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
 @Suite(.serialized) struct SessionArchiveTests {
-    private struct Fixture: Decodable {
+    struct Fixture: Decodable {
         struct Refusal: Decodable {
             let name: String
             let agent: String
@@ -32,7 +32,7 @@ import Testing
         let refusals: [Refusal]
     }
 
-    private struct Run {
+    struct Run {
         let code: Int32
         let out: String
         let err: String
@@ -40,65 +40,65 @@ import Testing
 
     /// A session an export may find running: its record's text changed by `edit`, and its
     /// event log's lock — a directory for `""` — and how the export is refused, if it is.
-    private struct RunningCase {
+    struct RunningCase {
         let label: String
         let edit: (String) -> String
         var lock: String?
         var refused: Run?
     }
 
-    private static let exportedAt = "2026-09-24T12:00:00.000Z"
-    private static let locked =
+    static let exportedAt = "2026-09-24T12:00:00.000Z"
+    static let locked =
         "session is currently locked by a running queue owner; close it first with `acpx sessions close`\n"
 
-    private static func fixture() throws -> Fixture {
+    static func fixture() throws -> Fixture {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/acpx-session-archive.json")
         return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
     }
 
     /// The whole CLI, run on `arguments`, and what it printed.
-    private static func run(_ arguments: [String]) -> Run {
+    static func run(_ arguments: [String]) -> Run {
         let capture = Console.Capture()
         let code = Console.$capture.withValue(capture) { runCommandLine(arguments) }
         return Run(code: code, out: capture.out, err: capture.err)
     }
 
     /// A new directory, its path with symbolic links resolved.
-    private static func directory() throws -> String {
+    static func directory() throws -> String {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath()
             .appendingPathComponent("acpx-archive-\(UUID().uuidString)").path
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         return path
     }
 
-    private static func write(_ text: String, to path: String) throws {
+    static func write(_ text: String, to path: String) throws {
         try Data(text.utf8).write(to: URL(fileURLWithPath: path))
     }
 
-    private static func text(at path: String) throws -> String {
+    static func text(at path: String) throws -> String {
         String(decoding: try Data(contentsOf: URL(fileURLWithPath: path)), as: UTF8.self)
     }
 
-    private static func mode(of path: String) throws -> UInt16 {
+    static func mode(of path: String) throws -> UInt16 {
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         return try #require(attributes[.posixPermissions] as? NSNumber).uint16Value
     }
 
     /// The fixture's archive, exported at ``exportedAt``, as the file `path`.
-    private static func writeArchive(_ fixture: Fixture, to path: String) throws {
+    static func writeArchive(_ fixture: Fixture, to path: String) throws {
         try write(fixture.archive.replacingOccurrences(of: "<exported_at>", with: exportedAt), to: path)
     }
 
     /// The `probe` agent the archive was exported for, in the global config.
-    private static func configureProbe(_ fixture: Fixture) throws {
+    static func configureProbe(_ fixture: Fixture) throws {
         try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
         try write(#"{"agents": {"probe": {"command": "\#(fixture.command)"}}}"#, to: ACPXPaths.globalConfigPath.path)
     }
 
     /// The fixture's record and event log as the record `id`, its home at `home` and its
     /// text changed by `edit`.
-    private static func storeSource(
+    static func storeSource(
         _ fixture: Fixture, home: String, id: String = "rec-1", edit: (String) -> String = { $0 }
     ) throws {
         try FileManager.default.createDirectory(at: ACPXPaths.sessionsDir, withIntermediateDirectories: true)
@@ -113,7 +113,7 @@ import Testing
     }
 
     /// `record` open, its agent process `pid` — none when `nil`.
-    private static func opened(_ record: String, pid: Int32? = nil) -> String {
+    static func opened(_ record: String, pid: Int32? = nil) -> String {
         record.replacingOccurrences(of: #""closed": true"#, with: #""closed": false"#)
             .replacingOccurrences(of: #""pid": 4242,"#, with: pid.map { #""pid": \#($0),"# } ?? "")
     }
@@ -239,6 +239,71 @@ import Testing
         }
     }
 
+    /// An archive names the agent a session ran, never how to launch one: an argv it
+    /// carries beside the expected command is not what the imported session launches.
+    /// The local agent's argv is — or, when the agent has none, its command.
+    @Test func anArchiveCannotNameTheProgramToLaunch() async throws {
+        let fixture = try Self.fixture()
+        let payload: [String] = ["/bin/sh", "-c", "echo pwned"]
+        try await withIsolatedStore {
+            let parsed = try WireJSON.parse(
+                fixture.archive.replacingOccurrences(of: "<exported_at>", with: Self.exportedAt))
+            let session = try #require(parsed["session"])
+            let state = try #require(session["state"])
+            let crafted = parsed.replacing("session", with: session.replacing(
+                "state", with: state.replacing("agent_argv", with: .array(payload.map(WireJSON.text)))))
+            let archive = try Self.directory() + "/archive.json"
+            try Self.write(crafted.stringified(indent: 2), to: archive)
+
+            let plain = try SessionArchive.importArchive(
+                at: archive, name: nil, cwd: nil, expectedAgentName: "probe", expectedAgentCommand: fixture.command,
+                home: "/home/user")
+            let plainArgv = SessionStore.loadRecord(plain.recordId)?.agentArgv
+            try FileManager.default.removeItem(at: ACPXPaths.sessionRecordPath(plain.recordId))
+            let launched = try SessionArchive.importArchive(
+                at: archive, name: nil, cwd: nil, expectedAgentName: "probe", expectedAgentCommand: fixture.command,
+                expectedAgentArgv: ["probe-agent", "--acp"], home: "/home/user")
+
+            #expect(plainArgv != payload)
+            #expect(plainArgv == nil || plainArgv?.first == "npx")
+            #expect(SessionStore.loadRecord(launched.recordId)?.agentArgv == ["probe-agent", "--acp"])
+        }
+    }
+
+    /// The environment a session's agent starts with is this machine's: an export leaves
+    /// it out — it may hold credentials — and an import brings none, since it decides what
+    /// the agent runs too. The session's other options travel.
+    @Test func anArchiveCarriesNoEnvironment() async throws {
+        let fixture = try Self.fixture()
+        try await withIsolatedStore {
+            try Self.storeSource(fixture, home: "/home/user")
+            var record = try #require(SessionStore.loadRecord("rec-1"))
+            var options = SessionAcpxState.SessionOptions()
+            options.model = "gpt"
+            options.env = ["API_TOKEN": "t0ken"]
+            record.acpx?.sessionOptions = options
+            let archive = try Self.directory() + "/archive.json"
+
+            try SessionArchive.export(
+                record, agentName: "probe", to: archive, home: "/home/user", exportedAt: Self.exportedAt)
+            let exported = try Self.text(at: archive)
+            try Self.write(
+                exported.replacingOccurrences(
+                    of: #""session_options": {"#,
+                    with: #""session_options": {"env": {"NODE_OPTIONS": "--require /tmp/x.js"}, "#),
+                to: archive)
+            try FileManager.default.removeItem(at: ACPXPaths.sessionRecordPath("rec-1"))
+            let imported = try SessionArchive.importArchive(
+                at: archive, name: nil, cwd: nil, expectedAgentName: "probe", expectedAgentCommand: fixture.command,
+                home: "/home/user")
+
+            #expect(exported.contains(#""session_options": {"#) && !exported.contains("t0ken"))
+            let back = try #require(SessionStore.loadRecord(imported.recordId))
+            #expect(back.acpx?.sessionOptions?.model == "gpt")
+            #expect(back.acpx?.sessionOptions?.env == nil)
+        }
+    }
+
     // MARK: - Refusals
 
     /// Every archive acpx refuses is refused with acpx's message and exit code — bad
@@ -313,156 +378,6 @@ import Testing
             #expect(missing.err == "ENOENT: no such file or directory, open '\(cwd)/none.json'\n")
             #expect(directory.code == ExitCodes.error)
             #expect(directory.err == "EISDIR: illegal operation on a directory, read\n")
-        }
-    }
-
-    // MARK: - Export
-
-    /// The session exported is the one acpx finds: by agent, directory and name —
-    /// trimmed, and the directory against the global one — an open one before a closed
-    /// one; with none, "session not found".
-    @Test func anExportFindsTheSessionAcpxFinds() async throws {
-        let fixture = try Self.fixture()
-        try await withIsolatedStore {
-            try Self.configureProbe(fixture)
-            let home = try Self.directory()
-            try Self.storeSource(fixture, home: home)
-            try Self.storeSource(fixture, home: home, id: "rec-2") {
-                Self.opened($0).replacingOccurrences(of: #""sess-1""#, with: #""sess-2""#)
-            }
-            let output = home + "/out.json"
-
-            let found = Self.run([
-                "--cwd", home, "probe", "sessions", "export", "  alpha  ", "--output", " \(output) ", "--cwd", "proj/x"
-            ])
-            let missing = Self.run(
-                ["--cwd", home + "/proj/x", "probe", "sessions", "export", "beta", "--output", output])
-
-            #expect(found.out == "exported session to \(output)\n")
-            let archive = try #require(WireJSON(parsing: Data(contentsOf: URL(fileURLWithPath: output))))
-            #expect(archive["session"]?["record_id"] == .text("rec-2"))
-            #expect(missing.code == ExitCodes.usage)
-            #expect(missing.err == "session not found\n")
-        }
-    }
-
-    /// A session whose agent still runs is not exported — its process alive, or the
-    /// queue owner holding its event log's lock alive. A closed session, a process gone
-    /// or one not ours to signal, and a lock naming no live process do not hold it.
-    @Test func aRunningSessionIsNotExported() async throws {
-        let fixture = try Self.fixture()
-        let live = getppid()
-        let lockedOut = Run(code: ExitCodes.usage, out: "", err: Self.locked)
-        let cases = [
-            RunningCase(label: "its agent running", edit: { Self.opened($0, pid: live) }, refused: lockedOut),
-            RunningCase(
-                label: "closed, its agent running", edit: { $0.replacingOccurrences(of: "4242,", with: "\(live),") }),
-            RunningCase(label: "its agent not ours to signal", edit: { Self.opened($0, pid: 1) }),
-            RunningCase(label: "its agent this very process", edit: { Self.opened($0, pid: getpid()) }),
-            RunningCase(label: "its agent gone", edit: { Self.opened($0, pid: 999_999) }),
-            RunningCase(
-                label: "its queue owner running", edit: { Self.opened($0) }, lock: #"{"pid": \#(live)}"#,
-                refused: lockedOut),
-            RunningCase(label: "closed, its queue owner running", edit: { $0 }, lock: #"{"pid": \#(live)}"#),
-            RunningCase(label: "its queue owner gone", edit: { Self.opened($0) }, lock: #"{"pid": 999999}"#),
-            RunningCase(label: "a lock naming no process", edit: { Self.opened($0) }, lock: #"{"pid": "\#(live)"}"#),
-            RunningCase(label: "a lock that is no JSON", edit: { Self.opened($0) }, lock: "not json"),
-            RunningCase(
-                label: "a lock that is a directory", edit: { Self.opened($0) }, lock: "",
-                refused: Run(code: ExitCodes.error, out: "", err: "EISDIR: illegal operation on a directory, read\n"))
-        ]
-        for testCase in cases {
-            try await withIsolatedStore {
-                try Self.configureProbe(fixture)
-                let home = try Self.directory()
-                try Self.storeSource(fixture, home: home, edit: testCase.edit)
-                let lock = ACPXPaths.sessionStreamLockPath("rec-1")
-                if testCase.lock == "" {
-                    try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-                } else if let text = testCase.lock {
-                    try Self.write(text, to: lock.path)
-                }
-                let output = home + "/out.json"
-
-                let run = Self.run(
-                    ["--cwd", home + "/proj/x", "probe", "sessions", "export", "alpha", "--output", output])
-
-                let exported = Run(code: ExitCodes.success, out: "exported session to \(output)\n", err: "")
-                let expected = testCase.refused ?? exported
-                #expect(run.code == expected.code, "\(testCase.label)")
-                #expect(run.out == expected.out, "\(testCase.label)")
-                #expect(run.err == expected.err, "\(testCase.label)")
-                let written = FileManager.default.fileExists(atPath: output)
-                #expect(written == (testCase.refused == nil), "\(testCase.label)")
-            }
-        }
-    }
-
-    /// The archive goes where acpx puts it: through a symbolic link — a relative one from
-    /// the link's directory, a dangling one to the file it names — into directories made
-    /// for it. A directory, and links without end, are refused.
-    @Test func theArchiveGoesWhereAcpxPutsIt() async throws {
-        let fixture = try Self.fixture()
-        try await withIsolatedStore {
-            try Self.storeSource(fixture, home: "/home/user")
-            let record = try #require(SessionStore.loadRecord("rec-1"))
-            let root = try Self.directory()
-            let files = FileManager.default
-            func export(to path: String) throws {
-                try SessionArchive.export(
-                    record, agentName: nil, to: path, home: "/home/user", exportedAt: Self.exportedAt)
-            }
-            try files.createDirectory(atPath: root + "/d", withIntermediateDirectories: true)
-            try files.createSymbolicLink(atPath: root + "/d/link.json", withDestinationPath: "../dangling.json")
-            try files.createSymbolicLink(atPath: root + "/a.json", withDestinationPath: root + "/b.json")
-            try files.createSymbolicLink(atPath: root + "/b.json", withDestinationPath: root + "/a.json")
-
-            try export(to: root + "/d/link.json")
-            try export(to: root + "/new/deeper/out.json")
-
-            #expect(files.fileExists(atPath: root + "/dangling.json"))
-            #expect(try files.destinationOfSymbolicLink(atPath: root + "/d/link.json") == "../dangling.json")
-            #expect(files.fileExists(atPath: root + "/new/deeper/out.json"))
-            #expect(throws: SessionArchive.Failure(message: "Session export output must be a regular file")) {
-                try export(to: root + "/d")
-            }
-            #expect(throws: SessionArchive.Failure(message: "Too many symbolic links in session export output")) {
-                try export(to: root + "/a.json")
-            }
-        }
-    }
-
-    /// What each format prints for an export and an import: acpx's line, its JSON
-    /// result, or only the path or the id.
-    @Test func eachFormatPrintsWhatAcpxPrints() async throws {
-        let fixture = try Self.fixture()
-        for format in ["text", "json", "quiet"] {
-            try await withIsolatedStore {
-                try Self.configureProbe(fixture)
-                let home = try Self.directory()
-                try Self.storeSource(fixture, home: home)
-                let output = home + "/out.json"
-                let destination = home + "/copy"
-
-                let exported = Self.run([
-                    "--format", format, "--cwd", home + "/proj/x", "probe", "sessions", "export", "alpha",
-                    "--output", output
-                ])
-                try FileManager.default.removeItem(at: ACPXPaths.sessionRecordPath("rec-1"))
-                let imported = Self.run(
-                    ["--format", format, "--cwd", home, "probe", "sessions", "import", output, "--cwd", "copy"])
-
-                let id = try #require(SessionStore.listSessions().first?.acpxRecordId)
-                let expected: (exported: String, imported: String) = switch format {
-                case "json": (
-                    #"{"action":"session_exported","output":"\#(output)"}"#,
-                    #"{"action":"session_imported","record_id":"\#(id)","cwd":"\#(destination)"}"#)
-                case "quiet": (output, id)
-                default: ("exported session to \(output)", "imported session \(id) at \(destination)")
-                }
-                #expect(exported.out == expected.exported + "\n", "\(format)")
-                #expect(imported.out == expected.imported + "\n", "\(format)")
-            }
         }
     }
 

@@ -81,7 +81,9 @@ public enum SessionArchive {
     /// (`client_capabilities`) go with it — imported, a session made under `--no-fs` must
     /// not get the filesystem back — but not its MCP servers (`mcp_servers`): their
     /// commands, environment and headers are this machine's, and may hold credentials an
-    /// archive must not carry. acpx's archive never has them either.
+    /// archive must not carry. acpx's archive never has them either. Nor does the
+    /// environment the session's agent starts with (`session_options.env`) go: it is
+    /// this machine's too, and may hold credentials.
     private static func state(of record: SessionRecord, cwd: String) throws -> WireJSON {
         guard let written = WireJSON(parsing: try SessionRecordSerializer.data(for: record)) else {
             throw Failure(message: "session record could not be serialized")
@@ -90,8 +92,14 @@ public enum SessionArchive {
         if let eventLog = state["event_log"], case .object = eventLog {
             state = state.replacing("event_log", with: eventLog.replacing("active_path", with: .text(".stream.ndjson")))
         }
-        if let acpx = state["acpx"], acpx.hasMember("mcp_servers") {
-            state = state.replacing("acpx", with: acpx.removing("mcp_servers"))
+        if var acpx = state["acpx"], case .object = acpx {
+            acpx = acpx.removing("mcp_servers")
+            if let options = acpx["session_options"], options.hasMember("env") {
+                let kept = options.removing("env")
+                acpx = kept == .object([])
+                    ? acpx.removing("session_options") : acpx.replacing("session_options", with: kept)
+            }
+            state = state.replacing("acpx", with: acpx)
         }
         return state
     }

@@ -44,7 +44,8 @@ extension SessionsCommand {
             name: try options.parsed("name", parseSessionName),
             cwd: try options.parsed("destination-cwd") { try parseNonEmptyValue("Imported session cwd", $0) }
                 .map { ACPXPaths.resolve($0, base: flags.cwd) },
-            expectedAgentName: flags.agent == nil ? agent.agentName : nil, expectedAgentCommand: agent.agentCommand)
+            expectedAgentName: flags.agent == nil ? agent.agentName : nil, expectedAgentCommand: agent.agentCommand,
+            expectedAgentArgv: agent.agentArgv)
         switch flags.format {
         case "json":
             Console.out(jsonObject([
