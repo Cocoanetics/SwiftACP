@@ -211,7 +211,7 @@ import Testing
             let history = SessionStore.conversationHistoryEntries(record)
             #expect(history.contains { $0.role == "user" && $0.textPreview == "ping" })
             #expect(history.contains { $0.role == "assistant" })
-            #expect(record.acpx?.currentModeId == "auto")
+            #expect(record.acpx?.desiredModeId == "auto")
         }
     }
 }
