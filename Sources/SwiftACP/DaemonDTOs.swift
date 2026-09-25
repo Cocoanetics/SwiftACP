@@ -470,8 +470,10 @@ public struct PromptLimits: Codable, Hashable, Sendable {
     /// How long each step of the turn may take, in milliseconds: each step of connecting
     /// the agent — its launch, getting the session back or starting one, each selection
     /// put back — putting the turn's model on the session, and each attempt at the
-    /// prompt. A step that runs over fails the turn with `TIMEOUT`. Omitted, or not
-    /// positive, no step has a limit; not past the maximum timer delay (2,147,483,647).
+    /// prompt. A step that runs over fails the turn with `TIMEOUT`, but for a selection
+    /// put back, which fails as putting it back failed (`SESSION_*_REPLAY_FAILED`), as in
+    /// acpx. Omitted, or not positive, no step has a limit; not past the maximum timer
+    /// delay (2,147,483,647).
     public var timeoutMs: Int?
     /// How many more times the prompt is sent when it fails the way a passing fault does
     /// (the agent's `-32603` or `-32700`) and the turn has had no effect yet — each after
