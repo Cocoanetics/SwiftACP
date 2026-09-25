@@ -103,7 +103,13 @@ extension SessionJournal {
     /// start of what it retains without one, and then those still to come, each handed to
     /// `onEvent` in turn. Once a read has caught up, `continueWatching` says whether to go
     /// on, given the turn the journal has started and not ended; the next read comes
-    /// 100 ms later. Ends when it says not to, and quietly when cancelled.
+    /// 100 ms later. Ends quietly when cancelled.
+    ///
+    /// Told not to go on — or that the turn's outcome is unknown (`WATCH_OUTCOME_UNKNOWN`)
+    /// — it reads again at once, as acpx 0.19.3 drains what the journal still holds before
+    /// it takes a terminal outcome (#719): only a read that finds nothing new under the
+    /// same turn ends the watch, or throws the unknown outcome. One that finds more hands
+    /// it on, and asks again.
     public static func watch(
         recordId: String, maxSegments: Int, cursor: String?,
         continueWatching: (_ pendingRequestId: String?) async throws -> Bool,
@@ -112,6 +118,8 @@ extension SessionJournal {
         var after = try cursor.map { try sequence(ofCursor: $0, recordId: recordId) } ?? -1
         let reader = Reader(recordId: recordId, maxSegments: maxSegments)
         var first = true
+        // A decision to stop, not yet confirmed by a read that finds nothing new.
+        var stopping: (requestId: String?, unknown: SessionJournalError?)?
         do {
             while !Task.isCancelled {
                 let snapshot = try await reader.read(after: after, maxBytes: watchPageBytes)
@@ -122,7 +130,24 @@ extension SessionJournal {
                     after = event.sequence
                     try await onEvent(event)
                 }
-                if !snapshot.hasMore, try await !continueWatching(snapshot.requestId) { return }
+                if let decided = stopping {
+                    stopping = nil
+                    if snapshot.events.isEmpty, !snapshot.hasMore, snapshot.requestId == decided.requestId {
+                        if let unknown = decided.unknown { throw unknown }
+                        return
+                    }
+                }
+                if !snapshot.hasMore {
+                    do {
+                        if try await !continueWatching(snapshot.requestId) {
+                            stopping = (snapshot.requestId, nil)
+                            continue
+                        }
+                    } catch let unknown as SessionJournalError where unknown.code == "WATCH_OUTCOME_UNKNOWN" {
+                        stopping = (snapshot.requestId, unknown)
+                        continue
+                    }
+                }
                 try await Task.sleep(nanoseconds: snapshot.hasMore ? 0 : 100_000_000)
             }
         } catch is CancellationError {
