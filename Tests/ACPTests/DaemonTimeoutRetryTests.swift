@@ -238,8 +238,11 @@ extension DaemonToolsTests {
     /// acpx's queue owner refuses a negative retry count.
     @Test func aNegativeRetryCountIsRefused() async throws {
         let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-        await #expect(throws: DaemonError.self) {
+        await #expect {
             try await daemon.runPrompt(sessionId: "any", text: "hi", limits: PromptLimits(promptRetries: -1))
+        } throws: { error in
+            guard case .invalidPromptRetries(-1)? = error as? DaemonError else { return false }
+            return true
         }
     }
 
