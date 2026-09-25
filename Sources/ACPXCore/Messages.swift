@@ -113,19 +113,23 @@ public enum SessionUserContent: Codable, Sendable {
         }
     }
 
-    /// Preview text per acpx `userContentToText`.
+    /// Preview text per acpx `userContentToText`: an image or an audio clip by its type
+    /// (`mime_type || "image"`), never by its data, as acpx 0.19.3 names it
+    /// (openclaw/acpx#766).
     public var previewText: String {
         switch self {
         case .text(let t): return t
         case .mention(_, let content): return content
-        // acpx returns `source` (the raw base64) here; ours is empty by design, so
-        // name the type instead — a history listing wants a label, not a payload.
-        case .image(let image):
-            guard image.source.isEmpty else { return image.source }
-            return "[image] \(image.mimeType ?? "image")"
-        case .audio(let audio): return "[audio] \(audio.mimeType ?? "audio")"
+        case .image(let image): return "[image] \(Self.named(image.mimeType?.value, or: "image"))"
+        case .audio(let audio): return "[audio] \(Self.named(audio.mimeType, or: "audio"))"
         case .other: return ""
         }
+    }
+
+    /// JavaScript's `type || fallback`: an empty type is no type.
+    private static func named(_ type: String?, or fallback: String) -> String {
+        guard let type, !type.isEmpty else { return fallback }
+        return type
     }
 }
 
@@ -209,11 +213,12 @@ public enum SessionAgentContent: Codable, Sendable {
 /// — while still decoding a populated `source` from records acpx itself wrote.
 public struct SessionMessageImage: Codable, Sendable {
     public var source: String
+    /// `string | null | absent`: acpx records an image's MIME type since 0.19.3
+    /// (openclaw/acpx#766), and keeps whichever a record it read had.
+    public var mimeType: Nullable<String>?
     /// `size | null | absent`: acpx builds an image with a `null` size, and keeps
     /// whichever a record it read had.
     public var size: Nullable<Size>?
-    /// The image's MIME type, when known. An acpx extension: upstream records omit it.
-    public var mimeType: String?
     public struct Size: Codable, Sendable {
         public var width: Double
         public var height: Double
@@ -221,13 +226,13 @@ public struct SessionMessageImage: Codable, Sendable {
 }
 
 extension SessionMessageImage {
-    enum CodingKeys: String, CodingKey { case source, size, mimeType }
+    enum CodingKeys: String, CodingKey { case source, mimeType, size }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         source = try c.decode(String.self, forKey: .source)
+        mimeType = c.contains(.mimeType) ? try c.decode(Nullable<String>.self, forKey: .mimeType) : nil
         size = c.contains(.size) ? try c.decode(Nullable<Size>.self, forKey: .size) : nil
-        mimeType = try c.decodeIfPresent(String.self, forKey: .mimeType)
     }
 }
 

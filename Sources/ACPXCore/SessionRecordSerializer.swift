@@ -201,7 +201,7 @@ enum MessageOrder {
         content
             .mapping("Mention") { $0.ordered(["uri", "content"]) }
             .mapping("Image") { image in
-                image.ordered(["source", "size"]).mapping("size") { $0.ordered(["width", "height"]) }
+                image.ordered(["source", "mime_type", "size"]).mapping("size") { $0.ordered(["width", "height"]) }
             }
             .mapping("Audio") { $0.ordered(["source", "mime_type"]) }
     }

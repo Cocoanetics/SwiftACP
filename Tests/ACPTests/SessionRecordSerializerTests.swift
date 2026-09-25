@@ -6,7 +6,7 @@ import Testing
 
 /// How a session record is written: acpx's `serializeSessionRecordForDisk`, printed as
 /// `JSON.stringify(…, null, 2)` with a newline (#85). The parser fixture holds, for each
-/// record acpx takes, the exact file acpx 0.19.1 wrote for it (`disk`).
+/// record acpx takes, the exact file acpx 0.19.3 writes for it (`disk`).
 struct SessionRecordSerializerTests {
     private struct Case: Decodable {
         let name: String
@@ -25,7 +25,7 @@ struct SessionRecordSerializerTests {
     /// byte.
     @Test func aRecordIsSerializedAsAcpxSerializesIt() throws {
         let written = Self.cases.filter { $0.parsed != nil && $0.disk != nil }
-        #expect(written.count == 75)
+        #expect(written.count == 77)
         for testCase in written {
             let text = try #require(testCase.parsed)
             let parsed = try #require(WireJSON(parsing: Data(text.utf8)))
@@ -72,7 +72,7 @@ struct SessionRecordSerializerTests {
             let sessionsDir = ACPXPaths.sessionsDir.path
             let stored = ACPXPaths.sessionsDir.appendingPathComponent("stored.json")
             let written = Self.cases.filter { $0.disk != nil && Self.beyondTheModel[$0.name] == nil }
-            #expect(written.count == 67)
+            #expect(written.count == 69)
             for testCase in written {
                 try Data(testCase.raw.utf8).write(to: stored)
                 let record = try #require(SessionStore.readRecord(at: stored), "\(testCase.name)")

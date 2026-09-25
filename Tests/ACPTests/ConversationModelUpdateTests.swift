@@ -6,7 +6,7 @@ import Testing
 
 /// The session updates acpx records besides the conversation's messages, and a user's
 /// chunk, recorded as a prompt's block is (#122). What is expected is what acpx 0.19.1
-/// recorded for the same updates.
+/// recorded for the same updates, and for an image what 0.19.3 records (#88).
 struct ConversationModelUpdateTests {
     private static func record() -> SessionRecord {
         let now = nowISO()
@@ -95,7 +95,23 @@ struct ConversationModelUpdateTests {
             throw POSIXError(.EINVAL)
         }
         #expect(messages[0]["User"]?["content"]?.stringified == #"[{"Mention":{"uri":"file:///tmp/a.txt","content":"a.txt"}}]"#)
-        guard case .array(let image)? = messages[1]["User"]?["content"] else { throw POSIXError(.EINVAL) }
-        #expect(image.first?["Image"] != nil)
+        #expect(messages[1]["User"]?["content"]?.stringified
+            == #"[{"Image":{"source":"iVBORw0KGgo=","mime_type":"image/png","size":null}}]"#)
+    }
+
+    /// A prompt's image and audio clip are recorded with their data and MIME type, as acpx
+    /// 0.19.3 records them (openclaw/acpx#766, #88): `{source, mime_type, size: null}`
+    /// for an image, `{source, mime_type}` for audio.
+    @Test func aPromptsImageAndAudioAreRecordedWithTheirData() throws {
+        var record = Self.record()
+        ConversationModel.recordPromptSubmission(into: &record, prompt: [
+            .text(TextContent(text: "look")),
+            .image(ImageContent(data: "iVBORw0KGgo=", mimeType: "image/png")),
+            .audio(AudioContent(data: "UklGRg==", mimeType: "audio/wav"))
+        ])
+        guard case .array(let messages)? = try Self.written(record)["messages"] else { throw POSIXError(.EINVAL) }
+        #expect(messages.first?["User"]?["content"]?.stringified == #"[{"Text":"look"},"#
+            + #"{"Image":{"source":"iVBORw0KGgo=","mime_type":"image/png","size":null}},"#
+            + #"{"Audio":{"source":"UklGRg==","mime_type":"audio/wav"}}]"#)
     }
 }

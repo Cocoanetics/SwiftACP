@@ -88,7 +88,7 @@ struct LiveAgentTests {
         print("\n===== \(agent) image attachment =====\nreply: \(reply.prefix(200))")
         #expect(reply.contains("VX7-QUARTZ-4192"))
 
-        // The turn is recorded with the image's type but not its bytes.
+        // The turn is recorded with the image's type and its data, as acpx 0.19.3 records it.
         let record = try #require(SessionStore.loadRecord(id))
         guard case .user(let message) = try #require(record.messages.first) else {
             Issue.record("first message is not a user message")
@@ -98,8 +98,8 @@ struct LiveAgentTests {
             Issue.record("prompt was not persisted with an image block")
             return
         }
-        #expect(image.mimeType == "image/png")
-        #expect(image.source.isEmpty)
+        #expect(image.mimeType?.value == "image/png")
+        #expect(image.source == png.base64EncodedString())
     }
 
     @Test func codexImageAttachment() async throws { try await runImageAttachment("codex") }

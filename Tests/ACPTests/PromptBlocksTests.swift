@@ -217,10 +217,10 @@ import Testing
 
     // MARK: - What gets persisted
 
-    /// The record keeps the MIME type and drops the payload: acpx writes the whole
-    /// base64 into the session file and then prints it as the history preview.
+    /// The record keeps the image as acpx 0.19.3 records it, its data and MIME type
+    /// (openclaw/acpx#766, #88), and the history names it by its type, not its data.
     @Test(.enabled(if: mockPythonAvailable))
-    func persistedTurnKeepsTheMimeTypeButNotTheBase64() async throws {
+    func persistedTurnKeepsTheImageAsAcpxRecordsIt() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
@@ -234,27 +234,34 @@ import Testing
             let history = try await daemon.sessionHistory(sessionId: id)
             let user = try #require(history.first)
             #expect(user.role == "user")
-            #expect(user.textPreview.contains("what is this?"))
-            #expect(user.textPreview.contains("[image] image/png"))
+            #expect(user.textPreview == "what is this? [image] image/png")
 
-            let record = try #require(SessionStore.loadRecord(id))
-            guard case .user(let message) = try #require(record.messages.first) else {
-                Issue.record("first message is not a user message")
+            let file = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath(id))))
+            guard case .array(let messages)? = file["messages"],
+                  case .array(let content)? = messages.first?["User"]?["content"], content.count == 2
+            else {
+                Issue.record("expected a user message of text and an image: \(file.stringified)")
                 return
             }
-            #expect(message.content.count == 2)
-            guard case .image(let image) = message.content.last else {
-                Issue.record("second content block is not an image")
-                return
-            }
-            #expect(image.mimeType == "image/png")
-            #expect(image.source.isEmpty)
-
-            // Belt and braces: the base64 is nowhere in the file on disk.
-            let json = try String(
-                contentsOf: ACPXPaths.sessionRecordPath(id), encoding: .utf8)
-            #expect(!json.contains(Self.pngBase64))
+            #expect(content[1].stringified
+                == #"{"Image":{"source":"\#(Self.pngBase64)","mime_type":"image/png","size":null}}"#)
         }
+    }
+
+    /// acpx 0.19.3's `userContentToText`: an image or an audio clip by its type, never
+    /// its data, however the record came by it; no type, or an empty one, as the kind.
+    @Test func aHistoryPreviewNamesAnImageByItsType() {
+        func image(_ mimeType: Nullable<String>?) -> SessionUserContent {
+            .image(SessionMessageImage(source: Self.pngBase64, mimeType: mimeType, size: .null))
+        }
+        #expect(image(.value("image/png")).previewText == "[image] image/png")
+        #expect(image(nil).previewText == "[image] image")
+        #expect(image(.null).previewText == "[image] image")
+        #expect(image(.value("")).previewText == "[image] image")
+        #expect(SessionUserContent.audio(SessionMessageAudio(source: "UklGRg==", mimeType: "audio/wav")).previewText
+            == "[audio] audio/wav")
+        #expect(SessionUserContent.audio(SessionMessageAudio(source: "UklGRg==", mimeType: "")).previewText
+            == "[audio] audio")
     }
 
     // MARK: - Content as written (#103)
