@@ -21,6 +21,7 @@
 - `stall-prompt`: answers a prompt only once it is cancelled, with `cancelled`;
   `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
   after `RETRY_AGENT_DELAY_MS` (400 by default).
+- `usage-meta`: reports its usage in a `usage_update`'s `_meta.usage`, then answers.
 
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
@@ -144,6 +145,10 @@ def prompt(req_id, session_id):
                 ask("fs/write_text_file", {"sessionId": session_id, "path": os.path.join(cwd, "out.txt"),
                                            "content": "x"})
             return
+    if MODE == "usage-meta":
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
+            "sessionUpdate": "usage_update", "used": 5, "size": 100,
+            "_meta": {"usage": {"input_tokens": 7, "outputTokens": 8, "total_tokens": 15}}}}})
     update(session_id, "hello")
     send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
 
