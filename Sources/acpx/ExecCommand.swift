@@ -26,8 +26,11 @@ enum ExecCommand {
         // JSON mode prints the exchange from the handshake on, so the tap goes in at launch.
         // Quiet mode reads the prompt response's usage and cost off the wire, as acpx does.
         let promptResult = PromptResultCapture()
+        // Whether a prompt went out, which a connection ending then fails with nothing more to show.
+        let promptWritten = PromptWritten()
         let onRawWire: RawWireTap.Observer = { direction, body in
             promptResult.observe(direction, body)
+            promptWritten.observe(direction, body)
             if renderer.streamsWireJSON { renderer.acpMessage(direction, body) }
         }
         let auth = context.config.auth
@@ -56,8 +59,8 @@ enum ExecCommand {
                     return await run(
                         prompt, on: handle, agent: agent, mcpServers: mcpServers, meta: meta,
                         configOptions: configOptions, flags: flags, renderer: renderer, promptResult: promptResult,
-                        interrupt: interrupt)
-                }, onInterrupt: { await interrupt.putDown() })
+                        promptWritten: promptWritten, interrupt: interrupt)
+                }, onInterrupt: { await interrupt.putDown(endInterrupted: $0) })
             } catch is InterruptedError {
                 renderer.flushText()
                 renderer.flushQuietText()
@@ -71,7 +74,8 @@ enum ExecCommand {
     private static func run(
         _ prompt: [ContentBlock], on handle: ACPAgent, agent: AgentInvocation, mcpServers: [MCPServerSpec],
         meta: JSONValue?, configOptions: [ModelApplication.ConfigOptionAssignment], flags: GlobalFlags,
-        renderer: OutputRenderer, promptResult: PromptResultCapture, interrupt: RunInterrupt
+        renderer: OutputRenderer, promptResult: PromptResultCapture, promptWritten: PromptWritten,
+        interrupt: RunInterrupt
     ) async -> Int32 {
         // Whether the prompt may go again depends on what the connection had of the
         // agent meanwhile.
@@ -102,10 +106,11 @@ enum ExecCommand {
         } catch {
             await handle.close()
             // The connection ended with the prompt out — the agent gone, or an interrupt's
-            // close: acpx has nothing more to show for it (`outputAlreadyEmitted`).
+            // close: acpx has nothing more to show for it (`outputAlreadyEmitted`). One that
+            // ended before a prompt went out is reported, as acpx reports it.
             return reportFailure(
                 error, renderer: renderer, format: flags.format, agentErrorShown: showsAgentError(error),
-                shown: ACPAgentConnection.isConnectionClosed(error))
+                shown: ACPAgentConnection.isConnectionClosed(error) && promptWritten.happened)
         }
         renderer.finish(stopReason: run.response.stopReason)
         renderer.promptMetadata(usage: promptResult.result?["usage"], cost: promptResult.result?["cost"])
@@ -210,7 +215,7 @@ enum ExecCommand {
         var acpDetails: String?
 
         init(_ error: Error) {
-            message = error.localizedDescription
+            message = TurnFailure.message(of: error)
             switch error {
             case let rpc as JSONRPCErrorBody:
                 message = rpc.message
@@ -297,4 +302,17 @@ func renderOptions(_ flags: GlobalFlags) -> RenderOptions {
     default: format = .text
     }
     return RenderOptions(format: format, suppressReads: flags.suppressReads)
+}
+
+/// Whether a `session/prompt` went out to the agent, seen on the wire as it was written.
+final class PromptWritten: @unchecked Sendable {
+    private let lock = NSLock()
+    private var written = false
+
+    func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+        guard direction == .outbound, WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
+        lock.withLock { written = true }
+    }
+
+    var happened: Bool { lock.withLock { written } }
 }

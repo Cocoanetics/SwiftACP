@@ -70,6 +70,8 @@ public actor ACPAgentConnection {
     var promptSettledWaiters: [SessionId: [CheckedContinuation<Bool, Never>]] = [:]
     /// Whether each session's latest prompt was answered, once it settled.
     var latestPromptAnswered: [SessionId: Bool] = [:]
+    /// How many of this client's requests wait for their answer.
+    var requestsOutstanding = 0
     /// The `session/cancel` of each session's prompt in flight, sent once however often
     /// the turn is cancelled (see ``cancel(sessionId:)``).
     var cancelSends: [SessionId: Task<Void, any Error>] = [:]
@@ -379,6 +381,8 @@ public actor ACPAgentConnection {
 
     func send<P: Encodable, R: Decodable>(_ method: String, _ params: P) async throws -> R {
         onClientRequest?(method)
+        requestsOutstanding += 1
+        defer { requestsOutstanding -= 1 }
         let paramsValue = try JSONValue(encoding: params)
         let result = try await rpc.sendRequest(method: method, params: paramsValue)
         if R.self == EmptyResponse.self, let empty = EmptyResponse() as? R { return empty }

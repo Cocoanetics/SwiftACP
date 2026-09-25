@@ -8,10 +8,10 @@ import SwiftACP
 struct InterruptedError: Error {}
 
 /// acpx's `withInterrupt`: SIGINT, SIGTERM and SIGHUP while a run goes. The first puts
-/// the run down; unless the run ended meanwhile — or putting it down failed what it
-/// waited for, so that it ends by itself — it then ends as ``InterruptedError``. Once
-/// one has come, the signals' default actions are back, so another ends the process at
-/// once, as Node's one-off listeners leave it.
+/// the run down, which either ends by itself on what putting it down failed, or — told
+/// so before anything is put down, so that nothing it does can end the run first — as
+/// ``InterruptedError``. Once one has come, the signals' default actions are back, so
+/// another ends the process at once, as Node's one-off listeners leave it.
 enum Interrupts {
     /// Stands in for the process's signals in a test: ``fire()`` is a signal arriving.
     final class Source: @unchecked Sendable {
@@ -44,18 +44,21 @@ enum Interrupts {
     /// The source a run under test is interrupted from, in place of the process's signals.
     @TaskLocal static var source: Source?
 
-    /// Run `run`; at the first signal, `onInterrupt` puts it down, and the run ends as
-    /// ``InterruptedError`` unless it ended first — or `onInterrupt` says that it failed
-    /// what the run waits for: acpx's close rejects the requests pending, and the run
-    /// ends on that before the interrupt does.
+    /// Run `run`; at the first signal, `onInterrupt` puts it down. It calls the function
+    /// it is given, before putting anything down, when the run is to end as
+    /// ``InterruptedError`` rather than on what it waits for — acpx's close rejects the
+    /// requests pending, and the run ends on that before the interrupt does. The run then
+    /// no longer can, and ends so once `onInterrupt` is done, as acpx's rejects only once
+    /// its `onInterrupt` has closed the client.
     static func withInterrupt<T: Sendable>(
-        _ run: @escaping @Sendable () async throws -> T, onInterrupt: @escaping @Sendable () async -> Bool
+        _ run: @escaping @Sendable () async throws -> T,
+        onInterrupt: @escaping @Sendable (_ endInterrupted: @escaping @Sendable () -> Void) async -> Void
     ) async throws -> T {
         let outcome = FirstOutcome<T>()
         let interrupted: @Sendable () -> Void = {
             Task {
-                if await onInterrupt() { return }
-                outcome.settle(.failure(InterruptedError()))
+                await onInterrupt { outcome.reserve() }
+                outcome.settleReserved(.failure(InterruptedError()))
             }
         }
         let stopWatching: () -> Void
@@ -112,15 +115,31 @@ private final class SignalWatch: @unchecked Sendable {
     }
 }
 
-/// The first of a run's outcome and its interrupt, handed to whoever waits for it.
+/// The first of a run's outcome and its interrupt, handed to whoever waits for it. The
+/// interrupt can take the outcome before it has one to give (``reserve()``).
 private final class FirstOutcome<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var settled: Result<T, Error>?
+    private var reserved = false
     private var waiter: CheckedContinuation<T, Error>?
 
     func settle(_ result: Result<T, Error>) {
+        settle(result, reservedFor: false)
+    }
+
+    /// Take the outcome for the interrupt, unless it is settled already.
+    func reserve() {
+        lock.withLock { if settled == nil { reserved = true } }
+    }
+
+    /// Settle the outcome the interrupt took, if it took it.
+    func settleReserved(_ result: Result<T, Error>) {
+        settle(result, reservedFor: true)
+    }
+
+    private func settle(_ result: Result<T, Error>, reservedFor interrupt: Bool) {
         let waiter: CheckedContinuation<T, Error>? = lock.withLock {
-            guard settled == nil else { return nil }
+            guard settled == nil, reserved == interrupt else { return nil }
             settled = result
             defer { self.waiter = nil }
             return self.waiter
@@ -168,11 +187,13 @@ final class RunInterrupt: @unchecked Sendable {
         lock.withLock { self.sessionId = sessionId }
     }
 
-    /// Put the run down. Returns whether the run ends by itself, as acpx's does before its
-    /// interrupt: a prompt was out, and either the agent answered it within the wait or it
-    /// was still out, so that the close fails it. One the agent failed leaves the run to
-    /// go on — into the pause before a retry, say.
-    func putDown() async -> Bool {
+    /// Put the run down, as acpx's `handleInterrupt` does. The run ends by itself, as
+    /// acpx's does before its interrupt, when it waits for something the close fails — a
+    /// prompt still out, `session/new`, the model's request — or when the agent answered
+    /// its prompt within the wait. Otherwise — nothing out, as in the pause before a
+    /// retry, a prompt the agent failed, or the agent still starting — it ends
+    /// interrupted (`endInterrupted`), before anything is put down.
+    func putDown(endInterrupted: @Sendable () -> Void) async {
         var agent: ACPAgent?
         var sessionId: SessionId?
         var launching: Task<ACPAgent, Error>?
@@ -183,24 +204,24 @@ final class RunInterrupt: @unchecked Sendable {
             launching = self.launching
         }
         guard let agent else {
+            // acpx closes the client it is starting, and the run fails on the agent's exit
+            // (#142 for how that exit is recorded); here the launch is called off.
+            endInterrupted()
             launching?.cancel()
             if let late = try? await launching?.value { await late.close() }
-            return false
+            return
         }
         let connection = agent.connection
-        var endsByItself = false
         if let sessionId, await connection.hasPromptInFlight(sessionId: sessionId) {
             try? await connection.cancel(sessionId: sessionId)
-            do {
-                let answered = try await withTimeout(milliseconds: Self.cancelWaitMilliseconds) {
-                    await connection.waitForPromptToSettle(sessionId: sessionId)
-                }
-                endsByItself = answered == true
-            } catch {
-                endsByItself = true
+            let answered = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) {
+                await connection.waitForPromptToSettle(sessionId: sessionId)
             }
+            // Failed by the agent within the wait: the run goes on (to a retry's pause).
+            if answered == .some(false) { endInterrupted() }
+        } else if await !connection.hasRequestsOutstanding {
+            endInterrupted()
         }
         await agent.close()
-        return endsByItself
     }
 }

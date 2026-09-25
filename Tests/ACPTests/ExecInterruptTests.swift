@@ -51,6 +51,30 @@ struct ExecInterruptTests {
         #expect(!isRunning(run.pid))
     }
 
+    /// While the session is being opened, the close fails `session/new`, and the run ends
+    /// on that — reported, exit 1, as acpx reports the agent's disconnect then. (Which of
+    /// the transport's end and the connection's close fails it first decides the words;
+    /// acpx's are `ACP agent disconnected during request (process_exit, exit=null,
+    /// signal=SIGTERM)`, the end as #142 would record it.)
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anInterruptWhileTheSessionOpensEndsTheRunOnItsFailure() async throws {
+        let run = try await exec("hang-new")
+        #expect(run.code == 1)
+        #expect(!run.err.isEmpty)
+        #expect(!isRunning(run.pid))
+    }
+
+    /// An agent gone before any prompt went out is reported, as acpx reports it: the
+    /// connection closed, in its SDK's words.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anAgentGoneBeforeThePromptIsReported() async throws {
+        let text = try await exec("die-after-new", interrupting: false)
+        #expect(text.code == 1)
+        #expect(text.err == "ACP connection closed\n")
+        let quiet = try await exec("die-after-new", format: "quiet", interrupting: false)
+        #expect(quiet.err == "[acpx] error: RUNTIME ACP connection closed\n")
+    }
+
     /// An agent that goes with the prompt out ends the run with nothing more shown, in any
     /// format: acpx's error carries `outputAlreadyEmitted`.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["text", "quiet", "json"])

@@ -97,6 +97,12 @@ extension ACPAgentConnection {
         return result
     }
 
+    /// Whether any request of this client's waits for its answer — one that closing the
+    /// connection fails.
+    public var hasRequestsOutstanding: Bool {
+        requestsOutstanding > 0
+    }
+
     /// Whether `sessionId` has a prompt out, not answered yet — acpx's active prompt,
     /// which an interrupt cancels (`cancelActivePrompt`).
     public func hasPromptInFlight(sessionId: SessionId) -> Bool {
