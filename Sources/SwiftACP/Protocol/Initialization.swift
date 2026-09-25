@@ -68,10 +68,13 @@ public struct SessionCapabilities: Codable, Hashable, Sendable {
     public var resume: JSONValue?
     public var load: JSONValue?
     public var list: JSONValue?
+    /// `session/close` (unstable).
+    public var close: JSONValue?
 
     public var supportsResume: Bool { resume != nil }
     public var supportsLoad: Bool { load != nil }
     public var supportsList: Bool { list != nil }
+    public var supportsClose: Bool { close != nil }
 }
 
 /// Which content types the agent accepts in prompts beyond plain text.

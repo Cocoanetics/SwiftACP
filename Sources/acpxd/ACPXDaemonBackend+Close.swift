@@ -1,5 +1,6 @@
 import ACPXCore
 import Foundation
+import Logging
 import SwiftACP
 
 // Closing a session as acpx's owner closes one, once drained. Split from
@@ -26,6 +27,7 @@ extension ACPXDaemonBackend {
         _ = try? await cancelSession(sessionId: recordId)
         try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
         defer { Task { await turnQueue.release(recordId) } }
+        await askToClose(recordId)
         forgetOwner(recordId)
         await evict(recordId)
         // Re-read after the await: closing the agent suspends this actor, so another
@@ -38,6 +40,21 @@ extension ACPXDaemonBackend {
         record.closedAt = nowISO()
         try SessionStore.writeRecord(record)
         return true
+    }
+
+    /// Ask the agent that the session's owner holds to close the session, when it
+    /// advertises it can, as acpx's owner does once drained (`closeActiveBackendSession`):
+    /// best effort, as acpx's close goes on whatever comes of it.
+    private func askToClose(_ recordId: String) async {
+        guard owners[recordId] != nil, let entry = live[recordId],
+              entry.agent.agentCapabilities?.sessionCapabilities?.supportsClose == true,
+              await !entry.agent.connection.isClosed
+        else { return }
+        do {
+            try await entry.agent.connection.closeSession(CloseSessionRequest(sessionId: entry.session.id))
+        } catch {
+            closeLog.info("the agent did not close session \(recordId): \(error)")
+        }
     }
 
     /// How long a close waits for the turn or control that holds the session
@@ -77,3 +94,5 @@ extension ACPXDaemonBackend {
         await evict(recordId)
     }
 }
+
+private let closeLog = Logger(label: "com.cocoanetics.acpx.acpxd.close")

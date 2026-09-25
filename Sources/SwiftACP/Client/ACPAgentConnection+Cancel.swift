@@ -41,25 +41,32 @@ extension ACPAgentConnection {
     /// served is answered so without being served, and not counted. One still being
     /// served when that comes is answered so at once — a permission question then counts
     /// as cancelled, as `finishPermissionRequest` counts it — and what serves it is
-    /// cancelled. The rest of the terminal requests, and those read with no prompt in
-    /// flight, are served as they come.
+    /// cancelled. The rest of the terminal requests are served as they come.
+    ///
+    /// Those read with no prompt in flight are served as they come too, but not for a
+    /// session being closed: acpx asks of each, owned by a prompt or not, that its session
+    /// is not being cancelled or closed (`assertActive`), and a close ends those still
+    /// being served (`abortSessionRequests`, ``answerSessionRequestsCancelled(_:)``).
     func servingUnlessCancelled(
         _ method: String, _ params: JSONValue?, sessionId: SessionId?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         guard RequestOwnership.ownedMethods.contains(method) else {
             return await handleIncomingRequest(method: method, params: params)
         }
-        guard let owner = requestOwnership.claim(method, params), let sessionId else {
-            return await handleIncomingRequest(method: method, params: params)
-        }
-        if requestOwnership.isAnswered(owner) || cancellingSessionIds.contains(sessionId) {
+        let owner = requestOwnership.claim(method, params)
+        guard let sessionId else { return await handleIncomingRequest(method: method, params: params) }
+        if cancellingSessionIds.contains(sessionId) || owner.map(requestOwnership.isAnswered) == true {
             return Self.cancelledAnswer(to: method)
         }
-        await afterClaimingOwnedRequest?()
+        if owner != nil { await afterClaimingOwnedRequest?() }
         let key = UUID()
         let result = await withCheckedContinuation { continuation in
             let request = TurnRequest(method: method, continuation: continuation)
-            turnRequests[sessionId, default: [:]][key] = request
+            if owner != nil {
+                turnRequests[sessionId, default: [:]][key] = request
+            } else {
+                unownedRequests[sessionId, default: [:]][key] = request
+            }
             let serving = Task {
                 // Its prompt was answered as it was taken up — `track` stopped it before it
                 // started: answered cancelled without being served, and not counted, as acpx
@@ -72,10 +79,10 @@ extension ACPAgentConnection {
                 let answer = await PermissionTally.$current.withValue(tally) {
                     await self.handleIncomingRequest(method: method, params: params)
                 }
-                await self.afterServingOwnedRequest?()
+                if owner != nil { await self.afterServingOwnedRequest?() }
                 // Its prompt ended while this was served — its answer read, or its turn
-                // cancelled: acpx answers it cancelled then, and counts a question so. What
-                // it counts, it counts by the answer that goes back.
+                // cancelled — or its session was closed: acpx answers it cancelled then, and
+                // counts a question so. What it counts, it counts by the answer that goes back.
                 guard Task.isCancelled else {
                     // What the handler reports of its decision goes out with it, ahead of
                     // anything the agent sends in reaction.
@@ -90,10 +97,11 @@ extension ACPAgentConnection {
             request.serving = serving
             // The prompt's answer, once read, stops it at once — ahead of the prompt's call
             // resuming — as acpx's `clearActivePrompt` aborts its owner.
-            requestOwnership.track(serving, as: key, ownedBy: owner)
+            if let owner { requestOwnership.track(serving, as: key, ownedBy: owner) }
         }
-        requestOwnership.untrack(key, ownedBy: owner)
+        if let owner { requestOwnership.untrack(key, ownedBy: owner) }
         turnRequests[sessionId]?[key] = nil
+        unownedRequests[sessionId]?[key] = nil
         return result
     }
 
@@ -131,7 +139,19 @@ extension ACPAgentConnection {
     /// Answer `sessionId`'s owned requests still being served as cancelled, and stop
     /// serving them.
     func answerTurnRequestsCancelled(_ sessionId: SessionId) {
-        for request in (turnRequests.removeValue(forKey: sessionId) ?? [:]).values {
+        answerCancelled(turnRequests.removeValue(forKey: sessionId), in: sessionId)
+    }
+
+    /// Answer every request of `sessionId`'s still being served as cancelled, those read
+    /// with no prompt in flight too, and stop serving them: acpx ends them all at a close
+    /// (`abortSessionRequests`).
+    func answerSessionRequestsCancelled(_ sessionId: SessionId) {
+        answerTurnRequestsCancelled(sessionId)
+        answerCancelled(unownedRequests.removeValue(forKey: sessionId), in: sessionId)
+    }
+
+    private func answerCancelled(_ requests: [UUID: TurnRequest]?, in sessionId: SessionId) {
+        for request in (requests ?? [:]).values {
             let answered = request.answer(Self.cancelledAnswer(to: request.method))
             if answered, request.method == "session/request_permission" {
                 turnPermissionStats[sessionId, default: PermissionStats()].record(.cancelled)
@@ -201,8 +221,8 @@ final class PermissionTally: @unchecked Sendable {
     var announced: [ClientOperation] { lock.withLock { notices } }
 }
 
-/// An agent's request of a turn in flight, and the one answer it gets: its handler's,
-/// or its turn's cancel's, whichever comes first.
+/// An agent's request being served, and the one answer it gets: its handler's, or its
+/// turn's cancel's or its session's close's, whichever comes first.
 final class TurnRequest: @unchecked Sendable {
     let method: String
     /// What serves it, cancelled when the turn is. Set on the connection's actor.

@@ -78,6 +78,9 @@ public actor ACPAgentConnection {
     /// The agent's requests of each session's prompt in flight still being served,
     /// answered as cancelled when the turn is.
     var turnRequests: [SessionId: [UUID: TurnRequest]] = [:]
+    /// Those read with no prompt in flight still being served, answered as cancelled when
+    /// their session is closed.
+    var unownedRequests: [SessionId: [UUID: TurnRequest]] = [:]
 
     /// Sessions whose `session/update`s are not delivered — their `session/load` is
     /// replaying history the caller has — with how many loads asked. acpx's
