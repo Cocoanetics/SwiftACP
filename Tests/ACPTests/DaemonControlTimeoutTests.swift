@@ -142,10 +142,66 @@ extension DaemonToolsTests {
                 _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300)
             }
             let held = await daemon.heldConnection(session.id)
-            let pid = try #require(SessionStore.loadRecord(session.id)).pid
+            let saved = try #require(SessionStore.loadRecord(session.id))
             noteOverdue.finish()
             #expect(held == nil)
-            #expect(pid == nil)
+            #expect(saved.pid == nil)
+            // What the answer changed is kept all the same, as acpx applies an answer whenever
+            // it comes (`acceptControl`) (#165).
+            #expect(saved.acpx?.desiredModeId == "plan")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A control the agent refuses saves the session as used when an owner holds it, as
+    /// acpx's owner checkpoints a control that did not complete; a direct one does not, as
+    /// acpx's `withConnectedSession` saves only how the agent is doing (#165).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: [true, false])
+    func aRefusedControlIsSavedAsUsedWhenAnOwnerHoldsTheSession(owned: Bool) async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            try session.set("refuse-set-mode")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            if owned {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            }
+            var record = try #require(SessionStore.loadRecord(session.id))
+            record.lastUsedAt = "2000-01-01T00:00:00.000Z"
+            try SessionStore.writeRecord(record)
+
+            await #expect(throws: (any Error).self) {
+                _ = try await daemon.setMode(sessionId: session.id, modeId: "plan")
+            }
+            let saved = try #require(SessionStore.loadRecord(session.id))
+            #expect((saved.lastUsedAt != "2000-01-01T00:00:00.000Z") == owned, "\(saved.lastUsedAt)")
+            #expect(saved.acpx?.desiredModeId == nil)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// An owned control that fails while it connects — its agent gone, the next one never
+    /// answering `initialize` before the deadline — saves the session as used too: acpx's
+    /// owner checkpoints any control that did not complete, connected or not (#165).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anOwnedControlThatFailsConnectingIsSavedAsUsed() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            await daemon.evict(session.id)
+            try session.set("hang-init")
+            var record = try #require(SessionStore.loadRecord(session.id))
+            record.lastUsedAt = "2000-01-01T00:00:00.000Z"
+            try SessionStore.writeRecord(record)
+
+            await #expect(throws: TimeoutError(milliseconds: 300)) {
+                _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300)
+            }
+            #expect(try #require(SessionStore.loadRecord(session.id)).lastUsedAt != "2000-01-01T00:00:00.000Z")
             await daemon.releaseAll()
         }
     }

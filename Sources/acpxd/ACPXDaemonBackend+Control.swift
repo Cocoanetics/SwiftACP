@@ -96,10 +96,13 @@ extension ACPXDaemonBackend {
             await settle(deadline, of: recordId)
             // Connecting can fail after it moved the record — the daemon began stopping
             // before the agent was held — and what it connected is saved all the same, as
-            // acpx saves the record its control connected on the way out.
-            if !changes.isEmpty {
+            // acpx saves the record its control connected on the way out. A session its owner
+            // holds is saved as used now, however connecting went, as the owner's
+            // `checkpoint` saves a control that did not complete.
+            if !changes.isEmpty || !direct {
                 var moved = current
                 changes.apply(to: &moved)
+                if !direct { moved.lastUsedAt = nowISO() }
                 do {
                     try SessionStore.writeRecord(moved)
                 } catch let writeError {
@@ -112,22 +115,30 @@ extension ACPXDaemonBackend {
         changes.apply(to: &connected)
         var record = connected
         let result: T
+        var answeredLate = false
         do {
             result = try await body(entry, &record, step)
             // An answer that came as the deadline passed is too late, as acpx's deadline
             // settles first (`deadline.wait`): the control is timed out, and its agent put down.
-            if deadline?.settle() == false { throw TimeoutError(milliseconds: 0) }
+            if deadline?.settle() == false {
+                answeredLate = true
+                throw TimeoutError(milliseconds: 0)
+            }
         } catch {
             await settle(deadline, of: recordId)
             // The agent may have gone meanwhile. How it is doing is saved whatever the
-            // control came to, as acpx's controls save it on their way out — but nothing
-            // of the control that failed.
+            // control came to, as acpx's controls save it on their way out. What the control
+            // changed is saved only from a late answer, which acpx applies whenever it comes
+            // (`acceptControl`). A session its owner holds is saved as used now, as the owner's
+            // `checkpoint` saves it.
             // An agent whose connection is gone is ended first, as a turn's is: it can be
             // running still, and its pid would be kept.
             if direct || ACPAgentConnection.endedTheConnection(error) { await letGo(entry, of: recordId) }
-            connected.applyLifecycle(entry.agent.lifecycle)
+            var saved = answeredLate ? record : connected
+            if !direct { saved.lastUsedAt = nowISO() }
+            saved.applyLifecycle(entry.agent.lifecycle)
             do {
-                try SessionStore.writeRecord(connected)
+                try SessionStore.writeRecord(saved)
             } catch let writeError {
                 log.warning("session record write failed after a failed control op: \(writeError)")
             }
