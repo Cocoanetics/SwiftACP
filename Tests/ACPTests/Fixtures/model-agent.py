@@ -16,7 +16,8 @@ that list instead, read at launch, so a test can change what a later launch offe
 what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
 names a file: while it exists, the next model request removes it and the agent exits
 without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_option` with
-`{}`, reporting no options back.
+`{}`, reporting no options back. `MODEL_AGENT_EXTRA_OPTION` names one more select to
+advertise after `effort`, with the values `x` (current) and `y`.
 """
 import json
 import os
@@ -33,6 +34,9 @@ else:
 NAMES = {"m1": "One", "m2": "Two"}
 EXIT_ON_MODEL = os.environ.get("MODEL_AGENT_EXIT_ON_MODEL")
 EMPTY_REPLIES = os.environ.get("MODEL_AGENT_EMPTY_REPLIES") == "1"
+EXTRA = os.environ.get("MODEL_AGENT_EXTRA_OPTION")
+if EXTRA:
+    CURRENT[EXTRA] = "x"
 
 
 def config_options():
@@ -43,7 +47,8 @@ def config_options():
         {"id": "effort", "type": "select", "name": "Effort",
          "currentValue": CURRENT["effort"],
          "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}]},
-    ]
+    ] + ([{"id": EXTRA, "type": "select", "name": EXTRA, "currentValue": CURRENT[EXTRA],
+           "options": [{"value": "x", "name": "X"}, {"value": "y", "name": "Y"}]}] if EXTRA else [])
 
 
 def legacy_models():

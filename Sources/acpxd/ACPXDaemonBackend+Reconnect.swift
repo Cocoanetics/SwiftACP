@@ -99,7 +99,7 @@ extension ACPXDaemonBackend {
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = record?.acpx
-        let desired = ReconnectReplay.Desired(original, replacing: replacing)
+        let desired = ReconnectReplay.Desired(record, replacing: replacing)
         let launch = config.agentLaunch(for: agentCommand)
         let command = launch.command
         let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }

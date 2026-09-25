@@ -59,10 +59,18 @@ public enum ReconnectReplay {
     public struct Desired: Sendable {
         public var modeId: String?
         public var modelId: String?
-        /// In the order they are sent. The record keeps no order (#85), so by id.
+        /// In the order they are sent: the order the record holds them in, as acpx's
+        /// reconnect iterates its object (`Object.entries`).
         public var configOptions: [(id: String, value: String)]
 
-        public init(_ state: SessionAcpxState?, replacing: Replacing?) {
+        /// What to put back of `record`, saved options in the record's order.
+        public init(_ record: SessionRecord?, replacing: Replacing?) {
+            self.init(record?.acpx, replacing: replacing, order: record?.savedConfigOptionOrder ?? [])
+        }
+
+        /// What to put back of `state`: saved options in `order`, and any it leaves out
+        /// after them, by id.
+        public init(_ state: SessionAcpxState?, replacing: Replacing?, order: [String] = []) {
             modeId = replacing == .mode ? nil : Self.normalized(state?.desiredModeId)
             let pinned = Self.normalized(state?.sessionOptions?.model)
             var options = state?.desiredConfigOptions ?? [:]
@@ -75,7 +83,10 @@ public enum ReconnectReplay {
             } else {
                 modelId = pinned
             }
-            configOptions = options.keys.sorted().compactMap { id in options[id].map { (id, $0) } }
+            let ordered = order.filter { options[$0] != nil }
+            let unordered = options.keys.filter { !ordered.contains($0) }.sorted()
+            configOptions = WireJSON.propertyOrder(ordered + unordered)
+                .compactMap { id in options[id].map { (id, $0) } }
         }
 
         private static func normalized(_ value: String?) -> String? {
@@ -322,5 +333,16 @@ public enum ReconnectReplay {
             }
             return entryFields["value"] == .string(value)
         }
+    }
+}
+
+extension SessionRecord {
+    /// The ids of the saved config option selections, in the order the record holds
+    /// them: as built since it was read (the order acpx gave the object), else as read.
+    /// Ids it holds no order for are left out; the record writes them after the rest.
+    var savedConfigOptionOrder: [String] {
+        if let rebuilt = acpx?.rebuiltOrders["desired_config_options"] { return rebuilt }
+        guard case .object(let members)? = parsedByAcpx?["acpx"]?["desired_config_options"] else { return [] }
+        return members.map { String(decoding: $0.key, as: UTF16.self) }
     }
 }

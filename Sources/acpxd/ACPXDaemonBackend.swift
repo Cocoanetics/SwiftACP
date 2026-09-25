@@ -250,9 +250,10 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling) { entry, record in
             try await entry.session.setMode(modeId)
+            // Only the mode to put back, as acpx's `setDesiredModeId`: the current mode is
+            // what the agent's `current_mode_update` of a turn says.
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.desiredModeId = modeId
-            acpx.currentModeId = modeId
             record.acpx = acpx
         }
         return SessionControlResult(resumed: resumed)
