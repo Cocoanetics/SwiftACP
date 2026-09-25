@@ -142,6 +142,10 @@ struct DaemonUnavailable: Error {
 /// Drives the `acpxd` MCP daemon: connect to it by the `127.0.0.1` port it records
 /// in its lock file (spawning it if needed), call its tools, render streamed updates.
 enum DaemonClient {
+    /// The daemon a run under test talks to, in place of the one the lock names: one in
+    /// process, say. None is started in its place.
+    @TaskLocal static var standIn: MCPServerConfig?
+
     /// A direct TCP endpoint for the running daemon, read from its lock file, or nil
     /// if no live daemon has recorded a port yet.
     static func liveEndpoint() -> MCPServerTcpConfig? {
@@ -172,10 +176,10 @@ enum DaemonClient {
         spawnIfNeeded: Bool, daemonExecutable: String? = nil,
         configure: @Sendable (MCPServerProxy) async -> Void = { _ in }
     ) async throws -> MCPServerProxy {
-        if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
+        if let proxy = await tryConnectLive(configure: configure) {
             return proxy
         }
-        guard spawnIfNeeded else { throw DaemonUnavailable("no daemon is running") }
+        guard spawnIfNeeded, standIn == nil else { throw DaemonUnavailable("no daemon is running") }
         let startup: DaemonStartup
         do {
             startup = try DaemonStartup.launch(daemonExecutable ?? daemonExecutablePath())
@@ -203,12 +207,26 @@ enum DaemonClient {
         throw DaemonUnavailable("it did not become reachable within ~9s of being started")
     }
 
+    /// Try to connect to the running daemon: the stand-in, else the one the lock names.
+    static func tryConnectLive(
+        configure: @Sendable (MCPServerProxy) async -> Void
+    ) async -> MCPServerProxy? {
+        if let standIn { return await tryConnect(to: standIn, configure: configure) }
+        return await tryConnect(liveEndpoint(), configure: configure)
+    }
+
     /// Try to connect to `endpoint`; returns a connected proxy, or nil on any failure.
     static func tryConnect(
         _ endpoint: MCPServerTcpConfig?, configure: @Sendable (MCPServerProxy) async -> Void
     ) async -> MCPServerProxy? {
         guard let endpoint else { return nil }
-        let proxy = MCPServerProxy(config: .tcp(config: endpoint))
+        return await tryConnect(to: .tcp(config: endpoint), configure: configure)
+    }
+
+    private static func tryConnect(
+        to config: MCPServerConfig, configure: @Sendable (MCPServerProxy) async -> Void
+    ) async -> MCPServerProxy? {
+        let proxy = MCPServerProxy(config: config)
         await configure(proxy)
         do {
             try await proxy.connect(clientName: "acpx", clientVersion: ACPVersion.current)
@@ -380,31 +398,6 @@ enum DaemonClient {
         }) ?? false
     }
 
-    /// What a running daemon made of being asked to let a session's agent go.
-    enum Release {
-        /// It did, saying whether it had the session.
-        case released(Bool)
-        /// None is running: nothing holds the session.
-        case noDaemon
-        /// One answered with an error — one from before the tool (#162), or one that failed
-        /// it — and may still hold the session.
-        case refused
-    }
-
-    /// Ask a *running* daemon to let go of its live agent for `sessionId` without closing
-    /// the session (``ACPXDaemon/releaseSession(sessionId:)``). Never spawns a daemon.
-    static func releaseSession(sessionId: String) async -> Release {
-        do {
-            return .released(try await withClient(spawnIfNeeded: false) {
-                try await $0.releaseSession(sessionId: sessionId)
-            })
-        } catch is DaemonUnavailable {
-            return .noDaemon
-        } catch {
-            return .refused
-        }
-    }
-
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel. A daemon
@@ -422,7 +415,7 @@ enum DaemonClient {
 
     /// Connect to the daemon (spawning if needed) and run `body` with the generated,
     /// typed ``ACPXDaemon/Client`` proxy, disconnecting afterward.
-    private static func withClient<T>(
+    static func withClient<T>(
         spawnIfNeeded: Bool = true, _ body: (ACPXDaemon.Client) async throws -> T
     ) async throws -> T {
         let proxy = try await connect(spawnIfNeeded: spawnIfNeeded)

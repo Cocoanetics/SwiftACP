@@ -15,33 +15,22 @@ enum SessionLifecycle {
 
         let replaced = SessionStore.findSession(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)
-        // The new session first, then the one it replaces closed, as acpx 0.19.3 has it
-        // (#778, for our openclaw/acpx#767): a creation that fails leaves that one open.
+        // A running acpxd from before `releaseSession` (#162) lets a session's agent go only
+        // by closing the session, and a `session/close` sent once the new session exists
+        // would reach that one too, should the agent reuse the id. With one running, the
+        // replaced session is closed first, in the order that daemon was built for.
+        let closeFirst = try replaced != nil && runBlocking { await DaemonClient.lacksRelease() }
+        if closeFirst, let replaced {
+            _ = try close(replaced)
+            noteSoftClosed(replaced, flags)
+        }
+        // Otherwise the new session first, then the one it replaces closed, as acpx 0.19.3
+        // has it (#778, for our openclaw/acpx#767): a creation that fails leaves that one open.
         let record = try createSession(
             agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
-        if let replaced {
-            if record.acpxRecordId == replaced.acpxRecordId {
-                // The agent gave the new session the replaced one's id: the record is the new
-                // session's, and closing it would close that (openclaw/acpx#805; acpx 0.19.3
-                // spares only a resume). A daemon holding the old one lets its agent go —
-                // no `session/close`, which could end the new session too — and the record
-                // is written once more, over whatever a turn of the old one saved on its
-                // way out, even one that was still connecting.
-                try release(record.acpxRecordId)
-                try SessionStore.writeRecord(record)
-            } else if record.acpSessionId == replaced.acpSessionId {
-                // The agent gave the new session the ACP session the replaced record had
-                // moved to (a reconnect's fallback, an import): a `session/close` for it
-                // would reach the new session. A daemon holding the replaced one lets its
-                // agent go, and the replaced record is closed here.
-                try release(replaced.acpxRecordId)
-                _ = try markClosed(SessionStore.loadRecord(replaced.acpxRecordId) ?? replaced)
-            } else {
-                _ = try close(replaced)
-            }
-            if flags.verbose {
-                Console.errLine("[acpx] soft-closed prior session: \(replaced.acpxRecordId)")
-            }
+        if let replaced, !closeFirst {
+            try retire(replaced, replacedBy: record)
+            noteSoftClosed(replaced, flags)
         }
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         if flags.verbose {
@@ -181,14 +170,45 @@ enum SessionLifecycle {
         return try markClosed(record)
     }
 
+    /// Close `replaced` now that `record` is created in its place.
+    private static func retire(_ replaced: SessionRecord, replacedBy record: SessionRecord) throws {
+        if record.acpxRecordId == replaced.acpxRecordId {
+            // The agent gave the new session the replaced one's id: the record is the new
+            // session's, and closing it would close that (openclaw/acpx#805; acpx 0.19.3
+            // spares only a resume). A daemon holding the old one lets its agent go —
+            // no `session/close`, which could end the new session too — and the record
+            // is written once more, over whatever a turn of the old one saved on its
+            // way out, even one that was still connecting.
+            try release(record.acpxRecordId)
+            try SessionStore.writeRecord(record)
+        } else if record.acpSessionId == replaced.acpSessionId {
+            // The agent gave the new session the ACP session the replaced record had
+            // moved to (a reconnect's fallback, an import): a `session/close` for it
+            // would reach the new session. A daemon holding the replaced one lets its
+            // agent go, and the replaced record is closed here.
+            try release(replaced.acpxRecordId)
+            _ = try markClosed(SessionStore.loadRecord(replaced.acpxRecordId) ?? replaced)
+        } else {
+            _ = try close(replaced)
+        }
+    }
+
     /// Have a running daemon let the session's agent go without closing the session. One
-    /// that refuses — an acpxd from before `releaseSession` (#162) — is asked to close it
-    /// instead, which lets the agent go too: holding on would send the next prompt to the
-    /// replaced session's agent. The caller writes the records it means to keep after.
+    /// that fails to may still hold it, and would send the next prompt to that agent: that
+    /// is an error, and the session is not closed instead, as a `session/close` could end
+    /// the new session too. The caller writes the records it means to keep after.
     private static func release(_ recordId: String) throws {
         let outcome = try runBlocking { await DaemonClient.releaseSession(sessionId: recordId) }
-        guard case .refused = outcome else { return }
-        _ = try runBlocking { await DaemonClient.closeSession(sessionId: recordId) }
+        guard case .refused(let error) = outcome else { return }
+        throw CLIError(
+            "acpxd could not let go of session \(recordId)'s agent: \(error.localizedDescription). "
+                + "Restart acpxd before using the new session.")
+    }
+
+    private static func noteSoftClosed(_ replaced: SessionRecord, _ flags: GlobalFlags) {
+        if flags.verbose {
+            Console.errLine("[acpx] soft-closed prior session: \(replaced.acpxRecordId)")
+        }
     }
 
     /// `record` marked closed, as the CLI closes a session no daemon holds.
