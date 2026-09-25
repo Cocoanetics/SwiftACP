@@ -54,21 +54,26 @@ extension ACPXDaemonBackend {
     /// the saved model and options alone, which the turn replaces, and a session the
     /// reconnect has to start is started on that model, as acpx's queue owner does
     /// with the options it was started with.
+    ///
+    /// A turn also passes its record's `acpx` block, which connecting builds on: acpx
+    /// connects on the prompt's own record, whose block the prompt built anew. Without
+    /// one, connecting builds on the block as stored.
     func ensure(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, handlers: ACPClientHandlers? = nil, terminalOutputCeiling: Int? = nil,
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
+        turnAcpx: SessionAcpxState? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
             control: control, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling,
-            replacing: replacing, requestedModel: requestedModel,
+            replacing: replacing, requestedModel: requestedModel, turnAcpx: turnAcpx,
             onRecordChange: onRecordChange, onConnectOutput: onConnectOutput
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:handlers:terminalOutputCeiling:replacing:requestedModel:onRecordChange:onConnectOutput:)``,
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:handlers:terminalOutputCeiling:replacing:requestedModel:turnAcpx:onRecordChange:onConnectOutput:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
     /// A session already held, or one a new session replaced, was not.
@@ -76,6 +81,7 @@ extension ACPXDaemonBackend {
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, handlers: ACPClientHandlers? = nil, terminalOutputCeiling: Int? = nil,
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
+        turnAcpx: SessionAcpxState? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
         guard !stopping else { throw DaemonError.stopping }
@@ -98,7 +104,7 @@ extension ACPXDaemonBackend {
         let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
-        let original = record?.acpx
+        let original = turnAcpx ?? record?.acpx
         let desired = ReconnectReplay.Desired(record, replacing: replacing)
         let launch = config.agentLaunch(for: agentCommand)
         let command = launch.command
