@@ -125,10 +125,12 @@ public enum AgentEnvironment {
 
 /// Raised when the agent advertises auth methods, no matching credential is
 /// found, and the auth policy is `fail` (acpx `AuthPolicyError`).
-public struct AuthPolicyError: Error, CustomStringConvertible {
+public struct AuthPolicyError: Error, CustomStringConvertible, LocalizedError {
     public let methodIds: [String]
     public var description: String {
         "agent advertised auth methods [\(methodIds.joined(separator: ", "))] "
             + "but no matching credentials found"
     }
+
+    public var errorDescription: String? { description }
 }

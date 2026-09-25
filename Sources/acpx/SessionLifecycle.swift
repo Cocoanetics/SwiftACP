@@ -110,22 +110,20 @@ enum SessionLifecycle {
         let (permission, permissionRules) = permissions
         let meta = sessionMeta(agent: agent, flags: flags)
         let options = sessionOptions(flags)
+        // A failure reaches the top level as it is, as acpx's `createSession` throws it:
+        // the agent's error with its code and data, an auth policy's with its detail code.
         return try runBlocking {
-            do {
-                // An explicit `--mcp-config` becomes the session's own server set,
-                // persisted so the daemon replays it on every reconnect.
-                return try await SessionEngine.createSession(
-                    agentCommand: agent.agentCommand, agentArgv: agent.agentArgv, cwd: agent.cwd, name: name,
-                    permission: permission, permissionRules: permissionRules, authCredentials: config.auth,
-                    authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
-                    sessionMcpServers: config.sessionMcpServers,
-                    meta: meta, sessionOptions: options,
-                    capabilities: flags.clientCapabilities,
-                    inheritStderr: flags.verbose,
-                    onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })
-            } catch {
-                throw CLIError(error.localizedDescription)
-            }
+            // An explicit `--mcp-config` becomes the session's own server set,
+            // persisted so the daemon replays it on every reconnect.
+            try await SessionEngine.createSession(
+                agentCommand: agent.agentCommand, agentArgv: agent.agentArgv, cwd: agent.cwd, name: name,
+                permission: permission, permissionRules: permissionRules, authCredentials: config.auth,
+                authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
+                sessionMcpServers: config.sessionMcpServers,
+                meta: meta, sessionOptions: options,
+                capabilities: flags.clientCapabilities,
+                inheritStderr: flags.verbose,
+                onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })
         }
     }
 
