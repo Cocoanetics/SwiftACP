@@ -31,6 +31,14 @@ public struct PermissionStats: Codable, Sendable, Equatable {
         requested > 0 && approved == 0 && denied + cancelled > 0
     }
 
+    /// Count `other`'s settled permissions in too; `promptUnavailable` stays as it is.
+    public mutating func add(_ other: PermissionStats) {
+        requested += other.requested
+        approved += other.approved
+        denied += other.denied
+        cancelled += other.cancelled
+    }
+
     enum Decision { case approved, denied, cancelled }
 
     mutating func record(_ decision: Decision) {

@@ -1,5 +1,6 @@
 import Foundation
 import JSONFoundation
+import JSONRPCPeer
 
 /// Counts the agent's requests to the client — `fs/*`, `session/request_permission` —
 /// that have arrived for a session and not yet been answered, so a turn can wait for
@@ -90,6 +91,7 @@ final class InboundRequestLedger: @unchecked Sendable {
 final class WireObserverBox: @unchecked Sendable {
     private let lock = NSLock()
     private var observer: (@Sendable (String) -> Void)?
+    private var messageObserver: (@Sendable (JSONRPCPeer.WireDirection, JSONRPCMessage) -> Void)?
 
     func set(_ observer: (@Sendable (String) -> Void)?) {
         lock.withLock { self.observer = observer }
@@ -97,5 +99,13 @@ final class WireObserverBox: @unchecked Sendable {
 
     var current: (@Sendable (String) -> Void)? {
         lock.withLock { observer }
+    }
+
+    func setMessages(_ observer: (@Sendable (JSONRPCPeer.WireDirection, JSONRPCMessage) -> Void)?) {
+        lock.withLock { messageObserver = observer }
+    }
+
+    var currentMessages: (@Sendable (JSONRPCPeer.WireDirection, JSONRPCMessage) -> Void)? {
+        lock.withLock { messageObserver }
     }
 }

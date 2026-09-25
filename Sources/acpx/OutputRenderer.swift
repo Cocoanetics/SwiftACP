@@ -57,6 +57,7 @@ final class OutputRenderer: @unchecked Sendable {
     // JSON wire-mode state
     private var sanitizer: JSONMessageSanitizer
     var shownErrors = AcpErrorTracker()
+    private var renderingDelay: (@Sendable () async -> Void)?
 
     init(
         options: RenderOptions,
@@ -69,6 +70,13 @@ final class OutputRenderer: @unchecked Sendable {
         self.err = err
         self.useColor = color ?? (isatty(fileno(stdout)) != 0)
         self.sanitizer = JSONMessageSanitizer(suppressReads: options.suppressReads)
+    }
+
+    /// For tests: runs before each event of an attempt is rendered, so that rendering can
+    /// lag the agent without blocking a thread.
+    var beforeRenderingEvent: (@Sendable () async -> Void)? {
+        get { lock.withLock { renderingDelay } }
+        set { lock.withLock { renderingDelay = newValue } }
     }
 
     /// JSON mode printing the exchange: every other entry point stays silent in it.
@@ -168,6 +176,16 @@ final class OutputRenderer: @unchecked Sendable {
             writeLine(dim("[done] \(stopReason.rawValue)"))
             if !atLineStart { write("\n") }
         }
+    }
+
+    /// acpx's text formatter `flush()`, which a run ends with however it went: what the
+    /// agent was thinking is shown, and a line left open is ended.
+    func flushText() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard options.format == .text else { return }
+        flushThoughtBuffer()
+        if !atLineStart { write("\n") }
     }
 
     /// Render a client-side ACP operation (e.g. `initialize`, `session/new`) as

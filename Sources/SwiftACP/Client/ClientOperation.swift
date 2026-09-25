@@ -77,6 +77,10 @@ public enum ConnectionEvent: Sendable {
     /// answer, before any it sends after. acpx's formatters mark the turn done at this
     /// point in the wire.
     case promptAnswered(SessionId, PromptResponse)
+    /// The agent failed a session's prompt with its error response: after every update it
+    /// sent before, before any it sends after — where acpx's text formatter shows the
+    /// error (`[error] RUNTIME: …`).
+    case promptFailed(SessionId, JSONRPCErrorBody)
 }
 
 /// A request the agent made of this client — `fs/read_text_file`, `fs/write_text_file`,
