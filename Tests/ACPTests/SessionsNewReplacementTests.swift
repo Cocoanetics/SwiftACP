@@ -73,6 +73,28 @@ import Testing
         }
     }
 
+    /// A replaced record that moved to another ACP session (a reconnect's fallback, an
+    /// import) keeps its own id: when the new session gets the ACP id it moved to, the
+    /// replaced record is the one closed, and the new one stays open (Codex review on #184).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aReplacedRecordThatMovedIsClosedByItsOwnId() async throws {
+        let directory = try DaemonToolsTests.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let agent = try Self.agent(in: directory)
+            let first = await Self.sessionsNew(agent, in: directory)
+            var moved = try #require(SessionStore.loadRecord(first.id))
+            moved.acpSessionId = "mock-session-1"
+            try SessionStore.writeRecord(moved)
+            Self.touch("same-id", in: directory)
+            let second = await Self.sessionsNew(agent, in: directory)
+            #expect(second.code == 0)
+            #expect(second.id == "mock-session-1" && second.id != first.id)
+            #expect(try #require(SessionStore.loadRecord(first.id)).closed == true)
+            #expect(try #require(SessionStore.loadRecord(second.id)).closed != true)
+        }
+    }
+
     /// An agent that gives every session the same id makes the new session the replaced
     /// record anew; it stays open, where acpx 0.19.3 closes it (openclaw/acpx#805).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
