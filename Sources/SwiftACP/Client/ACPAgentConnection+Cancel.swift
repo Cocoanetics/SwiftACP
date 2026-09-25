@@ -60,11 +60,18 @@ extension ACPAgentConnection {
             let request = TurnRequest(method: method, continuation: continuation)
             turnRequests[sessionId, default: [:]][key] = request
             let serving = Task {
-                let answer = await self.handleIncomingRequest(method: method, params: params)
+                let tally = PermissionTally()
+                let answer = await PermissionTally.$current.withValue(tally) {
+                    await self.handleIncomingRequest(method: method, params: params)
+                }
+                await self.afterServingOwnedRequest?()
                 // Its prompt ended while this was served — its answer read, or its turn
-                // cancelled: acpx answers it cancelled then, and counts a question so.
+                // cancelled: acpx answers it cancelled then, and counts a question so. A
+                // question counts once, by the answer that goes back.
                 guard Task.isCancelled else {
-                    request.answer(answer)
+                    if request.answer(answer), let decision = tally.decision {
+                        self.turnPermissionStats[sessionId, default: PermissionStats()].record(decision)
+                    }
                     return
                 }
                 if request.answer(Self.cancelledAnswer(to: method)), method == "session/request_permission" {
@@ -101,6 +108,24 @@ extension ACPAgentConnection {
         else { return .failure(requestCancelled) }
         return .success(cancelled)
     }
+}
+
+/// The decision a permission question served for its prompt came to. It counts only
+/// if its answer is the one that goes back: when the prompt ends first, the question is
+/// answered `cancelled` and counts as that — once, as acpx's `finishPermissionRequest`
+/// counts the answer it returns.
+final class PermissionTally: @unchecked Sendable {
+    /// The tally of the question being served, when it is served for its prompt.
+    @TaskLocal static var current: PermissionTally?
+
+    private let lock = NSLock()
+    private var noted: PermissionStats.Decision?
+
+    func note(_ decision: PermissionStats.Decision) {
+        lock.withLock { noted = decision }
+    }
+
+    var decision: PermissionStats.Decision? { lock.withLock { noted } }
 }
 
 /// An agent's request of a turn in flight, and the one answer it gets: its handler's,

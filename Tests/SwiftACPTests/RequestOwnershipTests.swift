@@ -341,6 +341,59 @@ extension RequestOwnershipTests {
     }
 }
 
+extension RequestOwnershipTests {
+    /// A question its handler decided, whose prompt's answer is read before that decision
+    /// goes back, is answered `cancelled` — and counted once, as that: acpx's
+    /// `finishPermissionRequest` counts the answer it returns.
+    @Test(.timeLimit(.minutes(1)))
+    func aQuestionDecidedAsItsPromptEndsCountsOnce() async throws {
+        let (clientEnd, agentEnd) = LoopbackTransport.pair()
+        let answers = Answers()
+        let (prompts, promptCame) = AsyncStream<JSONRPCID>.makeStream()
+        let script = Script { prompt in
+            promptCame.yield(prompt)
+            return [.request(id: "q1", method: "session/request_permission", params: Self.permission)]
+        }
+        let agent = Task { try await Self.playAgent(on: agentEnd, answers: answers, script: script) }
+        defer { agent.cancel() }
+        let client = try await Self.client(clientEnd, handlers: .standard(permission: .approveAll))
+        let (served, servedNoted) = AsyncStream<Void>.makeStream()
+        let (answerRead, answerReadNoted) = AsyncStream<Void>.makeStream()
+        await client.setWireObserver { line in
+            if line.contains("\"stopReason\"") { answerReadNoted.finish() }
+        }
+        // The question is approved; the approval goes back only once the prompt's answer
+        // is read, and the prompt's call resumes only once the question is answered.
+        await client.setAfterServingOwnedRequest {
+            servedNoted.yield()
+            for await _ in answerRead { break }
+        }
+        await client.setAfterPromptAnswer { _ = await answers.wait(for: "q1") }
+
+        let turn = Task { try await client.prompt(PromptRequest(sessionId: "s", prompt: [.text("hi")])) }
+        var prompt: JSONRPCID?
+        for await id in prompts {
+            prompt = id
+            break
+        }
+        for await _ in served { break }
+        try agentEnd.send(try Self.answer(try #require(prompt)))
+        _ = try await turn.value
+
+        guard case .response(let response) = await answers.wait(for: "q1") else { throw CancellationError() }
+        #expect(try #require(response.result).decoded(RequestPermissionResponse.self).outcome == .cancelled)
+        let stats = await client.permissionStats(for: "s")
+        #expect(stats.requested == 1 && stats.cancelled == 1 && stats.approved == 0, "\(stats)")
+        await client.close()
+    }
+}
+
+extension ACPAgentConnection {
+    func setAfterServingOwnedRequest(_ hook: (@Sendable () async -> Void)?) {
+        afterServingOwnedRequest = hook
+    }
+}
+
 /// Set once, read from anywhere.
 private final class Flag: @unchecked Sendable {
     private let lock = NSLock()

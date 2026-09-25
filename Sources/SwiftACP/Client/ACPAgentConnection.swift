@@ -17,11 +17,13 @@ public actor ACPAgentConnection {
     let eventSinks = EventSinks()
     /// What the wire hook announces as it reads it: requests arriving, prompts answered.
     private let wireOrderedEvents = WireOrderedEvents()
-    /// For tests: runs once a prompt's answer is back with the call that sent it, and
-    /// before a request of the agent's is served — each can be well after the messages
-    /// that followed were read and handed on.
+    /// For tests: runs once a prompt's answer is back with the call that sent it, before
+    /// a request of the agent's is served, and once a request its prompt owns is served
+    /// and before it is answered — each can be well after the messages that followed
+    /// were read and handed on.
     var afterPromptAnswer: (@Sendable () async -> Void)?
     var beforeServingRequest: (@Sendable () async -> Void)?
+    var afterServingOwnedRequest: (@Sendable () async -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
