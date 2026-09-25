@@ -43,6 +43,24 @@ extension DaemonToolsTests {
         return (created.acpxRecordId, log)
     }
 
+    /// The saved options go back in the order the record holds them — acpx's reconnect
+    /// iterates its object (`Object.entries`) — not by id.
+    @Test(.enabled(if: mockPythonAvailable))
+    func savedOptionsGoBackInTheRecordsOrder() async throws {
+        try await withIsolatedStore {
+            let extra = "MODEL_AGENT_EXTRA_OPTION=alpha "
+            let (id, log) = try await pinnedSession(load: true, environment: extra) { acpx in
+                acpx.desiredConfigOptions = ["effort": "high", "alpha": "y"]
+                acpx.rebuiltOrders["desired_config_options"] = ["effort", "alpha"]
+            }
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false).runPrompt(sessionId: id, text: "hi")
+            #expect(try Self.modelAgentRequests(log) == [
+                "session/load", "session/set_config_option model=m2", "session/set_config_option effort=high",
+                "session/set_config_option alpha=y", "session/prompt"
+            ])
+        }
+    }
+
     /// A loaded session kept its mode, so none is sent; the pinned model is, although
     /// the session already has it, and then the options.
     @Test(.enabled(if: mockPythonAvailable))
