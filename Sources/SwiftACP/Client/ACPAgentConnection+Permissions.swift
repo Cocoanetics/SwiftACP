@@ -67,12 +67,17 @@ extension ACPAgentConnection {
     }
 
     /// Report a permission notice to the event subscriptions, ahead of anything the
-    /// agent sends in reaction to the answer.
+    /// agent sends in reaction to the answer — for a question served for its prompt, only
+    /// with the answer it explains, once that is the one that goes back (``PermissionTally``).
     private func announce(_ notice: String, sessionId: SessionId, escalation: PermissionEscalation? = nil) {
         let operation = ClientOperation(
             method: ClientOperation.requestPermission, status: .completed, summary: notice,
             sessionId: sessionId, escalation: escalation)
-        eventSinks.yield(.clientOperation(operation))
+        if let tally = PermissionTally.current {
+            tally.announce(operation)
+        } else {
+            eventSinks.yield(.clientOperation(operation))
+        }
     }
 
     /// Whether a handler cancelled outright although the agent offered a refusal it

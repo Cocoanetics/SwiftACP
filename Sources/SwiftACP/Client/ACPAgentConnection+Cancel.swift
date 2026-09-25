@@ -69,6 +69,9 @@ extension ACPAgentConnection {
                 // cancelled: acpx answers it cancelled then, and counts a question so. What
                 // it counts, it counts by the answer that goes back.
                 guard Task.isCancelled else {
+                    // What the handler reports of its decision goes out with it, ahead of
+                    // anything the agent sends in reaction.
+                    for operation in tally.announced { self.publish(.clientOperation(operation)) }
                     if request.answer(answer), let noted = tally.noted { self.count(noted, in: sessionId) }
                     return
                 }
@@ -125,12 +128,13 @@ extension ACPAgentConnection {
     }
 }
 
-/// What a request served for its prompt came to in the permission stats — a question's
-/// decision, a refusal — counted only if its answer is the one that goes back. When the
-/// prompt ends first, a question is answered `cancelled` and counts as that, and a
-/// refusal is answered `Request cancelled` and does not count: acpx counts what it
-/// answers, while the request's owner is active (`finishPermissionRequest`,
-/// `runDelegatedOperation`).
+/// What a request served for its prompt came to — in the permission stats, a question's
+/// decision or a refusal; on the event stream, the notices explaining a decision — kept
+/// until its answer goes back, and dropped if that answer is not the one that does. When
+/// the prompt ends first, a question is answered `cancelled` and counts as that, and a
+/// refusal is answered `Request cancelled` and does not count: acpx counts and reports
+/// what it answers, while the request's owner is active (`finishPermissionRequest`,
+/// `runDelegatedOperation`, `assertControlAuthority` ahead of its notices).
 final class PermissionTally: @unchecked Sendable {
     struct Note {
         var decision: PermissionStats.Decision
@@ -143,12 +147,19 @@ final class PermissionTally: @unchecked Sendable {
 
     private let lock = NSLock()
     private var kept: Note?
+    private var notices: [ClientOperation] = []
 
     func note(_ note: Note) {
         lock.withLock { kept = note }
     }
 
     var noted: Note? { lock.withLock { kept } }
+
+    func announce(_ operation: ClientOperation) {
+        lock.withLock { notices.append(operation) }
+    }
+
+    var announced: [ClientOperation] { lock.withLock { notices } }
 }
 
 /// An agent's request of a turn in flight, and the one answer it gets: its handler's,
