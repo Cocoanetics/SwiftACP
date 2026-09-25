@@ -71,7 +71,7 @@ extension ACPXDaemonBackend {
                 body)
         } catch {
             if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }
-            throw error
+            throw AgentFailure.shown(error)
         }
     }
 
@@ -246,5 +246,20 @@ final class ControlDeadline: @unchecked Sendable {
             passed = true
             return true
         }
+    }
+}
+
+/// An agent's failure, as acpx's CLI shows a control's (`formatErrorMessage`): its error
+/// response by its message, and a connection that closed in the words of acpx's ACP SDK. The
+/// daemon's tool reports the failure by that text.
+struct AgentFailure: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+
+    /// `error`, as the tool reports it: an agent's error or a closed connection by acpx's
+    /// words for it, anything else as it is.
+    static func shown(_ error: Error) -> Error {
+        guard error is JSONRPCErrorBody || (error as? JSONRPCPeerError) == .closed else { return error }
+        return AgentFailure(message: TurnFailure.message(of: error))
     }
 }

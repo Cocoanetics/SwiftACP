@@ -188,12 +188,15 @@ public enum ModelApplication {
         }
         let resolved = try resolveModelId(modelId, models: models, agentCommand: agentCommand)
         guard let configId = models.configId else {
-            try await connection.setModel(
-                SetSessionModelRequest(sessionId: sessionId, modelId: resolved))
+            try await SessionControlError.wrappingModel("session/set_model", modelId: resolved) {
+                try await connection.setModel(SetSessionModelRequest(sessionId: sessionId, modelId: resolved))
+            }
             return nil
         }
-        return try await connection.setConfigOption(
-            SetSessionConfigOptionRequest(sessionId: sessionId, configId: configId, value: resolved))
+        return try await SessionControlError.wrappingModel("session/set_config_option", modelId: resolved) {
+            try await connection.setConfigOption(
+                SetSessionConfigOptionRequest(sessionId: sessionId, configId: configId, value: resolved))
+        }
     }
 
     /// Set one config option. A value going to the *model's* option is resolved
@@ -211,8 +214,11 @@ public enum ModelApplication {
         if let models, models.configId == configId {
             resolved = try resolveModelId(value, models: models, agentCommand: agentCommand)
         }
-        return try await connection.setConfigOption(
-            SetSessionConfigOptionRequest(sessionId: sessionId, configId: configId, value: resolved))
+        return try await SessionControlError.wrapping(
+            "session/set_config_option", context: "for \"\(configId)\"=\"\(value)\"") {
+            try await connection.setConfigOption(
+                SetSessionConfigOptionRequest(sessionId: sessionId, configId: configId, value: resolved))
+        }
     }
 
     // MARK: - Advertised state

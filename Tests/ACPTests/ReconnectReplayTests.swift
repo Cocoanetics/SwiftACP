@@ -139,9 +139,13 @@ extension DaemonToolsTests {
             let failure = await #expect(throws: SessionReplayError.self) {
                 _ = try await restarted.runPrompt(sessionId: id, text: "ping")
             }
+            // The option's own failure says which option and value, as acpx's client says it
+            // (`maybeWrapSessionControlError`, #164).
             #expect(failure?.localizedDescription == """
                 Failed to replay saved session config option effort on ACP session \(record.acpSessionId): \
-                Invalid params
+                Agent rejected session/set_config_option for "effort"="high": option unavailable (ACP -32602, \
+                adapter reported "Invalid params"). The adapter may not implement session/set_config_option, or the \
+                requested value is not supported.
                 """)
             #expect(failure?.detailCode == "SESSION_CONFIG_OPTION_REPLAY_FAILED" && failure?.retryable == true)
             let after = try #require(SessionStore.loadRecord(id))
