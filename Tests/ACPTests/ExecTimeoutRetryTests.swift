@@ -339,6 +339,8 @@ struct ExecTimeoutRetryTests {
         #expect(try await withTimeout(milliseconds: 1_000) { 7 } == 7)
         #expect(try await withTimeout(milliseconds: nil) { 8 } == 8)
         #expect(try await withTimeout(milliseconds: 0) { 9 } == 9)
+        // A deadline too far off for a sleep in nanoseconds is the longest sleep there is.
+        #expect(try await withTimeout(milliseconds: Int.max) { 10 } == 10)
         let gate = Gate()
         await #expect(throws: TimeoutError(milliseconds: 50)) {
             try await withTimeout(milliseconds: 50) { await gate.wait() }

@@ -38,7 +38,7 @@ public func withTimeout<T: Sendable>(
         }
     }
     let deadline = Task {
-        try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
+        try await Task.sleep(nanoseconds: nanoseconds(milliseconds))
         race.settle(.failure(TimeoutError(milliseconds: milliseconds)))
     }
     defer {
@@ -50,6 +50,12 @@ public func withTimeout<T: Sendable>(
     } onCancel: {
         race.settle(.failure(CancellationError()))
     }
+}
+
+/// `milliseconds` in nanoseconds — the longest sleep there is, for more than fits.
+private func nanoseconds(_ milliseconds: Int) -> UInt64 {
+    let (product, overflow) = UInt64(milliseconds).multipliedReportingOverflow(by: 1_000_000)
+    return overflow ? .max : product
 }
 
 /// ``withTimeout(milliseconds:_:)`` for an operation that starts what its caller would
