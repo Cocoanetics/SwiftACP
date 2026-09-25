@@ -3,8 +3,8 @@ import JSONFoundation
 import JSONRPCPeer
 
 /// A connection's ``ConnectionEvent`` subscriptions, reachable from the peer's wire hook
-/// as well as from the connection itself: a prompt's answer is announced as it is read,
-/// in order with the messages around it (see ``PromptsOnTheWire``).
+/// as well as from the connection itself: what the wire hook announces keeps its place
+/// among the messages around it (see ``WireOrderedEvents``).
 final class EventSinks: @unchecked Sendable {
     private let lock = NSLock()
     private var sinks: [UUID: AsyncStream<ConnectionEvent>.Continuation] = [:]
@@ -36,19 +36,23 @@ final class EventSinks: @unchecked Sendable {
     }
 }
 
-/// The `session/prompt` requests on the wire, with their sessions, until their answers
-/// are read: how the wire hook knows a prompt's answer when it reads one.
-final class PromptsOnTheWire: @unchecked Sendable {
+/// What the connection announces from the peer's wire hook, as the messages it is about
+/// are read: a request of the agent's arriving, and a prompt's answer. The peer hands
+/// each notification on before it reads the next message, so every update the agent
+/// sent before either has been handed on by then, and none it sent after has been yet:
+/// each keeps its place among them, as acpx's formatter sees every message in order.
+/// Announced from where they are served or awaited — tasks of their own — they would not.
+final class WireOrderedEvents: @unchecked Sendable {
     private let lock = NSLock()
+    /// The `session/prompt` requests on the wire, with their sessions, until answered.
     private var sessions: [JSONRPCID: SessionId] = [:]
 
-    /// Note `message` as it crosses the wire: a prompt going out, or its answer coming
-    /// back — announced to `sinks` then and there. Every update the agent sent before the
-    /// answer was handed on before it was read, and none it sent after has been yet, so
-    /// the answer keeps its place among them, as acpx's formatter sees it. Announced from
-    /// the call that sent the prompt, as it resumes, it would not.
+    /// Note `message` as it crosses the wire, announcing to `sinks` what it tells.
     func observe(_ direction: JSONRPCPeer.WireDirection, _ message: JSONRPCMessage, announcingTo sinks: EventSinks) {
         switch (direction, message) {
+        case (.inbound, .request(let request)):
+            let sessionId = InboundRequestLedger.sessionId(of: request.params)
+            sinks.yield(.inboundRequest(InboundRequest(method: request.method, sessionId: sessionId)))
         case (.outbound, .request(let request)) where request.method == "session/prompt":
             guard let sessionId = InboundRequestLedger.sessionId(of: request.params) else { return }
             lock.withLock { sessions[request.id] = sessionId }

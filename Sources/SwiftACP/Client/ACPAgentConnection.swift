@@ -15,11 +15,13 @@ public actor ACPAgentConnection {
     /// Subscribers to the richer ``ConnectionEvent`` stream: updates plus the client
     /// operations this connection reports.
     let eventSinks = EventSinks()
-    /// The prompts on the wire, whose answers the wire hook announces as it reads them.
-    private let promptsOnTheWire = PromptsOnTheWire()
-    /// For tests: runs once a prompt's answer is back with the call that sent it — which
-    /// can be well after the messages that followed it were read and handed on.
+    /// What the wire hook announces as it reads it: requests arriving, prompts answered.
+    private let wireOrderedEvents = WireOrderedEvents()
+    /// For tests: runs once a prompt's answer is back with the call that sent it, and
+    /// before a request of the agent's is served — each can be well after the messages
+    /// that followed were read and handed on.
     var afterPromptAnswer: (@Sendable () async -> Void)?
+    var beforeServingRequest: (@Sendable () async -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
@@ -173,13 +175,13 @@ public actor ACPAgentConnection {
         // Runs inline as each message is read, in order: an agent request is counted
         // here, before the peer hands it to its own task, so a turn that ends after
         // reading it is sure to wait for it.
-        let (sinks, prompts) = (eventSinks, promptsOnTheWire)
-        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates, sinks, prompts] direction, message in
+        let (sinks, ordered) = (eventSinks, wireOrderedEvents)
+        await rpc.setWireLog { [wireObserver, inboundRequests, sessionUpdates, sinks, ordered] direction, message in
             if direction == .inbound, case .request(let request) = message,
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
                 inboundRequests.arrived(sessionId)
             }
-            prompts.observe(direction, message, announcingTo: sinks)
+            ordered.observe(direction, message, announcingTo: sinks)
             if direction == .inbound, case .notification(let note) = message, note.method == "session/update",
                 let sessionId = InboundRequestLedger.sessionId(of: note.params) {
                 sessionUpdates.arrived(sessionId)
