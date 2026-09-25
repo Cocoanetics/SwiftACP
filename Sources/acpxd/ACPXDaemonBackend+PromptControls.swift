@@ -81,6 +81,14 @@ extension ACPXDaemonBackend {
         }
     }
 
+    /// A prompt that went out is given up for a retry on a fresh launch: the turn's
+    /// controls from now on wait for the retry's prompt to go out, and run on its agent,
+    /// none on the one given up. Returns whether the prompt had gone out, for the turn to
+    /// hand them back should it not be retried after all.
+    func handControlsOn(from recordId: String) -> Bool {
+        tickets[recordId]?.unpublish() ?? false
+    }
+
     /// The prompt's turn is over, as acpx's `seal` says (`onPromptFinalizing`): a control
     /// from now on waits for the session's next turn, and those taken are done before the
     /// turn's last save.
@@ -114,6 +122,14 @@ final class PromptControlTicket: @unchecked Sendable {
         let ready = waiting
         waiting = []
         ready.forEach { $0.resume() }
+    }
+
+    /// The prompt that went out is given up for a retry: controls wait for the retry's to go
+    /// out. Returns whether it had gone out.
+    func unpublish() -> Bool {
+        guard published, !sealed else { return false }
+        published = false
+        return true
     }
 
     /// The turn is over: no control is taken from now on. Those still waiting for a prompt

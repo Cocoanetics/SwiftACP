@@ -363,21 +363,9 @@ extension ACPXDaemonBackend {
             // The prompt is over, and its end said all it has to.
             throw unwritten
         } catch {
-            await relay.end()
-            // Everything the agent said before failing still goes out, and is kept, as
-            // acpx shows and records it — then the error itself.
-            _ = await relay.text()
-            let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
-                ? AgentExitedBeforeTheTurn(underlying: error) : error
-            let retried = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && !wireFeed.agentAnswered
-                && turns[recordId]?.retried != true
-            // How the agent ended, if it did, goes into the record the failure saves — once
-            // it has: an agent whose connection is gone can still be running (its stdout
-            // closed, say), and is ended before its pid would be kept.
-            await wrapUp(
-                failedAttemptOn: entry, error: error, retried: retried, recordId: recordId, persister: persister)
-            await wireFeed.finish(showingHeld: !retried)
-            throw retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
+            throw await failedAttempt(
+                error, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
+                wireFeed: wireFeed, recordId: recordId, persister: persister)
         }
     }
 }
@@ -472,26 +460,4 @@ struct TurnPermissions: Sendable {
         handlers = .standard(
             permission: policy, nonInteractivePermissions: unanswerable, terminal: .none, rules: rules)
     }
-}
-
-extension ACPXDaemonBackend {
-    /// What a failed attempt leaves: its agent ended if its connection is gone — it can be
-    /// running still, its stdout closed, say, and is ended before its pid would be kept —
-    /// the controls the turn took done if the turn ends here, and how the agent ended in the
-    /// record the failure saves.
-    func wrapUp(
-        failedAttemptOn entry: Live, error: Error, retried: Bool, recordId: String, persister: TurnPersister
-    ) async {
-        if ACPAgentConnection.endedTheConnection(error) { await entry.agent.close() }
-        if !retried { await sealControls(of: recordId) }
-        await persister.applyLifecycle(entry.agent.lifecycle)
-    }
-}
-
-/// The held agent had exited before any of the turn reached it: its connection was
-/// already closed when the prompt was sent. Nothing was seen by it, so the turn can go
-/// to a fresh launch. Reads as the closed connection it is.
-struct AgentExitedBeforeTheTurn: LocalizedError {
-    let underlying: Error
-    var errorDescription: String? { underlying.localizedDescription }
 }

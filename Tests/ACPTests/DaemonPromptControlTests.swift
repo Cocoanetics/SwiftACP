@@ -133,6 +133,42 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A prompt a fresh launch takes over, its held agent having dropped the session, runs
+    /// the turn's controls on the fresh launch: one sent as the turn moves over waits for
+    /// the retry's prompt to go out, then runs on its agent (Codex review on #174).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aControlWhileAPromptMovesToAFreshLaunchWaitsForItsPrompt() async throws {
+        try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, methods in
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+
+            // As the retry connects, a control is taken on the turn's ticket.
+            let (taken, taking) = AsyncStream<Void>.makeStream()
+            let (controls, sending) = AsyncStream<Task<SessionControlResult, Error>>.makeStream()
+            await daemon.setControlTakenHook { _ in taking.yield() }
+            await daemon.setReconnected { _ in
+                sending.yield(Task { try await daemon.setMode(sessionId: id, modeId: "plan") })
+                var waiting = taken.makeAsyncIterator()
+                _ = await waiting.next()
+            }
+            _ = try await withTimeout(milliseconds: 10_000) {
+                try await daemon.runPrompt(sessionId: id, text: "second")
+            }
+            var sent = controls.makeAsyncIterator()
+            let control = try #require(await sent.next())
+            let result = try await withTimeout(milliseconds: 10_000) { try await control.value }
+            #expect(!result.resumed)
+            // Its mode went to the fresh launch after the retry's prompt, not to the agent
+            // that dropped the session.
+            let received = try methods()
+            let retried = try #require(received.lastIndex(of: "session/prompt"))
+            #expect(received.lastIndex(of: "session/set_mode").map { $0 > retried } == true, "\(received)")
+            #expect(try #require(SessionStore.loadRecord(id)).acpx?.desiredModeId == "plan")
+            await daemon.releaseAll()
+        }
+    }
+
     /// Past its deadline once its request went out, a control puts the prompt's agent down,
     /// as acpx's control closes the prompt's client; the caller hears `TIMEOUT` at once.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
