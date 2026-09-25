@@ -3,7 +3,7 @@
 @testable import acpxd
 import Foundation
 import JSONFoundation
-import SwiftACP
+@testable import SwiftACP
 import SwiftMCP
 import Testing
 
@@ -207,6 +207,57 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A request that came once the prompt had stopped waiting for requests, but before
+    /// the turn first looked, and that is still open when the updates first go quiet, keeps
+    /// the turn going too: the turn waits for it, and what the agent says once it has the
+    /// answer is the turn's — though no request came since the turn looked.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aRequestOpenPastTheFirstQuietKeepsTheTurn() async throws {
+        let directory = try Self.scratchDirectory()
+        let (log, gate) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("gate"))
+        defer {
+            Self.create(gate)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let command = try #require(mockCommand())
+        let mock = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' "
+            + "MOCK_REACT_AFTER_GATE='\(gate.path)' \(command)"
+        try await withIsolatedStore {
+            try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 100, timeoutMilliseconds: 5000)) {
+                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+                let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
+                let client = CallingClient()
+                let (asked, ask) = AsyncStream<Void>.makeStream()
+                client.observe { log in
+                    if let request = try? log.decoded(InboundRequest.self),
+                       request.method == "session/request_permission", request.failure == nil { ask.yield() }
+                }
+                // Past the answer, and before the turn looks: the agent asks, and the turn
+                // looks once the question has come. The question is served only once the
+                // turn waits for it.
+                await daemon.setBeforeReplyDrain { recordId in
+                    let (released, release) = AsyncStream<Void>.makeStream()
+                    if let (connection, _) = await daemon.agentConnection(for: recordId) {
+                        await connection.setBeforeServingRequest { for await _ in released { break } }
+                        await connection.setOnRequestWait { _ in release.finish() }
+                    }
+                    Self.create(gate)
+                    for await _ in asked { break }
+                }
+
+                try await prompt(daemon, id, text: "hi", client: client)
+
+                let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
+                let reaction = client.logs.firstIndex { log in
+                    guard let note = try? log.decoded(SessionNotification.self),
+                          case .agentMessageChunk(let block) = note.update else { return false }
+                    return block.text == "reaction"
+                }
+                #expect(try #require(reaction) < #require(ended))
+            }
+        }
+    }
+
     /// Whether `stream` yields within `limit`.
     private static func first(of stream: AsyncStream<Void>, within limit: Duration) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
@@ -277,6 +328,10 @@ extension ACPXDaemonBackend {
         afterUpdateDrain = hook
     }
 
+    func setBeforeReplyDrain(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
+        beforeReplyDrain = hook
+    }
+
     /// The connection and ACP session of the agent this daemon holds for `recordId`.
     func agentConnection(for recordId: String) -> (ACPAgentConnection, SessionId)? {
         live[recordId].map { ($0.agent.connection, $0.session.id) }
@@ -319,5 +374,16 @@ struct LateUpdateRenderingTests {
     @Test func quietShowsNothingAfterTheEnd() async throws {
         #expect(try await Self.rendered(.quiet) == "early \n")
         #expect(try await Self.rendered(.quiet, thenFailing: true) == "early \n")
+    }
+}
+
+extension ACPAgentConnection {
+    func setBeforeServingRequest(_ hook: (@Sendable () async -> Void)?) {
+        beforeServingRequest = hook
+    }
+
+    /// Run `hook` when a wait for the agent's requests has to wait.
+    func setOnRequestWait(_ hook: (@Sendable (SessionId) -> Void)?) {
+        inboundRequests.setOnWait(hook)
     }
 }

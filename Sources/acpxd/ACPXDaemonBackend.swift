@@ -50,6 +50,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
     /// longer keep it from going out.
     var promptGoingOut: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a turn's prompt is answered, before the turn first looks at
+    /// how many requests the agent has made.
+    var beforeReplyDrain: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: run each time a turn's updates have gone quiet past its answer, before
     /// it looks for requests of the agent's.
     var afterUpdateDrain: (@Sendable (_ recordId: String) async -> Void)?

@@ -24,19 +24,21 @@ extension ACPXDaemonBackend {
         // A request the agent made meanwhile is the turn's too: answered before the turn
         // ends — under its handlers, counted in its permissions — as one made before it.
         // What the agent sends once it has the answer to it is the turn's as well, so the
-        // turn ends only when its updates have gone quiet with no request having come
-        // since the last look — one answered already may not have reached the agent yet.
+        // turn ends only when its updates have gone quiet with no request answered since
+        // they did: none came since the last look — one answered already may not have
+        // reached the agent yet — and none was still open, whenever it came.
         let (connection, sessionId) = (entry.agent.connection, entry.session.id)
         let drain = TurnReplyDrain.current
+        await beforeReplyDrain?(recordId)
         var arrived = await connection.requestsArrived(sessionId: sessionId)
         while true {
             try? await connection.waitForSessionUpdateDrain(
                 sessionId: sessionId, idleMilliseconds: drain.idleMilliseconds,
                 timeoutMilliseconds: drain.timeoutMilliseconds)
             await afterUpdateDrain?(recordId)
-            await connection.waitForRequestsAnswered(sessionId: sessionId)
+            let waited = await connection.waitForRequestsAnswered(sessionId: sessionId)
             let now = await connection.requestsArrived(sessionId: sessionId)
-            if now == arrived { break }
+            if now == arrived, !waited { break }
             arrived = now
         }
         return (response, true)
