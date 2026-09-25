@@ -19,8 +19,10 @@
 - `fail-after-updates`: sends twenty updates, then fails as `fail-once` does.
   `burst-then-hang` sends them and never answers.
 
-Otherwise a prompt answers `hello`. Each prompt appends a line to the file
-`RETRY_AGENT_ATTEMPTS` names, and the agent writes its pid to `RETRY_AGENT_PID` on start.
+`RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
+mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
+Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
+writes its pid to `RETRY_AGENT_PID` on start.
 """
 import json
 import os
@@ -28,6 +30,8 @@ import sys
 import time
 
 MODE = os.environ.get("RETRY_AGENT_MODE", "ok")
+if os.environ.get("RETRY_AGENT_MODE_FILE") and os.path.exists(os.environ["RETRY_AGENT_MODE_FILE"]):
+    MODE = open(os.environ["RETRY_AGENT_MODE_FILE"]).read().strip() or MODE
 ATTEMPTS = os.environ.get("RETRY_AGENT_ATTEMPTS")
 if os.environ.get("RETRY_AGENT_PID"):
     with open(os.environ["RETRY_AGENT_PID"], "w") as handle:
