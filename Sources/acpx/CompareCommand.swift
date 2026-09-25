@@ -98,13 +98,14 @@ enum CompareCommand {
     /// comes during ends as its interrupt makes it end, and its row says so; no agent
     /// after it runs.
     static func runAgents(_ agents: [String], _ run: (String) -> Row) -> (rows: [Row], interrupted: Bool) {
-        let signal = SignalHeard()
+        let signal = Interrupts.Heard()
         let listening = Interrupts.listen { signal.heard() }
         defer { listening.stop() }
         var rows: [Row] = []
         for agentName in agents {
             if signal.happened { break }
-            let row = run(agentName)
+            // One that comes from here on is the run's too, before it listens for its own.
+            let row = Interrupts.$heardBefore.withValue(signal) { run(agentName) }
             rows.append(signal.happened ? row.interrupted : row)
         }
         return (rows, signal.happened)
@@ -202,13 +203,4 @@ extension CompareCommand.Row {
         if let meta { members.append(.init("_meta", meta)) }
         return .object(members)
     }
-}
-
-/// Whether a signal has come — `compare`'s own listener, which stops admitting agents.
-private final class SignalHeard: @unchecked Sendable {
-    private let lock = NSLock()
-    private var came = false
-
-    func heard() { lock.withLock { came = true } }
-    var happened: Bool { lock.withLock { came } }
 }

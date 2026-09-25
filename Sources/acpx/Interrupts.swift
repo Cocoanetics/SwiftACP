@@ -45,6 +45,29 @@ enum Interrupts {
     /// The source a run under test is interrupted from, in place of the process's signals.
     @TaskLocal static var source: Source?
 
+    /// A signal heard for a run before the run listened for one — `compare`'s, between
+    /// admitting an agent and its run listening — which the run takes as its own. Node
+    /// dispatches a signal only between turns of its event loop, so none comes between
+    /// the two in acpx; here one can.
+    @TaskLocal static var heardBefore: Heard?
+
+    /// Whether a signal has come, as a listener records it.
+    final class Heard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var came = false
+
+        func heard() { lock.withLock { came = true } }
+        var happened: Bool { lock.withLock { came } }
+
+        /// Record a signal, saying whether it is the first.
+        func first() -> Bool {
+            lock.withLock {
+                defer { came = true }
+                return !came
+            }
+        }
+    }
+
     /// Hears the first of SIGINT, SIGTERM and SIGHUP after it was added, once — acpx's
     /// `process.once` listeners — until it is stopped.
     struct Listening {
@@ -76,13 +99,18 @@ enum Interrupts {
         onInterrupt: @escaping @Sendable (_ endInterrupted: @escaping @Sendable () -> Void) async -> Void
     ) async throws -> T {
         let outcome = FirstOutcome<T>()
-        let listening = listen {
+        // Heard once, whether by the listener, before it listened (``heardBefore``), or both.
+        let once = Heard()
+        let interrupt: @Sendable () -> Void = {
+            guard once.first() else { return }
             Task {
                 await onInterrupt { outcome.reserve() }
                 outcome.settleReserved(.failure(InterruptedError()))
             }
         }
+        let listening = listen(interrupt)
         defer { listening.stop() }
+        if heardBefore?.happened == true { interrupt() }
         Task {
             do {
                 outcome.settle(.success(try await run()))

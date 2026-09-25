@@ -127,4 +127,28 @@ struct CompareRunOnceTests {
         #expect(compared.rows.map { $0["status"] as? String } == ["ok", "cancelled"])
         #expect(compared.rows.last?["error"] as? String == "Interrupted")
     }
+
+    /// A signal that comes once `compare` admitted an agent, but before the agent's run
+    /// listens for one, still puts that run down: Node dispatches none between the two,
+    /// so acpx's run always hears it.
+    @Test(.timeLimit(.minutes(1)))
+    func aSignalBeforeTheRunListensStillPutsItDown() {
+        let source = Interrupts.Source()
+        let (rows, interrupted) = Interrupts.$source.withValue(source) {
+            CompareCommand.runAgents(["agent"]) { name in
+                source.fire()
+                let ran = (try? runBlocking {
+                    try await Interrupts.withInterrupt({
+                        try await Task.sleep(nanoseconds: 5_000_000_000)
+                        return "ran on"
+                    }, onInterrupt: { $0() })
+                }) ?? "put down"
+                return CompareCommand.Row(
+                    agent: name, status: "ok", stopReason: nil, wallMs: 0, finalMessage: ran, error: nil)
+            }
+        }
+        #expect(interrupted)
+        #expect(rows.map(\.finalMessage) == ["put down"])
+        #expect(rows.map(\.error) == ["Interrupted"])
+    }
 }
