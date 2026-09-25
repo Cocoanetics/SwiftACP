@@ -154,7 +154,8 @@ import Testing
 
             let second = await Self.sessionsNew(agent, in: directory, daemon: daemon)
             #expect(second.code == 0 && second.id == first.id)
-            await held.waitUntilClosed()
+            let letGo = await (try? withTimeout(milliseconds: 10_000) { await held.waitUntilClosed() }) != nil
+            #expect(letGo, "the replaced session's agent is still running")
             #expect(await backend.heldConnection(first.id) == nil)
             let kept = try #require(SessionStore.loadRecord(second.id))
             #expect(kept.closed != true)
