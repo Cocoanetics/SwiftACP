@@ -35,7 +35,8 @@ extension DaemonToolsTests {
             let result = try await ACPXDaemonBackend(inheritAgentStderr: false)
                 .setConfigOption(sessionId: id, configId: "effort", value: "high")
             #expect(result.resumed == false)
-            #expect(result.configOptions == [])
+            // As the mock's reply reported them: none, the value only acknowledged.
+            #expect(result.configOptions == nil)
         }
     }
 }
