@@ -197,6 +197,22 @@ struct ExecTimeoutRetryTests {
         #expect(quiet.err == "[acpx] error: PERMISSION_DENIED Permission request denied or cancelled\n")
     }
 
+    /// A question during the pause that nobody could answer, under
+    /// `--non-interactive-permissions fail`, is no effect, so the retry goes ahead — and
+    /// then fails as that once it is answered, as acpx keeps its note for the next prompt.
+    /// Needs no terminal to ask at, as in CI.
+    @Test(.enabled(if: mockPythonAvailable && !(isatty(0) != 0 && isatty(2) != 0)))
+    func aQuestionNobodyCouldAnswerDuringThePauseFailsTheRetry() async throws {
+        let options = ["--prompt-retries", "1", "--non-interactive-permissions", "fail"]
+        let unavailable = "Permission prompt unavailable in non-interactive mode"
+        let text = try await exec("fail-then-ask", options)
+        #expect(text.code == 5 && text.attempts == 2)
+        #expect(text.out.hasSuffix("hello\n\n[done] end_turn\n"), "\(text.out)")
+        #expect(text.err.hasSuffix(unavailable + "\n"), "\(text.err)")
+        let quiet = try await exec("fail-then-ask", options, format: "quiet")
+        #expect(quiet.err == "[acpx] error: PERMISSION_PROMPT_UNAVAILABLE \(unavailable)\n")
+    }
+
     /// Quiet output shows what the agent said before its prompt failed, then the error.
     @Test(.enabled(if: mockPythonAvailable))
     func quietOutputShowsWhatCameBeforeTheFailure() async throws {

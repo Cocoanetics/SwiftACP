@@ -85,6 +85,8 @@ public actor ACPAgentConnection {
     var turnPermissionStats: [SessionId: PermissionStats] = [:]
     /// What each session's earlier turns settled (``permissionTotals(for:)``).
     var earlierPermissionStats: [SessionId: PermissionStats] = [:]
+    /// Whether each session's latest turn had needed a confirmation nobody could give when it ended.
+    var unavailableAtTurnEnd: [SessionId: Bool] = [:]
     /// Sessions whose in-flight turn this client is cancelling (`session/cancel` asked
     /// for, prompt not yet returned): the agent's requests of it are answered as
     /// cancelled, and a refusal isn't explained — the caller is ending the turn itself.
@@ -223,62 +225,6 @@ public actor ACPAgentConnection {
         Task { await rpc.close() }
     }
 
-    // MARK: - Subscriptions
-
-    /// A new stream of every `session/update` notification across all sessions.
-    /// Subscribe before prompting so no updates are missed.
-    public func updates() -> AsyncStream<SessionNotification> {
-        makeSubscription().stream
-    }
-
-    /// Like ``updates()`` but also returns a token so the caller can deliberately
-    /// end the stream (draining buffered values first) — used by one-shot helpers.
-    public func makeSubscription() -> (id: UUID, stream: AsyncStream<SessionNotification>) {
-        var capturedId = UUID()
-        let stream = AsyncStream<SessionNotification> { continuation in
-            let id = UUID()
-            capturedId = id
-            updateSinks[id] = continuation
-            continuation.onTermination = { [weak self] _ in
-                Task { await self?.removeSink(id) }
-            }
-        }
-        return (capturedId, stream)
-    }
-
-    /// Like ``makeSubscription()``, but the stream carries every ``ConnectionEvent``
-    /// — each `session/update` plus the client operations this connection reports
-    /// (a permission refusal that may end the turn) — in wire order.
-    public func makeEventSubscription() -> (id: UUID, stream: AsyncStream<ConnectionEvent>) {
-        var capturedId = UUID()
-        let stream = AsyncStream<ConnectionEvent> { continuation in
-            let id = UUID()
-            capturedId = id
-            eventSinks.add(continuation, as: id)
-            continuation.onTermination = { [weak self] _ in
-                Task { await self?.removeSink(id) }
-            }
-        }
-        return (capturedId, stream)
-    }
-
-    /// A new stream of every ``ConnectionEvent`` across all sessions. Subscribe
-    /// before prompting so no event is missed.
-    public func events() -> AsyncStream<ConnectionEvent> {
-        makeEventSubscription().stream
-    }
-
-    /// Finish a subscription's stream; the consumer still receives buffered values.
-    public func endSubscription(_ id: UUID) {
-        updateSinks[id]?.finish()
-        eventSinks.finish(id)
-    }
-
-    private func removeSink(_ id: UUID) {
-        updateSinks[id] = nil
-        eventSinks.remove(id)
-    }
-
     // MARK: - Agent methods
 
     public func initialize(
@@ -375,13 +321,18 @@ public actor ACPAgentConnection {
         // cancelled either (the bookkeeping acpx does around its active prompt).
         cancellingSessionIds.remove(request.sessionId)
         promptingSessionIds.insert(request.sessionId)
-        earlierPermissionStats[request.sessionId, default: PermissionStats()]
-            .add(turnPermissionStats[request.sessionId] ?? PermissionStats())
+        // One noted since the last turn ended — as in a retry's pause — fails this one, as acpx
+        // keeps it for the next prompt to throw (`notePromptPermissionFailure`).
+        let previous = turnPermissionStats[request.sessionId] ?? PermissionStats()
+        earlierPermissionStats[request.sessionId, default: PermissionStats()].add(previous)
         turnPermissionStats[request.sessionId] = PermissionStats()
+        turnPermissionStats[request.sessionId]?.promptUnavailable =
+            previous.promptUnavailable && unavailableAtTurnEnd[request.sessionId] != true
         defer {
             promptingSessionIds.remove(request.sessionId)
             cancellingSessionIds.remove(request.sessionId)
             cancelSends[request.sessionId] = nil
+            unavailableAtTurnEnd[request.sessionId] = turnPermissionStats[request.sessionId]?.promptUnavailable
         }
         // The turn is not over until the agent's requests from it are answered: one it
         // sent without awaiting would otherwise be counted against the next turn.

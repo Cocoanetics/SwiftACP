@@ -12,7 +12,8 @@
   first sends an update, reads `<cwd>/notes.txt`, reads `notes.txt` (a path the client
   refuses), or asks permission to edit — then fails as `fail-once` does.
 - `fail-then-update`: fails as `fail-once` does, and sends an update 300 ms later —
-  inside the pause before a retry. `fail-then-ask` asks permission to edit then instead.
+  inside the pause before a retry. `fail-then-ask` asks permission to edit then instead,
+  and `fail-then-write` writes `<cwd>/out.txt`.
 - `fail-auth-once`: its first prompt fails with -32000 (authentication required).
 - `fail-after-updates`: sends twenty updates, then fails as `fail-once` does.
   `burst-then-hang` sends them and never answers.
@@ -105,6 +106,10 @@ def prompt(req_id, session_id):
             elif MODE == "fail-then-ask":
                 time.sleep(0.3)
                 ask_to_edit(session_id)
+            elif MODE == "fail-then-write":
+                time.sleep(0.3)
+                ask("fs/write_text_file", {"sessionId": session_id, "path": os.path.join(cwd, "out.txt"),
+                                           "content": "x"})
             return
     update(session_id, "hello")
     send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
