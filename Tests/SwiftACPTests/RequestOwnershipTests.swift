@@ -1,3 +1,4 @@
+#if os(macOS) || os(Linux)
 @testable import SwiftACP
 import Foundation
 import JSONFoundation
@@ -185,6 +186,58 @@ struct RequestOwnershipTests {
         await client.close()
     }
 
+    /// A write whose permission is still being asked when the prompt's answer is read is
+    /// stopped then — before the prompt's call resumes — as acpx aborts the owner at the
+    /// answer and its handlers look again once asked. It is answered `Request cancelled`,
+    /// and nothing is written.
+    @Test(.timeLimit(.minutes(1)))
+    func aWriteAskedAboutAcrossTheAnswerIsNotDone() async throws {
+        let (clientEnd, agentEnd) = LoopbackTransport.pair()
+        let answers = Answers()
+        let root = try ChildSpawnTests.workspace()
+        let write: JSONValue = .object([
+            "sessionId": .string("s"), "path": .string(root + "/out.txt"), "content": .string("x")
+        ])
+        let (prompts, promptCame) = AsyncStream<JSONRPCID>.makeStream()
+        let script = Script { prompt in
+            promptCame.yield(prompt)
+            return [.request(id: "w1", method: "fs/write_text_file", params: write)]
+        }
+        let agent = Task { try await Self.playAgent(on: agentEnd, answers: answers, script: script) }
+        defer { agent.cancel() }
+        let (asking, askingStarted) = AsyncStream<Void>.makeStream()
+        let (answerRead, answerReadNoted) = AsyncStream<Void>.makeStream()
+        var handlers = ACPClientHandlers.standard(permission: .approveAll)
+        handlers.authorizeWrite = { _ in
+            askingStarted.yield()
+            // Approved only once the prompt's answer has been read.
+            for await _ in answerRead { break }
+        }
+        // The session's directory is the workspace, where the write is let through.
+        let client = try await Self.client(clientEnd, handlers: handlers, terminals: root)
+        await client.setWireObserver { line in
+            if line.contains("\"stopReason\"") { answerReadNoted.finish() }
+        }
+        // The prompt's call resumes only once the write is answered.
+        await client.setAfterPromptAnswer { _ = await answers.wait(for: "w1") }
+
+        let turn = Task { try await client.prompt(PromptRequest(sessionId: "s", prompt: [.text("hi")])) }
+        var prompt: JSONRPCID?
+        for await id in prompts {
+            prompt = id
+            break
+        }
+        for await _ in asking { break }
+        try agentEnd.send(try Self.answer(try #require(prompt)))
+        _ = try await turn.value
+
+        let answer = await answers.wait(for: "w1")
+        guard case .errorResponse(let failure) = answer else { throw CancellationError() }
+        #expect(failure.error.code == -32800)
+        #expect(!FileManager.default.fileExists(atPath: root + "/out.txt"))
+        await client.close()
+    }
+
     /// Waiting for a command's exit is not the prompt's: a turn the agent answers while
     /// it waits ends at once, and the wait is answered when the command is done.
     @Test(.timeLimit(.minutes(1)))
@@ -287,3 +340,4 @@ private final class Flag: @unchecked Sendable {
     var isSet: Bool { lock.withLock { value } }
     func set() { lock.withLock { value = true } }
 }
+#endif

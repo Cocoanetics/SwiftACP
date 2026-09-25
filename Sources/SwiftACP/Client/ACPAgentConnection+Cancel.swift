@@ -59,8 +59,24 @@ extension ACPAgentConnection {
         let result = await withCheckedContinuation { continuation in
             let request = TurnRequest(method: method, continuation: continuation)
             turnRequests[sessionId, default: [:]][key] = request
-            request.serving = Task { request.answer(await self.handleIncomingRequest(method: method, params: params)) }
+            let serving = Task {
+                let answer = await self.handleIncomingRequest(method: method, params: params)
+                // Its prompt ended while this was served — its answer read, or its turn
+                // cancelled: acpx answers it cancelled then, and counts a question so.
+                guard Task.isCancelled else {
+                    request.answer(answer)
+                    return
+                }
+                if request.answer(Self.cancelledAnswer(to: method)), method == "session/request_permission" {
+                    self.turnPermissionStats[sessionId, default: PermissionStats()].record(.cancelled)
+                }
+            }
+            request.serving = serving
+            // The prompt's answer, once read, stops it at once — ahead of the prompt's call
+            // resuming — as acpx's `clearActivePrompt` aborts its owner.
+            requestOwnership.track(serving, ownedBy: owner)
         }
+        requestOwnership.untrack(owner)
         turnRequests[sessionId]?[key] = nil
         return result
     }
