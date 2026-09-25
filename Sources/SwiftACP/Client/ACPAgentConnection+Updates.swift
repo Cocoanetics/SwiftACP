@@ -97,8 +97,9 @@ extension ACPAgentConnection {
 
     /// Wait until every request `sessionId`'s agent has made of this client is answered —
     /// one it sends after a turn's answer, while the turn waits for its updates to go
-    /// quiet, as much as one sent before.
-    public func waitForRequestsAnswered(sessionId: SessionId) async {
+    /// quiet, as much as one sent before. Returns whether any was still open.
+    @discardableResult
+    public func waitForRequestsAnswered(sessionId: SessionId) async -> Bool {
         await inboundRequests.waitUntilIdle(sessionId)
     }
 

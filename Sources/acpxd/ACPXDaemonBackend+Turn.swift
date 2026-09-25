@@ -21,13 +21,16 @@ extension ACPXDaemonBackend {
         let response = try await entry.session.prompt(blocks)
         turns[recordId]?.prompt = nil
         turns[recordId]?.answered = true
-        let drain = TurnReplyDrain.current
-        try? await entry.agent.connection.waitForSessionUpdateDrain(
-            sessionId: entry.session.id, idleMilliseconds: drain.idleMilliseconds,
-            timeoutMilliseconds: drain.timeoutMilliseconds)
         // A request the agent made meanwhile is the turn's too: answered before the turn
         // ends — under its handlers, counted in its permissions — as one made before it.
-        await entry.agent.connection.waitForRequestsAnswered(sessionId: entry.session.id)
+        // What the agent sends once it has the answer to it is the turn's as well, so the
+        // turn ends only when its updates have gone quiet with no request left open.
+        let drain = TurnReplyDrain.current
+        repeat {
+            try? await entry.agent.connection.waitForSessionUpdateDrain(
+                sessionId: entry.session.id, idleMilliseconds: drain.idleMilliseconds,
+                timeoutMilliseconds: drain.timeoutMilliseconds)
+        } while await entry.agent.connection.waitForRequestsAnswered(sessionId: entry.session.id)
         return (response, true)
     }
 

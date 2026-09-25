@@ -237,6 +237,11 @@ def main():
         if method is None and req_id == "mock-ask":
             open(HOLD_TERMINAL, "w", encoding="utf-8").close()
             continue
+        if method is None and req_id == "mock-terminal-wait" and HOLD_AFTER_ANSWER:
+            # What an agent says once its command is done, after the turn's answer.
+            session_update(terminal_session, {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after the terminal"}})
+            continue
         if method is None and str(req_id).startswith("mock-"):
             continue
 
