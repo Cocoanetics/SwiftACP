@@ -69,7 +69,9 @@ extension ACPAgentConnection {
     private func notePermissionRefusal(
         _ params: JSONValue?, _ decision: PermissionStats.Decision, promptUnavailable: Bool = false
     ) {
-        guard let sessionId = decodedSessionId(params) else { return }
+        // One its prompt ended while this was asked has been answered cancelled, and is
+        // not counted: acpx counts a refusal only while its owner is active.
+        guard !Task.isCancelled, let sessionId = decodedSessionId(params) else { return }
         turnPermissionStats[sessionId, default: PermissionStats()].record(decision)
         if promptUnavailable { turnPermissionStats[sessionId]?.promptUnavailable = true }
     }

@@ -113,12 +113,12 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A request the agent makes after answering, while the turn waits for its updates to
-    /// go quiet, is the turn's: the turn ends once it is answered, not when the updates go
-    /// quiet — and what the agent sends once it has that answer is the turn's too. (The
-    /// terminal it holds keeps it going until the test releases it.)
+    /// A command the agent waits on after answering does not hold the turn: waiting for
+    /// its exit is not a request the prompt owns, so the turn ends once its updates go
+    /// quiet, as acpx's does (#130). The wait is answered when the command is done, and
+    /// what the agent says then comes after the turn's end.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aRequestAfterTheAnswerIsAnsweredBeforeTheTurnEnds() async throws {
+    func aCommandWaitedOnAfterTheAnswerDoesNotHoldTheTurn() async throws {
         let directory = try Self.scratchDirectory()
         let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
         defer {
@@ -131,29 +131,17 @@ extension DaemonToolsTests {
                 let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
                 let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
                 let client = CallingClient()
-                let (asked, ask) = AsyncStream<Void>.makeStream()
-                let (ends, end) = AsyncStream<Void>.makeStream()
-                client.observe { log in
-                    if let request = try? log.decoded(InboundRequest.self), request.method == "terminal/wait_for_exit",
-                       request.failure == nil { ask.yield() }
-                    if (try? log.decoded(TurnEndedEvent.self)) != nil { end.yield() }
-                }
-                let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
-                for await _ in asked { break }
-
-                // The updates go quiet 300 ms after the answer; the held request is still open.
-                let endedWhileHeld = await Self.first(of: ends, within: .seconds(1))
+                // The turn ends while the command still runs: nothing releases it before.
+                // A turn that waited for its exit would not return.
+                try await prompt(daemon, id, text: "hi", client: client)
+                let requests = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
                 Self.create(release)
-                try await turn.value
 
-                #expect(!endedWhileHeld)
-                let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
-                let reaction = client.logs.firstIndex { log in
-                    guard let note = try? log.decoded(SessionNotification.self),
-                          case .agentMessageChunk(let block) = note.update else { return false }
-                    return block.text == "after the terminal"
-                }
-                #expect(try #require(reaction) < #require(ended))
+                #expect(client.logs.contains { (try? $0.decoded(TurnEndedEvent.self)) != nil })
+                // The agent had asked for the command's exit before the turn ended.
+                #expect(client.logs.contains { log in
+                    (try? log.decoded(InboundRequest.self))?.method == "terminal/wait_for_exit"
+                }, "\(requests)")
             }
         }
     }
@@ -277,8 +265,8 @@ extension DaemonToolsTests {
 
     /// How the turn's permissions went — which decides the CLI's exit code — is read at
     /// the turn's end, not at its answer: a question the agent asks after answering, while
-    /// the turn still waits on a request it left open, counts, as acpx reads the stats for
-    /// its result once the turn is over.
+    /// the turn waits for its updates to go quiet, counts, as acpx reads the stats for its
+    /// result once the turn is over.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aPermissionAskedAfterTheAnswerCounts() async throws {
         let directory = try Self.scratchDirectory()
@@ -294,14 +282,21 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             let client = CallingClient()
-            let answers = Self.answers(to: client)
-            let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
-            for await _ in answers { break }
+            let (asked, ask) = AsyncStream<Void>.makeStream()
+            client.observe { log in
+                if let request = try? log.decoded(InboundRequest.self),
+                   request.method == "session/request_permission", request.failure == nil { ask.yield() }
+            }
+            let once = OnceFlag()
+            // Once the updates first go quiet, past the answer: the agent asks, and the turn
+            // looks only once the question has come.
+            await daemon.setAfterUpdateDrain { _ in
+                guard once.claim() else { return }
+                Self.create(gate)
+                for await _ in asked { break }
+            }
 
-            // The agent asks once its gate is there — after the answer went out — and then
-            // lets its terminal end.
-            Self.create(gate)
-            try await turn.value
+            try await prompt(daemon, id, text: "hi", client: client)
 
             let ended = try #require(client.logs.lazy.compactMap { try? $0.decoded(TurnEndedEvent.self) }.first)
             #expect(ended.permissions?.requested == 1)

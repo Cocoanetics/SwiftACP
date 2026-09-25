@@ -34,22 +34,27 @@ extension ACPAgentConnection {
         try await rpc.sendNotification(method: "session/cancel", params: params)
     }
 
-    /// The agent's requests a turn's cancel answers — acpx's delegated requests.
-    static let turnRequestMethods: Set<String> =
-        terminalMethods.union(["fs/read_text_file", "fs/write_text_file", "session/request_permission"])
-
-    /// Serve an agent's request, unless it belongs to a turn being cancelled: acpx binds
-    /// it to the prompt in flight (`captureDelegatedRequestOwner`). One arriving once the
-    /// turn is cancelled is answered so without being served. One still being served
-    /// when the cancel comes is answered so at once — a permission question then counts
+    /// Serve an agent's request, unless the prompt it belongs to is over: acpx binds a
+    /// permission question, a file request and starting a command to the prompt in
+    /// flight when it was read (``RequestOwnership``), and ends them with it — at its
+    /// answer, and at a cancel. One whose prompt was answered or cancelled before it is
+    /// served is answered so without being served, and not counted. One still being
+    /// served when that comes is answered so at once — a permission question then counts
     /// as cancelled, as `finishPermissionRequest` counts it — and what serves it is
-    /// cancelled.
+    /// cancelled. The rest of the terminal requests, and those read with no prompt in
+    /// flight, are served as they come.
     func servingUnlessCancelled(
         _ method: String, _ params: JSONValue?, sessionId: SessionId?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
-        guard let sessionId, Self.turnRequestMethods.contains(method), promptingSessionIds.contains(sessionId)
-        else { return await handleIncomingRequest(method: method, params: params) }
-        if cancellingSessionIds.contains(sessionId) { return Self.cancelledAnswer(to: method) }
+        guard RequestOwnership.ownedMethods.contains(method) else {
+            return await handleIncomingRequest(method: method, params: params)
+        }
+        guard let owner = requestOwnership.claim(method, params), let sessionId else {
+            return await handleIncomingRequest(method: method, params: params)
+        }
+        if requestOwnership.isAnswered(owner) || cancellingSessionIds.contains(sessionId) {
+            return Self.cancelledAnswer(to: method)
+        }
         let key = UUID()
         let result = await withCheckedContinuation { continuation in
             let request = TurnRequest(method: method, continuation: continuation)
@@ -60,7 +65,9 @@ extension ACPAgentConnection {
         return result
     }
 
-    private func answerTurnRequestsCancelled(_ sessionId: SessionId) {
+    /// Answer `sessionId`'s owned requests still being served as cancelled, and stop
+    /// serving them.
+    func answerTurnRequestsCancelled(_ sessionId: SessionId) {
         for request in (turnRequests.removeValue(forKey: sessionId) ?? [:]).values {
             let answered = request.answer(Self.cancelledAnswer(to: request.method))
             if answered, request.method == "session/request_permission" {
