@@ -332,3 +332,18 @@ extension ACPXDaemonBackend {
 }
 
 private let reconnectLog = Logger(label: "com.cocoanetics.acpx.acpxd.reconnect")
+
+/// The changes connecting makes to a record, kept to apply to the one a caller goes on
+/// with rather than written at once.
+final class RecordChanges: @unchecked Sendable {
+    private let lock = NSLock()
+    private var changes: [ACPXDaemonBackend.RecordChange] = []
+
+    func add(_ change: @escaping ACPXDaemonBackend.RecordChange) {
+        lock.withLock { changes.append(change) }
+    }
+
+    func apply(to record: inout SessionRecord) {
+        for change in lock.withLock({ changes }) { change(&record) }
+    }
+}

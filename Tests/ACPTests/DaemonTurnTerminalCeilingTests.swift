@@ -39,7 +39,8 @@ extension DaemonToolsTests {
     }
 
     /// So does a control's caller: the cap applies to the agent before the control goes
-    /// out, as to one reconnected for it.
+    /// out, as to one reconnected for it — here the agent a prompt's owner holds, which a
+    /// control keeps (#145).
     @Test(.enabled(if: mockPythonAvailable))
     func aControlCapsTheAgentsTerminalsByItsCallersCeiling() async throws {
         let log = NSTemporaryDirectory() + "terminal-log-\(UUID().uuidString)"
@@ -48,11 +49,13 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            try await prompt(daemon, id, text: "hi", client: CallingClient())
             _ = try await daemon.setMode(sessionId: id, modeId: "plan", terminalOutputCeiling: 4)
             let manager = try #require(await daemon.live[id]?.agent.terminals as? TerminalManager)
             #expect(await manager.outputCeiling == 4)
             _ = try await daemon.setMode(sessionId: id, modeId: "plan", terminalOutputCeiling: 0)
             #expect(await manager.outputCeiling == nil)
+            await daemon.releaseAll()
         }
     }
 
