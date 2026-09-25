@@ -53,12 +53,12 @@ extension ACPAgentConnection {
         } catch let error as JSONRPCErrorBody {
             return .failure(error)
         } catch let error as FileSystemPermissionError {
-            if let sessionId = decodedSessionId(params) {
-                turnPermissionStats[sessionId, default: PermissionStats()]
-                    .record(error == .promptUnavailable ? .cancelled : .denied)
-                if error == .promptUnavailable {
-                    turnPermissionStats[sessionId]?.promptUnavailable = true
-                }
+            // One its prompt ended while this was asked has been answered cancelled, and
+            // is not counted: acpx counts a refusal only while its owner is active.
+            if !Task.isCancelled, let sessionId = decodedSessionId(params) {
+                let unavailable = error == .promptUnavailable
+                note(PermissionTally.Note(decision: unavailable ? .cancelled : .denied, promptUnavailable: unavailable),
+                     in: sessionId)
             }
             return .failure(FileSystemContainment.refused(error.description))
         } catch {

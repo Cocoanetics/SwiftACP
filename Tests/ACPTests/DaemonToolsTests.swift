@@ -305,7 +305,9 @@ import Testing
             _ = try await daemon.setMode(sessionId: id, modeId: "auto")
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpx?.desiredModeId == "auto")
-            #expect(record.acpx?.currentModeId == "auto")
+            // The mock echoes the mode as a `current_mode_update` while it is set, and
+            // acpx records that nowhere: its current mode comes from a turn's updates.
+            #expect(record.acpx?.currentModeId == nil)
         }
     }
 
