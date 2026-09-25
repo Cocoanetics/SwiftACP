@@ -35,9 +35,10 @@ public enum TurnFailure {
     }
 
     /// acpx's `formatErrorMessage`: an agent's error by its message, anything else by
-    /// its description.
+    /// its description — a connection that closed in the words of acpx's ACP SDK.
     public static func message(of error: Error) -> String {
-        (error as? JSONRPCErrorBody)?.message ?? error.localizedDescription
+        if (error as? JSONRPCPeerError) == .closed { return "ACP connection closed" }
+        return (error as? JSONRPCErrorBody)?.message ?? error.localizedDescription
     }
 
     /// acpx's `extractAcpError` on the failure itself: the agent's error response, when
