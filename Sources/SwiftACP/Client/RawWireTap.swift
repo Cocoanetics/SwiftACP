@@ -109,9 +109,11 @@ public struct TappedFraming<Base: MessageFraming>: MessageFraming {
         return base.frame(body)
     }
 
-    public mutating func push(_ bytes: Data) -> [Data] {
-        let bodies = base.push(bytes)
-        for body in bodies { tap.observe(.inbound, body) }
-        return bodies
+    public mutating func push(_ bytes: Data, emit: (Data) -> Void) throws {
+        let tap = tap
+        try base.push(bytes) { body in
+            tap.observe(.inbound, body)
+            emit(body)
+        }
     }
 }
