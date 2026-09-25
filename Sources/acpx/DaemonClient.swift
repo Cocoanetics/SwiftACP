@@ -131,10 +131,18 @@ enum DaemonClient {
     /// A direct TCP endpoint for the running daemon, read from its lock file, or nil
     /// if no live daemon has recorded a port yet.
     static func liveEndpoint() -> MCPServerTcpConfig? {
-        guard let holder = DaemonLock().currentHolder(),
-            DaemonLock.isProcessAlive(holder.pid),
-            let port = holder.port, let tcpPort = UInt16(exactly: port)
-        else { return nil }
+        liveHolder().flatMap(endpoint)
+    }
+
+    /// The daemon holding the lock, when its process is alive.
+    static func liveHolder() -> DaemonLock.Holder? {
+        guard let holder = DaemonLock().currentHolder(), DaemonLock.isProcessAlive(holder.pid) else { return nil }
+        return holder
+    }
+
+    /// Where `holder` listens, once it has recorded a port.
+    static func endpoint(of holder: DaemonLock.Holder) -> MCPServerTcpConfig? {
+        guard let port = holder.port, let tcpPort = UInt16(exactly: port) else { return nil }
         return MCPServerTcpConfig(host: "127.0.0.1", port: tcpPort)
     }
 

@@ -68,14 +68,21 @@ extension DaemonToolsTests {
         }
     }
 
-    /// With no daemon, nothing holds a session. A daemon that holds the lock but does not
-    /// answer — or stops answering once connected — is taken as acpx takes an owner whose
-    /// socket cannot be reached; one from before it could say cannot.
+    /// With no daemon, or a lock whose daemon is gone, nothing holds a session. A daemon
+    /// that holds the lock but does not answer — with no port recorded yet, at its port,
+    /// or once connected — is taken as acpx takes an owner whose socket cannot be reached;
+    /// one from before it could say cannot.
     @Test func withoutADaemonThatAnswers() async throws {
         try await withIsolatedStore {
             let none = await DaemonClient.sessionHold(sessionId: "s")
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let gone = DaemonLock.Holder(pid: 999_999, port: 1, startedAt: "2026-09-25T00:00:00.000Z")
+            try JSONEncoder().encode(gone).write(to: ACPXPaths.daemonLockPath)
+            let stale = await DaemonClient.sessionHold(sessionId: "s")
+            try FileManager.default.removeItem(at: ACPXPaths.daemonLockPath)
             let lock = DaemonLock()
             #expect(try lock.acquire())
+            let starting = await DaemonClient.sessionHold(sessionId: "s")
             // Nothing listens on port 1.
             lock.update(port: 1)
             let silent = await DaemonClient.sessionHold(sessionId: "s")
@@ -88,6 +95,8 @@ extension DaemonToolsTests {
             let dropped = await DaemonClient.sessionHold(on: legacy, sessionId: "s")
 
             #expect(none == .notHeld)
+            #expect(stale == .notHeld)
+            #expect(starting == .unreachable)
             #expect(silent == .unreachable)
             #expect(older == .unknown)
             #expect(dropped == .unreachable)

@@ -21,10 +21,14 @@ extension DaemonClient {
         case unknown
     }
 
-    /// Ask the running daemon whether it holds `sessionId`. Never starts one.
+    /// Ask the running daemon whether it holds `sessionId`. Never starts one. A daemon
+    /// holding the lock with no port recorded — starting, or with a lock that says none —
+    /// is one that does not answer, as one that cannot be reached at its port is.
     static func sessionHold(sessionId: String) async -> SessionHold {
-        guard let endpoint = liveEndpoint() else { return .notHeld }
-        guard let proxy = await tryConnect(endpoint, configure: { _ in }) else { return .unreachable }
+        guard let holder = liveHolder() else { return .notHeld }
+        guard let endpoint = endpoint(of: holder),
+              let proxy = await tryConnect(endpoint, configure: { _ in })
+        else { return .unreachable }
         let hold = await sessionHold(on: proxy, sessionId: sessionId)
         await proxy.disconnect()
         return hold
