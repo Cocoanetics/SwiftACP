@@ -96,10 +96,13 @@ extension ACPXDaemonBackend {
             await settle(deadline, of: recordId)
             // Connecting can fail after it moved the record — the daemon began stopping
             // before the agent was held — and what it connected is saved all the same, as
-            // acpx saves the record its control connected on the way out.
-            if !changes.isEmpty {
+            // acpx saves the record its control connected on the way out. A session its owner
+            // holds is saved as used now, however connecting went, as the owner's
+            // `checkpoint` saves a control that did not complete.
+            if !changes.isEmpty || !direct {
                 var moved = current
                 changes.apply(to: &moved)
+                if !direct { moved.lastUsedAt = nowISO() }
                 do {
                     try SessionStore.writeRecord(moved)
                 } catch let writeError {
