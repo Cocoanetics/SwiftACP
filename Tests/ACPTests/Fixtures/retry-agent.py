@@ -22,6 +22,7 @@
   `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
   after `RETRY_AGENT_DELAY_MS` (400 by default).
 - `usage-meta`: reports its usage in a `usage_update`'s `_meta.usage`, then answers.
+- `meta-answer`: answers with a `_meta` of `{"z": 1, "a": "\u00e9"}`.
 
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
@@ -153,6 +154,9 @@ def prompt(req_id, session_id):
             "sessionUpdate": "usage_update", "used": 5, "size": 100,
             "_meta": {"usage": {"input_tokens": 7, "outputTokens": 8, "total_tokens": 15}}}}})
     update(session_id, "hello")
+    if MODE == "meta-answer":
+        meta = {"z": 1, "a": "\u00e9"}
+        return send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn", "_meta": meta}})
     send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
 
 

@@ -34,6 +34,14 @@ public enum TurnFailure {
             retryable: meta?.retryable)
     }
 
+    /// acpx's `failedWatchResult`: the failure as the turn's journal records it —
+    /// normalized as for the queue owner's error line, without the ACP error itself.
+    public static func journalResult(for error: Error) -> SessionJournal.TurnResult {
+        let event = event(for: error, shown: nil, sessionId: "")
+        return .failed(
+            message: event.message, code: event.outputCode, detailCode: event.detailCode, retryable: event.retryable)
+    }
+
     /// acpx's `formatErrorMessage`: an agent's error by its message, anything else by
     /// its description — a connection that closed in the words of acpx's ACP SDK.
     public static func message(of error: Error) -> String {

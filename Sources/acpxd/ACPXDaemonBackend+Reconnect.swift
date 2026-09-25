@@ -41,7 +41,8 @@ extension ACPXDaemonBackend {
     ///
     /// A turn also passes `onConnectOutput`, which gets what connecting a new agent put
     /// on the wire once it is connected — or once connecting it failed (see
-    /// ``ConnectOutputBuffer``). An agent already held has nothing to show.
+    /// ``ConnectOutputBuffer``) — and `onConnectWire`, which sees each message of it as it
+    /// crosses the wire, none left out. An agent already held has nothing to show.
     ///
     /// The caller's `settings` answer what the agent asks, cap its terminals' output, and
     /// bound each step of connecting (``CallerSettings``). The answers and the cap apply
@@ -61,16 +62,18 @@ extension ACPXDaemonBackend {
         control: Bool = false, settings: CallerSettings = CallerSettings(),
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
         turnAcpx: SessionAcpxState? = nil,
-        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
+        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil,
+        onConnectWire: RawWireTap.Observer? = nil
     ) async throws -> Live {
         try await connect(
             recordId: recordId, agentCommand: agentCommand, cwd: rawCwd, mcpServers: mcpServers,
             control: control, settings: settings, replacing: replacing, requestedModel: requestedModel,
-            turnAcpx: turnAcpx, onRecordChange: onRecordChange, onConnectOutput: onConnectOutput
+            turnAcpx: turnAcpx, onRecordChange: onRecordChange, onConnectOutput: onConnectOutput,
+            onConnectWire: onConnectWire
         ).entry
     }
 
-    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:settings:replacing:requestedModel:turnAcpx:onRecordChange:onConnectOutput:)``,
+    /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:settings:replacing:requestedModel:turnAcpx:onRecordChange:onConnectOutput:onConnectWire:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
     /// A session already held, or one a new session replaced, was not.
@@ -79,7 +82,8 @@ extension ACPXDaemonBackend {
         control: Bool = false, settings: CallerSettings = CallerSettings(),
         replacing: ReconnectReplay.Replacing? = nil, requestedModel: String? = nil,
         turnAcpx: SessionAcpxState? = nil,
-        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil
+        onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil,
+        onConnectWire: RawWireTap.Observer? = nil
     ) async throws -> (entry: Live, resumed: Bool) {
         guard !stopping else { throw DaemonError.stopping }
         let (handlers, terminalOutputCeiling) = (settings.handlers, settings.terminalOutputCeiling)
@@ -107,6 +111,7 @@ extension ACPXDaemonBackend {
         let launch = config.agentLaunch(for: agentCommand)
         let command = launch.command
         let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
+        let connectTap = Self.both(connectOutput?.observer, onConnectWire)
         // What connecting shows goes out once it is over, however it went: acpx flushes
         // its buffer when connecting fails too, so the agent's refusal is on screen.
         let showConnectOutput = { (fellBack: Bool) in
@@ -130,7 +135,7 @@ extension ACPXDaemonBackend {
                             authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
                         authCredentials: config.auth, authPolicy: config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
-                        onRawWire: connectOutput?.observer)
+                        onRawWire: connectTap)
                 }, discardingLate: { await $0.close() })
             }
         } catch {
@@ -250,6 +255,16 @@ extension ACPXDaemonBackend {
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
     typealias ConnectOutputHandler = @Sendable ([WireMessageEvent]) async -> Void
+
+    /// One observer that hands each message to `first`, then `second`, of those given.
+    private static func both(_ first: RawWireTap.Observer?, _ second: RawWireTap.Observer?) -> RawWireTap.Observer? {
+        guard let first else { return second }
+        guard let second else { return first }
+        return { direction, body in
+            first(direction, body)
+            second(direction, body)
+        }
+    }
 
     /// A change a reconnect makes to the record, and where a turn in flight takes it.
     typealias RecordChange = @Sendable (inout SessionRecord) -> Void

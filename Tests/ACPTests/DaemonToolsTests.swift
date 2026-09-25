@@ -120,13 +120,14 @@ import Testing
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             _ = try await daemon.runPrompt(sessionId: id, text: "ping")
 
-            // The raw JSON-RPC wire was logged to <id>.stream.ndjson.
+            // The raw JSON-RPC wire was logged to <id>.stream.ndjson, with the journal's
+            // records around the turn.
             let streamPath = ACPXPaths.sessionStreamPath(id)
             #expect(FileManager.default.fileExists(atPath: streamPath.path))
             let lines = try String(contentsOf: streamPath, encoding: .utf8)
                 .split(separator: "\n").map(String.init)
             #expect(!lines.isEmpty)
-            #expect(lines.allSatisfy { $0.contains("\"jsonrpc\"") })
+            #expect(lines.allSatisfy { $0.contains("\"jsonrpc\"") || $0.contains("acpx.session.journal.v1") })
             #expect(lines.contains { $0.contains("session/prompt") })
             #expect(lines.contains { $0.contains("session/update") })
 
