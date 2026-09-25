@@ -22,6 +22,7 @@
   `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
   after `RETRY_AGENT_DELAY_MS` (400 by default).
 - `meta-answer`: answers with a `_meta` of `{"z": 1, "a": "\u00e9"}`.
+- `echo-usage`: echoes the prompt back as a `user_message_chunk`, then answers with its usage.
 
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
@@ -148,7 +149,13 @@ def prompt(req_id, session_id):
                 ask("fs/write_text_file", {"sessionId": session_id, "path": os.path.join(cwd, "out.txt"),
                                            "content": "x"})
             return
+    if MODE == "echo-usage":
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
+            "sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "hi"}}}})
     update(session_id, "hello")
+    if MODE == "echo-usage":
+        usage = {"inputTokens": 11, "outputTokens": 22, "totalTokens": 33}
+        return send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn", "usage": usage}})
     if MODE == "meta-answer":
         meta = {"z": 1, "a": "\u00e9"}
         return send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn", "_meta": meta}})
