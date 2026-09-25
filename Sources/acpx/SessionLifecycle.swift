@@ -15,15 +15,19 @@ enum SessionLifecycle {
 
         let replaced = SessionStore.findSession(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)
+        // The new session first, then the one it replaces closed, as acpx 0.19.3 has it
+        // (#778, for our openclaw/acpx#767): a creation that fails leaves that one open.
+        let record = try createSession(
+            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
         if let replaced {
-            try softClose(replaced)
+            // A new session under the replaced one's id is that record, made anew — the
+            // agent gave the same id — so closing it would close the new session. acpx
+            // 0.19.3 spares only a resume of it (openclaw/acpx#805).
+            if record.acpxRecordId != replaced.acpxRecordId { _ = try close(replaced) }
             if flags.verbose {
                 Console.errLine("[acpx] soft-closed prior session: \(replaced.acpxRecordId)")
             }
         }
-
-        let record = try createSession(
-            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         if flags.verbose {
             let scope = name.map { "named session \"\($0)\"" } ?? "cwd session"
@@ -144,12 +148,24 @@ enum SessionLifecycle {
         return any ? options : nil
     }
 
-    private static func softClose(_ record: SessionRecord) throws {
-        var record = record
-        record.pid = nil
-        record.closed = true
-        record.closedAt = nowISO()
-        try SessionStore.writeRecord(record)
+    /// acpx's `closeSession`, as `sessions close` and `sessions new` close a session: a
+    /// running daemon drops its live agent and closes the record itself; with none
+    /// reachable nothing is held, and the record is marked closed here. Returns the
+    /// record as closed.
+    static func close(_ record: SessionRecord) throws -> SessionRecord {
+        let acpSessionId = record.acpSessionId
+        let closedByDaemon = try runBlocking {
+            await DaemonClient.closeSession(sessionId: acpSessionId)
+        }
+        if closedByDaemon, let persisted = SessionStore.loadRecord(record.acpxRecordId) {
+            return persisted
+        }
+        var closed = record
+        closed.pid = nil
+        closed.closed = true
+        closed.closedAt = nowISO()
+        try SessionStore.writeRecord(closed)
+        return closed
     }
 
     static func permissionPolicy(_ flags: GlobalFlags, config: ResolvedAcpxConfig) throws -> PermissionPolicy {
