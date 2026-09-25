@@ -48,6 +48,8 @@ struct AcpxdCommand: AsyncParsableCommand {
         signal(SIGPIPE, SIG_IGN)
         bootstrapACPXLogging()
         let log = Logger(label: "com.cocoanetics.acpx.acpxd")
+        // Held from before the lock is taken until acpxd has let it go (``StopSignals``).
+        let stopSignals = StopSignals(StopSignals.daemon)
 
         // Singleton guard: only one acpxd may own the live sessions + records at a
         // time. If another live daemon already holds the lock, exit cleanly — the
@@ -111,14 +113,9 @@ struct AcpxdCommand: AsyncParsableCommand {
         }
         defer { portRecorder.cancel() }
 
-        // A ServiceGroup owns the run loop for all transports and traps SIGINT/SIGTERM
-        // for an ordered graceful shutdown.
-        let group = ServiceGroup(
-            configuration: .init(
-                services: services,
-                gracefulShutdownSignals: [.sigterm, .sigint],
-                logger: log))
-        try await group.run()
+        // A ServiceGroup owns the run loop for all transports, and SIGINT, SIGTERM and
+        // SIGHUP stop it in order, gracefully.
+        try await ServiceGroup.run(services, stoppingOn: stopSignals, logger: log)
         #else
         throw ValidationError("""
             acpxd was built without the 'Server' trait; rebuild SwiftACP with the \
