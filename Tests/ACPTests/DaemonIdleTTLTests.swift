@@ -63,6 +63,17 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A TTL longer than a timer takes is refused, as acpx's CLI refuses `--ttl` past it.
+    @Test func aTTLNoTimerTakesIsRefused() async throws {
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+        await #expect {
+            try await daemon.runPrompt(sessionId: "any", text: "hi", limits: PromptLimits(ttlMs: Int.max))
+        } throws: { error in
+            guard case .invalidTTL(Int.max)? = error as? DaemonError else { return false }
+            return true
+        }
+    }
+
     /// acpx's `normalizeQueueOwnerTtlMs`: five minutes unless given, and none for `0`.
     @Test func aTTLIsTakenAsAcpxTakesIt() {
         #expect(ACPXDaemonBackend.ownerTTL(nil) == DEFAULT_TTL_MS)

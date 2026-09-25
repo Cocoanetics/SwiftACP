@@ -54,6 +54,8 @@ extension ACPXDaemonBackend {
         guard retries >= 0 else { throw DaemonError.invalidPromptRetries(retries) }
         let timeout = limits?.timeoutMs.flatMap { $0 > 0 ? $0 : nil }
         if let timeout, timeout > JavaScriptNumber.maxTimerDelayMs { throw DaemonError.invalidTimeout(timeout) }
+        // So is a TTL, as acpx's CLI refuses `--ttl` past it.
+        if let ttl = limits?.ttlMs, ttl > JavaScriptNumber.maxTimerDelayMs { throw DaemonError.invalidTTL(ttl) }
         // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(

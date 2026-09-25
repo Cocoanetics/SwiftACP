@@ -471,7 +471,7 @@ public struct PromptLimits: Codable, Hashable, Sendable {
     /// the agent — its launch, getting the session back or starting one, each selection
     /// put back — putting the turn's model on the session, and each attempt at the
     /// prompt. A step that runs over fails the turn with `TIMEOUT`. Omitted, or not
-    /// positive, no step has a limit.
+    /// positive, no step has a limit; not past the maximum timer delay (2,147,483,647).
     public var timeoutMs: Int?
     /// How many more times the prompt is sent when it fails the way a passing fault does
     /// (the agent's `-32603` or `-32700`) and the turn has had no effect yet — each after
@@ -481,7 +481,7 @@ public struct PromptLimits: Codable, Hashable, Sendable {
     /// milliseconds, when this turn is the one that starts holding it. With no prompt for
     /// that long its agent is closed, as acpx's queue owner stops after its TTL; a
     /// session held already keeps the time it was started with. `0` keeps it; omitted
-    /// (or negative), five minutes.
+    /// (or negative), five minutes; not past the maximum timer delay.
     public var ttlMs: Int?
 
     public init(timeoutMs: Int? = nil, promptRetries: Int? = nil, ttlMs: Int? = nil) {
