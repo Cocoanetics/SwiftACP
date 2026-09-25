@@ -21,18 +21,20 @@ enum TopLevelFailure {
         let (outputCode, detailCode, message) = (failure.outputCode, failure.detailCode, failure.message)
         switch requestedFormat(arguments) {
         case "json":
+            // An agent's error keeps its own code and message, its data merged in.
             out(JSONErrorLine.make(
                 outputCode: outputCode, detailCode: detailCode, origin: failure.origin, message: message,
-                sessionId: "unknown") + "\n")
+                sessionId: "unknown", acp: failure.acp) + "\n")
         case "quiet":
+            // acpx's quiet formatter: the agent's `data.details`, when it gave some.
             let qualifier = detailCode.map { "\(outputCode) \($0)" } ?? outputCode
-            let oneLine = message.replacingOccurrences(of: "\r\n", with: " ")
+            let oneLine = (failure.acp?.details ?? message).replacingOccurrences(of: "\r\n", with: " ")
                 .replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
             err("[acpx] error: \(qualifier) \(oneLine)")
         default:
             err(message)
             for hint in remediationHints(
-                code: outputCode, origin: failure.origin, detailCode: detailCode, message: message, acpCode: nil) {
+                code: outputCode, origin: failure.origin, detailCode: detailCode, message: message, acp: failure.acp) {
                 err(hint)
             }
         }
@@ -45,10 +47,14 @@ enum TopLevelFailure {
         var detailCode: String?
         var origin = "cli"
         var message: String
+        /// The agent's error the failure is, when it is one (acpx's `extractAcpError`).
+        var acp: AcpErrorPayload?
         var commandExitCode: Int32?
 
         init(_ error: Error) {
-            message = error.localizedDescription
+            // `formatErrorMessage`: an agent's error by its message.
+            message = TurnFailure.message(of: error)
+            acp = TurnFailure.payload(of: error)
             switch error {
             case let noSession as NoSessionError:
                 outputCode = "NO_SESSION"
@@ -69,6 +75,8 @@ enum TopLevelFailure {
             }
             // `resolveOutputErrorCode`: a runtime failure saying the session is gone.
             if outputCode == "RUNTIME", ReconnectFallback.isResourceNotFound(error) { outputCode = "NO_SESSION" }
+            // `resolveDetailCode`: an agent's error saying it needs credentials.
+            if detailCode == nil, acp?.saysAuthRequired == true { detailCode = "AUTH_REQUIRED" }
         }
 
         var processExitCode: Int32 { commandExitCode ?? exitCode(forOutputCode: outputCode) }

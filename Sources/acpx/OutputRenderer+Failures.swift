@@ -78,8 +78,8 @@ extension OutputRenderer {
         case .text:
             guard !event.shown else { return }
             renderError(
-                code: event.outputCode, event.message, acpCode: acp.flatMap { Int(exactly: $0.code) },
-                detailCode: event.detailCode, origin: event.origin ?? "runtime")
+                code: event.outputCode, event.message, acp: acp, detailCode: event.detailCode,
+                origin: event.origin ?? "runtime")
         case .quiet:
             lock.lock()
             defer { lock.unlock() }

@@ -40,9 +40,10 @@ public enum TurnFailure {
         (error as? JSONRPCErrorBody)?.message ?? error.localizedDescription
     }
 
-    /// acpx's `extractAcpError` on the failure itself: the agent's error response.
-    static func payload(of error: Error) -> AcpErrorPayload? {
-        guard let rpc = error as? JSONRPCErrorBody else { return nil }
+    /// acpx's `extractAcpError` on the failure itself: the agent's error response, when
+    /// it has a message.
+    public static func payload(of error: Error) -> AcpErrorPayload? {
+        guard let rpc = error as? JSONRPCErrorBody, !rpc.message.isEmpty else { return nil }
         return AcpErrorPayload(code: Double(rpc.code), message: rpc.message, data: rpc.data.map(WireJSON.init))
     }
 }
@@ -78,6 +79,14 @@ extension AgentLaunchError: OutputErrorMeta {
 extension AgentDisconnectedError: OutputErrorMeta {
     public var outputCode: String? { "RUNTIME" }
     public var detailCode: String? { "AGENT_DISCONNECTED" }
+    public var origin: String? { "acp" }
+}
+
+/// acpx's `AuthPolicyError`: no credential for any auth method the agent advertised,
+/// under `--auth-policy fail`.
+extension AuthPolicyError: OutputErrorMeta {
+    public var outputCode: String? { "RUNTIME" }
+    public var detailCode: String? { "AUTH_REQUIRED" }
     public var origin: String? { "acp" }
 }
 

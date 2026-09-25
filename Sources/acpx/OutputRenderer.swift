@@ -264,7 +264,8 @@ final class OutputRenderer: @unchecked Sendable {
     /// JSON-RPC error response. The raw message is also surfaced on stderr by the
     /// command's `CLIError` handler.
     func renderError(
-        code: String, _ message: String, acpCode: Int? = nil, detailCode: String? = nil, origin: String = "acp"
+        code: String, _ message: String, acp: AcpErrorPayload? = nil, detailCode: String? = nil,
+        origin: String = "acp"
     ) {
         lock.lock()
         defer { lock.unlock() }
@@ -273,8 +274,7 @@ final class OutputRenderer: @unchecked Sendable {
         beginSection()
         writeLine(ansi("[error] \(code): \(message)", "31"))
         // The formatter renders a wire error as acp-origin.
-        for hint in remediationHints(
-            code: code, origin: origin, detailCode: detailCode, message: message, acpCode: acpCode) {
+        for hint in remediationHints(code: code, origin: origin, detailCode: detailCode, message: message, acp: acp) {
             writeLine(dim(hint))
         }
     }
