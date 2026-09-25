@@ -163,6 +163,20 @@ struct HelpTests {
         #expect(arguments == ["help"])
     }
 
+    /// An agent the config names `help` is a command of its own: acpx 0.19.3 lists it and
+    /// the help command both, as commander lists a `helpCommand(true)` whatever else there
+    /// is, and `acpx help …` goes to the agent, as commander tries a command first.
+    @Test func anAgentNamedHelpComesBeforeTheHelpCommand() throws {
+        let rows = HelpCatalog.root(cwd: "/tmp", configAgents: ["help"]).subcommands.map(\.term)
+        #expect(rows.filter { $0.hasPrefix("help ") } == ["help [options] [prompt...]", "help [command]"])
+        let root = CommandTree.acpx(agents: AgentRegistry.orderedNames + ["help"])
+        guard case .run(let levels, _) = try Commander.parse(["help", "sessions"], root: root) else {
+            Issue.record("`acpx help sessions` did not go to the agent named help")
+            return
+        }
+        #expect(levels.map(\.spec.name) == ["acpx", "help", "sessions"])
+    }
+
     @Test func boxWrapGreedilyBreaksAtWordBoundaries() {
         // width 48 fills exactly to "another" (48 chars) before breaking.
         let wrapped = HelpRenderer.boxWrap(
