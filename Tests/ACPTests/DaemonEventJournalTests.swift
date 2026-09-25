@@ -41,6 +41,7 @@ extension DaemonToolsTests {
                 "segment", "turn_started", "initialize", "result", "session/new", "result",
                 "session/prompt", "session/update", "result", "turn_result"
             ])
+            try #require(lines.count == 10)
             // Keyed by the turn's request id — a UUID, as acpx's — which the record keeps.
             let record = try #require(SessionStore.loadRecord(session.id))
             let requestId = try #require(record.lastRequestId)
@@ -141,6 +142,7 @@ extension DaemonToolsTests {
             try handle.write(contentsOf: Data("not json\n".utf8))
             try handle.close()
 
+            let first = try #require(SessionStore.loadRecord(session.id)?.lastRequestId)
             let client = CallingClient()
             let corrupt = SessionJournalError(
                 code: "WATCH_JOURNAL_CORRUPT", message: "Invalid complete line in session journal")
@@ -148,6 +150,9 @@ extension DaemonToolsTests {
                 try await limitedPrompt(daemon, session.id, limits: PromptLimits(), client: client)
             }
             #expect(client.failure?.message == "Invalid complete line in session journal")
+            // The turn's request id is kept even so, as acpx keeps it before opening the journal.
+            let kept = try #require(SessionStore.loadRecord(session.id)?.lastRequestId)
+            #expect(kept != first)
             #expect(session.prompts == 1)
             #expect(await daemon.heldConnection(session.id) != nil)
             await daemon.releaseAll()
