@@ -34,7 +34,7 @@ extension ACPXDaemonBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none —
     ///     omitted, the daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`.
     ///   - model: the turn's `--model`, put on the session before the prompt and pinned.
-    ///   - limits: the turn's `--timeout` and `--prompt-retries` (``PromptLimits``).
+    ///   - limits: the turn's `--timeout`, `--prompt-retries` and `--ttl` (``PromptLimits``).
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -81,9 +81,17 @@ extension ACPXDaemonBackend {
         // agent — or persist one record — concurrently. Keyed by the record, whose
         // ACP session a fallback can replace.
         try await turnQueue.acquire(recordId, wait: wait)
+        // The session is held from here on, as acpx's queue owner holds it: until it has
+        // had no prompt for its TTL once this turn is over.
+        turnStarts(recordId, ttlMs: limits?.ttlMs)
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
-        defer { Task { await turnQueue.release(recordId) } }
+        defer {
+            Task {
+                await turnQueue.release(recordId)
+                await self.turnEnded(recordId)
+            }
+        }
         // The turn runs from here: from now on a cancel is its (``cancelSession(sessionId:)``).
         let control = TurnControl()
         turns[recordId] = control

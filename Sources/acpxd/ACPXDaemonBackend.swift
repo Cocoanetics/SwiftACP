@@ -47,6 +47,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     let turnQueue = SessionTurnQueue()
     /// The turn each session runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
+    var owners: [String: SessionOwner] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
     /// longer keep it from going out.
     var promptGoingOut: (@Sendable (_ recordId: String) async -> Void)?
@@ -59,6 +61,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once the pause before a retry has begun, which a cancel from then on
     /// cuts short.
     var retryPaused: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a session's owner has stopped, its agent closed and its record
+    /// written.
+    var ownerStopped: (@Sendable (_ recordId: String) async -> Void)?
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -341,6 +346,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
+        forgetOwner(initial.acpxRecordId)
         await evict(initial.acpxRecordId)
         // Re-read after the await: closing the agent suspends this actor, so another
         // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
@@ -383,6 +389,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     func releaseAll() async {
         // Before anything is let go: a turn whose agent this closes must not start another.
         stopping = true
+        for recordId in owners.keys { forgetOwner(recordId) }
         while let recordId = live.keys.first {
             guard let entry = live.removeValue(forKey: recordId) else { continue }
             await entry.agent.close()

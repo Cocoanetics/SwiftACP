@@ -271,9 +271,10 @@ public actor ACPXDaemon {
     ///   - model: acpx's `--model` for this turn: put on the session before the prompt,
     ///     through the control it advertises, and pinned as the session's model. The
     ///     turn fails before the prompt if the session cannot take it.
-    ///   - limits: acpx's `--timeout` and `--prompt-retries` for this turn: how long each
-    ///     of its steps may take, and how often a prompt that failed the way a passing
-    ///     fault does is sent again. See ``PromptLimits``. Omitted, neither.
+    ///   - limits: acpx's `--timeout`, `--prompt-retries` and `--ttl` for this turn: how
+    ///     long each of its steps may take, how often a prompt that failed the way a
+    ///     passing fault does is sent again, and how long the session is kept once idle.
+    ///     See ``PromptLimits``. Omitted, no limit, no retry, and five minutes.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).

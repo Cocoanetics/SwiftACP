@@ -250,7 +250,7 @@ extension DaemonToolsTests {
 
     /// A session on `retry-agent.py`, created on a working agent, with `environment` as
     /// `NAME=value ` pairs.
-    private func retrySession(in directory: URL, environment: String = "") async throws -> RetrySession {
+    func retrySession(in directory: URL, environment: String = "") async throws -> RetrySession {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/retry-agent.py")
@@ -268,7 +268,7 @@ extension DaemonToolsTests {
 
     /// Run one turn with `limits` as a calling client's request, answered on `client`.
     @discardableResult
-    private func limitedPrompt(
+    func limitedPrompt(
         _ daemon: ACPXDaemonBackend, _ sessionId: String, limits: PromptLimits, model: String? = nil,
         streamWire: Bool = false, client: CallingClient
     ) async throws -> String {
