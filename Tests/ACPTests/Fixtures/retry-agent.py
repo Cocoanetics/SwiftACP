@@ -22,13 +22,18 @@
   `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
   after `RETRY_AGENT_DELAY_MS` (400 by default).
 
+`die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
+`die-after-new`: exits with status 3 once it has answered `session/new`.
+
 `slow-set-mode`: answers `session/set_mode` only after `RETRY_AGENT_DELAY_MS`, having
 first written a byte to the FIFO `RETRY_AGENT_MODE_SENT` names.
 
 `RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
 mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
 Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
-writes its pid to `RETRY_AGENT_PID` on start.
+writes its pid to `RETRY_AGENT_PID` on start. `RETRY_AGENT_READY` names a FIFO it
+writes a byte to as each prompt arrives, before doing anything with it — and, in
+`hang-new`, as `session/new` does.
 """
 import json
 import os
@@ -86,12 +91,22 @@ def fail(req_id, code=-32603, message="Internal error", details="model overloade
                                                      "data": {"details": details}}})
 
 
+def signal_ready():
+    if os.environ.get("RETRY_AGENT_READY"):
+        with open(os.environ["RETRY_AGENT_READY"], "w") as ready:
+            ready.write("x")
+
+
 def prompt(req_id, session_id):
     first = True
     if ATTEMPTS:
         first = not os.path.exists(ATTEMPTS)
         with open(ATTEMPTS, "a") as handle:
             handle.write("prompt\n")
+    signal_ready()
+    if MODE == "die-in-prompt":
+        update(session_id, "partial ")
+        os._exit(3)
     if MODE == "burst-then-hang":
         for index in range(20):
             update(session_id, "u%d " % index)
@@ -147,9 +162,12 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": {}}})
     elif method == "session/new":
         if MODE == "hang-new":
+            signal_ready()
             time.sleep(60)
         cwd = params.get("cwd")
         send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "retry-session", "configOptions": OPTIONS}})
+        if MODE == "die-after-new":
+            os._exit(3)
     elif method == "session/set_mode" and MODE == "slow-set-mode":
         with open(os.environ["RETRY_AGENT_MODE_SENT"], "w") as sent:
             sent.write("x")
