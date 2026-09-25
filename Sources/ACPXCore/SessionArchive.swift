@@ -70,7 +70,7 @@ public enum SessionArchive {
             ("exported_at", .text(exportedAt)),
             ("exported_by", .text("acpx")),
             ("session", session),
-            ("history", .array(history(of: record)))
+            ("history", .array(try history(of: record)))
         ])
     }
 
@@ -105,13 +105,22 @@ public enum SessionArchive {
     }
 
     /// acpx's `listSessionEvents`: the ACP messages of the session's event log, oldest
-    /// segment first — each line that `JSON.parse` reads as one.
-    static func history(of record: SessionRecord) -> [WireJSON] {
-        let segments = stride(from: record.eventLog.maxSegments, through: 1, by: -1).map {
-            ACPXPaths.sessionStreamSegmentPath(record.acpxRecordId, segment: $0)
-        }
-        return (segments + [ACPXPaths.sessionStreamPath(record.acpxRecordId)]).flatMap { url -> [WireJSON] in
-            guard let data = try? Data(contentsOf: url) else { return [] }
+    /// segment first — each line that `JSON.parse` reads as one. Read as acpx's journal
+    /// reads it: every segment's path looked at first, then those there read. One not
+    /// there is skipped. Anything else — not a regular file, or unreadable — fails the
+    /// export, which would otherwise leave part of the conversation out of an archive.
+    static func history(of record: SessionRecord) throws -> [WireJSON] {
+        let paths = stride(from: record.eventLog.maxSegments, through: 1, by: -1).map {
+            ACPXPaths.sessionStreamSegmentPath(record.acpxRecordId, segment: $0).path
+        } + [ACPXPaths.sessionStreamPath(record.acpxRecordId).path]
+        return try paths.filter(isPresentSegment).flatMap { path -> [WireJSON] in
+            let data: Data
+            do {
+                data = try readFile(at: path)
+            } catch let failure as Failure where failure.code == ENOENT {
+                // Gone since it was looked at: acpx's reader takes its snapshot again.
+                return []
+            }
             // Split on the bytes: as a `String`, "\r\n" is one character, not a line's end.
             return data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).compactMap { line in
                 guard let value = try? WireJSON.parse(String(decoding: line, as: UTF8.self)), isACPMessage(value)
@@ -119,6 +128,19 @@ public enum SessionArchive {
                 return value
             }
         }
+    }
+
+    /// fs-safe's `statRegularFile`: whether a segment is there, a regular file, or not
+    /// (`ENOENT`, `ENOTDIR`). Anything else at its path fails.
+    private static func isPresentSegment(_ path: String) throws -> Bool {
+        var status = stat()
+        guard lstat(path, &status) == 0 else {
+            let code = errno
+            if code == ENOENT || code == ENOTDIR { return false }
+            throw Failure(message: NodePath.errorMessage(code, syscall: "lstat", path: path), code: code)
+        }
+        guard status.st_mode & S_IFMT == S_IFREG else { throw Failure(message: "path must be a regular file") }
+        return true
     }
 
     /// acpx's `isAcpJsonRpcMessage`: a JSON-RPC 2.0 request, notification or response.

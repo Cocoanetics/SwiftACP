@@ -213,10 +213,10 @@ extension SessionArchive {
         record.lastAgentExitSignal = nil
         record.lastAgentExitAt = nil
         record.lastAgentDisconnectReason = nil
+        // The event log is this machine's, under its limits: an archive's own would set how
+        // far rotation and reading it go. acpx writes nothing but these defaults.
         var eventLog = SessionEventLog(recordId: id)
         eventLog.segmentCount = historyCount > 0 ? 1 : source.eventLog.segmentCount
-        eventLog.maxSegmentBytes = source.eventLog.maxSegmentBytes
-        eventLog.maxSegments = source.eventLog.maxSegments
         record.eventLog = eventLog
         let cwdRelative = archive["session"]?["cwd_relative"]?.stringValue ?? ""
         record.importedFrom = SessionRecord.ImportedFrom(

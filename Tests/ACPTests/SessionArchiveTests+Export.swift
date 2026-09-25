@@ -122,6 +122,35 @@ extension SessionArchiveTests {
         }
     }
 
+    /// A segment of the event log that is there but cannot be read as one fails the export,
+    /// as acpx's journal reader fails it: an archive missing part of the conversation
+    /// would be taken for the whole of it.
+    @Test func anUnreadableEventLogFailsTheExport() async throws {
+        let fixture = try Self.fixture()
+        try await withIsolatedStore {
+            try Self.storeSource(fixture, home: "/home/user")
+            let record = try #require(SessionStore.loadRecord("rec-1"))
+            let output = try Self.directory() + "/out.json"
+            func export() throws {
+                try SessionArchive.export(
+                    record, agentName: nil, to: output, home: "/home/user", exportedAt: Self.exportedAt)
+            }
+            let segment = ACPXPaths.sessionStreamSegmentPath("rec-1", segment: 3)
+            try FileManager.default.createDirectory(at: segment, withIntermediateDirectories: false)
+
+            #expect(throws: SessionArchive.Failure(message: "path must be a regular file")) { try export() }
+            try FileManager.default.removeItem(at: segment)
+            let unreadable = ACPXPaths.sessionStreamSegmentPath("rec-1", segment: 1)
+            if getuid() != 0 {
+                chmod(unreadable.path, 0)
+                defer { chmod(unreadable.path, 0o600) }
+                #expect(throws: SessionArchive.Failure(
+                    message: "EACCES: permission denied, open '\(unreadable.path)'", code: EACCES)) { try export() }
+            }
+            #expect(!FileManager.default.fileExists(atPath: output))
+        }
+    }
+
     /// What each format prints for an export and an import: acpx's line, its JSON
     /// result, or only the path or the id.
     @Test func eachFormatPrintsWhatAcpxPrints() async throws {

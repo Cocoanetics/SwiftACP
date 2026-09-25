@@ -304,6 +304,28 @@ import Testing
         }
     }
 
+    /// An imported session's event log is this machine's, under its limits: an archive
+    /// setting its own would set how far rotation and reading go.
+    @Test func anArchiveCannotSetTheEventLogsLimits() async throws {
+        let fixture = try Self.fixture()
+        try await withIsolatedStore {
+            let archive = try Self.directory() + "/archive.json"
+            try Self.write(
+                fixture.archive.replacingOccurrences(of: "<exported_at>", with: Self.exportedAt)
+                    .replacingOccurrences(of: #""max_segment_bytes": 67108864"#, with: #""max_segment_bytes": 1"#)
+                    .replacingOccurrences(of: #""max_segments": 5"#, with: #""max_segments": 1000000000000"#),
+                to: archive)
+
+            let imported = try SessionArchive.importArchive(
+                at: archive, name: nil, cwd: nil, expectedAgentName: "probe", expectedAgentCommand: fixture.command,
+                home: "/home/user")
+
+            let eventLog = try #require(SessionStore.loadRecord(imported.recordId)?.eventLog)
+            #expect(eventLog.maxSegments == DEFAULT_EVENT_MAX_SEGMENTS)
+            #expect(eventLog.maxSegmentBytes == DEFAULT_EVENT_SEGMENT_MAX_BYTES)
+        }
+    }
+
     // MARK: - Refusals
 
     /// Every archive acpx refuses is refused with acpx's message and exit code — bad
