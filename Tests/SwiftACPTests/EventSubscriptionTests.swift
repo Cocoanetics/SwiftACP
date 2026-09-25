@@ -16,6 +16,8 @@ struct EventSubscriptionTests {
         let connection = ACPAgentConnection(transport: LoopbackTransport.pair().0)
         let sinks = await connection.eventSinks
         let replaced = Stop()
+        // Subscribed before the first event is yielded: every one has a stream to go to.
+        let first = await connection.makeEventSubscription()
         Thread {
             var index = 0
             while !replaced.isSet {
@@ -27,7 +29,6 @@ struct EventSubscriptionTests {
             sinks.yield(.inboundRequest(InboundRequest(method: "end \(index)", sessionId: nil)))
         }.start()
 
-        let first = await connection.makeEventSubscription()
         var subscription = first.id
         var events = first.stream.makeAsyncIterator()
         var replacement: (id: UUID, stream: AsyncStream<ConnectionEvent>)?
