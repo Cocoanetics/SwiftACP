@@ -36,6 +36,7 @@ the file `RETRY_AGENT_MODE_GATE` names exists, having first written a byte to th
 `RETRY_AGENT_MODE_SENT` names.
 
 `RETRY_AGENT_SET_MODE_ERROR`, a JSON-RPC error object, answers `session/set_mode` with it.
+`RETRY_AGENT_SET_MODE_EXIT` makes the agent exit with status 3 on `session/set_mode` instead.
 
 `RETRY_AGENT_SET_MODE_GATE`, in any mode, answers `session/set_mode` only once the file it
 names exists, having first written a byte to the FIFO `RETRY_AGENT_SET_MODE_SENT` names, if
@@ -225,6 +226,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {}})
     elif method == "session/set_mode" and os.environ.get("RETRY_AGENT_SET_MODE_ERROR"):
         send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["RETRY_AGENT_SET_MODE_ERROR"])})
+    elif method == "session/set_mode" and os.environ.get("RETRY_AGENT_SET_MODE_EXIT"):
+        os._exit(3)
     elif method == "session/set_config_option":
         if MODE == "hang-%s" % params.get("configId"):
             time.sleep(60)

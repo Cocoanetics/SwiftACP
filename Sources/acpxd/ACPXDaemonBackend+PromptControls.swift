@@ -27,7 +27,12 @@ extension ACPXDaemonBackend {
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
         if let record = findRecord(sessionId), let ticket = tickets[record.acpxRecordId], !ticket.sealed {
-            return (try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step), false)
+            // Its failure is said as one between turns is (``AgentFailure/shown(_:)``).
+            do {
+                return (try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step), false)
+            } catch {
+                throw AgentFailure.shown(error)
+            }
         }
         return try await withSessionTurn(
             sessionId, replacing: replacing, nonInteractivePermissions: nonInteractivePermissions,

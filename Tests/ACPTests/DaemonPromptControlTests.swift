@@ -92,6 +92,47 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A control the agent fails during a prompt is reported as the same control between
+    /// turns is (#164): a rejection says which control and what was asked, any other agent
+    /// error is its message alone, and an agent gone under it is acpx's disconnect.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: [
+        ("RETRY_AGENT_SET_MODE_ERROR='{\"code\":-32602,\"message\":\"Invalid params\"}'",
+         #"Agent rejected session/set_mode for mode "plan": Invalid params (ACP -32602). The adapter may not "#
+            + "implement session/set_mode, or the requested value is not supported."),
+        ("RETRY_AGENT_SET_MODE_ERROR='{\"code\":-32000,\"message\":\"boom\"}'", "boom"),
+        ("RETRY_AGENT_SET_MODE_EXIT=1", "ACP agent disconnected during request (process_exit, exit=3, signal=null)")
+    ])
+    func aControlTheAgentFailsDuringAPromptIsReportedAsBetweenTurns(agent: String, reported: String) async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ready = try fifo("ready", in: directory)
+        try await withIsolatedStore {
+            let session = try await retrySession(
+                in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' \(agent) ")
+            try session.set("stall-prompt")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            func failure() async -> String? {
+                do {
+                    _ = try await withTimeout(milliseconds: 10_000) {
+                        try await daemon.setMode(sessionId: session.id, modeId: "plan")
+                    }
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }
+            #expect(await failure() == reported, "between turns")
+            let prompt = Task {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            }
+            try await signalled(ready)
+            #expect(await failure() == reported, "during the prompt")
+            _ = try? await daemon.cancelSession(sessionId: session.id)
+            _ = try? await prompt.value
+            await daemon.releaseAll()
+        }
+    }
+
     /// Past its deadline once its request went out, a control puts the prompt's agent down,
     /// as acpx's control closes the prompt's client; the caller hears `TIMEOUT` at once.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
