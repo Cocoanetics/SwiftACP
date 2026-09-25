@@ -347,28 +347,59 @@ extension RequestOwnershipTests {
     /// `finishPermissionRequest` counts the answer it returns.
     @Test(.timeLimit(.minutes(1)))
     func aQuestionDecidedAsItsPromptEndsCountsOnce() async throws {
+        let (answer, stats) = try await Self.servedAcrossTheAnswer(
+            "session/request_permission", Self.permission, handlers: .standard(permission: .approveAll))
+        guard case .response(let response) = answer else { throw CancellationError() }
+        #expect(try #require(response.result).decoded(RequestPermissionResponse.self).outcome == .cancelled)
+        #expect(stats.requested == 1 && stats.cancelled == 1 && stats.approved == 0, "\(stats)")
+    }
+
+    /// A refusal whose answer has not gone back when its prompt's answer is read is
+    /// answered `Request cancelled` then, and not counted — nor noted as a confirmation
+    /// nobody could give: acpx counts a refusal as it answers with it, while its owner is
+    /// active (`runDelegatedOperation`).
+    @Test(.timeLimit(.minutes(1)), arguments: ["fs/write_text_file", "terminal/create"])
+    func aRefusalOvertakenByItsPromptsAnswerIsNotCounted(method: String) async throws {
+        let root = try ChildSpawnTests.workspace()
+        var handlers = ACPClientHandlers.standard(permission: .approveAll)
+        handlers.authorizeWrite = { _ in throw FileSystemPermissionError.promptUnavailable }
+        handlers.authorizeTerminal = { _ in throw TerminalError.permissionDenied }
+        let params: JSONValue = method == "fs/write_text_file"
+            ? .object(["sessionId": .string("s"), "path": .string(root + "/out.txt"), "content": .string("x")])
+            : .object(["sessionId": .string("s"), "command": .string("/bin/echo")])
+        let (answer, stats) = try await Self.servedAcrossTheAnswer(method, params, handlers: handlers, terminals: root)
+        guard case .errorResponse(let failure) = answer else { throw CancellationError() }
+        #expect(failure.error.code == -32800)
+        #expect(stats.requested == 0 && !stats.promptUnavailable, "\(stats)")
+        #expect(!FileManager.default.fileExists(atPath: root + "/out.txt"))
+    }
+
+    /// Serve the agent's `method` request for its prompt, its answer held until the
+    /// prompt's answer has been read, and the prompt's call held until that request is
+    /// answered. Returns what the agent was told, and the turn's permission stats.
+    private static func servedAcrossTheAnswer(
+        _ method: String, _ params: JSONValue, handlers: ACPClientHandlers, terminals: String? = nil
+    ) async throws -> (answer: JSONRPCMessage, stats: PermissionStats) {
         let (clientEnd, agentEnd) = LoopbackTransport.pair()
         let answers = Answers()
         let (prompts, promptCame) = AsyncStream<JSONRPCID>.makeStream()
         let script = Script { prompt in
             promptCame.yield(prompt)
-            return [.request(id: "q1", method: "session/request_permission", params: Self.permission)]
+            return [.request(id: "r1", method: method, params: params)]
         }
         let agent = Task { try await Self.playAgent(on: agentEnd, answers: answers, script: script) }
         defer { agent.cancel() }
-        let client = try await Self.client(clientEnd, handlers: .standard(permission: .approveAll))
+        let client = try await Self.client(clientEnd, handlers: handlers, terminals: terminals)
         let (served, servedNoted) = AsyncStream<Void>.makeStream()
         let (answerRead, answerReadNoted) = AsyncStream<Void>.makeStream()
         await client.setWireObserver { line in
             if line.contains("\"stopReason\"") { answerReadNoted.finish() }
         }
-        // The question is approved; the approval goes back only once the prompt's answer
-        // is read, and the prompt's call resumes only once the question is answered.
         await client.setAfterServingOwnedRequest {
             servedNoted.yield()
             for await _ in answerRead { break }
         }
-        await client.setAfterPromptAnswer { _ = await answers.wait(for: "q1") }
+        await client.setAfterPromptAnswer { _ = await answers.wait(for: "r1") }
 
         let turn = Task { try await client.prompt(PromptRequest(sessionId: "s", prompt: [.text("hi")])) }
         var prompt: JSONRPCID?
@@ -380,11 +411,10 @@ extension RequestOwnershipTests {
         try agentEnd.send(try Self.answer(try #require(prompt)))
         _ = try await turn.value
 
-        guard case .response(let response) = await answers.wait(for: "q1") else { throw CancellationError() }
-        #expect(try #require(response.result).decoded(RequestPermissionResponse.self).outcome == .cancelled)
+        let answer = await answers.wait(for: "r1")
         let stats = await client.permissionStats(for: "s")
-        #expect(stats.requested == 1 && stats.cancelled == 1 && stats.approved == 0, "\(stats)")
         await client.close()
+        return (answer, stats)
     }
 }
 

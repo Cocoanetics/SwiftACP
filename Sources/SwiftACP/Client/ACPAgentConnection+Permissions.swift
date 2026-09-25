@@ -34,12 +34,8 @@ extension ACPAgentConnection {
         // the turn's cancel answered first was counted as cancelled then. One served for
         // its prompt counts once it goes back (``PermissionTally``).
         guard !Task.isCancelled else { return response }
-        let decision = PermissionStats.classify(request, response)
-        if let tally = PermissionTally.current {
-            tally.note(decision)
-        } else {
-            turnPermissionStats[request.sessionId, default: PermissionStats()].record(decision)
-        }
+        note(PermissionTally.Note(decision: PermissionStats.classify(request, response)), in: request.sessionId)
+        // acpx notes this in the handler (`handleModePermissionError`), ahead of the answer.
         if promptUnavailable { turnPermissionStats[request.sessionId]?.promptUnavailable = true }
         return response
     }

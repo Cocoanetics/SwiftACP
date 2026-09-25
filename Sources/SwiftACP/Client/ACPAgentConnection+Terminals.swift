@@ -72,8 +72,7 @@ extension ACPAgentConnection {
         // One its prompt ended while this was asked has been answered cancelled, and is
         // not counted: acpx counts a refusal only while its owner is active.
         guard !Task.isCancelled, let sessionId = decodedSessionId(params) else { return }
-        turnPermissionStats[sessionId, default: PermissionStats()].record(decision)
-        if promptUnavailable { turnPermissionStats[sessionId]?.promptUnavailable = true }
+        note(PermissionTally.Note(decision: decision, promptUnavailable: promptUnavailable), in: sessionId)
     }
 
     // MARK: - Lifetime

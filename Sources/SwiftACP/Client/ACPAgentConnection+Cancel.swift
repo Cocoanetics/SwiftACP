@@ -66,12 +66,10 @@ extension ACPAgentConnection {
                 }
                 await self.afterServingOwnedRequest?()
                 // Its prompt ended while this was served — its answer read, or its turn
-                // cancelled: acpx answers it cancelled then, and counts a question so. A
-                // question counts once, by the answer that goes back.
+                // cancelled: acpx answers it cancelled then, and counts a question so. What
+                // it counts, it counts by the answer that goes back.
                 guard Task.isCancelled else {
-                    if request.answer(answer), let decision = tally.decision {
-                        self.turnPermissionStats[sessionId, default: PermissionStats()].record(decision)
-                    }
+                    if request.answer(answer), let noted = tally.noted { self.count(noted, in: sessionId) }
                     return
                 }
                 if request.answer(Self.cancelledAnswer(to: method)), method == "session/request_permission" {
@@ -110,22 +108,47 @@ extension ACPAgentConnection {
     }
 }
 
-/// The decision a permission question served for its prompt came to. It counts only
-/// if its answer is the one that goes back: when the prompt ends first, the question is
-/// answered `cancelled` and counts as that — once, as acpx's `finishPermissionRequest`
-/// counts the answer it returns.
+extension ACPAgentConnection {
+    /// Count `noted` in `sessionId`'s turn, or — while a request is served for its
+    /// prompt — keep it for when that request's answer goes back (``PermissionTally``).
+    func note(_ noted: PermissionTally.Note, in sessionId: SessionId) {
+        if let tally = PermissionTally.current {
+            tally.note(noted)
+        } else {
+            count(noted, in: sessionId)
+        }
+    }
+
+    fileprivate func count(_ noted: PermissionTally.Note, in sessionId: SessionId) {
+        turnPermissionStats[sessionId, default: PermissionStats()].record(noted.decision)
+        if noted.promptUnavailable { turnPermissionStats[sessionId]?.promptUnavailable = true }
+    }
+}
+
+/// What a request served for its prompt came to in the permission stats — a question's
+/// decision, a refusal — counted only if its answer is the one that goes back. When the
+/// prompt ends first, a question is answered `cancelled` and counts as that, and a
+/// refusal is answered `Request cancelled` and does not count: acpx counts what it
+/// answers, while the request's owner is active (`finishPermissionRequest`,
+/// `runDelegatedOperation`).
 final class PermissionTally: @unchecked Sendable {
-    /// The tally of the question being served, when it is served for its prompt.
+    struct Note {
+        var decision: PermissionStats.Decision
+        /// A write or command needed a confirmation nobody could give.
+        var promptUnavailable = false
+    }
+
+    /// The tally of the request being served, when it is served for its prompt.
     @TaskLocal static var current: PermissionTally?
 
     private let lock = NSLock()
-    private var noted: PermissionStats.Decision?
+    private var kept: Note?
 
-    func note(_ decision: PermissionStats.Decision) {
-        lock.withLock { noted = decision }
+    func note(_ note: Note) {
+        lock.withLock { kept = note }
     }
 
-    var decision: PermissionStats.Decision? { lock.withLock { noted } }
+    var noted: Note? { lock.withLock { kept } }
 }
 
 /// An agent's request of a turn in flight, and the one answer it gets: its handler's,
