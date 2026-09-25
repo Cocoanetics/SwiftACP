@@ -1,0 +1,15 @@
+
+[92a008c6-fc43-48ea-9c34-b2dc5d1517e9] started cursor=WyJqb3VybmFsLXNlc3Npb24iLDFd
+[client] initialize (running)
+
+[client] session/load (running)
+ok
+
+[92a008c6-fc43-48ea-9c34-b2dc5d1517e9] completed: end_turn cursor=WyJqb3VybmFsLXNlc3Npb24iLDld
+
+[a51bc704-892b-430a-bf7d-ccab3295dc3e] started cursor=WyJqb3VybmFsLXNlc3Npb24iLDEwXQ
+partial 
+
+[error] RUNTIME: model overloaded
+
+[a51bc704-892b-430a-bf7d-ccab3295dc3e] failed: Internal error cursor=WyJqb3VybmFsLXNlc3Npb24iLDE0XQ

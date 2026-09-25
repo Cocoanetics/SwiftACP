@@ -13,19 +13,27 @@ import SwiftACP
 /// acpx's `JsonMessageSanitizer`: under `--suppress-reads` a read's result and a
 /// read-like tool's output are replaced by `[read output suppressed]`; nothing else
 /// about the message changes, member order included.
+///
+/// Over part of a history (`partialHistory`, as `sessions watch` replays one), a result
+/// whose request came before it and a tool whose title and kind it never saw may be
+/// reads too, and are suppressed as well.
 struct JSONMessageSanitizer {
     let suppressReads: Bool
+    let partialHistory: Bool
     /// The method of each request still awaiting its response, by direction and id.
     private var requestMethodById: [String: String] = [:]
     /// What each tool has said of itself so far: a later update may omit its title or
     /// kind. A kind of JSON `null` clears an earlier one, as in acpx.
     private var toolStateById: [String: (title: String?, kind: String?)] = [:]
 
-    init(suppressReads: Bool) {
+    init(suppressReads: Bool, partialHistory: Bool = false) {
         self.suppressReads = suppressReads
+        self.partialHistory = partialHistory
     }
 
-    mutating func sanitize(_ message: WireJSON, direction: JSONRPCPeer.WireDirection) -> WireJSON {
+    /// `message`, sanitized. Without a `direction`, as a history read back gives none,
+    /// requests and responses are paired by id alone.
+    mutating func sanitize(_ message: WireJSON, direction: JSONRPCPeer.WireDirection?) -> WireJSON {
         guard suppressReads else { return message }
         if let response = sanitizeReadResponse(message, direction: direction) { return response }
         if let toolMessage = sanitizeReadToolMessage(message) { return toolMessage }
@@ -36,13 +44,15 @@ struct JSONMessageSanitizer {
     /// A response to `fs/read_text_file` with its content suppressed; `nil` to carry on.
     /// Any response settles its request.
     private mutating func sanitizeReadResponse(
-        _ message: WireJSON, direction: JSONRPCPeer.WireDirection
+        _ message: WireJSON, direction: JSONRPCPeer.WireDirection?
     ) -> WireJSON? {
-        guard let key = Self.correlationKey(message["id"], direction.reversed) else { return nil }
+        guard let key = Self.correlationKey(message["id"], direction?.reversed) else { return nil }
         let hasResult = message.hasMember("result")
         guard hasResult || message.hasMember("error") else { return nil }
         let method = requestMethodById.removeValue(forKey: key)
-        guard hasResult, method == "fs/read_text_file", let result = message["result"] else { return nil }
+        guard hasResult, method == "fs/read_text_file" || (partialHistory && method == nil),
+              let result = message["result"]
+        else { return nil }
         guard result["content"]?.stringValue != nil else { return message }
         return message.replacing("result", with: result.replacing("content", with: .text(SUPPRESSED_READ_OUTPUT)))
     }
@@ -66,7 +76,8 @@ struct JSONMessageSanitizer {
         default: break
         }
         toolStateById[toolCallId] = state
-        guard ToolText.isReadLike(title: state.title, kindName: state.kind) else { return nil }
+        let unclassified = partialHistory && (state.kind ?? "").isEmpty && (state.title ?? "").isEmpty
+        guard ToolText.isReadLike(title: state.title, kindName: state.kind) || unclassified else { return nil }
 
         var sanitized = update
         if update.hasMember("rawOutput") {
@@ -86,7 +97,7 @@ struct JSONMessageSanitizer {
         return message.replacing("params", with: params.replacing("update", with: sanitized))
     }
 
-    private mutating func trackRequestMethod(_ message: WireJSON, direction: JSONRPCPeer.WireDirection) {
+    private mutating func trackRequestMethod(_ message: WireJSON, direction: JSONRPCPeer.WireDirection?) {
         guard let method = message["method"]?.stringValue,
             let key = Self.correlationKey(message["id"], direction)
         else { return }
@@ -95,14 +106,14 @@ struct JSONMessageSanitizer {
 
     /// acpx's `requestCorrelationKey`: the direction the request travelled plus its id,
     /// for string and finite-number ids only.
-    static func correlationKey(_ id: WireJSON?, _ direction: JSONRPCPeer.WireDirection) -> String? {
+    static func correlationKey(_ id: WireJSON?, _ direction: JSONRPCPeer.WireDirection?) -> String? {
         let idKey: String
         switch id {
         case .string?: idKey = "s:" + (id?.stringified ?? "")
         case .number(let value)? where value.isFinite: idKey = "n:" + WireJSON.javaScriptString(for: value)
         default: return nil
         }
-        return "\(direction.name):\(idKey)"
+        return "\(direction?.name ?? "unknown"):\(idKey)"
     }
 }
 
