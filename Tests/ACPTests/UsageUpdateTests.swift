@@ -70,6 +70,19 @@ struct UsageUpdateTests {
         Case(name: "only the context window", update: #"{"sessionUpdate":"usage_update","used":50,"size":1000}"#)
     ]
 
+    /// One acpx's SDK drops leaves the record as it was: not even stamped or trimmed.
+    @Test func anUpdateAcpxNeverSeesLeavesTheRecordAlone() throws {
+        var session = record(id: "dropped")
+        let before = session.updatedAt
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data(
+            #"{"sessionUpdate":"usage_update","_meta":{"usage":{"input_tokens":1}}}"#.utf8))
+        let applied = ConversationModel.recordSessionUpdate(
+            into: &session, notification: SessionNotification(sessionId: "u", update: update),
+            timestamp: "2031-01-01T00:00:00.000Z")
+        #expect(!applied)
+        #expect(session.updatedAt == before)
+    }
+
     @Test(arguments: cases)
     func anUpdateRecordsWhatAcpxRecordsOfIt(_ given: Case) throws {
         var session = record(id: "usage")

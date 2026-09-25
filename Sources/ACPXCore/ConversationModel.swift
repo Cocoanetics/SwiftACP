@@ -69,14 +69,19 @@ public enum ConversationModel {
         }
     }
 
-    /// Apply one streamed `session/update` to the conversation.
+    /// Apply one streamed `session/update` to the conversation. Returns whether it was
+    /// applied: a `usage_update` acpx's SDK drops (``SwiftACP/UsageUpdate/reachesACPX``)
+    /// never reaches acpx's handler, so it leaves the record as it was, not even stamped.
+    @discardableResult
     public static func recordSessionUpdate(
         into record: inout SessionRecord, notification: SessionNotification,
         timestamp: String = nowISO()
-    ) {
+    ) -> Bool {
+        if case .usageUpdate(let usage) = notification.update, !usage.reachesACPX { return false }
         applySessionUpdate(into: &record, update: notification.update)
         record.updatedAt = timestamp
         trimForRuntime(&record)
+        return true
     }
 
     /// Record the token breakdown an agent reports on the *prompt response* into
@@ -142,8 +147,7 @@ public enum ConversationModel {
             acpx.currentModeId = modeId
             record.acpx = acpx
         case .usageUpdate(let usage):
-            // One acpx's SDK drops (`zUsageUpdate`) never reaches acpx, which records nothing of it.
-            if usage.reachesACPX { applyUsageUpdate(into: &record, usage) }
+            applyUsageUpdate(into: &record, usage)
         case .availableCommandsUpdate(let commands):
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.availableCommands = commands.compactMap(recordedCommand)
