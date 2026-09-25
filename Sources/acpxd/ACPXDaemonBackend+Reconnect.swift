@@ -170,11 +170,8 @@ extension ACPXDaemonBackend {
             record.acpx = connected
             record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
-        // An agent started while the daemon began stopping is not held: nothing would end it.
-        guard !stopping else {
-            await handle.close()
-            throw DaemonError.stopping
-        }
+        await reconnected?(recordId)
+        try await refuseIfStopping(handle, of: recordId, via: onRecordChange)
         let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
         live[recordId] = entry
         handle.rawWire.set(nil)
@@ -182,6 +179,18 @@ extension ACPXDaemonBackend {
         await showConnectOutput(fellBack)
         // Taken back unless a new session had to replace it.
         return (entry, !fellBack)
+    }
+
+    /// An agent started while the daemon began stopping is not held: nothing would end it.
+    /// It is closed, and the record says how it ended, as acpx's does once it closes its
+    /// client.
+    private func refuseIfStopping(
+        _ handle: ACPAgent, of recordId: String, via onRecordChange: RecordChangeHandler?
+    ) async throws {
+        guard stopping else { return }
+        await handle.close()
+        await apply({ [handle] record in record.applyLifecycle(handle.lifecycle) }, to: recordId, via: onRecordChange)
+        throw DaemonError.stopping
     }
 
     /// The live entry for `recordId`, given this call's handlers and terminal output
@@ -346,4 +355,6 @@ final class RecordChanges: @unchecked Sendable {
     func apply(to record: inout SessionRecord) {
         for change in lock.withLock({ changes }) { change(&record) }
     }
+
+    var isEmpty: Bool { lock.withLock { changes.isEmpty } }
 }

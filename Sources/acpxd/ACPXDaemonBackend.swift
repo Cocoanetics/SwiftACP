@@ -64,6 +64,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once a session's owner has stopped, its agent closed and its record
     /// written.
     var ownerStopped: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once connecting has moved the record to what it connected, before
+    /// the agent is held.
+    var reconnected: (@Sendable (_ recordId: String) async -> Void)?
 
     private let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -212,11 +215,28 @@ actor ACPXDaemonBackend: ACPXBackend {
         // record it connected: the block a reconnect built anew keeps the places it holds
         // for members still unset, which reading it back would lose.
         let changes = RecordChanges()
-        let (entry, resumed) = try await connect(
-            recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-            mcpServers: current.acpx?.mcpServers, control: true,
-            settings: CallerSettings(handlers: permissions.handlers, terminalOutputCeiling: ceiling),
-            replacing: replacing, onRecordChange: { changes.add($0) })
+        let entry: Live, resumed: Bool
+        do {
+            (entry, resumed) = try await connect(
+                recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
+                mcpServers: current.acpx?.mcpServers, control: true,
+                settings: CallerSettings(handlers: permissions.handlers, terminalOutputCeiling: ceiling),
+                replacing: replacing, onRecordChange: { changes.add($0) })
+        } catch {
+            // Connecting can fail after it moved the record — the daemon began stopping
+            // before the agent was held — and what it connected is saved all the same, as
+            // acpx saves the record its control connected on the way out.
+            if !changes.isEmpty {
+                var moved = current
+                changes.apply(to: &moved)
+                do {
+                    try SessionStore.writeRecord(moved)
+                } catch let writeError {
+                    log.warning("session record write failed after connecting for a control op: \(writeError)")
+                }
+            }
+            throw error
+        }
         var connected = current
         changes.apply(to: &connected)
         var record = connected

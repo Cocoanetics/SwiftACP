@@ -29,6 +29,52 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A control cut off by the daemon stopping once its reconnect started a new session
+    /// leaves the record on that session all the same — acpx saves the record its control
+    /// connected on the way out — and says how the agent it closed ended.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aControlCutOffByStoppingKeepsTheSessionItsReconnectStarted() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            // Each process of the mock has a session of its own: the control's can't load the
+            // first process's, and starts a new one.
+            let id = try await daemon.newSession(
+                agentCommand: "/usr/bin/env MOCK_SESSION_ID_PER_PROCESS=1 " + command, cwd: NSTemporaryDirectory())
+            let before = try #require(SessionStore.loadRecord(id)).acpSessionId
+            await daemon.setReconnected { _ in await daemon.releaseAll() }
+            do {
+                _ = try await daemon.setMode(sessionId: id, modeId: "plan")
+                Issue.record("the control went through a stopping daemon")
+            } catch DaemonError.stopping {}
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.acpSessionId != before)
+            #expect(record.pid == nil)
+            #expect(record.lastAgentDisconnectReason == "connection_close")
+        }
+    }
+
+    /// A turn cut off the same way says how the agent it closed ended: the record keeps
+    /// no pid of it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aTurnCutOffByStoppingSaysHowItsAgentEnded() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            await daemon.setReconnected { _ in await daemon.releaseAll() }
+            do {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(), client: CallingClient())
+                Issue.record("the turn went through a stopping daemon")
+            } catch DaemonError.stopping {}
+            let record = try #require(SessionStore.loadRecord(session.id))
+            #expect(record.pid == nil)
+            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(session.prompts == 0)
+        }
+    }
+
     /// A session a prompt left its owner holding keeps its agent through a control.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aControlOnAnOwnedSessionKeepsItsAgent() async throws {
@@ -121,5 +167,11 @@ extension DaemonToolsTests {
             ])
             await daemon.releaseAll()
         }
+    }
+}
+
+extension ACPXDaemonBackend {
+    func setReconnected(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
+        reconnected = hook
     }
 }
