@@ -23,13 +23,13 @@ var products: [Product] = [
 var dependencies: [Package.Dependency] = [
     // JSONFoundation: JSON value type, JSON Schema, JSON-RPC 2.0 envelope, and the
     // JSON-RPC runtime (peer, framing, stdio transport) the ACP transports build on.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "2.5.0",
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "3.1.0",
              traits: ["Subprocess"]),
     // SwiftMCP: the MCP client (`MCPServerProxy`, swift-nio-free `Client` trait) that
     // SwiftACP's generated `ACPXDaemon.Client` uses, and — behind this package's
     // default-on `Server` trait — the swift-nio TCP/Bonjour/HTTP-SSE server transports
     // acpxd serves over. A client-only consumer (an iOS/Android app) disables `Server`.
-    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.7.0", traits: [
+    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.11.0", traits: [
         "Client",
         .trait(name: "Server", condition: .when(traits: ["Server"])),
         .trait(name: "OpenAPI", condition: .when(traits: ["Server"]))

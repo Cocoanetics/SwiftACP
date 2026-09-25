@@ -60,16 +60,16 @@ enum MessageLimit {
             base.frame(body)
         }
 
-        mutating func push(_ bytes: Data) -> [Data] {
-            guard !exceeded else { return [] }
+        mutating func push(_ bytes: Data, emit: (Data) -> Void) throws {
+            guard !exceeded else { return }
             do {
                 retained = try AgentOutputReader.countLineBytes(Array(bytes), retained: retained, limit: limit)
             } catch {
                 exceeded = true
                 signal.fire(AcpMessageLimitError(limit: limit))
-                return []
+                return
             }
-            return base.push(bytes)
+            try base.push(bytes, emit: emit)
         }
     }
 
