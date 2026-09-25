@@ -29,7 +29,9 @@ extension ACPAgentConnection {
     /// Ask the agent to close a session (`session/close`), as acpx's client does: from
     /// now on what the agent asks for it is answered cancelled — a permission question, a
     /// file read or write, starting a command — and what of that is still being served is
-    /// ended first, whether a prompt owns it or not.
+    /// ended first, whether a prompt owns it or not. A prompt started on the session ends
+    /// that, as acpx's `beginActivePrompt` does, so the caller starts none while it closes
+    /// the session; acpxd closes one in the session's turn.
     public func closeSession(_ request: CloseSessionRequest) async throws {
         cancellingSessionIds.insert(request.sessionId)
         answerSessionRequestsCancelled(request.sessionId)
