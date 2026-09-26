@@ -9,9 +9,9 @@ import Foundation
 // sent meanwhile finds the session between prompts.
 extension ACPXDaemonBackend {
     /// A session's prompts waiting to begin after the one begun, in order: each resumed
-    /// with what it begins with, or `nil` once called off.
+    /// with what it begins with, or with why it never will.
     struct PromptLine {
-        var waiting: [(token: Int, continuation: CheckedContinuation<BegunPrompt?, Never>)] = []
+        var waiting: [(token: Int, continuation: CheckedContinuation<BegunPrompt, Error>)] = []
     }
 
     /// What a prompt begins with: its turn, which a cancel is for, and the ticket its
@@ -24,8 +24,10 @@ extension ACPXDaemonBackend {
     /// Begin a prompt for `recordId`: at once when no other prompt of the session has
     /// begun, else once those before it are over (``promptEnded(_:_:heldTheSlot:)``).
     /// When `wait` is false, a session running anything refuses it with
-    /// ``DaemonError/sessionBusy``, and it takes the slot as it begins.
+    /// ``DaemonError/sessionBusy``, and it takes the slot as it begins. A daemon that is
+    /// stopping takes none, as acpx's owner takes no task once it shuts down (`enqueue`).
     func beginPrompt(_ recordId: String, wait: Bool) async throws -> BegunPrompt {
+        guard !stopping else { throw QueueOwnerShuttingDown(inLine: false) }
         guard wait else {
             try await turnQueue.acquire(recordId, wait: false)
             guard promptLines[recordId] == nil else {
@@ -41,8 +43,8 @@ extension ACPXDaemonBackend {
         }
         let token = nextPromptToken
         nextPromptToken += 1
-        let begun = await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
+        let begun = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
                 promptLines[recordId]?.waiting.append((token, continuation))
                 promptWaits?(recordId)
             }
@@ -51,7 +53,6 @@ extension ACPXDaemonBackend {
             // begun before the drop lands keeps what it began with, and ends below.
             Task { await self.dropWaitingPrompt(recordId, token: token) }
         }
-        guard let begun else { throw CancellationError() }
         // Called off as it began: it ends at once, handing the line on, as acpx's owner
         // cancels a task it has just taken (Codex review on #196).
         if Task.isCancelled {
@@ -95,10 +96,32 @@ extension ACPXDaemonBackend {
         return begun
     }
 
-    /// Drop a prompt called off before it began, resuming it with `nil`.
+    /// The session's owner shuts down, as acpx's does (`beginShutdown`): the prompts still in
+    /// line are refused, none of them sent.
+    func refusePromptsWaiting(_ recordId: String) {
+        guard let waiting = promptLines[recordId]?.waiting, !waiting.isEmpty else { return }
+        promptLines[recordId]?.waiting = []
+        waiting.forEach { $0.continuation.resume(throwing: QueueOwnerShuttingDown(inLine: true)) }
+    }
+
+    /// Drop a prompt called off before it began.
     private func dropWaitingPrompt(_ recordId: String, token: Int) {
         guard let index = promptLines[recordId]?.waiting.firstIndex(where: { $0.token == token }),
               let waiter = promptLines[recordId]?.waiting.remove(at: index) else { return }
-        waiter.continuation.resume(returning: nil)
+        waiter.continuation.resume(throwing: CancellationError())
     }
+}
+
+/// acpx's error for a prompt its session's owner refuses as it shuts down: one still in line
+/// (`beginShutdown`), or one sent once it began to (`enqueue`).
+struct QueueOwnerShuttingDown: LocalizedError, OutputErrorMeta, Equatable {
+    /// Whether the prompt was in line as the shutdown began.
+    let inLine: Bool
+    var errorDescription: String? {
+        inLine ? "Queue owner shutting down before prompt execution" : "Queue owner is shutting down"
+    }
+    var outputCode: String? { "RUNTIME" }
+    var detailCode: String? { "QUEUE_OWNER_SHUTTING_DOWN" }
+    var origin: String? { "queue" }
+    var retryable: Bool? { true }
 }

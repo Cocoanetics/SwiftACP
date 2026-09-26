@@ -10,8 +10,9 @@ extension ACPXDaemonBackend {
     /// closed — mirrors the CLI's `sessions close`.
     ///
     /// acpx's owner closes a session once drained (`closeActiveBackendSession` after
-    /// `shutdown.drain()`): a prompt running is cancelled, and the turn or control holding
-    /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
+    /// `shutdown.drain()`): a prompt running is cancelled, those waiting in line behind it are
+    /// refused, none of them sent (`beginShutdown`), and the turn or control holding the
+    /// session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
     /// Past that, its agent is closed under it — one still connecting too, as acpx's owner
     /// closes its client connecting or not — and the close waits for it to end all the
     /// same, in its place in line, as acpx's drain waits once it has closed its client:
@@ -28,6 +29,7 @@ extension ACPXDaemonBackend {
         // Called off before it began, it does nothing at all: not even the prompt running is cancelled.
         try Task.checkCancellation()
         _ = try? await cancelSession(sessionId: recordId)
+        refusePromptsWaiting(recordId)
         try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
         defer { Task { await turnQueue.release(recordId) } }
         await askToClose(recordId)
@@ -59,6 +61,7 @@ extension ACPXDaemonBackend {
         let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
             || owners[recordId] != nil
         _ = try? await cancelSession(sessionId: recordId)
+        refusePromptsWaiting(recordId)
         try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
         defer { Task { await turnQueue.release(recordId) } }
         forgetOwner(recordId)

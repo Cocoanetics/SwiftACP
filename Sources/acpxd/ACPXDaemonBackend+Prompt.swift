@@ -90,7 +90,13 @@ extension ACPXDaemonBackend {
         // (``cancelSession(sessionId:)``), and so is a control sent, run on the prompt's
         // agent once the prompt goes out (acpx's `beginPrompt`). A turn that ends before
         // then fails the controls still waiting.
-        let begun = try await beginPrompt(recordId, wait: wait)
+        let begun: BegunPrompt
+        do {
+            begun = try await beginPrompt(recordId, wait: wait)
+        } catch let refused as QueueOwnerShuttingDown {
+            // Told to the client as acpx's owner tells it, the turn's error.
+            return try await reportingFailure(of: recordId, errors: TurnErrorWatch()) { throw refused }
+        }
         let (control, ticket) = (begun.control, begun.ticket)
         var heldTheSlot = !wait
         defer { promptEnded(recordId, begun, heldTheSlot: heldTheSlot) }

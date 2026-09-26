@@ -170,8 +170,9 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A daemon that has let its agents go starts no more: a turn caught by the stop
-    /// fails rather than leaving an agent behind that nothing would end (#113 review).
+    /// A daemon that has let its agents go starts no more: a prompt sent then is refused, as
+    /// acpx's owner refuses a task once it shuts down, rather than leaving an agent behind
+    /// that nothing would end (#113 review).
     @Test(.enabled(if: mockPythonAvailable))
     func aStoppedDaemonStartsNoAgent() async throws {
         let command = try Self.exitAgent("")
@@ -179,7 +180,7 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             await daemon.releaseAll()
-            await #expect(throws: DaemonError.self) {
+            await #expect(throws: QueueOwnerShuttingDown(inLine: false)) {
                 try await prompt(daemon, id, text: "hi", client: CallingClient())
             }
             #expect(await daemon.live.isEmpty)

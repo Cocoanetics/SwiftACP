@@ -319,6 +319,68 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A close — or a release, for `sessions new` — refuses the prompts waiting in line behind
+    /// the one running, none of them sent, as acpx's owner refuses its pending tasks as it shuts
+    /// down (`beginShutdown`); the client hears it as acpx's CLI does (Codex review on #196).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["close", "release"])
+    func shuttingASessionDownRefusesThePromptsInLine(how: String) async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ready = try fifo("ready", in: directory)
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' ")
+            try session.set("stall-prompt")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let running = Task {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            }
+            try await signalled(ready)
+            let (waits, waiting) = AsyncStream<Void>.makeStream()
+            await daemon.setPromptWaits { _ in waiting.yield() }
+            let client = CallingClient()
+            let inLine = Task {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: client)
+            }
+            try await nextEvent(waits)
+
+            if how == "close" {
+                #expect(try await daemon.closeSession(sessionId: session.id))
+            } else {
+                #expect(try await daemon.releaseSession(sessionId: session.id))
+            }
+            await #expect(throws: QueueOwnerShuttingDown(inLine: true)) {
+                _ = try await withTimeout(milliseconds: 10_000) { try await inLine.value }
+            }
+            let failure = try #require(client.failure)
+            #expect(failure.message == "Queue owner shutting down before prompt execution")
+            #expect(failure.detailCode == "QUEUE_OWNER_SHUTTING_DOWN")
+            #expect(failure.origin == "queue" && failure.retryable == true)
+            _ = try? await withTimeout(milliseconds: 10_000) { try await running.value }
+            #expect(session.prompts == 1, "the prompt in line never went out")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A daemon that is stopping takes no prompt, as acpx's owner takes no task once it shuts
+    /// down (`enqueue`): nothing is sent, and nothing kept.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aStoppingDaemonTakesNoPrompt() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            await daemon.releaseAll()
+            let client = CallingClient()
+            await #expect(throws: QueueOwnerShuttingDown(inLine: false)) {
+                _ = try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: client)
+            }
+            #expect(client.failure?.message == "Queue owner is shutting down")
+            #expect(session.prompts == 0)
+            #expect(try #require(SessionStore.loadRecord(session.id)).messages.isEmpty)
+        }
+    }
+
     /// The control a test sends once a turn's controls are sealed, and what it saw.
     private final class SentControl: @unchecked Sendable {
         private let lock = NSLock()

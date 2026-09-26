@@ -360,6 +360,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     func releaseAll() async {
         // Before anything is let go: a turn whose agent this closes must not start another.
         stopping = true
+        // The prompts still in line are refused, as each owner acpx stops refuses its own.
+        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
         for recordId in owners.keys { forgetOwner(recordId) }
         while let recordId = live.keys.first {
             guard let entry = live.removeValue(forKey: recordId) else { continue }
