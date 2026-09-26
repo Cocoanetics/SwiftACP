@@ -43,6 +43,9 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     /// The processes the agent started, as last seen. Looked at under ``descendantsLock``.
     private let descendants: ProcessDescendants
     private let descendantsLock = NSLock()
+    /// For tests: signalled once the transport has looked at whether the agent is exiting,
+    /// which the exit's reaping then waits for (`reapsLate`).
+    private let exitLookedAt: DispatchSemaphore?
 
     private let lock = NSLock()
     /// Touched only by the reader thread.
@@ -57,7 +60,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     private var termination: Task<Void, Never>?
 
     private init(
-        process: ChildProcess, agentCommand: String, maxMessageBytes: Int?, inheritStderr: Bool, tap: RawWireTap
+        process: ChildProcess, agentCommand: String, maxMessageBytes: Int?, inheritStderr: Bool, tap: RawWireTap,
+        reapsLate: Bool
     ) {
         self.process = process
         startedAt = AgentProcessTransport.now()
@@ -69,6 +73,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         (eventStream, events) = AsyncStream.makeStream()
         writer = MessageWriter(process: process, tap: tap)
         descendants = ProcessDescendants(root: process.pid, ownProcessGroup: false)
+        exitLookedAt = reapsLate ? DispatchSemaphore(value: 0) : nil
     }
 
     /// Start the agent `launch` describes and begin reading it.
@@ -76,9 +81,12 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     /// - Parameters:
     ///   - agentCommand: the command the agent was started with, for its quirks.
     ///   - maxMessageBytes: the longest line read from it, `nil` for no limit.
+    ///   - reapsLate: for tests, the latest its exit can be reaped, as under load: only
+    ///     once the transport, its stdout ended, has looked at whether it is exiting.
     /// - Throws: ``ChildProcess/SpawnError`` when it cannot be started.
     static func start(
-        _ launch: ProcessLaunch, agentCommand: String, maxMessageBytes: Int?, tap: RawWireTap
+        _ launch: ProcessLaunch, agentCommand: String, maxMessageBytes: Int?, tap: RawWireTap,
+        reapsLate: Bool = false
     ) throws -> AgentProcessTransport {
         let process = try ChildProcess.spawn(
             command: launch.executable, arguments: launch.arguments,
@@ -86,7 +94,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
             environment: launch.environment, input: true, newSession: false)
         let transport = AgentProcessTransport(
             process: process, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes,
-            inheritStderr: launch.inheritStderr, tap: tap)
+            inheritStderr: launch.inheritStderr, tap: tap, reapsLate: reapsLate)
         transport.begin()
         return transport
     }
@@ -125,7 +133,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
             onClose: { [self] output in
                 if output == .stdout { stdoutClosed() }
             },
-            onExit: { [self] status in exited(status) })
+            onExit: { [self] status in exited(status) },
+            beforeReaping: exitLookedAt.map { lookedAt in { @Sendable in lookedAt.wait() } })
     }
 
     // MARK: - JSONRPCMessageTransport
@@ -275,7 +284,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     /// process is still running a moment later.
     private func stdoutClosed() {
         Task {
-            if await waitForExit(timeout: .milliseconds(100)) { return }
+            if await exits(within: .milliseconds(100)) { return }
             recordDisconnect(.pipeClose)
             // acpx's `handleAgentDisconnect`: an agent whose connection is gone is ended.
             _ = startTermination()
@@ -286,10 +295,22 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     /// exiting — as it usually is — that ends the connection, and the agent with it.
     private func writeFailed() {
         Task {
-            if await waitForExit(timeout: .milliseconds(100)) { return }
+            if await exits(within: .milliseconds(100)) { return }
             recordDisconnect(.connectionClose)
             _ = startTermination()
         }
+    }
+
+    /// Whether the process exits within `timeout`, or has begun to by then. Its exit is
+    /// recorded once it has been reaped (``exited(_:)``), which under load can come well
+    /// after the exit began: one under way is given 5 s more. An exit that stalls past
+    /// that — a process can hang in its exit — is left to the caller's account of the end.
+    private func exits(within timeout: Duration) async -> Bool {
+        if await waitForExit(timeout: timeout) { return true }
+        let exiting = process.isExiting
+        exitLookedAt?.signal()
+        guard exiting else { return false }
+        return await waitForExit(timeout: .seconds(5))
     }
 
     /// The process exited and was reaped, after all it wrote was read. acpx's `exit`

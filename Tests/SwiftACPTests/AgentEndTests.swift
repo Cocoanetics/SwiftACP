@@ -156,6 +156,29 @@ import Glibc
         await transport.terminate()
     }
 
+    /// An agent that exits is put down to its exit though the exit is reaped late — as under
+    /// load, long after its stdout's end is seen.
+    @Test(.enabled(if: mockPythonAvailable))
+    func anExitReapedLateIsStillTheExit() async throws {
+        let launch = try AgentRegistry.launch(
+            for: Self.command("EXIT_AGENT_ON=prompt"), cwd: NSTemporaryDirectory(), environment: nil,
+            inheritStderr: false)
+        let transport = try AgentProcessTransport.start(
+            launch, agentCommand: "exit-agent", maxMessageBytes: nil, tap: RawWireTap(), reapsLate: true)
+        try transport.send(.request(id: 1, method: "session/prompt", params: .object([
+            "sessionId": .string("exit-session"), "prompt": .array([])
+        ])))
+        var ending: Error?
+        do {
+            for try await _ in transport.makeInboundStream() {}
+        } catch {
+            ending = error
+        }
+        #expect(ending as? AgentDisconnectedError
+            == AgentDisconnectedError(reason: .processExit, exitCode: 3, signal: nil))
+        await transport.terminate()
+    }
+
     /// Nothing keeps a transport once its agent is closed: its writer's failure hook holds
     /// it weakly (#113 review). Letting go has no signal to wait on, so the check gives
     /// the reader thread, which ends last, a moment to finish.
