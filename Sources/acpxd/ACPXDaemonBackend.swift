@@ -92,6 +92,10 @@ actor ACPXDaemonBackend: ACPXBackend {
     var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: told the record id whenever a prompt waits to begin behind another.
     var promptWaits: (@Sendable (_ recordId: String) -> Void)?
+    /// For tests: handed each note that a turn's prompt went out, as the writer's thread
+    /// tells it, in place of bringing the note to the backend: it comes once the test runs
+    /// it, if ever — as late as its task can come under load.
+    var promptNoted: (@Sendable (_ recordId: String, _ note: @escaping @Sendable () async -> Void) async -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 

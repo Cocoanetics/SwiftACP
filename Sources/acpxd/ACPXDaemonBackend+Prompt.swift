@@ -353,7 +353,9 @@ extension ACPXDaemonBackend {
             let outcome = try await promptWithRetries(turn, on: entry, relay: relay, wireFeed: wireFeed)
             let response = outcome.response
             // The controls the turn took are done before its last save, what they said part of
-            // its exchange (acpx's `seal`, `onPromptFinalizing`).
+            // its exchange (acpx's `seal`, `onPromptFinalizing`) — those waiting for its prompt
+            // too, however late the note that it went out comes.
+            takePromptNote(of: recordId, from: wrote)
             await sealControls(of: recordId)
             await relay.end()
             let fullText = await relay.text()
@@ -395,7 +397,8 @@ extension ACPXDaemonBackend {
     /// answered at once, from the reader's thread, before the connection has even handed
     /// it on, as acpx's client clears its active prompt at the answer. The note that the
     /// prompt went out comes from the writer's thread; it reaches this actor as the turn
-    /// goes on, and is dropped once the turn has ended.
+    /// goes on, and is dropped once the turn has ended — or has taken it, acting on the
+    /// attempt's end before it came (``takePromptNote(of:from:)``).
     func watchTheWire(
         of entry: Live, for turn: Turn, feeding wireFeed: TurnWireFeed, result promptResult: PromptResultCapture,
         wrote: WriteMark
@@ -403,6 +406,7 @@ extension ACPXDaemonBackend {
         let (recordId, turnId, errors) = (turn.recordId, turn.id, turn.errors)
         let (connection, sessionId) = (entry.agent.connection, entry.session.id)
         let eventBuffer = turn.eventBuffer
+        let noted = promptNoted
         entry.agent.rawWire.set { [self] direction, body in
             // Into the event log with the turn's next save, as the bytes the message was.
             eventBuffer.append(body)
@@ -415,8 +419,12 @@ extension ACPXDaemonBackend {
         entry.agent.rawWire.onDelivery { [self] body, delivery in
             guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
             guard delivery == .writing else { return wrote.unmark() }
-            wrote.mark()
-            Task { await self.promptWritten(recordId: recordId, turn: turnId, to: connection, sessionId: sessionId) }
+            wrote.mark(noting: true)
+            let note: @Sendable () async -> Void = {
+                await self.promptWritten(
+                    recordId: recordId, turn: turnId, to: connection, sessionId: sessionId, note: wrote)
+            }
+            Task { if let noted { await noted(recordId, note) } else { await note() } }
         }
     }
 
