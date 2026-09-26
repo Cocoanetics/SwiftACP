@@ -209,10 +209,10 @@ private final class FlowShellRun: @unchecked Sendable {
         }
         guard let overflow, !termination.cancelled else { return }
         fail(overflow)
-        let termination = self.termination
+        let stopper = termination
         Task {
             do {
-                try await termination.cancel("SIGTERM")
+                try await stopper.cancel("SIGTERM")
             } catch {
                 self.fail(error)
             }
