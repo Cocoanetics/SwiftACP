@@ -6,6 +6,9 @@ import SwiftACP
 // that file inside the 500-line limit.
 extension ACPXDaemonBackend {
     /// What a failed attempt leaves, and the error its turn goes on with:
+    /// - the note that its prompt went out is taken first, should it not have come
+    ///   (``takePromptNote(of:from:)``): coming later, it would publish the controls
+    ///   handed on below;
     /// - everything the agent said before failing still goes out, and is kept, as acpx
     ///   shows and records it — then the error itself;
     /// - a failure a fresh launch takes over (``isFixedByAFreshLaunch(_:)``) is
@@ -18,6 +21,7 @@ extension ACPXDaemonBackend {
         _ error: Error, on entry: Live, wrote: WriteMark, retriesOnAFreshLaunch: Bool, relay: TurnRelay,
         wireFeed: TurnWireFeed, recordId: String, persister: TurnPersister
     ) async -> Error {
+        takePromptNote(of: recordId, from: wrote)
         let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
             ? AgentExitedBeforeTheTurn(underlying: error) : error
         let retrying = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && turns[recordId]?.retried != true

@@ -65,8 +65,12 @@ extension ACPXDaemonBackend {
 
     /// Turn `id`'s prompt began to be written to `connection`: a cancel goes to it from
     /// now on, and one asked before is sent now (acpx's `applyPendingCancel` once the
-    /// prompt is active).
-    func promptWritten(recordId: String, turn id: UUID, to connection: ACPAgentConnection, sessionId: SessionId) async {
+    /// prompt is active). A `note` the turn took already, acting on the attempt's end
+    /// before it came (``takePromptNote(of:from:)``), comes too late to do anything.
+    func promptWritten(
+        recordId: String, turn id: UUID, to connection: ACPAgentConnection, sessionId: SessionId, note: WriteMark
+    ) async {
+        guard note.takeNote() else { return }
         // The prompt went out: the controls sent meanwhile run on its agent now, as acpx's
         // owner publishes them (`onPromptActive`).
         if turns[recordId]?.id == id { tickets[recordId]?.publish() }

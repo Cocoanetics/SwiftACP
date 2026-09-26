@@ -89,6 +89,19 @@ extension ACPXDaemonBackend {
         tickets[recordId]?.unpublish() ?? false
     }
 
+    /// Take the note that an attempt's prompt went out, should it not have come by the time
+    /// the turn acts on the attempt's end, and do as it would have: publish the controls
+    /// waiting for the prompt. Once taken, the note does nothing when it comes. acpx
+    /// publishes them as it sends the prompt, before its answer can be handled
+    /// (`onPromptActive`); here the note comes from the writer's thread in a task of its
+    /// own, which under load can come after the answer. Then a control waiting for a
+    /// prompt that was answered would fail as though it had never gone out, and one taken
+    /// as the turn moves to a fresh launch would be published while the retry connects,
+    /// for no agent to run on.
+    func takePromptNote(of recordId: String, from wrote: WriteMark) {
+        if wrote.takeNote() { tickets[recordId]?.publish() }
+    }
+
     /// The prompt's turn is over, as acpx's `seal` says (`onPromptFinalizing`): a control
     /// from now on waits for the session's next turn, and those taken are done before the
     /// turn's last save.
@@ -164,21 +177,38 @@ struct PromptEndedBeforeControls: LocalizedError, OutputErrorMeta {
 }
 
 /// Set once anything is written to the agent. Marked from the transport's writer
-/// task, so lock-protected.
+/// task, so lock-protected. A mark can leave a note that the prompt went out, which
+/// whoever comes to it first takes (``ACPXDaemonBackend/takePromptNote(of:from:)``).
 final class WriteMark: @unchecked Sendable {
     private let lock = NSLock()
     private var marked = false
+    private var noted = false
 
-    func mark() {
-        lock.withLock { marked = true }
+    func mark(noting: Bool = false) {
+        lock.withLock {
+            marked = true
+            if noting { noted = true }
+        }
     }
 
+    /// The write failed: the agent does not have it, and a note it left that no one took
+    /// is withdrawn — the prompt never went out.
     func unmark() {
-        lock.withLock { marked = false }
+        lock.withLock {
+            marked = false
+            noted = false
+        }
     }
 
     var happened: Bool {
         lock.withLock { marked }
     }
 
+    /// Take the note a mark left, unless it was taken: whoever takes it acts on it.
+    func takeNote() -> Bool {
+        lock.withLock {
+            defer { noted = false }
+            return noted
+        }
+    }
 }

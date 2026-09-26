@@ -35,7 +35,8 @@ extension DaemonToolsTests {
 
     /// A prompt the agent does not answer in time fails the turn with `TIMEOUT`: the
     /// prompt is cancelled once the session's updates have gone quiet — the JSON stream
-    /// shows `session/cancel` after it, and the report — and its agent let go.
+    /// shows `session/cancel` after it, and the report — and its agent let go. The agent is
+    /// held first, so that the timeout is the prompt's alone (``holdAgent(_:_:)``).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aPromptPastTheTimeoutIsCancelledAndItsAgentLetGo() async throws {
         let directory = try Self.scratchDirectory()
@@ -44,6 +45,8 @@ extension DaemonToolsTests {
             let session = try await retrySession(in: directory)
             try session.set("stall-prompt")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await holdAgent(daemon, session.id)
+            let prompted = session.prompts
             let client = CallingClient()
             await #expect(throws: TimeoutError(milliseconds: 300)) {
                 try await limitedPrompt(
@@ -53,7 +56,7 @@ extension DaemonToolsTests {
             #expect(turn.first == "wire:outbound:session/prompt")
             #expect(turn.contains("wire:outbound:session/cancel"))
             #expect(turn.last == "failed:TIMEOUT")
-            #expect(session.prompts == 1)
+            #expect(session.prompts == prompted + 1)
             #expect(await daemon.heldConnection(session.id) == nil)
             // Its owner still holds the session, as acpx's outlives its client's agent.
             let status = await daemon.sessionStatus(sessionId: session.id)
@@ -63,7 +66,8 @@ extension DaemonToolsTests {
     }
 
     /// An answer that comes past the deadline, while the session's updates go quiet,
-    /// stands — as acpx takes it (`recoveredSessionResult`) — and the agent is kept.
+    /// stands — as acpx takes it (`recoveredSessionResult`) — and the agent, held before
+    /// (``holdAgent(_:_:)``), is kept.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anAnswerThatComesWhileTheUpdatesGoQuietStands() async throws {
         let directory = try Self.scratchDirectory()
@@ -72,6 +76,7 @@ extension DaemonToolsTests {
             let session = try await retrySession(in: directory, environment: "RETRY_AGENT_DELAY_MS=1000 ")
             try session.set("slow-prompt")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let held = try await holdAgent(daemon, session.id)
             let text = try await TurnReplyDrain.$current.withValue(
                 ReplyDrain(idleMilliseconds: 1_500, timeoutMilliseconds: 5_000)
             ) {
@@ -79,7 +84,7 @@ extension DaemonToolsTests {
                     daemon, session.id, limits: PromptLimits(timeoutMs: 300), client: CallingClient())
             }
             #expect(text == "hello")
-            #expect(await daemon.sessionStatus(sessionId: session.id).live)
+            #expect(await daemon.heldConnection(session.id) === held)
             await daemon.releaseAll()
         }
     }
@@ -104,7 +109,8 @@ extension DaemonToolsTests {
         }
     }
 
-    /// So does putting the turn's `--model` on the session (`applyPromptModelIfAdvertised`).
+    /// So does putting the turn's `--model` on the session (`applyPromptModelIfAdvertised`),
+    /// on an agent held before, so that it is this step that runs over.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func theTurnsModelPastTheTimeoutFailsTheTurn() async throws {
         let directory = try Self.scratchDirectory()
@@ -113,11 +119,13 @@ extension DaemonToolsTests {
             let session = try await retrySession(in: directory)
             try session.set("hang-model")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await holdAgent(daemon, session.id)
+            let prompted = session.prompts
             await #expect(throws: TimeoutError(milliseconds: 300)) {
                 try await limitedPrompt(
                     daemon, session.id, limits: PromptLimits(timeoutMs: 300), model: "b", client: CallingClient())
             }
-            #expect(session.prompts == 0)
+            #expect(session.prompts == prompted)
             await daemon.releaseAll()
         }
     }
@@ -279,6 +287,20 @@ extension DaemonToolsTests {
             agentCommand: command, cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll,
             authCredentials: [:], authPolicy: "skip")
         return RetrySession(id: created.acpxRecordId, mode: session.mode, attempts: session.attempts)
+    }
+
+    /// Launch the session's agent and hold it, as a turn leaves it — one cancelled as its
+    /// prompt goes out, which ends it on an agent that stalls too — so that a timed turn after
+    /// it has nothing to connect. The turn's `--timeout` bounds each step of connecting as
+    /// well, as acpx's does, and launching python under load can take longer than a short
+    /// one: the turn would time out before the step it is about. Returns the held agent's
+    /// connection.
+    @discardableResult
+    func holdAgent(_ daemon: ACPXDaemonBackend, _ sessionId: String) async throws -> ACPAgentConnection {
+        await daemon.setPromptGoingOut { _ in _ = try? await daemon.cancelSession(sessionId: sessionId) }
+        _ = try await limitedPrompt(daemon, sessionId, limits: PromptLimits(), client: CallingClient())
+        await daemon.setPromptGoingOut(nil)
+        return try #require(await daemon.heldConnection(sessionId))
     }
 
     /// Run one turn with `limits` as a calling client's request, answered on `client`.
