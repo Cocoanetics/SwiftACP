@@ -339,7 +339,7 @@ public final class ACPAgent: Sendable {
                 additionalDirectories: additionalDirectories, meta: meta))
         return ACPSession(
             id: response.sessionId, agent: self, modes: response.modes, meta: response.meta,
-            configOptions: response.configOptions, models: response.models)
+            rawConfigOptions: response.rawConfigOptions, models: response.models)
     }
 
     /// Resume a previously created session by id (requires `loadSession` support).
@@ -367,7 +367,7 @@ public final class ACPAgent: Sendable {
             suppressReplayUpdates: suppressReplayUpdates, rawWire: rawWire)
         return ACPSession(
             id: id, agent: self, modes: response.modes, meta: response.meta,
-            configOptions: response.configOptions, models: response.models)
+            rawConfigOptions: response.rawConfigOptions, models: response.models)
     }
 
     /// Resume a previously created session (`session/resume`).
@@ -381,7 +381,7 @@ public final class ACPAgent: Sendable {
                 additionalDirectories: additionalDirectories, meta: meta))
         return ACPSession(
             id: id, agent: self, modes: response.modes, meta: response.meta,
-            configOptions: response.configOptions, models: response.models)
+            rawConfigOptions: response.rawConfigOptions, models: response.models)
     }
 
     /// Reconnect to an existing session the way the agent says it can be reconnected:

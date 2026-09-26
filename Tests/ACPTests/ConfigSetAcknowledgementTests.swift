@@ -26,7 +26,7 @@ extension DaemonToolsTests {
             #expect(result.configOptions == nil)
 
             let record = try #require(SessionStore.loadRecord(session.id))
-            let reported = ControlCommand.reportedOptions(result, record: record)
+            let reported = ControlCommand.reportedOptions(result, record: record).arrayValue ?? []
             #expect(reported.compactMap { field($0, "id") } == [.string("model"), .string("effort")])
             let effort = reported.first { field($0, "id") == .string("effort") }
             #expect(effort.flatMap { field($0, "currentValue") } == .string("high"))
@@ -45,14 +45,26 @@ extension DaemonToolsTests {
         record.acpx = acpx
         let reported: [JSONValue] = [.object(["id": .string("reported")])]
         #expect(ControlCommand.reportedOptions(
-            SessionControlResult(resumed: false, configOptions: reported), record: record).count == 1)
-        #expect(ControlCommand.reportedOptions(
-            SessionControlResult(resumed: false, configOptions: reported), record: record).first
-            .flatMap { field($0, "id") } == .string("reported"))
+            SessionControlResult(resumed: false, configOptions: reported), record: record) == .array(reported))
         #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false), record: record)
-            .first.flatMap { field($0, "id") } == .string("saved"))
+            .arrayValue?.first.flatMap { field($0, "id") } == .string("saved"))
+        // `null`, as acpx's `??` takes it, falls back to the record too.
+        #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false, rawConfigOptions: .null),
+            record: record).arrayValue?.first.flatMap { field($0, "id") } == .string("saved"))
+        #expect(ControlCommand.reportedOptions(
+            SessionControlResult(resumed: false, rawConfigOptions: .string("oops")), record: record) == .string("oops"))
         record.acpx = nil
-        #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false), record: record).isEmpty)
+        #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false), record: record) == .array([]))
+    }
+
+    /// The count `set` prints is the options' `length`: a string's UTF-16 code units, as
+    /// acpx counts a string reply, and none for anything else that is no list.
+    @Test func aSetCountsTheOptionsAsAcpxDoes() {
+        #expect(ControlCommand.optionCount(.array([.null, .null])) == 2)
+        #expect(ControlCommand.optionCount(.string("oops")) == 4)
+        #expect(ControlCommand.optionCount(.string("é😀")) == 3)
+        #expect(ControlCommand.optionCount(.integer(5)) == 0)
+        #expect(ControlCommand.optionCount(.object([:])) == 0)
     }
 
     /// acpx's acknowledgement sets the first option with the id (`find`), not every one.

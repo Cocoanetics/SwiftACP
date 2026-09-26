@@ -106,11 +106,12 @@ public enum ModelApplication {
         onWarning: ((String) -> Void)? = nil
     ) async throws {
         guard model != nil || !configOptions.isEmpty else { return }
-        let advertised = ModelSupport.modelState(fromConfigOptions: session.configOptions)
+        let reported = ModelSupport.normalizedResponseConfigOptions(session.rawConfigOptions)
+        let advertised = ModelSupport.modelState(fromConfigOptions: reported)
             ?? ModelSupport.modelState(fromLegacyModels: session.models)
         control.update { state in
             if let advertised { ModelSupport.applyAdvertisedModelState(advertised, to: &state) }
-            ModelSupport.applyConfigOptions(session.configOptions ?? [], to: &state)
+            ModelSupport.applyConfigOptionsToState(reported ?? .array([]), to: &state)
         }
         let application = try await applyRequestedModel(
             connection: connection, sessionId: session.sessionId, requestedModel: model,
@@ -158,7 +159,7 @@ public enum ModelApplication {
             else { return }
             var options: [JSONValue] = []
             if case .array(let reported)? = announced["configOptions"] { options = reported }
-            update { ModelSupport.applyConfigOptions(options, to: &$0) }
+            update { ModelSupport.applyConfigOptionsToState(.array(options), to: &$0) }
         }
     }
 

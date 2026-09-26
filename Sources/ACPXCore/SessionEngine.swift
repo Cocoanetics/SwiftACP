@@ -134,7 +134,8 @@ public enum SessionEngine {
     private struct Created {
         let sessionId: String
         let meta: JSONValue?
-        let configOptions: [JSONValue]?
+        /// As acpx takes them (``ModelSupport/normalizedResponseConfigOptions(_:)``).
+        let configOptions: JSONValue?
         /// The models it advertises.
         let models: ModelSupport.ModelState?
         let application: ModelApplication.Application
@@ -146,7 +147,8 @@ public enum SessionEngine {
         let response = try await target.handle.connection.newSession(
             NewSessionRequest(cwd: target.cwd, mcpServers: target.mcpServers, meta: target.meta))
         return try await applyingModel(
-            to: response.sessionId, meta: response.meta, configOptions: response.configOptions,
+            to: response.sessionId, meta: response.meta,
+            configOptions: ModelSupport.normalizedResponseConfigOptions(response.rawConfigOptions),
             models: response.models, on: target)
     }
 
@@ -165,7 +167,9 @@ public enum SessionEngine {
                 id: sessionId, cwd: target.cwd, mcpServers: target.mcpServers, meta: target.meta,
                 suppressReplayUpdates: true)
             return try await applyingModel(
-                to: sessionId, meta: session.meta, configOptions: session.configOptions, models: session.models,
+                to: sessionId, meta: session.meta,
+                configOptions: ModelSupport.normalizedResponseConfigOptions(session.rawConfigOptions),
+                models: session.models,
                 on: target)
         } catch {
             throw SessionResumeError(sessionId: sessionId, underlying: error)
@@ -173,7 +177,7 @@ public enum SessionEngine {
     }
 
     private static func applyingModel(
-        to sessionId: String, meta: JSONValue?, configOptions: [JSONValue]?, models: JSONValue?, on target: Target
+        to sessionId: String, meta: JSONValue?, configOptions: JSONValue?, models: JSONValue?, on target: Target
     ) async throws -> Created {
         let advertised = ModelSupport.modelState(fromConfigOptions: configOptions)
             ?? ModelSupport.modelState(fromLegacyModels: models)

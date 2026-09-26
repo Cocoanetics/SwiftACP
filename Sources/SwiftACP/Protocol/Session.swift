@@ -29,12 +29,23 @@ public struct NewSessionRequest: Codable, Sendable {
     }
 }
 
+/// Read as acpx reads it (see `SessionReplyCoding.swift`).
 public struct NewSessionResponse: Codable, Sendable {
     public var sessionId: SessionId
+    /// The agent's modes, when it sent them as the ACP schema has them.
     public var modes: SessionModeState?
-    public var configOptions: [JSONValue]?
+    /// The config options, when the agent sent a list of them. `nil` when it sent none,
+    /// or something other than a list, which ``rawConfigOptions`` keeps.
+    public var configOptions: [JSONValue]? {
+        get { rawConfigOptions?.arrayValue }
+        set { rawConfigOptions = newValue.map(JSONValue.array) }
+    }
+    /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
+    /// the reply has none, and ``JSONValue/null`` when it is `null`.
+    public var rawConfigOptions: JSONValue?
     /// Legacy model advertisement (`{ currentModelId, availableModels }`), used
-    /// by agents like Codex that don't expose models as config options.
+    /// by agents like Codex that don't expose models as config options — as the agent
+    /// sent it, ``JSONValue/null`` included.
     public var models: JSONValue?
     public var meta: JSONValue?
 
@@ -47,7 +58,7 @@ public struct NewSessionResponse: Codable, Sendable {
     ) {
         self.sessionId = sessionId
         self.modes = modes
-        self.configOptions = configOptions
+        self.rawConfigOptions = configOptions.map(JSONValue.array)
         self.models = models
         self.meta = meta
     }
@@ -87,11 +98,22 @@ public struct LoadSessionRequest: Codable, Sendable {
     }
 }
 
+/// Read as acpx reads it (see `SessionReplyCoding.swift`).
 public struct LoadSessionResponse: Codable, Sendable {
+    /// The agent's modes, when it sent them as the ACP schema has them.
     public var modes: SessionModeState?
-    public var configOptions: [JSONValue]?
+    /// The config options, when the agent sent a list of them. `nil` when it sent none,
+    /// or something other than a list, which ``rawConfigOptions`` keeps.
+    public var configOptions: [JSONValue]? {
+        get { rawConfigOptions?.arrayValue }
+        set { rawConfigOptions = newValue.map(JSONValue.array) }
+    }
+    /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
+    /// the reply has none, and ``JSONValue/null`` when it is `null`.
+    public var rawConfigOptions: JSONValue?
     /// Legacy model advertisement (`{ currentModelId, availableModels }`), used
-    /// by agents like Codex that don't expose models as config options.
+    /// by agents like Codex that don't expose models as config options — as the agent
+    /// sent it, ``JSONValue/null`` included.
     public var models: JSONValue?
     public var meta: JSONValue?
 
@@ -102,7 +124,7 @@ public struct LoadSessionResponse: Codable, Sendable {
         meta: JSONValue? = nil
     ) {
         self.modes = modes
-        self.configOptions = configOptions
+        self.rawConfigOptions = configOptions.map(JSONValue.array)
         self.models = models
         self.meta = meta
     }
@@ -248,7 +270,8 @@ public struct CancelNotification: Codable, Sendable {
 // MARK: - session modes
 
 /// The agent's mode menu for a session: which mode is active and which are
-/// available. Advertised on `session/new` / `session/load`.
+/// available. Advertised on `session/new` / `session/load`. Read as the ACP schema
+/// reads it (see `SessionReplyCoding.swift`).
 public struct SessionModeState: Codable, Hashable, Sendable {
     public var currentModeId: String
     public var availableModes: [SessionMode]
@@ -257,10 +280,15 @@ public struct SessionModeState: Codable, Hashable, Sendable {
         self.currentModeId = currentModeId
         self.availableModes = availableModes
     }
+
+    enum CodingKeys: String, CodingKey {
+        case currentModeId, availableModes
+    }
 }
 
 /// One operating mode the agent offers (e.g. "ask", "code"); switched with
-/// `session/set_mode` and reported back via `current_mode_update`.
+/// `session/set_mode` and reported back via `current_mode_update`. Read as the ACP
+/// schema reads it (see `SessionReplyCoding.swift`).
 public struct SessionMode: Codable, Hashable, Sendable {
     public var id: String
     public var name: String
@@ -270,6 +298,10 @@ public struct SessionMode: Codable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.description = description
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description
     }
 }
 
@@ -303,11 +335,26 @@ public struct SetSessionConfigOptionRequest: Codable, Sendable {
 }
 
 /// `session/set_config_option` response — the agent's full set of config options
-/// after the change (each opaque, since the schema is agent-specific).
+/// after the change (each opaque, since the schema is agent-specific). Read as acpx
+/// reads it (see `SessionReplyCoding.swift`).
 public struct SetSessionConfigOptionResponse: Codable, Sendable {
-    public var configOptions: [JSONValue]?
+    /// The config options, when the agent sent a list of them. `nil` when it sent none,
+    /// or something other than a list, which ``rawConfigOptions`` keeps.
+    public var configOptions: [JSONValue]? {
+        get { rawConfigOptions?.arrayValue }
+        set { rawConfigOptions = newValue.map(JSONValue.array) }
+    }
+    /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
+    /// the reply has none — it only acknowledges — and ``JSONValue/null`` when it is
+    /// `null`.
+    public var rawConfigOptions: JSONValue?
+
     public init(configOptions: [JSONValue]? = nil) {
-        self.configOptions = configOptions
+        self.rawConfigOptions = configOptions.map(JSONValue.array)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case configOptions
     }
 }
 

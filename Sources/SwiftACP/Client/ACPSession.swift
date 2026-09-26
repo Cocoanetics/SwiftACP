@@ -16,20 +16,34 @@ public struct ACPSession: Sendable {
     /// The `_meta` of the agent's reply that opened the session — `session/new`,
     /// `session/load` or `session/resume` — where an agent names its own session id.
     public let meta: JSONValue?
-    /// The config options that reply advertised, when it named any.
-    public let configOptions: [JSONValue]?
-    /// The legacy `models` block that reply advertised, when it had one.
+    /// That reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
+    /// it had none, and ``JSONValue/null`` when it was `null`.
+    public let rawConfigOptions: JSONValue?
+    /// The legacy `models` block that reply advertised, when it had one — as sent,
+    /// ``JSONValue/null`` included.
     public let models: JSONValue?
+
+    /// The config options that reply advertised, when it listed any.
+    public var configOptions: [JSONValue]? { rawConfigOptions?.arrayValue }
 
     public init(
         id: SessionId, agent: ACPAgent, modes: SessionModeState? = nil, meta: JSONValue? = nil,
         configOptions: [JSONValue]? = nil, models: JSONValue? = nil
     ) {
+        self.init(
+            id: id, agent: agent, modes: modes, meta: meta, rawConfigOptions: configOptions.map(JSONValue.array),
+            models: models)
+    }
+
+    public init(
+        id: SessionId, agent: ACPAgent, modes: SessionModeState?, meta: JSONValue?, rawConfigOptions: JSONValue?,
+        models: JSONValue?
+    ) {
         self.id = id
         self.agent = agent
         self.modes = modes
         self.meta = meta
-        self.configOptions = configOptions
+        self.rawConfigOptions = rawConfigOptions
         self.models = models
     }
 

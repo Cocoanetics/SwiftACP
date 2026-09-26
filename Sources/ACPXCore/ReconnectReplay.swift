@@ -95,8 +95,7 @@ public enum ReconnectReplay {
         }
 
         private static func modelConfigId(_ state: SessionAcpxState?) -> String? {
-            guard case .array(let options)? = state?.configOptions else { return nil }
-            return ModelSupport.modelState(fromConfigOptions: options)?.configId
+            ModelSupport.modelState(fromConfigOptions: state?.configOptions)?.configId
         }
     }
 
@@ -105,15 +104,20 @@ public enum ReconnectReplay {
         public var sessionId: String
         /// Whether a `session/new` started it, rather than a load or resume.
         public var createdFreshSession: Bool
-        public var configOptions: [JSONValue]?
+        /// The reply's `configOptions` as acpx takes them
+        /// (``ModelSupport/normalizedResponseConfigOptions(_:)``): `nil` when it had none.
+        public var configOptions: JSONValue?
         public var models: ModelSupport.ModelState?
         public var legacyModelMetadataPresent: Bool
 
-        public init(sessionId: String, createdFreshSession: Bool, configOptions: [JSONValue]?, models: JSONValue?) {
+        /// - Parameters:
+        ///   - configOptions: the reply's `configOptions` as the agent sent them.
+        ///   - models: the reply's `models` as the agent sent them, `null` included.
+        public init(sessionId: String, createdFreshSession: Bool, configOptions: JSONValue?, models: JSONValue?) {
             self.sessionId = sessionId
             self.createdFreshSession = createdFreshSession
-            self.configOptions = configOptions
-            self.models = ModelSupport.modelState(fromConfigOptions: configOptions)
+            self.configOptions = ModelSupport.normalizedResponseConfigOptions(configOptions)
+            self.models = ModelSupport.modelState(fromConfigOptions: self.configOptions)
                 ?? ModelSupport.modelState(fromLegacyModels: models)
             legacyModelMetadataPresent = models != nil
         }
@@ -130,7 +134,7 @@ public enum ReconnectReplay {
     /// What the session's own reply says of the record, before anything is replayed —
     /// acpx's `applyConfigOptionsToRecord` and `applyReconnectedModelState`.
     public static func applyLoaded(_ loaded: Loaded, to state: inout SessionAcpxState?) {
-        if let configOptions = loaded.configOptions {
+        if let configOptions = loaded.configOptions, configOptions.isTruthyInJavaScript {
             // On the block built anew — a clone, or a new block when there was none.
             var acpx = state?.cloned() ?? SessionAcpxState()
             ModelSupport.applyConfigOptionsModelState(configOptions, to: &acpx)
@@ -229,8 +233,8 @@ public enum ReconnectReplay {
     /// What replaying the model left: acpx's `ModelReplayResult`.
     private struct ModelReplay {
         let models: ModelSupport.ModelState?
-        /// The options the agent's reply reported, when it replied with any.
-        let options: [JSONValue]?
+        /// The options the agent's reply reported, as it sent them, when it replied with any.
+        let options: JSONValue?
     }
 
     /// What replaying the options left: acpx's `ConfigReplayResult`.
@@ -282,7 +286,7 @@ public enum ReconnectReplay {
             state = acpx
             // What the selection left in the record: a reply reporting no options
             // acknowledged the model, and the session still offers it (acpx 0.19.3, #778).
-            return ModelReplay(models: ModelSupport.advertisedModelState(acpx), options: response?.configOptions)
+            return ModelReplay(models: ModelSupport.advertisedModelState(acpx), options: response?.rawConfigOptions)
         } catch {
             throw SessionReplayError(.model, """
                 Failed to replay saved session model \(modelId) on ACP session \(target.sessionId): \
@@ -293,8 +297,12 @@ public enum ReconnectReplay {
 
     /// acpx's `replayDesiredConfigOptions`: each saved option in turn, but for the one
     /// being replaced and one the last reply no longer accepts.
+    ///
+    /// Only a list of options can accept a value. acpx checks any reply JavaScript reads
+    /// as true (`acceptedConfigOptions && …find(…)`), and one that is no list fails it
+    /// with a `TypeError`; here it accepts no value.
     private static func replayOptions(
-        _ options: [(id: String, value: String)], skipping replacingKey: String?, accepted: [JSONValue]?,
+        _ options: [(id: String, value: String)], skipping replacingKey: String?, accepted: JSONValue?,
         state: inout SessionAcpxState?, on target: Target
     ) async throws -> OptionsReplay? {
         var accepted = accepted
@@ -303,7 +311,8 @@ public enum ReconnectReplay {
             // Each reply can retire a later selection; what the session started with
             // does not.
             if configId == replacingKey { continue }
-            if let accepted, !acceptsSavedValue(value, of: configId, in: accepted) { continue }
+            if let accepted, accepted.isTruthyInJavaScript,
+               !acceptsSavedValue(value, of: configId, in: accepted.arrayValue ?? []) { continue }
             do {
                 let models = ModelSupport.advertisedModelState(state)
                 let response = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
@@ -316,7 +325,7 @@ public enum ReconnectReplay {
                 state = acpx
                 // Read back from the record, which keeps the options a reply reporting none
                 // left as they were (acpx 0.19.3, #778).
-                if case .array(let options)? = acpx.configOptions { accepted = options } else { accepted = nil }
+                accepted = acpx.configOptions
                 replayed = OptionsReplay(models: ModelSupport.advertisedModelState(acpx))
             } catch {
                 throw SessionReplayError(.configOption, """
