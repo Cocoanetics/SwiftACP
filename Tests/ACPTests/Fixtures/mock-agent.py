@@ -271,6 +271,8 @@ def main():
                     # MOCK_LOAD_SESSION picks how `session/load` behaves (see below);
                     # only `unsupported` stops advertising it.
                     "loadSession": LOAD_MODE != "unsupported",
+                    # MOCK_CAN_CLOSE advertises `session/close`, which it answers with `{}`.
+                    **({"sessionCapabilities": {"close": {}}} if os.environ.get("MOCK_CAN_CLOSE") else {}),
                     "promptCapabilities": {
                         "image": bool(os.environ.get("MOCK_IMAGE_CAPABLE")),
                         "audio": False,
@@ -290,6 +292,8 @@ def main():
             if os.environ.get("MOCK_NEW_META"):
                 result["_meta"] = json.loads(os.environ["MOCK_NEW_META"])
             respond(req_id, result)
+        elif method == "session/close" and os.environ.get("MOCK_CAN_CLOSE"):
+            respond(req_id, {})
         elif method == "session/load" and LOAD_MODE != "unsupported":
             # `gone` (the default) is the usual reason a fresh agent process cannot
             # load a session: it no longer has it. `ok` takes it back; `internal`

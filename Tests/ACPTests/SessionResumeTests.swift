@@ -229,19 +229,22 @@ import Testing
         }
     }
 
-    /// A session a daemon holds is closed there before it is taken back: its agent goes, and
-    /// the session resumed is open.
+    /// A session a daemon holds is closed there before it is taken back, as acpx 0.19.3's
+    /// owner closes it (`closeActiveBackendSession`): `session/close` to the agent that held
+    /// it, which then goes, and `session/load` by the new one. The session resumed is open.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aHeldSessionIsClosedBeforeItIsTakenBack() async throws {
         let (a, _) = try Self.directories()
         defer { try? FileManager.default.removeItem(at: a.deletingLastPathComponent()) }
-        let agent = try Self.agent(load: "ok", log: a.appendingPathComponent("requests.ndjson"))
+        let log = a.appendingPathComponent("requests.ndjson")
+        let agent = try Self.agent(load: "ok", log: log, environment: "MOCK_CAN_CLOSE=1 ")
         try await withIsolatedStore {
             let id = await Self.acpx(["--format", "quiet", "sessions", "new"], agent: agent, cwd: a).out
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
             _ = try await backend.runPrompt(sessionId: id, text: "hi")
             let held = try #require(await backend.heldConnection(id))
+            let before = Self.requests(log).count
 
             let resumed = await Self.acpx(
                 ["sessions", "new", "--resume-session", id], agent: agent, cwd: a,
@@ -249,6 +252,7 @@ import Testing
             #expect(resumed.code == 0)
             let letGo = await (try? withTimeout(milliseconds: 10_000) { await held.waitUntilClosed() }) != nil
             #expect(letGo, "the resumed session's old agent is still running")
+            #expect(Array(Self.requests(log).dropFirst(before)) == ["session/close \(id)", "session/load \(id)"])
             #expect(SessionStore.loadRecord(id)?.closed != true)
             await backend.releaseAll()
         }
