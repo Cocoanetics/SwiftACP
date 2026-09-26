@@ -77,6 +77,10 @@ struct FlowRuntimeSupportTests {
         let expected = try Data(contentsOf: URL(fileURLWithPath: installed.host))
         #expect(expected == Data(FlowHostScripts.host.utf8))
         #expect(try mode(directory) == 0o700)
+        // Owner-only whatever the umask: no one else may change what Node will run.
+        for script in [installed.host, installed.runtime, installed.sucrase] {
+            #expect(try mode(URL(fileURLWithPath: script)) == 0o600, "\(script)")
+        }
 
         try Data("process.exit(66)".utf8).write(to: URL(fileURLWithPath: installed.host))
         let decoy = root.appendingPathComponent("decoy.mjs")
@@ -88,6 +92,7 @@ struct FlowRuntimeSupportTests {
         #expect(try Data(contentsOf: URL(fileURLWithPath: installed.host)) == expected)
         let runtime = try FileManager.default.attributesOfItem(atPath: installed.runtime)
         #expect(runtime[.type] as? FileAttributeType == .typeRegular)
+        #expect(try mode(URL(fileURLWithPath: installed.host)) == 0o600)
         #expect(try mode(directory) & 0o022 == 0)
 
         let linked = FileManager.default.temporaryDirectory.appendingPathComponent("flow-cache-\(UUID().uuidString)")

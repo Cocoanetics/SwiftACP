@@ -21,12 +21,13 @@ struct FlowRunnerTests {
         var pendingRequests: Int?
     }
 
-    /// Run a flow module — `body` after acpx's helpers are imported — with `input`, beside
-    /// `files`. With `tracking`, the host is asked what it holds for attempts once the run
-    /// is over: not of a host whose callback holds its event loop, which cannot answer.
+    /// Run a flow module — `body` after acpx's helpers are imported, or as it is without
+    /// `prelude` — with `input`, beside `files`. With `tracking`, the host is asked what it
+    /// holds for attempts once the run is over: not of a host whose callback holds its
+    /// event loop, which cannot answer.
     private func runnerRun(
         _ body: String, extension ext: String = "mjs", files: [String: String] = [:],
-        input: WireJSON = .object([WireJSON.Member]()), tracking: Bool = false
+        input: WireJSON = .object([WireJSON.Member]()), tracking: Bool = false, prelude: Bool = true
     ) async throws -> Run {
         let node = try #require(AgentRegistry.which("node"))
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-runner-\(UUID().uuidString)")
@@ -39,7 +40,7 @@ struct FlowRunnerTests {
             try content.write(to: file, atomically: true, encoding: .utf8)
         }
         let flowFile = dir.appendingPathComponent("test.flow.\(ext)")
-        try ("import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n" + body)
+        try ((prelude ? "import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n" : "") + body)
             .write(to: flowFile, atomically: true, encoding: .utf8)
         let runs = dir.appendingPathComponent("runs")
         let host = try FlowHost.start(node: node, cwd: dir.path, environment: ProcessInfo.processInfo.environment)
@@ -274,6 +275,22 @@ struct FlowRunnerTests {
         #expect(run.code == 0, "\(run.err)")
         #expect(member(run.state, "outputs", "a")?.stringified
             == #"{"keys":["dirname","filename","url"],"dirname":true,"filename":true,"url":true}"#)
+    }
+
+    /// tsx's `import.meta` in a `.ts` flow that starts with a shebang, and holds a name the
+    /// swap would otherwise take (Codex findings).
+    @Test(.enabled(if: nodeAvailable))
+    func aTypeScriptFlowsImportMetaLeavesItsShebangAndNames() async throws {
+        let run = try await runnerRun("""
+            #!/usr/bin/env node
+            import { defineFlow, compute } from "acpx/flows";
+            const __acpxImportMeta: string = "mine";
+            export default defineFlow({ name: "shebang", startAt: "a", nodes: {
+              a: compute({ run: () => ({ mine: __acpxImportMeta, dirname: import.meta.dirname === __dirname }) }) },
+              edges: [] });
+            """, extension: "ts", prelude: false)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified == #"{"mine":"mine","dirname":true}"#)
     }
 
     /// acpx: "requires defineFlow before permission gating".

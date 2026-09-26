@@ -41,15 +41,10 @@ enum FlowHostFiles {
             let file = directory.appendingPathComponent(name)
             let data = Data(text.utf8)
             guard !holds(file, data) else { continue }
-            // Written whole under a temporary name, then moved into place: another acpx
-            // starting a flow at the same time finds the old file or the new, never half.
-            let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
-            try data.write(to: temporary)
-            guard rename(temporary.path, file.path) == 0 else {
-                let failure = errno
-                unlink(temporary.path)
-                throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
-            }
+            // Owner-only whatever the umask, written whole under a temporary name, then
+            // moved into place: another acpx starting a flow at the same time finds the old
+            // file or the new, never half.
+            try FlowRunStore.writePrivateFile(data, to: file)
         }
         return Installed(
             host: directory.appendingPathComponent("flow-host.mjs").path,

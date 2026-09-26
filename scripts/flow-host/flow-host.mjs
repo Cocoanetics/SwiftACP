@@ -203,6 +203,9 @@ function withImportMeta(code, namespace) {
   if (!code.includes("import.meta")) return code;
   const { parse, TokenType } = sucrase;
   const { tokens } = parse(code, false, false, false);
+  // A name the module does not hold itself.
+  let binding = "__acpxImportMeta";
+  while (code.includes(binding)) binding += "_";
   let result = "";
   let last = 0;
   const text = (token) => code.slice(token.start, token.end);
@@ -213,16 +216,19 @@ function withImportMeta(code, namespace) {
     if (before === TokenType.dot || before === TokenType.questionDot) continue;
     if (keyword.type !== TokenType._import && !(keyword.type === TokenType.name && text(keyword) === "import")) continue;
     if (dot.type !== TokenType.dot || name.type !== TokenType.name || text(name) !== "meta") continue;
-    result += code.slice(last, keyword.start) + "__acpxImportMeta";
+    result += code.slice(last, keyword.start) + binding;
     last = name.end;
   }
   if (last === 0) return code;
   result += code.slice(last);
-  // On the first line, after any "use strict", so lines keep their numbers.
-  const declaration = "const __acpxImportMeta = { dirname: __dirname, filename: __filename, "
+  // On the first line of code — after a shebang's line and any "use strict" — so lines
+  // keep their numbers.
+  const declaration = `const ${binding} = { dirname: __dirname, filename: __filename, `
     + `url: require("node:url").pathToFileURL(__filename).href + "?namespace=${namespace}" };`;
-  const prologue = /^"use strict";/.exec(result)?.[0] ?? "";
-  return prologue + declaration + result.slice(prologue.length);
+  const shebang = /^#![^\n]*\n?/.exec(result)?.[0] ?? "";
+  const rest = result.slice(shebang.length);
+  const prologue = /^"use strict";/.exec(rest)?.[0] ?? "";
+  return shebang + prologue + declaration + rest.slice(prologue.length);
 }
 
 // tsx's CommonJS `register`, while the flow loads: `require` compiles TypeScript with
