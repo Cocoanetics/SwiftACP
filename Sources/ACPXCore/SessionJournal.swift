@@ -81,34 +81,30 @@ public enum SessionJournal {
     /// segments are read newest first, up to the first with an anchor. Lines before a
     /// segment's anchor are passed over; after it, one that is neither an ACP message nor
     /// a journal record, or a record out of place, is corruption (``SessionJournalError``).
+    /// They are read as one capture (``withSnapshot(_:_:)``), as acpx's `readTail` reads them.
     static func readTail(recordId: String, maxSegments: Int) throws -> Tail {
         let active = ACPXPaths.sessionStreamPath(recordId).path
-        let paths = [active] + (1...max(maxSegments, 1)).map {
+        let paths = stride(from: max(maxSegments, 1), through: 1, by: -1).map {
             ACPXPaths.sessionStreamSegmentPath(recordId, segment: $0).path
-        }
-        var tail = SegmentState()
-        var activeState = SegmentState()
-        for path in paths {
-            guard try SessionArchive.isPresentSegment(path) else { continue }
-            let data: Data
-            do {
-                data = try SessionArchive.readFile(at: path)
-            } catch let failure as SessionArchive.Failure where failure.code == ENOENT {
-                continue
+        } + [active]
+        return try withSnapshot(paths) { segments in
+            var tail = SegmentState()
+            var activeState = SegmentState()
+            for segment in segments.reversed() {
+                var state = SegmentState()
+                var none: Page?
+                try state.consume(try segment.contents(), recordId: recordId, page: &none)
+                if segment.path == active { activeState = state }
+                if state.firstSequence != nil {
+                    tail = state
+                    break
+                }
             }
-            var state = SegmentState()
-            var none: Page?
-            try state.consume(data, recordId: recordId, page: &none)
-            if path == active { activeState = state }
-            if state.firstSequence != nil {
-                tail = state
-                break
-            }
+            return Tail(
+                sequence: tail.sequence, messageSequence: tail.firstSequence == nil ? nil : tail.messageSequence,
+                requestId: tail.requestId, activeSize: activeState.offset,
+                activeAnchored: activeState.firstSequence != nil, activePartial: !activeState.pending.isEmpty)
         }
-        return Tail(
-            sequence: tail.sequence, messageSequence: tail.firstSequence == nil ? nil : tail.messageSequence,
-            requestId: tail.requestId, activeSize: activeState.offset, activeAnchored: activeState.firstSequence != nil,
-            activePartial: !activeState.pending.isEmpty)
     }
 
     /// What reading one segment has found so far: acpx's `SegmentState`. A segment is read
@@ -284,8 +280,10 @@ public struct SessionJournalError: Error, OutputErrorMeta, LocalizedError, Equat
         self.message = message
     }
 
+    static let corruptCode = "WATCH_JOURNAL_CORRUPT"
+
     static func corrupt(_ message: String) -> SessionJournalError {
-        SessionJournalError(code: "WATCH_JOURNAL_CORRUPT", message: message)
+        SessionJournalError(code: corruptCode, message: message)
     }
 
     public var errorDescription: String? { message }

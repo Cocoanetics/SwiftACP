@@ -106,26 +106,24 @@ public enum SessionArchive {
 
     /// acpx's `listSessionEvents`: the ACP messages of the session's event log, oldest
     /// segment first — each line that `JSON.parse` reads as one. Read as acpx's journal
-    /// reads it: every segment's path looked at first, then those there read. One not
-    /// there is skipped. Anything else — not a regular file, or unreadable — fails the
-    /// export, which would otherwise leave part of the conversation out of an archive.
+    /// reads them (`readAcpMessages`): the segments there as one capture, which rotation
+    /// moving them has read again (``SessionJournal/withSnapshot(_:_:)``). Anything else —
+    /// not a regular file, or unreadable — fails the export, which would otherwise leave
+    /// part of the conversation out of an archive.
     static func history(of record: SessionRecord) throws -> [WireJSON] {
         let paths = stride(from: record.eventLog.maxSegments, through: 1, by: -1).map {
             ACPXPaths.sessionStreamSegmentPath(record.acpxRecordId, segment: $0).path
         } + [ACPXPaths.sessionStreamPath(record.acpxRecordId).path]
-        return try paths.filter(isPresentSegment).flatMap { path -> [WireJSON] in
-            let data: Data
-            do {
-                data = try readFile(at: path)
-            } catch let failure as Failure where failure.code == ENOENT {
-                // Gone since it was looked at: acpx's reader takes its snapshot again.
-                return []
-            }
-            // Split on the bytes: as a `String`, "\r\n" is one character, not a line's end.
-            return data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).compactMap { line in
-                guard let value = try? WireJSON.parse(String(decoding: line, as: UTF8.self)), isACPMessage(value)
-                else { return nil }
-                return value
+        return try SessionJournal.withSnapshot(paths) { segments in
+            try segments.flatMap { segment -> [WireJSON] in
+                // Split on the bytes: as a `String`, "\r\n" is one character, not a line's end.
+                try segment.contents().split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+                    .compactMap { line in
+                        guard let value = try? WireJSON.parse(String(decoding: line, as: UTF8.self)),
+                              isACPMessage(value)
+                        else { return nil }
+                        return value
+                    }
             }
         }
     }
