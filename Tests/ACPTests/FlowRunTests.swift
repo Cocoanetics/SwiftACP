@@ -185,6 +185,28 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(run.trace.last?["type"] == .text("node_started"))
     }
 
+    /// A run that ends leaves the flow's own timers to run out, as acpx's process does:
+    /// the result is printed, and a timer's `process.exit(7)` then ends it with 7 — only a
+    /// failure makes acpx exit at once.
+    @Test(.enabled(if: nodeAvailable))
+    func aRunLeavesTheFlowsTimersToRunOut() async throws {
+        let run = try await flowRun("""
+            export default defineFlow({ name: "late", startAt: "a",
+              nodes: { a: compute({ run: () => { setTimeout(() => process.exit(7), 1000); return 1; } }) },
+              edges: [] });
+            """)
+        #expect(run.code == 7)
+        #expect(run.out.hasPrefix("runId: ") && run.out.contains("status: completed"), "\(run.out)")
+        #expect(member(run.state, "status") == .text("completed"))
+        let failed = try await flowRun("""
+            export default defineFlow({ name: "late-failure", startAt: "a", nodes: {
+              a: compute({ run: () => { setTimeout(() => process.exit(7), 1000); throw new Error("nope"); } }) },
+              edges: [] });
+            """)
+        #expect(failed.code == 1)
+        #expect(failed.err == "nope\n")
+    }
+
     // MARK: - Before the run
 
     @Test(.enabled(if: nodeAvailable))

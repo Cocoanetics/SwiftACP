@@ -450,6 +450,9 @@ async function handle(message) {
         if (message.id !== undefined) send({ id: message.id, result: null });
         channel.end(() => process.exit(0));
         return;
+      case "host/release":
+        release();
+        return;
       default:
         throw Object.assign(new Error(`Method not found: ${message.method}`), { code: -32601 });
     }
@@ -476,8 +479,21 @@ channel.on("data", (chunk) => {
 channel.on("end", () => process.exit(0));
 channel.on("error", () => process.exit(1));
 
-// A terminal's Ctrl-C reaches this process too. The runner handles it, as acpx does,
-// and tells the host when to go.
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(signal, () => {});
+// A terminal's Ctrl-C reaches this process too. While the run goes on, the runner
+// handles it, as acpx does, and tells the host when to go.
+const INTERRUPTS = ["SIGINT", "SIGTERM", "SIGHUP"];
+const ignore = () => {};
+for (const signal of INTERRUPTS) {
+  process.on(signal, ignore);
+}
+
+// A run that has ended — completed or waiting — leaves acpx's process to the flow's own
+// timers and handles: acpx prints the result and ends once they have run out, with the
+// code they leave (a later `process.exit(7)`: 7). So the host stops holding itself open
+// for the runner, and takes Ctrl-C as acpx then does; it still goes if the runner does.
+function release() {
+  for (const signal of INTERRUPTS) {
+    process.removeListener(signal, ignore);
+  }
+  channel.unref();
 }

@@ -31,12 +31,13 @@ enum FlowCommand {
                     endInterrupted()
                     await runner.interrupt()
                 })
-                let status = await host.stop()
                 // The flow ended the host after its last answer — a timer's `process.exit()`
                 // — which in acpx ends the process before the result is printed.
-                if host.exitedOnItsOwn { return FlowHost.exitCode(waitStatus: status) }
+                if host.exitedOnItsOwn { return FlowHost.exitCode(waitStatus: await host.stop()) }
                 printFlowRunResult(result, format: flags.format)
-                return ExitCodes.success
+                // acpx then ends once the flow's own timers and handles have run out, with
+                // the code they leave; it exits at once only on failure.
+                return FlowHost.exitCode(waitStatus: await host.release())
             } catch is FlowHost.Exited {
                 // The flow's own code ended the host — `process.exit()`, a crash — and in acpx
                 // that is acpx's process: it ends as the host did, printing nothing more.
