@@ -25,13 +25,14 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
     }
 
     /// `flow run` on the fixture flow `name` — or on `body`, after acpx's helpers are
-    /// imported — in a directory of its own with the fixture agent as its `mock` profile,
-    /// started with `agentEnvironment`, and a `sub` directory. `options` go before
-    /// `flow run`, `arguments` after the file. With `interruptWhenLogged`, SIGINT arrives
-    /// once the agent logs a request with that text (`MOCK_REQUEST_LOG`).
+    /// imported — in a directory of its own with the fixture agent `agentScript` as its
+    /// `mock` profile, started with `agentEnvironment`, and a `sub` directory. `options` go
+    /// before `flow run`, `arguments` after the file. With `interruptWhenLogged`, SIGINT
+    /// arrives once the agent logs a request with that text (`MOCK_REQUEST_LOG`).
     private func flowRun(
         _ name: String, body: String? = nil, options: [String] = [], arguments: [String] = [],
-        agentEnvironment: [String: String] = [:], interruptWhenLogged: String? = nil
+        agentScript: String = "mock-agent.py", agentEnvironment: [String: String] = [:],
+        interruptWhenLogged: String? = nil
     ) async throws -> Run {
         let made = FileManager.default.temporaryDirectory.appendingPathComponent("flow-acp-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
@@ -45,8 +46,8 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
         } else {
             try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("flows/\(name)"), to: flowFile)
         }
-        let agent = dir.appendingPathComponent("mock-agent.py")
-        try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("mock-agent.py"), to: agent)
+        let agent = dir.appendingPathComponent(agentScript)
+        try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent(agentScript), to: agent)
         try FileManager.default.createDirectory(
             at: dir.appendingPathComponent("sub"), withIntermediateDirectories: true)
         var environment = agentEnvironment
@@ -183,6 +184,25 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
             $0["message"]?["method"]?.stringValue ?? $0["message"]?["result"]?["stopReason"]?.stringValue ?? "?"
         }
         #expect(methods.suffix(3) == ["session/prompt", "session/cancel", "cancelled"])
+    }
+
+    /// A turn that needed a permission question nobody could be asked — a write under
+    /// `--approve-reads`, non-interactive with `fail` — fails as acpx's client fails it once
+    /// the prompt is over: `PERMISSION_PROMPT_UNAVAILABLE`, exit 5, its JSON error the
+    /// client's own refusal, which acpx attaches to the failure.
+    @Test(.enabled(if: nodeAvailable && pythonAvailable))
+    func aTurnThatNeededAnUnaskableQuestionFails() async throws {
+        let run = try await flowRun(
+            "write.flow.mjs", body: Self.held.replacingOccurrences(of: "\"hold\"", with: "\"write\""),
+            options: ["--approve-reads", "--non-interactive-permissions", "fail", "--format", "json"],
+            agentScript: "write-agent.py")
+        let unavailable = "Permission prompt unavailable in non-interactive mode"
+        #expect(run.code == 5)
+        #expect(member(run.state, "results", "ask", "error") == .text(unavailable))
+        let line = try WireJSON.parse(run.out.trimmingCharacters(in: .newlines))
+        #expect(line["error"]?["code"] == .number(-32603) && line["error"]?["message"] == .text("Internal error"))
+        #expect(line["error"]?["data"]?["acpxCode"] == .text("PERMISSION_PROMPT_UNAVAILABLE"))
+        #expect(line["error"]?["data"]?["details"] == .text(unavailable))
     }
 
     /// A node naming its agent under `--agent`, which acpx refuses to combine, fails with

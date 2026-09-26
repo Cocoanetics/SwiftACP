@@ -19,10 +19,11 @@ struct FlowAgentSessions: FlowSessionRunner {
     func runIsolated(_ turn: FlowTurn) async throws -> String {
         let owner = FlowTurnOwner()
         let events = FlowTurnEvents(turn)
+        let errors = FlowTurnErrors()
         let stopListening = turn.control.onStop { owner.stop() }
         defer { stopListening() }
         do {
-            let sessionId = try await run(turn, owner: owner, events: events)
+            let sessionId = try await run(turn, owner: owner, events: events, errors: errors)
             await owner.close()
             await events.finish()
             return sessionId
@@ -40,7 +41,9 @@ struct FlowAgentSessions: FlowSessionRunner {
 
     /// acpx's `runOnce`: the agent started, a session created with the invocation's model,
     /// and the prompt sent — the attempt checked before each.
-    private func run(_ turn: FlowTurn, owner: FlowTurnOwner, events: FlowTurnEvents) async throws -> String {
+    private func run(
+        _ turn: FlowTurn, owner: FlowTurnOwner, events: FlowTurnEvents, errors: FlowTurnErrors
+    ) async throws -> String {
         try turn.control.check()
         let agent = turn.agent
         var advertised = flags.clientCapabilities
@@ -54,6 +57,7 @@ struct FlowAgentSessions: FlowSessionRunner {
                 inheritStderr: flags.verbose,
                 onRawWire: { direction, body in
                     guard let message = WireJSON(parsing: body) else { return }
+                    errors.observe(message, inbound: direction == .inbound)
                     turn.onMessage(direction == .outbound, message)
                 })
         }
@@ -74,8 +78,53 @@ struct FlowAgentSessions: FlowSessionRunner {
         try turn.control.check()
         turn.onSessionReady(session.id)
         owner.opened(session.id)
-        _ = try await session.prompt(turn.prompt)
+        // acpx's client fails a prompt that needed a permission question nobody could be
+        // asked with that, in place of how the prompt ended (`throwPromptPermissionFailureIfPresent`).
+        let connection = handle.connection
+        let unavailable = { FlowPromptUnavailable(acp: errors.match(FlowPromptUnavailable.message)) }
+        errors.reset()
+        do {
+            _ = try await session.prompt(turn.prompt)
+        } catch {
+            if await connection.permissionStats(for: session.id).promptUnavailable { throw unavailable() }
+            throw error
+        }
+        if await connection.permissionStats(for: session.id).promptUnavailable { throw unavailable() }
         return session.id
+    }
+}
+
+/// acpx's `PermissionPromptUnavailableError`, as a flow's turn fails with it: the turn
+/// needed a permission question nobody could be asked (`--non-interactive-permissions
+/// fail`). acpx reports it as `PERMISSION_PROMPT_UNAVAILABLE`, exit 5, with the ACP error
+/// its turn saw that says so (`attachAcpErrorPayload`): the client's own refusal.
+struct FlowPromptUnavailable: Error, LocalizedError, OutputErrorMeta, AcpErrorCarrier {
+    var acp: AcpErrorPayload?
+    static let message = FileSystemPermissionError.promptUnavailable.description
+
+    var errorDescription: String? { Self.message }
+    var outputCode: String? { "PERMISSION_PROMPT_UNAVAILABLE" }
+    var detailCode: String? { nil }
+    var origin: String? { nil }
+}
+
+/// acpx's `AcpErrorTracker` for a flow's turn: the ACP errors on its wire since its prompt
+/// went out — before that, since the agent started.
+final class FlowTurnErrors: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tracker = AcpErrorTracker()
+
+    func observe(_ message: WireJSON, inbound: Bool) {
+        lock.withLock { tracker.observe(message, inbound: inbound) }
+    }
+
+    /// The prompt goes out: nothing seen before says how it fails.
+    func reset() {
+        lock.withLock { tracker.reset() }
+    }
+
+    func match(_ failureText: String) -> AcpErrorPayload? {
+        lock.withLock { tracker.match(failureText: failureText) }
     }
 }
 
@@ -126,27 +175,27 @@ final class FlowTurnOwner: @unchecked Sendable {
     /// The attempt stopped the turn.
     func stop() {
         let held: Held? = lock.withLock {
-            guard !stopped else { return nil }
-            stopped = true
-            return Held(agent: agent, sessionId: sessionId, launching: launching)
+            guard !self.stopped else { return nil }
+            self.stopped = true
+            return Held(agent: self.agent, sessionId: self.sessionId, launching: self.launching)
         }
         guard let held else { return }
-        guard let agent = held.agent else {
+        guard let running = held.agent else {
             held.launching?.cancel()
             return
         }
-        let sessionId = held.sessionId
+        let prompted = held.sessionId
         let task = Task {
-            let connection = agent.connection
-            if let sessionId, await connection.hasPromptInFlight(sessionId: sessionId) {
-                try? await connection.cancel(sessionId: sessionId)
+            let connection = running.connection
+            if let prompted, await connection.hasPromptInFlight(sessionId: prompted) {
+                try? await connection.cancel(sessionId: prompted)
                 _ = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) {
-                    await connection.waitForPromptToSettle(sessionId: sessionId)
+                    await connection.waitForPromptToSettle(sessionId: prompted)
                 }
             }
-            await agent.close()
+            await running.close()
         }
-        lock.withLock { stopping = task }
+        lock.withLock { self.stopping = task }
     }
 
     /// acpx's `closeOwnedClient`, which the turn ends with: the agent closed, once a stop

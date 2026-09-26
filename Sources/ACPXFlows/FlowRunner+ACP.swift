@@ -307,32 +307,32 @@ extension FlowRunner {
 /// conversation model updates.
 final class FlowTurnConversation: @unchecked Sendable {
     private let lock = NSLock()
-    private var record: SessionRecord
+    private var held: SessionRecord
     /// Whether an update or a client operation made the `acpx` state, which a record then has.
     private var touched = false
 
     init(_ record: SessionRecord) {
-        self.record = record
+        held = record
     }
 
     /// acpx's `recordSessionUpdate`.
     func record(_ notification: SessionNotification) {
         lock.withLock {
-            guard ConversationModel.recordSessionUpdate(into: &record, notification: notification) else { return }
-            touched = true
+            guard ConversationModel.recordSessionUpdate(into: &self.held, notification: notification) else { return }
+            self.touched = true
         }
     }
 
     /// acpx's `recordClientOperation`: the conversation stamped.
     func recordClientOperation() {
         lock.withLock {
-            record.updatedAt = nowISO()
-            touched = true
+            self.held.updatedAt = nowISO()
+            self.touched = true
         }
     }
 
     func snapshot() -> (SessionRecord, Bool) {
-        lock.withLock { (record, touched) }
+        lock.withLock { (self.held, self.touched) }
     }
 }
 

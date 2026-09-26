@@ -17,6 +17,12 @@ extension OutputErrorMeta {
     public var retryable: Bool? { nil }
 }
 
+/// A failure that carries the ACP error it came of — acpx's `error.acp`, which
+/// `attachAcpErrorPayload` sets on a failed turn — for its output to report.
+public protocol AcpErrorCarrier: Error {
+    var acp: AcpErrorPayload? { get }
+}
+
 /// acpx's `normalizeOutputError` as its queue owner applies it to a failed turn
 /// (`sendQueuedTaskError`): origin `runtime` and detail code
 /// `QUEUE_RUNTIME_PROMPT_FAILED` unless the error names its own, and as its `acp` the
@@ -52,6 +58,7 @@ public enum TurnFailure {
     /// acpx's `extractAcpError` on the failure itself: the agent's error response, when
     /// it has a message, or the one a session control wraps.
     public static func payload(of error: Error) -> AcpErrorPayload? {
+        if let carrier = error as? AcpErrorCarrier { return carrier.acp }
         if let control = error as? SessionControlError { return control.acp }
         if let resume = error as? SessionResumeError { return payload(of: resume.underlying) }
         guard let rpc = error as? JSONRPCErrorBody, !rpc.message.isEmpty else { return nil }
