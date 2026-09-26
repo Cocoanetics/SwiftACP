@@ -9,17 +9,33 @@ import Testing
 /// so a crashed daemon's lock no longer keeps every new one out.
 @Suite(.serialized) struct DaemonLockBirthTests {
     /// Some process that holds a pid now, standing in for one that took a crashed daemon's.
-    private func sleeper() throws -> Process {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
-        process.arguments = ["60"]
-        try process.run()
-        return process
-    }
+    private struct Sleeper {
+        private let process = Process()
+        private let exited: AsyncStream<Void>
 
-    private func stop(_ process: Process) {
-        if process.isRunning { process.terminate() }
-        process.waitUntilExit()
+        init() throws {
+            let (exited, exit) = AsyncStream<Void>.makeStream()
+            self.exited = exited
+            process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            process.arguments = ["60"]
+            process.terminationHandler = { _ in exit.finish() }
+            try process.run()
+        }
+
+        var pid: pid_t { process.processIdentifier }
+
+        /// Stop it, and return once it has exited, as its termination handler says. Not with
+        /// `waitUntilExit()`: that spins the calling thread's run loop until it notices the exit,
+        /// and on a thread of the cooperative pool it did not, once in a full run (#186).
+        func stop() async {
+            if process.isRunning { process.terminate() }
+            for await _ in exited {}
+        }
+
+        /// Stop it, not waiting for it to exit: the test's cleanup.
+        func end() {
+            if process.isRunning { process.terminate() }
+        }
     }
 
     private func writeLock(_ holder: DaemonLock.Holder) throws {
@@ -29,26 +45,26 @@ import Testing
     }
 
     /// A birth reads the same each time, is the process's own, and is gone with it.
-    @Test func aBirthIsAProcesssOwn() throws {
-        let child = try sleeper()
-        defer { stop(child) }
-        let birth = try #require(ProcessBirth.identity(of: child.processIdentifier))
-        #expect(ProcessBirth.identity(of: child.processIdentifier) == birth)
+    @Test func aBirthIsAProcesssOwn() async throws {
+        let child = try Sleeper()
+        defer { child.end() }
+        let birth = try #require(ProcessBirth.identity(of: child.pid))
+        #expect(ProcessBirth.identity(of: child.pid) == birth)
         #expect(ProcessBirth.identity(of: getpid()) != birth)
-        let started = try #require(ProcessBirth.date(of: child.processIdentifier))
+        let started = try #require(ProcessBirth.date(of: child.pid))
         #expect(abs(started.timeIntervalSinceNow) < 60)
-        stop(child)
-        #expect(ProcessBirth.identity(of: child.processIdentifier) == nil)
+        await child.stop()
+        #expect(ProcessBirth.identity(of: child.pid) == nil)
     }
 
     /// A lock naming a live pid whose process was born otherwise is stale: the CLI finds no
     /// daemon behind it, and a new daemon takes it, recording its own birth.
     @Test func aLockWhosePidAnotherProcessNowHoldsIsTakenOver() async throws {
-        let child = try sleeper()
-        defer { stop(child) }
+        let child = try Sleeper()
+        defer { child.end() }
         try await withIsolatedStore {
             let otherBirth = "darwin:1.000000"
-            try writeLock(DaemonLock.Holder(pid: child.processIdentifier, startedAt: nowISO(), birth: otherBirth))
+            try writeLock(DaemonLock.Holder(pid: child.pid, startedAt: nowISO(), birth: otherBirth))
             #expect(DaemonClient.liveHolder() == nil)
             #expect(try DaemonLock().acquire())
             let taken = try #require(DaemonLock().currentHolder())
@@ -60,14 +76,14 @@ import Testing
 
     /// A lock whose holder is still the process that wrote it is not taken.
     @Test func aLockItsHolderStillHoldsIsNotTaken() async throws {
-        let child = try sleeper()
-        defer { stop(child) }
+        let child = try Sleeper()
+        defer { child.end() }
         try await withIsolatedStore {
-            let birth = ProcessBirth.identity(of: child.processIdentifier)
-            try writeLock(DaemonLock.Holder(pid: child.processIdentifier, startedAt: nowISO(), birth: birth))
-            #expect(DaemonClient.liveHolder()?.pid == child.processIdentifier)
+            let birth = ProcessBirth.identity(of: child.pid)
+            try writeLock(DaemonLock.Holder(pid: child.pid, startedAt: nowISO(), birth: birth))
+            #expect(DaemonClient.liveHolder()?.pid == child.pid)
             #expect(try DaemonLock().acquire() == false)
-            #expect(DaemonLock().currentHolder()?.pid == child.processIdentifier)
+            #expect(DaemonLock().currentHolder()?.pid == child.pid)
         }
     }
 
@@ -75,13 +91,13 @@ import Testing
     /// that started after that cannot have written it — as with #176's lock, naming
     /// launchd — while one that was running then may have.
     @Test func anOlderLockIsJudgedByWhenItWasWritten() async throws {
-        let child = try sleeper()
-        defer { stop(child) }
+        let child = try Sleeper()
+        defer { child.end() }
         try await withIsolatedStore {
             try writeLock(DaemonLock.Holder(pid: 1, startedAt: "2000-01-01T00:00:00.000Z"))
             #expect(try DaemonLock().acquire())
             DaemonLock().release()
-            try writeLock(DaemonLock.Holder(pid: child.processIdentifier, startedAt: nowISO()))
+            try writeLock(DaemonLock.Holder(pid: child.pid, startedAt: nowISO()))
             #expect(try DaemonLock().acquire() == false)
         }
     }
