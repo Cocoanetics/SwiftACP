@@ -52,6 +52,13 @@ actor ACPXDaemonBackend: ACPXBackend {
     var turns: [String: TurnControl] = [:]
     /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
     var tickets: [String: PromptControlTicket] = [:]
+    /// Each session's prompts in line to begin, by record, while one has begun: see ``PromptLine``.
+    var promptLines: [String: PromptLine] = [:]
+    /// Monotonic source of tokens for the prompts waiting to begin.
+    var nextPromptToken = 0
+    /// The sessions being closed or let go, by record, with how many closes: no prompt begins
+    /// meanwhile, as acpx's owner takes none once it shuts down.
+    var shuttingDown: [String: Int] = [:]
     /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
     var owners: [String: SessionOwner] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
@@ -81,6 +88,10 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once a control sent during a prompt is taken on the prompt's ticket,
     /// before it waits for the prompt to go out.
     var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a prompt's turn has sealed its controls, before the turn is over.
+    var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: told the record id whenever a prompt waits to begin behind another.
+    var promptWaits: (@Sendable (_ recordId: String) -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 
@@ -352,6 +363,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     func releaseAll() async {
         // Before anything is let go: a turn whose agent this closes must not start another.
         stopping = true
+        // The prompts still in line are refused, as each owner acpx stops refuses its own.
+        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
         for recordId in owners.keys { forgetOwner(recordId) }
         while let recordId = live.keys.first {
             guard let entry = live.removeValue(forKey: recordId) else { continue }

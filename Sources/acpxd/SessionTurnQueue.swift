@@ -24,11 +24,20 @@ actor SessionTurnQueue {
         onQueued = observer
     }
 
+    /// Run with the session id as each caller asks for the slot, before it is decided — so a
+    /// test can act while a caller is on its way to it.
+    private var beforeAcquire: (@Sendable (String) async -> Void)?
+
+    func setBeforeAcquire(_ hook: (@Sendable (String) async -> Void)?) {
+        beforeAcquire = hook
+    }
+
     /// Take the slot for `sessionId`, returning once this caller owns it. Queues
     /// behind any in-flight turn; when `wait` is false, throws
     /// ``DaemonError/sessionBusy`` instead of queueing. Pair every successful call
     /// with exactly one ``release(_:)``.
     func acquire(_ sessionId: String, wait: Bool) async throws {
+        await beforeAcquire?(sessionId)
         if running.insert(sessionId).inserted { return }
         guard wait else { throw DaemonError.sessionBusy(sessionId) }
         let token = nextToken

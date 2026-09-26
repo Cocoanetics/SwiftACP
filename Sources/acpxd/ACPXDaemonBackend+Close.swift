@@ -10,8 +10,10 @@ extension ACPXDaemonBackend {
     /// closed — mirrors the CLI's `sessions close`.
     ///
     /// acpx's owner closes a session once drained (`closeActiveBackendSession` after
-    /// `shutdown.drain()`): a prompt running is cancelled, and the turn or control holding
-    /// the session gets 750 ms to be over (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
+    /// `shutdown.drain()`): a prompt running is cancelled, those waiting in line behind it are
+    /// refused, none of them sent, and so is any sent until the close is over
+    /// (`beginShutdown`); the turn or control holding the session gets 750 ms to be over
+    /// (`QUEUE_OWNER_ACTIVE_TURN_CANCEL_GRACE_MS`).
     /// Past that, its agent is closed under it — one still connecting too, as acpx's owner
     /// closes its client connecting or not — and the close waits for it to end all the
     /// same, in its place in line, as acpx's drain waits once it has closed its client:
@@ -27,22 +29,24 @@ extension ACPXDaemonBackend {
         let recordId = initial.acpxRecordId
         // Called off before it began, it does nothing at all: not even the prompt running is cancelled.
         try Task.checkCancellation()
-        _ = try? await cancelSession(sessionId: recordId)
-        try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
-        defer { Task { await turnQueue.release(recordId) } }
-        await askToClose(recordId)
-        forgetOwner(recordId)
-        await evict(recordId)
-        // Re-read after the await: closing the agent suspends this actor, so another
-        // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
-        // here to unblock) may have persisted changes meanwhile. Writing the
-        // pre-suspension snapshot would silently revert them.
-        var record = findRecord(initial.acpxRecordId) ?? initial
-        record.pid = nil
-        record.closed = true
-        record.closedAt = nowISO()
-        try SessionStore.writeRecord(record)
-        return true
+        return try await whileShuttingDown(recordId) {
+            _ = try? await cancelSession(sessionId: recordId)
+            try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
+            defer { Task { await turnQueue.release(recordId) } }
+            await askToClose(recordId)
+            forgetOwner(recordId)
+            await evict(recordId)
+            // Re-read after the await: closing the agent suspends this actor, so another
+            // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
+            // here to unblock) may have persisted changes meanwhile. Writing the
+            // pre-suspension snapshot would silently revert them.
+            var record = findRecord(initial.acpxRecordId) ?? initial
+            record.pid = nil
+            record.closed = true
+            record.closedAt = nowISO()
+            try SessionStore.writeRecord(record)
+            return true
+        }
     }
 
     /// Let go of the session's live agent without closing the session, for `sessions new`
@@ -58,12 +62,14 @@ extension ACPXDaemonBackend {
         try Task.checkCancellation()
         let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
             || owners[recordId] != nil
-        _ = try? await cancelSession(sessionId: recordId)
-        try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
-        defer { Task { await turnQueue.release(recordId) } }
-        forgetOwner(recordId)
-        await evict(recordId)
-        return held
+        return try await whileShuttingDown(recordId) {
+            _ = try? await cancelSession(sessionId: recordId)
+            try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
+            defer { Task { await turnQueue.release(recordId) } }
+            forgetOwner(recordId)
+            await evict(recordId)
+            return held
+        }
     }
 
     /// Ask the agent that the session's owner holds to close the session, when it

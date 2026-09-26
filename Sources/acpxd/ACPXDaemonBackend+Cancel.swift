@@ -8,11 +8,13 @@ import SwiftACP
 /// `session/cancel` however often it is asked; before that, the cancel waits, and the
 /// prompt is never sent: the turn ends cancelled. Either way the turn's prompt is not
 /// sent again: an attempt that fails is not retried, and a pause before a retry ends
-/// the turn cancelled at once. With no turn running there is nothing to cancel, and
-/// nothing is sent.
+/// the turn cancelled at once. A prompt begun but still waiting for the session ends
+/// cancelled once it holds it, nothing kept of it. With no turn running there is nothing
+/// to cancel, and nothing is sent.
 extension ACPXDaemonBackend {
-    /// A turn a session runs: starting until its prompt begins to be written, prompting
-    /// from then on (acpx's `starting` and `active`).
+    /// A turn a session runs, from when its prompt begins: starting until the prompt begins
+    /// to be written — waiting for the session first — and prompting from then on (acpx's
+    /// `starting` and `active`).
     struct TurnControl {
         /// Which turn it is, for a late note of its prompt going out.
         let id = UUID()
