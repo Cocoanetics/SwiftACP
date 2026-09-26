@@ -327,7 +327,7 @@ extension ACPXDaemonBackend {
                     id: sessionId, cwd: cwd, mcpServers: specs, meta: meta, suppressReplayUpdates: true)
             }
             return (session, ReconnectReplay.Loaded(
-                sessionId: session.id, createdFreshSession: false, configOptions: session.configOptions,
+                sessionId: session.id, createdFreshSession: false, configOptions: session.rawConfigOptions,
                 models: session.models))
         } catch {
             let record = findRecord(recordId)
@@ -342,7 +342,7 @@ extension ACPXDaemonBackend {
                 try await handle.newSession(cwd: cwd, mcpServers: specs, meta: meta)
             }
             return (session, ReconnectReplay.Loaded(
-                sessionId: session.id, createdFreshSession: true, configOptions: session.configOptions,
+                sessionId: session.id, createdFreshSession: true, configOptions: session.rawConfigOptions,
                 models: session.models))
         }
     }

@@ -10,8 +10,10 @@ public enum ModelSupport {
         public var availableModels: [(modelId: String, name: String)]
     }
 
-    public static func modelState(fromConfigOptions options: [JSONValue]?) -> ModelState? {
-        guard let options else { return nil }
+    /// acpx's `modelStateFromConfigOptions`: the model picker among the options a
+    /// session reported — none when what it reported is no list.
+    public static func modelState(fromConfigOptions options: JSONValue?) -> ModelState? {
+        guard case .array(let options)? = options else { return nil }
         for value in options {
             if let state = parseModelConfigOption(value) { return state }
         }
@@ -80,10 +82,24 @@ public enum ModelSupport {
 
     /// acpx's `applyConfigOptionsToRecord`: the config options a session reported, when
     /// it reported any, on the block built anew (a clone) — with the model state they carry.
-    public static func applyConfigOptions(_ configOptions: [JSONValue]?, to state: inout SessionAcpxState) {
-        guard let configOptions else { return }
+    /// What it reported is taken as it is, but not when JavaScript reads it as false
+    /// (`if (!configOptions) return`): `null`, `false`, `0` or `""`.
+    public static func applyConfigOptions(_ configOptions: JSONValue?, to state: inout SessionAcpxState) {
+        guard let configOptions, configOptions.isTruthyInJavaScript else { return }
+        applyConfigOptionsToState(configOptions, to: &state)
+    }
+
+    /// acpx's `applyConfigOptionsToState`: the config options a session reported, whatever
+    /// they are, on the block built anew (a clone) — with the model state they carry.
+    public static func applyConfigOptionsToState(_ configOptions: JSONValue, to state: inout SessionAcpxState) {
         state = state.cloned()
         applyConfigOptionsModelState(configOptions, to: &state)
+    }
+
+    /// acpx's `normalizeResponseConfigOptions`: a reply's `configOptions` as acpx takes
+    /// it — `null` as an empty list, anything else as it is, and none as none.
+    public static func normalizedResponseConfigOptions(_ raw: JSONValue?) -> JSONValue? {
+        raw == .null ? .array([]) : raw
     }
 
     /// acpx's `applyAdvertisedModelState`: the session's current model, the models it
@@ -102,9 +118,7 @@ public enum ModelSupport {
     /// legacy model list.
     public static func advertisedModelState(_ state: SessionAcpxState?) -> ModelState? {
         guard let state else { return nil }
-        var options: [JSONValue]?
-        if case .array(let configOptions)? = state.configOptions { options = configOptions }
-        if let fromOptions = modelState(fromConfigOptions: options) { return fromOptions }
+        if let fromOptions = modelState(fromConfigOptions: state.configOptions) { return fromOptions }
         guard state.modelControl != "config_option", let available = state.availableModels else { return nil }
         return ModelState(
             configId: nil, currentModelId: state.currentModelId ?? "",
@@ -124,7 +138,7 @@ public enum ModelSupport {
         var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
         options.model = modelId
         state.sessionOptions = options
-        state.currentModelId = modelState(fromConfigOptions: response?.configOptions)?.currentModelId ?? modelId
+        state.currentModelId = modelState(fromConfigOptions: response?.rawConfigOptions)?.currentModelId ?? modelId
         if let configId = modelConfigId ?? advertisedModelState(state)?.configId {
             state.desiredConfigOptions?.removeValue(forKey: configId)
             state.rebuiltOrders["desired_config_options"]?.removeAll { $0 == configId }
@@ -145,7 +159,7 @@ public enum ModelSupport {
         to state: inout SessionAcpxState
     ) {
         let modelConfigId = advertisedModelState(state)?.configId
-        if configId == modelConfigId || configId == modelState(fromConfigOptions: response.configOptions)?.configId {
+        if configId == modelConfigId || configId == modelState(fromConfigOptions: response.rawConfigOptions)?.configId {
             applyModelSelection(value, response: response, to: &state)
             return
         }
@@ -169,7 +183,7 @@ public enum ModelSupport {
         _ configId: String, value: String, unreportedBy response: SetSessionConfigOptionResponse?,
         in state: inout SessionAcpxState
     ) {
-        guard response?.configOptions == nil, case .array(var options)? = state.configOptions else { return }
+        guard response?.rawConfigOptions == nil, case .array(var options)? = state.configOptions else { return }
         for (index, option) in options.enumerated() {
             guard case .object(var fields) = option, case .string(let id)? = fields["id"], id == configId
             else { continue }
@@ -184,16 +198,20 @@ public enum ModelSupport {
     /// replace the record's, and saved selections follow what they now say — a reply
     /// can change sibling options — keeping only those still reported, in the order the
     /// reply lists them (`Object.fromEntries`).
+    ///
+    /// Only a list reports any selections. acpx walks a string reply's characters, which
+    /// report none; any other reply that is no list fails it with a `TypeError`
+    /// (`configOptions is not iterable`), and reports none here.
     static func applyAcceptedConfigOptions(
         _ response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
     ) {
         state = state.cloned()
-        guard let reported = response?.configOptions else { return }
+        guard let reported = response?.rawConfigOptions else { return }
         applyConfigOptionsModelState(reported, to: &state)
         guard let desired = state.desiredConfigOptions else { return }
         var kept: [String: String] = [:]
         var order: [String] = []
-        for case .object(let option) in reported {
+        for case .object(let option) in reported.arrayValue ?? [] {
             if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
                desired[id] != nil {
                 kept[id] = value
@@ -218,15 +236,14 @@ public enum ModelSupport {
     }
 
     /// acpx's `applyConfigOptionsModelState`: the config options the agent reported
-    /// replace the record's, with the model state they carry. When they carry none, a
-    /// legacy model control is kept, and any other model state is cleared.
-    public static func applyConfigOptionsModelState(_ configOptions: [JSONValue], to state: inout SessionAcpxState) {
-        var previousOptions: [JSONValue]?
-        if case .array(let options)? = state.configOptions { previousOptions = options }
+    /// replace the record's, as it reported them, with the model state they carry. When
+    /// they carry none — what it reported is no list, say — a legacy model control is
+    /// kept, and any other model state is cleared.
+    public static func applyConfigOptionsModelState(_ configOptions: JSONValue, to state: inout SessionAcpxState) {
         let preservesLegacyControl = state.modelControl == "legacy_set_model"
-            || (state.modelControl == nil && modelState(fromConfigOptions: previousOptions) == nil
+            || (state.modelControl == nil && modelState(fromConfigOptions: state.configOptions) == nil
                 && state.availableModels != nil)
-        state.configOptions = .array(configOptions)
+        state.configOptions = configOptions
         if let models = modelState(fromConfigOptions: configOptions) {
             applyAdvertisedModelState(models, to: &state)
         } else if preservesLegacyControl {
@@ -245,12 +262,28 @@ public enum ModelSupport {
     public static func applyInitialModelSelection(
         _ application: ModelApplication.Application, originalModels: ModelState?, to state: inout SessionAcpxState
     ) {
-        let replied = application.response?.configOptions
+        let replied = application.response?.rawConfigOptions
         applyConfigOptions(replied, to: &state)
         if let models = replied != nil ? modelState(fromConfigOptions: replied) : originalModels {
             applyAdvertisedModelState(models, to: &state)
         }
         guard application.applied, let modelId = application.modelId else { return }
         applyModelSelection(modelId, response: application.response, to: &state)
+    }
+}
+
+extension JSONValue {
+    /// Whether JavaScript reads the value as true: everything but `null`, `false`, `0`
+    /// and `""`.
+    var isTruthyInJavaScript: Bool {
+        switch self {
+        case .null: return false
+        case .bool(let value): return value
+        case .integer(let value): return value != 0
+        case .unsignedInteger(let value): return value != 0
+        case .double(let value): return value != 0 && !value.isNaN
+        case .string(let value): return !value.isEmpty
+        case .array, .object: return true
+        }
     }
 }

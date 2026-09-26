@@ -283,12 +283,12 @@ actor ACPXDaemonBackend: ACPXBackend {
                 ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
                 record.acpx = acpx
                 // As the agent reported them: none, for a reply that only acknowledges.
-                return response.configOptions
+                return response.rawConfigOptions
             })
         let (options, resumed) = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed, configOptions: options)
+        return SessionControlResult(resumed: resumed, rawConfigOptions: options)
     }
 
     /// Set a session's model on the live agent (reconnecting if needed) through the

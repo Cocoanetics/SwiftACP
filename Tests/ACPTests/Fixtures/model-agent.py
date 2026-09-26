@@ -22,7 +22,10 @@ without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_opt
 the `model` option) is answered with. `MODEL_AGENT_EXTRA_OPTION` names one more select to
 advertise after `effort`, with the values `x` (current) and `y`. During a prompt,
 `MODEL_AGENT_COMMANDS=1` sends an `available_commands_update` and `MODEL_AGENT_MODE_UPDATE`
-a `current_mode_update` to the mode it names, before the answer.
+a `current_mode_update` to the mode it names, before the answer. Replies the ACP schema would
+not take: `MODEL_AGENT_NEW_REPLY` holds a JSON object whose members replace those of the
+`session/new` reply's, and `MODEL_AGENT_LOAD_RESULT` and `MODEL_AGENT_SET_RESULT` the JSON
+`session/load` and `session/set_config_option` answer with instead.
 """
 import json
 import os
@@ -42,6 +45,7 @@ EMPTY_REPLIES = os.environ.get("MODEL_AGENT_EMPTY_REPLIES") == "1"
 MODEL_ERROR = os.environ.get("MODEL_AGENT_MODEL_ERROR")
 EXTRA = os.environ.get("MODEL_AGENT_EXTRA_OPTION")
 ANNOUNCE = os.environ.get("MODEL_AGENT_ANNOUNCE_MODEL")
+NEW_REPLY = json.loads(os.environ.get("MODEL_AGENT_NEW_REPLY", "{}"))
 if EXTRA:
     CURRENT[EXTRA] = "x"
 
@@ -108,12 +112,16 @@ def main():
                 "agentCapabilities": {"loadSession": LOAD,
                                       "promptCapabilities": {"image": False, "audio": False}},
                 "authMethods": []}})
+        elif method == "session/load" and "MODEL_AGENT_LOAD_RESULT" in os.environ:
+            send({"jsonrpc": "2.0", "id": req_id, "result": json.loads(os.environ["MODEL_AGENT_LOAD_RESULT"])})
         elif method in ("session/new", "session/load"):
             result = {} if method == "session/load" else {"sessionId": "model-session-1"}
             if LEGACY:
                 result["models"] = legacy_models()
             else:
                 result["configOptions"] = config_options()
+            if method == "session/new":
+                result.update(NEW_REPLY)
             send({"jsonrpc": "2.0", "id": req_id, "result": result})
         elif method == "session/set_config_option":
             params = message.get("params", {})
@@ -124,6 +132,9 @@ def main():
                 send({"jsonrpc": "2.0", "method": "session/update", "params": {
                     "sessionId": params.get("sessionId"),
                     "update": {"sessionUpdate": "config_option_update", "configOptions": config_options()}}})
+            if "MODEL_AGENT_SET_RESULT" in os.environ:
+                send({"jsonrpc": "2.0", "id": req_id, "result": json.loads(os.environ["MODEL_AGENT_SET_RESULT"])})
+                continue
             send({"jsonrpc": "2.0", "id": req_id,
                   "result": {} if LEGACY or EMPTY_REPLIES else {"configOptions": config_options()}})
         elif method == "session/set_mode":

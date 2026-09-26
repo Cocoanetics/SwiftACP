@@ -147,17 +147,28 @@ enum ControlCommand {
         return ExitCodes.success
     }
 
-    /// The options a `set` reports: the agent's reply's, or — for a reply that only
-    /// acknowledges — the record's, as acpx 0.19.3 falls back
-    /// (`printSetConfigOptionResultByFormat`, #778).
-    static func reportedOptions(_ result: SessionControlResult, record: SessionRecord) -> [JSONValue] {
-        if let reported = result.configOptions { return reported }
-        guard case .array(let options)? = record.acpx?.configOptions else { return [] }
-        return options
+    /// The options a `set` reports: the agent's reply's, as it sent them, or — for a reply
+    /// that only acknowledges, or reports `null` — the record's, as acpx 0.19.3 falls back
+    /// (`response.configOptions ?? record.acpx?.config_options ?? []`,
+    /// `printSetConfigOptionResultByFormat`, #778).
+    static func reportedOptions(_ result: SessionControlResult, record: SessionRecord) -> JSONValue {
+        if let reported = result.rawConfigOptions, reported != .null { return reported }
+        if let recorded = record.acpx?.configOptions, recorded != .null { return recorded }
+        return .array([])
+    }
+
+    /// How many options acpx says `options` holds: their `length` — a list's entries, and
+    /// a string's UTF-16 code units, as acpx counts a string reply. Anything else holds none.
+    static func optionCount(_ options: JSONValue) -> Int {
+        switch options {
+        case .array(let entries): return entries.count
+        case .string(let text): return text.utf16.count
+        default: return 0
+        }
     }
 
     private static func printSetConfig(
-        key: String, value: String, configOptions: [JSONValue], resumed: Bool, record: SessionRecord,
+        key: String, value: String, configOptions: JSONValue, resumed: Bool, record: SessionRecord,
         format: String
     ) {
         switch format {
@@ -167,7 +178,7 @@ enum ControlCommand {
                 ("configId", .string(key)),
                 ("value", .string(value)),
                 ("resumed", .bool(resumed)),
-                ("configOptions", .array(configOptions)),
+                ("configOptions", configOptions),
                 ("acpxRecordId", .string(record.acpxRecordId)),
                 ("acpxSessionId", .string(record.acpSessionId)),
                 ("agentSessionId", record.agentSessionId.map(JSONValue.string))
@@ -175,7 +186,7 @@ enum ControlCommand {
         case "quiet":
             Console.out("\(value)\n")
         default:
-            Console.out("config set: \(key)=\(value) (\(configOptions.count) options)\n")
+            Console.out("config set: \(key)=\(value) (\(optionCount(configOptions)) options)\n")
         }
     }
 

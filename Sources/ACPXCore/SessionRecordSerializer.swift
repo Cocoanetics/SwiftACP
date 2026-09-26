@@ -23,7 +23,7 @@ enum SessionRecordSerializer {
             return Data((raw.stringified(indent: 2) + "\n").utf8)
         }
         let rebuilt = record.acpx?.rebuiltOrders ?? [:]
-        let built = parsed
+        let built = withHeldConfigOptions(parsed, from: raw)
             .mapping("messages") { $0.mappingItems(MessageOrder.built) }
             .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: record) }
             .mapping("acpx") { acpx in
@@ -46,6 +46,19 @@ enum SessionRecordSerializer {
             }
         }
         return Data((document.stringified(indent: 2) + "\n").utf8)
+    }
+
+    /// `parsed` with the config options the record holds, `raw`'s. acpx writes them as they
+    /// are — what the agent reported, whatever that is — though its parser keeps only a
+    /// list of objects (`parseConfigOptions`), so a record read back has none.
+    static func withHeldConfigOptions(_ parsed: WireJSON, from raw: WireJSON) -> WireJSON {
+        guard let held = raw["acpx"]?["config_options"], case .object(let members)? = parsed["acpx"] else {
+            return parsed
+        }
+        let block: WireJSON = parsed["acpx"]?.hasMember("config_options") == true
+            ? .object(members).replacing("config_options", with: held)
+            : .object(members + [WireJSON.Member("config_options", held)])
+        return parsed.replacing("acpx", with: block)
     }
 
     /// acpx's `serializeSessionRecordForDisk` of the in-memory record `parsed`, with

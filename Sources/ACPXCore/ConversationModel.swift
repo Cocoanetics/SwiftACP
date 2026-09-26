@@ -188,7 +188,7 @@ public enum ConversationModel {
             var acpx = record.acpx ?? SessionAcpxState()
             var options: [JSONValue] = []
             if case .array(let reported)? = update["configOptions"] { options = reported }
-            ModelSupport.applyConfigOptionsModelState(options, to: &acpx)
+            ModelSupport.applyConfigOptionsModelState(.array(options), to: &acpx)
             record.acpx = acpx
         default:
             break
