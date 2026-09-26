@@ -19,7 +19,10 @@ actor StopReasonBox {
     private(set) var cost: JSONValue?
     /// Whether the turn ended with no answer to its prompt (``TurnEndedEvent/unanswered``).
     private(set) var unanswered = false
+    /// Whether the turn's end came: its outcome, as acpx's CLI has it in the owner's `result`.
+    private(set) var ended = false
     func set(_ ended: TurnEndedEvent) {
+        self.ended = true
         value = StopReason(rawValue: ended.stopReason)
         permissions = ended.permissions
         usage = ended.usage
@@ -293,7 +296,10 @@ enum DaemonClient {
         } catch {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
-            throw error
+            // A daemon gone with the turn leaves its outcome unknown — unless the turn's end
+            // came first, which is its outcome.
+            guard (error as? JSONRPCPeerError) == .closed else { throw error }
+            guard await stopReason.ended else { throw OwnerDisconnected(waitingFor: "prompt completion") }
         }
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
@@ -306,6 +312,18 @@ enum DaemonClient {
     struct DaemonControlFailure: LocalizedError {
         let message: String
         var errorDescription: String? { message }
+    }
+
+    /// acpxd went away with a request it had: acpx's `QueueConnectionError` for a queue
+    /// owner that disconnects once it has acknowledged one, whose outcome is unknown.
+    struct OwnerDisconnected: LocalizedError, OutputErrorMeta {
+        /// What the request still waited for: `prompt completion`, or `responding`.
+        let waitingFor: String
+        var errorDescription: String? { "Queue owner disconnected before \(waitingFor); outcome unknown" }
+        var outputCode: String? { "RUNTIME" }
+        var detailCode: String? { "QUEUE_DISCONNECTED_BEFORE_COMPLETION" }
+        var origin: String? { "queue" }
+        var retryable: Bool? { false }
     }
 
     /// Set a session's mode on the live agent via the daemon (which persists it). What
@@ -429,8 +447,10 @@ enum DaemonClient {
     }
 
     /// The daemon's own error, said as acpx says it — without the MCP client's `Tool
-    /// call failed: `, since the control ran where acpx runs it, not in a tool.
+    /// call failed: `, since the control ran where acpx runs it, not in a tool. A daemon
+    /// that went away with the control is acpx's owner that did.
     static func controlFailure(_ error: Error) -> Error {
+        if (error as? JSONRPCPeerError) == .closed { return OwnerDisconnected(waitingFor: "responding") }
         guard case MCPServerProxyError.toolError(let message) = error else { return error }
         return DaemonControlFailure(message: message)
     }
