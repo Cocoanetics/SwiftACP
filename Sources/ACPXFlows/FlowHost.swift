@@ -440,6 +440,9 @@ enum FlowHostError: Error, LocalizedError {
 /// An error's message as acpx's runner writes it: `error.message`.
 enum TurnFailureText {
     static func message(of error: Error) -> String {
+        // An agent's error response, which acpx's ACP SDK rejects with as an `Error` with the
+        // response's message.
+        if let rpc = error as? JSONRPCErrorBody { return rpc.message }
         if let described = error as? LocalizedError, let description = described.errorDescription { return description }
         return String(describing: error)
     }

@@ -10,7 +10,9 @@ enum FlowCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let flags = try context.globalFlags()
         let scan = context.options
-        let permissionMode = try Flags.resolvePermissionMode(flags, default: context.config.defaultPermissions)
+        let config = context.config
+        let permissionMode = try Flags.resolvePermissionMode(flags, default: config.defaultPermissions)
+        let permissionRules = try flags.permissionRules()
         let input = try readFlowInput(json: scan.string("input-json"), file: scan.string("input-file"))
         let flowPath = ACPXPaths.resolve(context.positionals.first ?? "", base: physicalCWD())
         let defaultAgent = scan.string("default-agent")
@@ -22,8 +24,20 @@ enum FlowCommand {
                     "flow/load", .object([WireJSON.Member("path", .text(flowPath))])) ?? .null)
                 try assertFlowPermissionRequirements(flow, mode: permissionMode, flags: flags)
                 // acpx's runner resolves the default agent up front, for its working directory.
-                let defaultCwd = try Flags.resolveAgentInvocation(defaultAgent, flags, config: context.config).cwd
-                let options = FlowRunner.Options(defaultCwd: defaultCwd, timeoutMs: flags.timeoutMs.map(Double.init))
+                let defaultCwd = try Flags.resolveAgentInvocation(defaultAgent, flags, config: config).cwd
+                let sessions = FlowAgentSessions(
+                    flags: flags, config: config,
+                    permission: try SessionLifecycle.permissionPolicy(flags, config: config),
+                    permissionRules: permissionRules, mcpServers: try config.mcpServerSpecs())
+                let options = FlowRunner.Options(
+                    defaultCwd: defaultCwd, timeoutMs: flags.timeoutMs.map(Double.init),
+                    resolveAgent: { profile in
+                        let agent = try Flags.resolveAgentInvocation(profile ?? defaultAgent, flags, config: config)
+                        return FlowAgent(
+                            agentName: agent.agentName, agentCommand: agent.agentCommand, agentArgv: agent.agentArgv,
+                            cwd: agent.cwd)
+                    },
+                    sessions: sessions, errorOutput: { Console.err($0) })
                 let runner = FlowRunner(host: host, options: options)
                 let result = try await Interrupts.withInterrupt({
                     try await runner.run(flow, input: input, flowPath: flowPath)

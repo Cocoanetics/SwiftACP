@@ -1,14 +1,14 @@
-import ACPXCore
 import Foundation
+import SwiftACP
 
 /// What acpx's quiet formatter writes to stderr after a turn's reply
 /// (`QuietOutputFormatter.flushMetadata`): the prompt response's token usage and its
 /// cost, each only when present.
-enum QuietMetadata {
+public enum QuietMetadata {
     /// acpx's `formatUsageLine`: `[acpx] tokens: input=… output=… cache_read=…
     /// cache_write=… total=…`, each field the first finite number among its spellings,
     /// and only the fields present.
-    static func usageLine(_ usage: WireJSON?) -> String? {
+    public static func usageLine(_ usage: WireJSON?) -> String? {
         guard let usage, case .object = usage else { return nil }
         let fields: [(label: String, keys: [String])] = [
             ("input", ["inputTokens", "input_tokens"]),
@@ -25,7 +25,7 @@ enum QuietMetadata {
 
     /// acpx's `formatCostLine`: a number, a non-blank string, or `{amount|value|total,
     /// currency}`.
-    static func costLine(_ cost: WireJSON?) -> String? {
+    public static func costLine(_ cost: WireJSON?) -> String? {
         switch cost {
         case .number(let value)? where value.isFinite:
             return "[acpx] cost: \(number(value))"

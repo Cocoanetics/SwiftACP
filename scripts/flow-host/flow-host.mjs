@@ -498,16 +498,38 @@ async function invoke(params) {
   try {
     // A shell action's `parse` gets the command's result with the `args` of the spec its
     // `exec` gave, as acpx's does.
-    const arg = fn === "parse" ? commandResult(params.arg, returned.get(attemptId)) : params.arg;
+    const shellParse = fn === "parse" && node.nodeType === "action";
+    const arg = shellParse ? commandResult(params.arg, returned.get(attemptId)) : params.arg;
     const args = "arg" in params ? [arg, ctx] : [ctx];
     const value = await node[fn](...args);
     if (!attempt.finished) returned.set(attemptId, value);
+    if (node.nodeType === "acp" && fn === "cwd") {
+      // acpx's `resolveNodeCwd`: against the agent's working directory, which stands in
+      // for none; `path.resolve` refuses what is not a string.
+      return { value: path.resolve(params.defaultCwd, value ?? params.defaultCwd) };
+    }
+    if (node.nodeType === "acp" && fn === "prompt") return acpPrompt(attempt, value);
     return returnedValue(fn === "exec" ? encodeExecution(value, ["cwd", "timeoutMs"]) : value);
   } catch (error) {
     attempt.thrown = { error };
     throw error;
   } finally {
     if (running.get(attemptId) === attempt) running.delete(attemptId);
+  }
+}
+
+// acpx's `prepareAcpPrompt`, the part that needs the flow's own value: the prompt — a
+// string made a text block (`normalizePromptInput`) — and the text its bundle shows of it
+// (`promptToDisplayText`), or what making that text threw. The runner throws that once it
+// has checked the attempt, as acpx's runner does; the attempt is then cancelled with it.
+function acpPrompt(attempt, value) {
+  const prompt = typeof value === "string" ? runtime.__textPrompt(value) : value;
+  try {
+    return { ...returnedValue(prompt), promptText: runtime.__promptToDisplayText(prompt) };
+  } catch (error) {
+    attempt.thrown = { error };
+    const isError = error instanceof Error;
+    return { ...returnedValue(prompt), promptTextError: { message: isError ? error.message : String(error), isError } };
   }
 }
 

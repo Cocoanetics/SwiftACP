@@ -77,10 +77,13 @@ struct UsageError: Error {
 
 /// commander's `InvalidArgumentError` thrown from an action rather than a parser: a
 /// flag combination or input acpx refuses once the command runs. acpx reports it as a
-/// `USAGE` failure — the bare message, in the requested format — and exits 2.
-struct InvalidArgumentError: Error {
+/// `USAGE` failure — the bare message, in the requested format — and exits 2. Its
+/// description is the message, acpx's `error.message`, which a flow's step records when
+/// resolving its agent refuses the flags.
+struct InvalidArgumentError: Error, LocalizedError {
     var message: String
     init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }
 
 /// A "no session" failure (exit 4). Message printed verbatim to stderr.

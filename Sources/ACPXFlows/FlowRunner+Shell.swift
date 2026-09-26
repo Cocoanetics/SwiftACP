@@ -82,7 +82,7 @@ extension FlowRunner {
         } catch {
             throw FlowTracedError(underlying: error, trace: trace)
         }
-        return Executed(output: output, outputFromHost: parsed, rawText: result.combinedOutput, trace: trace)
+        return Executed(output: output, outputFromHost: parsed, rawText: .text(result.combinedOutput), trace: trace)
     }
 
     /// acpx's `runCallbackShell`: a function action's `ctx.runShell`, as work its attempt

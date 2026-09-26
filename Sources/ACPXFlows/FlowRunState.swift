@@ -79,6 +79,11 @@ struct FlowRunState: Sendable {
         members[key] = value
     }
 
+    /// A member as it is, `nil` for `undefined`.
+    func member(_ key: String) -> WireJSON? {
+        members[key]
+    }
+
     var runId: String { self["runId"] ?? "" }
     var flowName: String { self["flowName"] ?? "" }
     var status: String { self["status"] ?? "" }
