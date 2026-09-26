@@ -68,18 +68,21 @@ extension FlowRunner {
     func forgetAttempt(_ step: Step) {
         host.notify("attempt/forget", .object([("attemptId", .text(step.result.attemptId))]))
         host.abandon(attempt: step.result.attemptId)
+        if let attempt = attempts.removeValue(forKey: step.result.attemptId) {
+            retiredAttempts[step.result.attemptId] = .some(attempt.abortReason)
+        }
     }
 
     /// acpx's `setNodeValue` for `outputs`, here and in the host, whose callbacks see it:
     /// a callback's value as the host holds it, anything else as JSON.
     func setOutput(_ step: Step) {
         state.setOutput(step.nodeId, step.executed.output)
-        var params: [(String, WireJSON?)] = [("nodeId", .text(step.nodeId))]
-        if step.executed.outputFromHost {
-            params.append(("attemptId", .text(step.result.attemptId)))
-        } else {
-            params.append(("value", step.executed.output.json ?? .null))
-        }
+        // The attempt, whose callback's value the host holds — or, for a shell action's
+        // result, whose `exec` gave the `args` the result holds.
+        var params: [(String, WireJSON?)] = [
+            ("nodeId", .text(step.nodeId)), ("attemptId", .text(step.result.attemptId))
+        ]
+        if !step.executed.outputFromHost { params.append(("value", step.executed.output.json ?? .null)) }
         host.notify("outputs/set", .object(params))
     }
 
