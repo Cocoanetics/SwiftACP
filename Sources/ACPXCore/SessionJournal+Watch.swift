@@ -186,7 +186,9 @@ extension SessionJournal {
 
     /// acpx's `SessionJournalReader`: the journal's segments, oldest first, each read on
     /// from where the last read left it. Its state is kept per file, so a segment that
-    /// rotation renames is read on from where it was too.
+    /// rotation renames is read on from where it was too. A page moves it on only once it
+    /// is read through, from a capture that held still, and not called off (#753): one
+    /// that fails leaves it where the last page did, so nothing is skipped.
     final class Reader {
         private let recordId: String
         private let paths: [String]
@@ -201,9 +203,23 @@ extension SessionJournal {
         }
 
         func read(after: Int, maxBytes: Int) async throws -> Snapshot {
+            while true {
+                if let (snapshot, read) = try SessionJournal.capture(paths, { try page(after, maxBytes, $0) }) {
+                    try Task.checkCancellation()
+                    states = read
+                    return snapshot
+                }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+
+        /// A page of `segments`, and where it leaves each: the reader's state is kept apart
+        /// until the page is had.
+        private func page(
+            _ after: Int, _ maxBytes: Int, _ segments: [OpenSegment]
+        ) throws -> (Snapshot, [FileIdentity: SegmentState]) {
             var page: Page? = Page(after: after, maxBytes: maxBytes)
-            let segments = try await openSnapshot()
-            defer { segments.forEach { _ = Foundation.close($0.descriptor) } }
+            var states = self.states
             var hasMore = false
             var firstSequence: Int?
             var tail = SegmentState()
@@ -226,10 +242,10 @@ extension SessionJournal {
                 }
             }
             let retained = Set(segments.map(\.identity))
-            states = states.filter { retained.contains($0.key) }
-            return Snapshot(
+            let snapshot = Snapshot(
                 events: page?.events ?? [], hasMore: hasMore, firstSequence: firstSequence, sequence: tail.sequence,
                 requestId: tail.requestId)
+            return (snapshot, states.filter { retained.contains($0.key) })
         }
 
         /// acpx's `readSegment`: what the segment holds past where it was left, until the page
@@ -252,53 +268,6 @@ extension SessionJournal {
                 state.offset += count
                 state.pending.append(contentsOf: buffer[0..<count])
             }
-        }
-
-        /// A segment opened for a read, as it was when opened.
-        private struct OpenSegment {
-            let path: String
-            let descriptor: Int32
-            let identity: FileIdentity
-            let size: Int
-        }
-
-        /// acpx's `openSnapshot`: every segment there is, opened, and each path found still
-        /// naming the file opened for it. Rotation renames segments; should it do so while
-        /// they are opened, they are opened again, 5 ms later, so none is read twice or not
-        /// at all.
-        private func openSnapshot() async throws -> [OpenSegment] {
-            while true {
-                var segments: [OpenSegment] = []
-                do {
-                    for path in paths where try SessionArchive.isPresentSegment(path) {
-                        segments.append(try open(path))
-                    }
-                    let opened = Dictionary(
-                        segments.map { ($0.path, $0.identity) }, uniquingKeysWith: { first, _ in first })
-                    if try paths.allSatisfy({ try FileIdentity(ofPath: $0) == opened[$0] }) { return segments }
-                } catch let failure as SessionArchive.Failure where failure.code == ENOENT {
-                    // Renamed away between looking and opening: look again.
-                } catch {
-                    segments.forEach { _ = Foundation.close($0.descriptor) }
-                    throw error
-                }
-                segments.forEach { _ = Foundation.close($0.descriptor) }
-                try await Task.sleep(nanoseconds: 5_000_000)
-            }
-        }
-
-        /// Open the segment at `path`, refusing a symbolic link as acpx's `symlinks: "reject"` does.
-        private func open(_ path: String) throws -> OpenSegment {
-            let descriptor = Foundation.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
-            guard descriptor >= 0 else { throw SessionJournal.failure("open", path) }
-            var status = stat()
-            guard fstat(descriptor, &status) == 0 else {
-                let failure = SessionJournal.failure("fstat", path)
-                _ = Foundation.close(descriptor)
-                throw failure
-            }
-            return OpenSegment(
-                path: path, descriptor: descriptor, identity: FileIdentity(status), size: Int(status.st_size))
         }
     }
 
