@@ -12,14 +12,20 @@ enum SessionLifecycle {
         let permissions = try resolvePermissions(flags, config: context.config)
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("name", parseSessionName)
+        let resumeSessionId = scan.string("resume-session")
 
         let replaced = SessionStore.findSession(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)
+        // Resuming the session it replaces writes that one anew, closed first as any resumed
+        // record is (``createSession(agent:name:flags:config:permissions:resumeSessionId:)``):
+        // there is nothing more to close (acpx's `resumesSameRecord`).
+        let resumesSameRecord = replaced != nil && replaced?.acpxRecordId == resumeSessionId
         // A running acpxd from before `releaseSession` (#162) lets a session's agent go only
         // by closing the session, and a `session/close` sent once the new session exists
         // would reach that one too, should the agent reuse the id. With one running, the
         // replaced session is closed first, in the order that daemon was built for.
-        let closeFirst = try replaced != nil && runBlocking { await DaemonClient.lacksRelease() }
+        let closeFirst = try replaced != nil && !resumesSameRecord
+            && runBlocking { await DaemonClient.lacksRelease() }
         if closeFirst, let replaced {
             _ = try close(replaced)
             noteSoftClosed(replaced, flags)
@@ -27,9 +33,10 @@ enum SessionLifecycle {
         // Otherwise the new session first, then the one it replaces closed, as acpx 0.19.3
         // has it (#778, for our openclaw/acpx#767): a creation that fails leaves that one open.
         let record = try createSession(
-            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
+            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions,
+            resumeSessionId: resumeSessionId)
         if let replaced, !closeFirst {
-            try retire(replaced, replacedBy: record)
+            if !resumesSameRecord { try retire(replaced, replacedBy: record) }
             noteSoftClosed(replaced, flags)
         }
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
@@ -59,7 +66,8 @@ enum SessionLifecycle {
         }
 
         let record = try createSession(
-            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions)
+            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions,
+            resumeSessionId: scan.string("resume-session"))
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         printEnsured(record, created: true, format: flags.format)
         return ExitCodes.success
@@ -111,10 +119,18 @@ enum SessionLifecycle {
         (try permissionPolicy(flags, config: config), try flags.permissionRules())
     }
 
+    /// acpx's `createSessionWithClient`: a new session, or with `resumeSessionId` the one
+    /// taken back. An open record under that id, of the same agent, is closed first, as acpx
+    /// 0.19.3 closes it (#782, #785): the resumed session is written over it, even from
+    /// another scope.
     static func createSession(
         agent: AgentInvocation, name: String?, flags: GlobalFlags, config: ResolvedAcpxConfig,
-        permissions: (policy: PermissionPolicy, rules: PermissionRules?)
+        permissions: (policy: PermissionPolicy, rules: PermissionRules?), resumeSessionId: String? = nil
     ) throws -> SessionRecord {
+        if let resumeSessionId, let resumed = SessionStore.loadRecord(resumeSessionId),
+           resumed.acpxRecordId == resumeSessionId, resumed.closed != true, resumed.agentCommand == agent.agentCommand {
+            _ = try close(resumed)
+        }
         let (permission, permissionRules) = permissions
         let meta = sessionMeta(agent: agent, flags: flags)
         let options = sessionOptions(flags)
@@ -128,7 +144,7 @@ enum SessionLifecycle {
                 permission: permission, permissionRules: permissionRules, authCredentials: config.auth,
                 authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
                 sessionMcpServers: config.sessionMcpServers,
-                meta: meta, sessionOptions: options,
+                meta: meta, resumeSessionId: resumeSessionId, sessionOptions: options,
                 capabilities: flags.clientCapabilities,
                 inheritStderr: flags.verbose,
                 onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })

@@ -61,6 +61,7 @@ public enum ReconnectFallback {
     /// wording in the message, anywhere in the error's data, or — for an error that did
     /// not come from the agent — in its description.
     public static func isResourceNotFound(_ error: Error) -> Bool {
+        if let resume = error as? SessionResumeError { return isResourceNotFound(resume.underlying) }
         guard let acp = error as? JSONRPCErrorBody else {
             return isSessionNotFoundText(error.localizedDescription)
         }

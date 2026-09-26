@@ -53,6 +53,7 @@ public enum TurnFailure {
     /// it has a message, or the one a session control wraps.
     public static func payload(of error: Error) -> AcpErrorPayload? {
         if let control = error as? SessionControlError { return control.acp }
+        if let resume = error as? SessionResumeError { return payload(of: resume.underlying) }
         guard let rpc = error as? JSONRPCErrorBody, !rpc.message.isEmpty else { return nil }
         return AcpErrorPayload(code: Double(rpc.code), message: rpc.message, data: rpc.data.map(WireJSON.init))
     }
