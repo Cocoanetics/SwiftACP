@@ -295,7 +295,7 @@ extension Duration {
 }
 
 /// A continuation resumed with the first result given it; later ones are dropped.
-private final class FirstResult<T: Sendable>: @unchecked Sendable {
+final class FirstResult<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<T, Error>?
 

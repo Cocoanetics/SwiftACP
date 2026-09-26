@@ -9,9 +9,10 @@ let nodeAvailable = AgentRegistry.which("node") != nil
 
 /// `flow run` as acpx 0.19.3 runs a flow of compute, function action and checkpoint
 /// nodes (#202): the flow's code in the Node host, the walk, the deadlines and the run
-/// bundle in Swift. Most of these are acpx's own `FlowRunner` and `flow run` tests
-/// (`test/flows.test.ts`, `test/integration.test.ts`); `theBundleIsWrittenAsAcpxWritesIt`
-/// compares a whole bundle with one acpx wrote.
+/// bundle in Swift. These go through the CLI, under the process-wide store isolation;
+/// they are acpx's own `flow run` tests (`test/flows.test.ts`,
+/// `test/integration.test.ts`), and `theBundleIsWrittenAsAcpxWritesIt` compares a whole
+/// bundle with one acpx wrote. `FlowRunnerTests` has the cases the runner alone decides.
 @Suite(.serialized) struct FlowRunTests {
     struct Run {
         var out: String
@@ -155,33 +156,6 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         ]))
     }
 
-    /// A callback's failure, whatever it throws, and an output `JSON.stringify` cannot
-    /// write fail the node and the run, and leave no output (acpx: "records callback and
-    /// output serialization failures as failed steps").
-    @Test(.enabled(if: nodeAvailable), arguments: [
-        ("throw new Error(\"callback failed\")", "callback failed"), ("throw \"plain string\"", "plain string"),
-        ("throw undefined", "undefined"), ("throw null", "null"), ("throw false", "false"),
-        ("return 1n", "Do not know how to serialize a BigInt")
-    ])
-    func aFailedCallbackFailsTheRun(_ statement: String, _ message: String) async throws {
-        for helper in ["compute", "action", "checkpoint"] {
-            let run = try await flowRun("""
-                export default defineFlow({ name: "callback-failure", startAt: "callback",
-                  nodes: { callback: \(helper)({ run: () => { \(statement); } }) }, edges: [] });
-                """)
-            #expect(run.code == 1, "\(helper)")
-            #expect(run.err == message + "\n", "\(helper)")
-            #expect(member(run.state, "status") == .text("failed"))
-            // The step is recorded before the run fails, which clears the node it was on.
-            #expect(member(run.state, "statusDetail") == .text(message))
-            #expect(member(run.state, "results", "callback", "outcome") == .text("failed"))
-            #expect(member(run.state, "results", "callback", "error") == .text(message))
-            #expect(member(run.state, "results", "callback", "output") == nil)
-            #expect(member(run.state, "outputs") == .object([WireJSON.Member]()))
-            #expect(run.trace.last?["type"] == .text("run_failed"))
-        }
-    }
-
     @Test(.enabled(if: nodeAvailable))
     func aNodePastItsDeadlineTimesOut() async throws {
         let run = try await flowRun("""
@@ -194,124 +168,6 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(run.err.hasPrefix("Timed out after 100ms\nhint: increase `--timeout <seconds>`"))
         #expect(member(run.state, "status") == .text("timed_out"))
         #expect(member(run.state, "results", "slow", "outcome") == .text("timed_out"))
-    }
-
-    /// acpx: "can route timed out nodes by outcome".
-    @Test(.enabled(if: nodeAvailable))
-    func aTimedOutNodeCanRouteOnItsResult() async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "timeout-routed", startAt: "slow", nodes: {
-              slow: compute({ timeoutMs: 100,
-                run: () => new Promise((resolve) => setTimeout(() => resolve(1), 5000)) }),
-              recover: compute({ run: ({ results }) => ({ recovered: results.slow.outcome }) }) },
-              edges: [{ from: "slow", switch: { on: "$result.outcome", cases: { timed_out: "recover" } } }] });
-            """)
-        #expect(run.code == 0, "\(run.err)")
-        #expect(member(run.state, "status") == .text("completed"))
-        #expect(member(run.state, "outputs", "recover", "recovered") == .text("timed_out"))
-        #expect(member(run.state, "outputs", "slow") == nil)
-    }
-
-    /// acpx: "preserves failures instead of following direct or output edges".
-    @Test(.enabled(if: nodeAvailable), arguments: [#"{ from: "boom", to: "next" }"#,
-        #"{ from: "boom", switch: { on: "$.route", cases: { a: "next" } } }"#])
-    func aFailureFollowsNoDirectOrOutputEdge(_ edge: String) async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "no-follow", startAt: "boom", nodes: {
-              boom: compute({ run: () => { throw new Error("nope"); } }), next: compute({ run: () => "ran" }) },
-              edges: [\(edge)] });
-            """)
-        #expect(run.code == 1)
-        #expect(run.err == "nope\n")
-        #expect(member(run.state, "results", "next") == nil)
-    }
-
-    /// acpx: "stores successful node results separately from outputs".
-    @Test(.enabled(if: nodeAvailable))
-    func resultsAreKeptApartFromOutputs() async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "results", startAt: "one", nodes: {
-              one: compute({ run: () => ({ value: 1 }) }),
-              two: compute({ run: ({ results, outputs, state }) => ({ outcome: results.one.outcome,
-                output: outputs.one, steps: state.steps.length }) }) },
-              edges: [{ from: "one", to: "two" }] });
-            """)
-        #expect(run.code == 0)
-        #expect(member(run.state, "results", "one", "outcome") == .text("ok"))
-        #expect(member(run.state, "results", "one", "output", "value") == .number(1))
-        #expect(member(run.state, "outputs", "two", "outcome") == .text("ok"))
-        #expect(member(run.state, "outputs", "two", "output", "value") == .number(1))
-        #expect(member(run.state, "outputs", "two", "steps") == .number(1))
-    }
-
-    @Test(.enabled(if: nodeAvailable), arguments: [
-        (#"{ route: "x" }"#, #"No flow switch case for $.route="x""#),
-        ("{ route: { nested: true } }", "Flow switch value must be scalar for $.route")
-    ])
-    func aSwitchThatCannotRouteFailsTheRun(_ output: String, _ message: String) async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "switch", startAt: "pick", nodes: {
-              pick: compute({ run: () => (\(output)) }), a: compute({ run: () => 1 }) },
-              edges: [{ from: "pick", switch: { on: "$.route", cases: { a: "a" } } }] });
-            """)
-        #expect(run.code == 1)
-        #expect(run.err == message + "\n")
-        #expect(member(run.state, "status") == .text("failed"))
-        #expect(member(run.state, "error") == .text(message))
-    }
-
-    /// acpx: "flow keys: a standalone __proto__ node publishes own output and result".
-    @Test(.enabled(if: nodeAvailable))
-    func aProtoNodeIsAnOrdinaryKey() async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "proto", startAt: "__proto__",
-              nodes: { ["__proto__"]: compute({ run: () => ({ special: true }) }) }, edges: [] });
-            """)
-        #expect(run.code == 0, "\(run.err)")
-        #expect(member(run.state, "outputs", "__proto__", "special") == .bool(true))
-        #expect(member(run.state, "results", "__proto__", "attemptId") == .text("__proto__#1"))
-    }
-
-    // MARK: - TypeScript
-
-    /// A `.ts` flow is compiled to CommonJS, as acpx's tsx compiles it: TypeScript's own
-    /// syntax, `__dirname`, `require`, and the TypeScript files it imports.
-    @Test(.enabled(if: nodeAvailable))
-    func aTypeScriptFlowLoadsAsAcpxLoadsIt() async throws {
-        let run = try await flowRun("""
-            import { double } from "./helper";
-            enum Route { Done = "done" }
-            interface Item { name: string }
-            const here: string = __dirname;
-            const os = require("node:os");
-            export default defineFlow({ name: "typed", startAt: "pick", nodes: {
-              pick: compute({ run: () => {
-                const item: Item = { name: "a" };
-                return { route: Route.Done, name: item.name, twice: double(21),
-                  hasDir: here.length > 0, platform: typeof os.platform() };
-              } }),
-              done: compute({ run: () => "done" }) },
-              edges: [{ from: "pick", switch: { on: "$.route", cases: { done: "done" } } }] });
-            """, extension: "ts",
-            files: ["helper.ts": "export function double(value: number): number { return value * 2; }\n"])
-        #expect(run.code == 0, "\(run.err)")
-        #expect(member(run.state, "outputs", "pick")?.stringified
-            == #"{"route":"done","name":"a","twice":42,"hasDir":true,"platform":"string"}"#)
-        #expect(member(run.state, "outputs", "done") == .text("done"))
-    }
-
-    /// An `.mts` flow is compiled as an ES module, as acpx's tsx compiles it — an `enum`
-    /// included, which Node's own type stripping refuses.
-    @Test(.enabled(if: nodeAvailable))
-    func anMtsFlowLoadsAsAModule() async throws {
-        let run = try await flowRun("""
-            enum Kind { Module = "module" }
-            const label: string = Kind.Module;
-            export default defineFlow({ name: "module", startAt: "a",
-              nodes: { a: compute({ run: () => ({ label, meta: typeof import.meta.url }) }) }, edges: [] });
-            """, extension: "mts")
-        #expect(run.code == 0, "\(run.err)")
-        #expect(member(run.state, "outputs", "a")?.stringified == #"{"label":"module","meta":"string"}"#)
     }
 
     // MARK: - Before the run
@@ -339,14 +195,6 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(granted.code == 0)
     }
 
-    /// acpx: "requires defineFlow before permission gating".
-    @Test(.enabled(if: nodeAvailable))
-    func aModuleWithoutDefineFlowIsRefused() async throws {
-        let run = try await flowRun(#"export default { name: "plain", startAt: "a", nodes: {}, edges: [] };"#)
-        #expect(run.code == 1)
-        #expect(run.err.hasPrefix(#"Flow module must export default defineFlow({...}) from "acpx/flows": "#))
-    }
-
     @Test(.enabled(if: nodeAvailable))
     func theInputComesFromAFlagOrAFile() async throws {
         let body = """
@@ -360,19 +208,6 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(bad.err.hasPrefix("--input-json must contain valid JSON: "))
         let both = try await flowRun(body, arguments: ["--input-json", "{}", "--input-file", "x.json"])
         #expect(both.err == "Use only one of --input-json or --input-file\n")
-    }
-
-    /// acpx: "resolves and persists dynamic run titles".
-    @Test(.enabled(if: nodeAvailable), arguments: [
-        (#""  Padded Title  ""#, "Padded Title"), (#"({ input }) => `For ${input.who}`"#, "For you"),
-        (#"() => "   ""#, nil)
-    ])
-    func aRunTitleIsTrimmed(_ title: String, _ expected: String?) async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "titled", run: { title: \(title) }, startAt: "a",
-              nodes: { a: compute({ run: () => 1 }) }, edges: [] });
-            """, arguments: ["--input-json", #"{"who":"you"}"#])
-        #expect(member(run.state, "runTitle") == expected.map(WireJSON.text))
     }
 
     // MARK: - While a node runs
@@ -395,6 +230,19 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(run.trace.last?["payload"]?["error"] == .text("Interrupted"))
     }
 
+    /// Interrupted while a callback holds Node's event loop, the run ends all the same: the
+    /// host, which cannot answer, is killed.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
+    func anInterruptEndsARunWhoseCallbackHoldsTheEventLoop() async throws {
+        let run = try await flowRun("""
+            export default defineFlow({ name: "busy-interrupt", startAt: "spin", nodes: {
+              spin: compute({ run: () => { fs.writeFileSync(READY, "x"); while (true) {} } }) }, edges: [] });
+            """, interrupting: true)
+        #expect(run.code == 130)
+        #expect(member(run.state, "status") == .text("failed"))
+        #expect(member(run.state, "error") == .text("Interrupted"))
+    }
+
     /// Interrupted while its title is worked out, the run has not begun and ends at once:
     /// acpx, which listens for the signal only once the steps begin, just exits.
     @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
@@ -406,31 +254,5 @@ let nodeAvailable = AgentRegistry.which("node") != nil
             """, interrupting: true)
         #expect(run.code == 130)
         #expect(run.state == nil)
-    }
-
-    /// `ctx.runShell` comes with shell actions (#202, step 2); until then it fails plainly.
-    @Test(.enabled(if: nodeAvailable))
-    func runShellIsRefusedForNow() async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "shell-helper", startAt: "act",
-              nodes: { act: action({ run: async ({ runShell }) => await runShell({ command: "true" }) }) },
-              edges: [] });
-            """)
-        #expect(run.code == 1)
-        #expect(run.err == "ctx.runShell is not supported by SwiftACP's acpx yet\n")
-    }
-
-    @Test(.enabled(if: nodeAvailable))
-    func aRunningNodeSendsHeartbeats() async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "heartbeat", startAt: "slow", nodes: {
-              slow: compute({ heartbeatMs: 50, statusDetail: "Working",
-                run: () => new Promise((resolve) => setTimeout(() => resolve(1), 400)) }) },
-              edges: [] });
-            """)
-        #expect(run.code == 0)
-        let heartbeats = run.trace.filter { $0["type"] == .text("node_heartbeat") }
-        #expect(heartbeats.count >= 2)
-        #expect(heartbeats.allSatisfy { $0["payload"]?["statusDetail"] == .text("Working") })
     }
 }

@@ -1,0 +1,268 @@
+@testable import ACPXCore
+@testable import ACPXFlows
+import Foundation
+import SwiftACP
+import Testing
+
+/// acpx 0.19.3's `FlowRunner` cases (`test/flows.test.ts`), run by the runner itself with
+/// the flow's code in the Node host, as `flow run` runs them. Each run keeps its bundle in
+/// a directory of its own, so these touch nothing process-wide and need no store isolation
+/// (`FlowRunTests` has the cases that go through the CLI).
+struct FlowRunnerTests {
+    /// A finished run: `err` and `code` are what the CLI would report of its failure.
+    struct Run {
+        var err = ""
+        var code: Int32 = 0
+        var state: WireJSON?
+        var trace: [WireJSON] = []
+    }
+
+    /// Run a flow module — `body` after acpx's helpers are imported — with `input`, beside
+    /// `files`.
+    private func runnerRun(
+        _ body: String, extension ext: String = "mjs", files: [String: String] = [:],
+        input: WireJSON = .object([WireJSON.Member]())
+    ) async throws -> Run {
+        let node = try #require(AgentRegistry.which("node"))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-runner-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (name, content) in files {
+            try content.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let flowFile = dir.appendingPathComponent("test.flow.\(ext)")
+        try ("import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n" + body)
+            .write(to: flowFile, atomically: true, encoding: .utf8)
+        let runs = dir.appendingPathComponent("runs")
+        let host = try FlowHost.start(node: node, cwd: dir.path, environment: ProcessInfo.processInfo.environment)
+        var run = Run()
+        do {
+            let loaded = try await host.request("flow/load", .object([WireJSON.Member("path", .text(flowFile.path))]))
+            let flow = try FlowDescription(loaded: loaded ?? .null)
+            let runner = FlowRunner(host: host, options: FlowRunner.Options(outputRoot: runs, defaultCwd: dir.path))
+            _ = try await runner.run(flow, input: input, flowPath: flowFile.path)
+        } catch {
+            run.err = TurnFailureText.message(of: error)
+            run.code = error is FlowTimeoutError ? 3 : 1
+        }
+        await host.stop()
+        if let name = try? FileManager.default.contentsOfDirectory(atPath: runs.path).first {
+            let runDir = runs.appendingPathComponent(name)
+            run.state = try? WireJSON.parse(String(
+                contentsOf: runDir.appendingPathComponent("projections/run.json"), encoding: .utf8))
+            let trace = (try? String(contentsOf: runDir.appendingPathComponent("trace.ndjson"), encoding: .utf8)) ?? ""
+            run.trace = trace.split(separator: "\n").compactMap { try? WireJSON.parse(String($0)) }
+        }
+        return run
+    }
+
+    private func member(_ value: WireJSON?, _ path: String...) -> WireJSON? {
+        path.reduce(value) { $0?[$1] }
+    }
+
+    /// A callback's failure, whatever it throws, and an output `JSON.stringify` cannot
+    /// write fail the node and the run, and leave no output (acpx: "records callback and
+    /// output serialization failures as failed steps").
+    @Test(.enabled(if: nodeAvailable), arguments: [
+        ("throw new Error(\"callback failed\")", "callback failed"), ("throw \"plain string\"", "plain string"),
+        ("throw undefined", "undefined"), ("throw null", "null"), ("throw false", "false"),
+        ("return 1n", "Do not know how to serialize a BigInt")
+    ])
+    func aFailedCallbackFailsTheRun(_ statement: String, _ message: String) async throws {
+        for helper in ["compute", "action", "checkpoint"] {
+            let run = try await runnerRun("""
+                export default defineFlow({ name: "callback-failure", startAt: "callback",
+                  nodes: { callback: \(helper)({ run: () => { \(statement); } }) }, edges: [] });
+                """)
+            #expect(run.code == 1, "\(helper)")
+            #expect(run.err == message, "\(helper)")
+            #expect(member(run.state, "status") == .text("failed"))
+            // The step is recorded before the run fails, which clears the node it was on.
+            #expect(member(run.state, "statusDetail") == .text(message))
+            #expect(member(run.state, "results", "callback", "outcome") == .text("failed"))
+            #expect(member(run.state, "results", "callback", "error") == .text(message))
+            #expect(member(run.state, "results", "callback", "output") == nil)
+            #expect(member(run.state, "outputs") == .object([WireJSON.Member]()))
+            #expect(run.trace.last?["type"] == .text("run_failed"))
+        }
+    }
+
+    /// acpx: "can route timed out nodes by outcome".
+    @Test(.enabled(if: nodeAvailable))
+    func aTimedOutNodeCanRouteOnItsResult() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "timeout-routed", startAt: "slow", nodes: {
+              slow: compute({ timeoutMs: 100,
+                run: () => new Promise((resolve) => setTimeout(() => resolve(1), 5000)) }),
+              recover: compute({ run: ({ results }) => ({ recovered: results.slow.outcome }) }) },
+              edges: [{ from: "slow", switch: { on: "$result.outcome", cases: { timed_out: "recover" } } }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "status") == .text("completed"))
+        #expect(member(run.state, "outputs", "recover", "recovered") == .text("timed_out"))
+        #expect(member(run.state, "outputs", "slow") == nil)
+    }
+
+    /// acpx: "preserves failures instead of following direct or output edges".
+    @Test(.enabled(if: nodeAvailable), arguments: [#"{ from: "boom", to: "next" }"#,
+        #"{ from: "boom", switch: { on: "$.route", cases: { a: "next" } } }"#])
+    func aFailureFollowsNoDirectOrOutputEdge(_ edge: String) async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "no-follow", startAt: "boom", nodes: {
+              boom: compute({ run: () => { throw new Error("nope"); } }), next: compute({ run: () => "ran" }) },
+              edges: [\(edge)] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == "nope")
+        #expect(member(run.state, "results", "next") == nil)
+    }
+
+    /// acpx: "stores successful node results separately from outputs".
+    @Test(.enabled(if: nodeAvailable))
+    func resultsAreKeptApartFromOutputs() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "results", startAt: "one", nodes: {
+              one: compute({ run: () => ({ value: 1 }) }),
+              two: compute({ run: ({ results, outputs, state }) => ({ outcome: results.one.outcome,
+                output: outputs.one, steps: state.steps.length }) }) },
+              edges: [{ from: "one", to: "two" }] });
+            """)
+        #expect(run.code == 0)
+        #expect(member(run.state, "results", "one", "outcome") == .text("ok"))
+        #expect(member(run.state, "results", "one", "output", "value") == .number(1))
+        #expect(member(run.state, "outputs", "two", "outcome") == .text("ok"))
+        #expect(member(run.state, "outputs", "two", "output", "value") == .number(1))
+        #expect(member(run.state, "outputs", "two", "steps") == .number(1))
+    }
+
+    @Test(.enabled(if: nodeAvailable), arguments: [
+        (#"{ route: "x" }"#, #"No flow switch case for $.route="x""#),
+        ("{ route: { nested: true } }", "Flow switch value must be scalar for $.route")
+    ])
+    func aSwitchThatCannotRouteFailsTheRun(_ output: String, _ message: String) async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "switch", startAt: "pick", nodes: {
+              pick: compute({ run: () => (\(output)) }), a: compute({ run: () => 1 }) },
+              edges: [{ from: "pick", switch: { on: "$.route", cases: { a: "a" } } }] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == message)
+        #expect(member(run.state, "status") == .text("failed"))
+        #expect(member(run.state, "error") == .text(message))
+    }
+
+    /// acpx: "flow keys: a standalone __proto__ node publishes own output and result".
+    @Test(.enabled(if: nodeAvailable))
+    func aProtoNodeIsAnOrdinaryKey() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "proto", startAt: "__proto__",
+              nodes: { ["__proto__"]: compute({ run: () => ({ special: true }) }) }, edges: [] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "__proto__", "special") == .bool(true))
+        #expect(member(run.state, "results", "__proto__", "attemptId") == .text("__proto__#1"))
+    }
+
+    /// A `.ts` flow is compiled to CommonJS, as acpx's tsx compiles it: TypeScript's own
+    /// syntax, `__dirname`, `require`, and the TypeScript files it imports.
+    @Test(.enabled(if: nodeAvailable))
+    func aTypeScriptFlowLoadsAsAcpxLoadsIt() async throws {
+        let run = try await runnerRun("""
+            import { double } from "./helper";
+            enum Route { Done = "done" }
+            interface Item { name: string }
+            const here: string = __dirname;
+            const os = require("node:os");
+            export default defineFlow({ name: "typed", startAt: "pick", nodes: {
+              pick: compute({ run: () => {
+                const item: Item = { name: "a" };
+                return { route: Route.Done, name: item.name, twice: double(21),
+                  hasDir: here.length > 0, platform: typeof os.platform() };
+              } }),
+              done: compute({ run: () => "done" }) },
+              edges: [{ from: "pick", switch: { on: "$.route", cases: { done: "done" } } }] });
+            """, extension: "ts",
+            files: ["helper.ts": "export function double(value: number): number { return value * 2; }\n"])
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "pick")?.stringified
+            == #"{"route":"done","name":"a","twice":42,"hasDir":true,"platform":"string"}"#)
+        #expect(member(run.state, "outputs", "done") == .text("done"))
+    }
+
+    /// An `.mts` flow is compiled as an ES module, as acpx's tsx compiles it — an `enum`
+    /// included, which Node's own type stripping refuses.
+    @Test(.enabled(if: nodeAvailable))
+    func anMtsFlowLoadsAsAModule() async throws {
+        let run = try await runnerRun("""
+            enum Kind { Module = "module" }
+            const label: string = Kind.Module;
+            export default defineFlow({ name: "module", startAt: "a",
+              nodes: { a: compute({ run: () => ({ label, meta: typeof import.meta.url }) }) }, edges: [] });
+            """, extension: "mts")
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified == #"{"label":"module","meta":"string"}"#)
+    }
+
+    /// acpx: "requires defineFlow before permission gating".
+    @Test(.enabled(if: nodeAvailable))
+    func aModuleWithoutDefineFlowIsRefused() async throws {
+        let run = try await runnerRun(#"export default { name: "plain", startAt: "a", nodes: {}, edges: [] };"#)
+        #expect(run.code == 1)
+        #expect(run.err.hasPrefix(#"Flow module must export default defineFlow({...}) from "acpx/flows": "#))
+    }
+
+    /// acpx: "resolves and persists dynamic run titles".
+    @Test(.enabled(if: nodeAvailable), arguments: [
+        (#""  Padded Title  ""#, "Padded Title"), (#"({ input }) => `For ${input.who}`"#, "For you"),
+        (#"() => "   ""#, nil)
+    ])
+    func aRunTitleIsTrimmed(_ title: String, _ expected: String?) async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "titled", run: { title: \(title) }, startAt: "a",
+              nodes: { a: compute({ run: () => 1 }) }, edges: [] });
+            """, input: try WireJSON.parse(#"{"who":"you"}"#))
+        #expect(member(run.state, "runTitle") == expected.map(WireJSON.text))
+    }
+
+    /// `ctx.runShell` comes with shell actions (#202, step 2); until then it fails plainly.
+    @Test(.enabled(if: nodeAvailable))
+    func runShellIsRefusedForNow() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "shell-helper", startAt: "act",
+              nodes: { act: action({ run: async ({ runShell }) => await runShell({ command: "true" }) }) },
+              edges: [] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == "ctx.runShell is not supported by SwiftACP's acpx yet")
+    }
+
+    /// A callback holding Node's event loop keeps the host from answering anything, its
+    /// exit included: the node times out all the same, and the host is killed a second
+    /// after it is asked to exit. (acpx runs the callback on its own event loop, which it
+    /// holds as well, timers and all: there, nothing ends the run.)
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
+    func aCallbackHoldingTheEventLoopStillTimesOut() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "busy", startAt: "spin",
+              nodes: { spin: compute({ timeoutMs: 100, run: () => { while (true) {} } }) }, edges: [] });
+            """)
+        #expect(run.code == 3)
+        #expect(run.err == "Timed out after 100ms")
+        #expect(member(run.state, "status") == .text("timed_out"))
+        #expect(member(run.state, "results", "spin", "outcome") == .text("timed_out"))
+    }
+
+    @Test(.enabled(if: nodeAvailable))
+    func aRunningNodeSendsHeartbeats() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "heartbeat", startAt: "slow", nodes: {
+              slow: compute({ heartbeatMs: 50, statusDetail: "Working",
+                run: () => new Promise((resolve) => setTimeout(() => resolve(1), 400)) }) },
+              edges: [] });
+            """)
+        #expect(run.code == 0)
+        let heartbeats = run.trace.filter { $0["type"] == .text("node_heartbeat") }
+        #expect(heartbeats.count >= 2)
+        #expect(heartbeats.allSatisfy { $0["payload"]?["statusDetail"] == .text("Working") })
+    }
+}

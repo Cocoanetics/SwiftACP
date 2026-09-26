@@ -52,6 +52,10 @@ public final class FlowHost: @unchecked Sendable {
         self.pid = pid
     }
 
+    deinit {
+        close(socket)
+    }
+
     /// Start the host with `node`, in `cwd`, with `environment`.
     public static func start(node: String, cwd: String, environment: [String: String]) throws -> FlowHost {
         let scripts = try FlowHostFiles.install()
@@ -116,17 +120,22 @@ public final class FlowHost: @unchecked Sendable {
         try? write(.object([("jsonrpc", .text("2.0")), ("method", .text(method)), ("params", params)]))
     }
 
-    /// Ask the host to exit, and make sure it has: a host that doesn't within a second is
-    /// killed.
+    /// Ask the host to exit, and make sure it has: a host that doesn't answer within a
+    /// second — one whose callback holds its event loop — is killed. Whichever comes first
+    /// ends the wait; a task group would wait for the other too, and the request cannot be
+    /// cancelled, only answered, or ended with the host.
     public func stop() async {
-        _ = try? await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { _ = try await self.request("host/exit") }
-            group.addTask {
-                try await Task.sleep(for: .seconds(1))
-                throw Exited()
+        _ = try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let first = FirstResult(continuation)
+            let deadline = Task {
+                try? await Task.sleep(for: .seconds(1))
+                first.settle(.success(()))
             }
-            defer { group.cancelAll() }
-            try await group.next()
+            Task {
+                _ = try? await self.request("host/exit")
+                deadline.cancel()
+                first.settle(.success(()))
+            }
         }
         kill(pid, SIGKILL)
         var status: Int32 = 0
