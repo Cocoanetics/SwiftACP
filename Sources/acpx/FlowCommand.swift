@@ -34,6 +34,10 @@ enum FlowCommand {
                 await host.stop()
                 printFlowRunResult(result, format: flags.format)
                 return ExitCodes.success
+            } catch is FlowHost.Exited {
+                // The flow's own code ended the host — `process.exit()`, a crash — and in acpx
+                // that is acpx's process: it ends as the host did, printing nothing more.
+                return FlowHost.exitCode(waitStatus: await host.stop())
             } catch is InterruptedError {
                 await host.stop()
                 return ExitCodes.interrupted

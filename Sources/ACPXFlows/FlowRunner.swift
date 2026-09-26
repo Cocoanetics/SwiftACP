@@ -97,6 +97,7 @@ public actor FlowRunner {
         } catch {
             outcome = .failure(error)
         }
+        if case .failure(let error) = outcome, error is FlowHost.Exited { throw error }
         if let interruption {
             try? persistRunFailure(runDir, interruption)
             throw interruption
@@ -152,7 +153,7 @@ public actor FlowRunner {
             }
             return try completeFlowRun(runDir)
         } catch {
-            if interruption == nil { try? persistRunFailure(runDir, error) }
+            if interruption == nil, !(error is FlowHost.Exited) { try? persistRunFailure(runDir, error) }
             throw error
         }
     }
@@ -232,6 +233,9 @@ public actor FlowRunner {
         heartbeat?.cancel()
         heartbeat = nil
         self.attempt = nil
+        // The flow ended the host — `process.exit()`, a crash — which in acpx is the
+        // process running the flow: gone with it, the run records nothing more.
+        if let executionError, Self.isHostGone(executionError) { throw FlowHost.Exited() }
         var result = FlowNodeResult(
             attemptId: attemptId, nodeId: nodeId, nodeType: node.nodeType.rawValue, outcome: outcome,
             startedAt: startedAt, finishedAt: nowISO())
@@ -242,6 +246,12 @@ public actor FlowRunner {
         }
         state.results[nodeId] = result.wire
         return Step(executed: executed, result: result, node: node, executionError: executionError)
+    }
+
+    /// Whether `error` is the host's going: itself, or among an attempt's cleanup failures.
+    static func isHostGone(_ error: Error) -> Bool {
+        error is FlowHost.Exited
+            || (error as? FlowAttemptCleanupError)?.errors.contains { $0 is FlowHost.Exited } == true
     }
 
     /// acpx's `outcomeForError`.

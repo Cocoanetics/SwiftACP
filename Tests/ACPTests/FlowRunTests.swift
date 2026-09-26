@@ -170,6 +170,21 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(member(run.state, "results", "slow", "outcome") == .text("timed_out"))
     }
 
+    /// A flow's own `process.exit()` ends acpx in acpx, whose process runs the flow: with
+    /// that code, nothing printed, and the bundle as it was — the node still running.
+    @Test(.enabled(if: nodeAvailable))
+    func aFlowThatExitsEndsTheRunAsItIs() async throws {
+        let run = try await flowRun("""
+            export default defineFlow({ name: "exit", startAt: "a",
+              nodes: { a: compute({ run: () => { process.exit(7); } }) }, edges: [] });
+            """)
+        #expect(run.code == 7)
+        #expect(run.out.isEmpty && run.err.isEmpty)
+        #expect(member(run.state, "status") == .text("running"))
+        #expect(member(run.state, "currentNode") == .text("a"))
+        #expect(run.trace.last?["type"] == .text("node_started"))
+    }
+
     // MARK: - Before the run
 
     @Test(.enabled(if: nodeAvailable))

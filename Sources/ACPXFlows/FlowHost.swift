@@ -16,7 +16,9 @@ import Glibc
 /// keeps this process's standard input and output, so what the flow prints lands where
 /// it does under acpx. The host ignores SIGINT, SIGTERM and SIGHUP — the runner handles
 /// those, as acpx's does — and exits when told to, or when this process's end of the
-/// socket closes.
+/// socket closes. A host that exits of its own accord — the flow's `process.exit()`, or
+/// a crash — takes acpx's own process with it in acpx: ``Exited`` says it is gone, and
+/// ``stop()`` how it went.
 ///
 /// Values cross as ``WireJSON``, which keeps object members in the order JavaScript gave
 /// them, as the run bundle has to.
@@ -31,7 +33,8 @@ public final class FlowHost: @unchecked Sendable {
         public var errorDescription: String? { message }
     }
 
-    /// The host went away with requests unanswered.
+    /// The host's end of the socket closed — it has exited, or is exiting — with a request
+    /// unanswered.
     public struct Exited: Error, LocalizedError {
         public var errorDescription: String? { "The flow host exited" }
     }
@@ -46,6 +49,10 @@ public final class FlowHost: @unchecked Sendable {
     private var pending: [Int: CheckedContinuation<WireJSON?, Error>] = [:]
     private var ended = false
     private var requestHandler: RequestHandler?
+    /// The host's wait status once it is reaped — under the lock, so that until then its
+    /// pid is still this process's to signal.
+    private var waitStatus: Int32?
+    private var exitWaiters: [CheckedContinuation<Int32, Never>] = []
 
     private init(socket: Int32, pid: pid_t) {
         self.socket = socket
@@ -64,6 +71,9 @@ public final class FlowHost: @unchecked Sendable {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         for descriptor in descriptors { _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC) }
+        // A write once the host is gone fails with `EPIPE`, not `SIGPIPE`, which would end
+        // this process then and there, not as the host ended.
+        _ = fcntl(descriptors[0], F_SETNOSIGPIPE, 1)
         var hostEnvironment = environment
         hostEnvironment["ACPX_FLOW_RUNTIME"] = scripts.runtime
         hostEnvironment["ACPX_FLOW_SUCRASE"] = scripts.sucrase
@@ -80,6 +90,7 @@ public final class FlowHost: @unchecked Sendable {
         close(descriptors[1])
         let host = FlowHost(socket: descriptors[0], pid: pid)
         host.startReading()
+        host.startWaiting()
         return host
     }
 
@@ -120,27 +131,56 @@ public final class FlowHost: @unchecked Sendable {
         try? write(.object([("jsonrpc", .text("2.0")), ("method", .text(method)), ("params", params)]))
     }
 
-    /// Ask the host to exit, and make sure it has: a host that doesn't answer within a
-    /// second — one whose callback holds its event loop — is killed. Whichever comes first
-    /// ends the wait; a task group would wait for the other too, and the request cannot be
-    /// cancelled, only answered, or ended with the host.
-    public func stop() async {
-        _ = try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let first = FirstResult(continuation)
-            let deadline = Task {
-                try? await Task.sleep(for: .seconds(1))
-                first.settle(.success(()))
-            }
-            Task {
-                _ = try? await self.request("host/exit")
-                deadline.cancel()
-                first.settle(.success(()))
+    /// Ask the host to exit, and make sure it has: a host still running a second later —
+    /// one whose callback holds its event loop — is killed. Returns its wait status: how it
+    /// ended, asked to or of its own accord.
+    @discardableResult
+    public func stop() async -> Int32 {
+        notify("host/exit")
+        if await exitStatus(within: .seconds(1)) == nil {
+            lock.withLock {
+                if waitStatus == nil { _ = kill(pid, SIGKILL) }
             }
         }
-        kill(pid, SIGKILL)
-        var status: Int32 = 0
-        _ = waitpid(pid, &status, 0)
+        let status = await exitStatus()
         shutdown(socket, SHUT_RDWR)
+        return status
+    }
+
+    /// The exit code that ends a process as the host ended: its own, or — killed by a
+    /// signal — 128 and the signal's number, as a shell reports that.
+    public static func exitCode(waitStatus status: Int32) -> Int32 {
+        let signal = status & 0x7F
+        return signal == 0 ? (status >> 8) & 0xFF : 128 + signal
+    }
+
+    /// The host's wait status, once it has exited.
+    private func exitStatus() async -> Int32 {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
+            let status: Int32? = lock.withLock {
+                if let waitStatus { return waitStatus }
+                exitWaiters.append(continuation)
+                return nil
+            }
+            if let status { continuation.resume(returning: status) }
+        }
+    }
+
+    /// The host's wait status, if it exits within `timeout`. Whichever comes first ends
+    /// the wait; a task group would wait for the other too.
+    private func exitStatus(within timeout: Duration) async -> Int32? {
+        try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int32?, Error>) in
+            let first = FirstResult(continuation)
+            let deadline = Task {
+                try? await Task.sleep(for: timeout)
+                first.settle(.success(nil))
+            }
+            Task {
+                let status = await self.exitStatus()
+                deadline.cancel()
+                first.settle(.success(status))
+            }
+        }
     }
 
     // MARK: - Wire
@@ -229,6 +269,28 @@ public final class FlowHost: @unchecked Sendable {
             return Array(pending.values)
         }
         for continuation in waiting { continuation.resume(throwing: Exited()) }
+    }
+
+    /// Wait for the host to exit, on a thread of its own, without reaping it (`WNOWAIT`);
+    /// then reap it under the lock, and hand its status to whoever waits for it.
+    private func startWaiting() {
+        let pid = self.pid
+        let thread = Thread { [self] in
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) != 0 {
+                guard errno == EINTR else { break }
+            }
+            let (status, waiters): (Int32, [CheckedContinuation<Int32, Never>]) = lock.withLock {
+                var status: Int32 = 0
+                while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+                waitStatus = status
+                defer { exitWaiters.removeAll() }
+                return (status, exitWaiters)
+            }
+            for waiter in waiters { waiter.resume(returning: status) }
+        }
+        thread.name = "acpx.flow-host.exit"
+        thread.start()
     }
 
     // MARK: - Spawning
