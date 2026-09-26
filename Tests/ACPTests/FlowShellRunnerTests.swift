@@ -441,6 +441,46 @@ struct FlowShellRunnerTests {
             + #""Error: Shell action maxBufferBytes must be a non-negative safe integer","done","NaN -Infinity\n"]"#)
     }
 
+    /// An object of a class as one of the spec's own members — a URL for `cwd` — is refused
+    /// by its class, as Node refuses it, though JSON would write it as a string (`toJSON`).
+    @Test(.enabled(if: nodeAvailable))
+    func aClassInstanceIsRefusedByItsClass() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "instance", startAt: "a", nodes: {
+              a: shell({ exec: () => ({ command: "/bin/pwd", cwd: new URL("file:///tmp") }) }) }, edges: [] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == #"The "paths[1]" argument must be of type string. Received an instance of URL"#)
+    }
+
+    /// Node checks for a NUL only in what was a string; a value converted to one with a NUL
+    /// ends at it, as a C string does — with `shell`, the whole command. And a value JSON
+    /// would write as a string is refused by its type, as Node names it.
+    @Test(.enabled(if: nodeAvailable))
+    func runShellTruncatesAndNamesAsNodeDoes() async throws {
+        let run = try await runnerRun("""
+            const nul = { toString: () => "b\\0c" };
+            const attempt = (runShell, execution) =>
+              runShell(execution).then((r) => r.stdout, (e) => `${e.code}: ${e.message}`);
+            export default defineFlow({ name: "node-rules", startAt: "a", nodes: {
+              a: action({ run: async ({ runShell }) => [
+                await attempt(runShell, { command: "/bin/echo", args: ["a", nul, "d"] }),
+                await attempt(runShell, { command: "echo", args: ["a", nul, "d"], shell: true }),
+                await attempt(runShell, { command: "/bin/sh", args: ["-c", 'printf "[%s]" "$X"'],
+                  env: { X: { toString: () => "p\\0q" } } }),
+                await attempt(runShell, { command: { toJSON: () => "/bin/echo" }, args: ["x"] }),
+                await attempt(runShell, { command: function named() {}, args: ["x"] }),
+              ] }) },
+              edges: [] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        let refused = #"ERR_INVALID_ARG_TYPE: The "file" argument must be of type string. Received "#
+        #expect(member(run.state, "outputs", "a") == .array([
+            .text("a b d\n"), .text("a b\n"), .text("[p]"),
+            .text(refused + "an instance of Object"), .text(refused + "function named")
+        ]))
+    }
+
     /// acpx hands every callback of an attempt the attempt's own `signal`: a shell action's
     /// `exec` and `parse` share it.
     @Test(.enabled(if: nodeAvailable))

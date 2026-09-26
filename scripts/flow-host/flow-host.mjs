@@ -18,6 +18,7 @@ import Module, { createRequire, register } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import util from "node:util";
 
 const RUNTIME_PATH = process.env.ACPX_FLOW_RUNTIME;
 // sucrase, which compiles a TypeScript flow as acpx's tsx does (`flow-sucrase.mjs`).
@@ -555,8 +556,9 @@ function encodeExecution(execution) {
   const encoded = {};
   for (const key of Object.keys(execution)) {
     const value = execution[key];
-    if (key === "args" && Array.isArray(value)) encoded.args = value.map(specJSON);
-    else if (value !== undefined) encoded[key] = specJSON(value);
+    if (value === undefined) continue;
+    if (key === "args") encoded.args = Array.isArray(value) ? value.map(specJSON) : specJSON(value);
+    else encoded[key] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
   }
   const { args, env, shell, stdin } = execution;
   // Bytes Node's `stdin.end` writes as they are: a Buffer, typed array or DataView.
@@ -568,7 +570,8 @@ function encodeExecution(execution) {
       encoded.env = Object.fromEntries(
         Object.entries(env)
           .filter(([, value]) => value !== undefined)
-          .map(([name, value]) => [name, typeof value === "string" ? value : `${value}`]),
+          // Node refuses a NUL only in a string; a converted value's ends at it, as C's.
+          .map(([name, value]) => [name, typeof value === "string" ? value : `${value}`.split("\0")[0]]),
       );
     } catch (error) {
       encoded["\u0000envError"] = error instanceof Error ? error.message : String(error);
@@ -584,6 +587,32 @@ function encodeExecution(execution) {
     }
   }
   return encoded;
+}
+
+// An object, a function or a symbol, which Node's checks name by its type ("an instance
+// of URL"), where JSON would write something else of it — through `toJSON`, or nothing.
+function typedByNode(value) {
+  const type = typeof value;
+  return (type === "object" && value !== null && !Array.isArray(value)) || type === "function" || type === "symbol";
+}
+
+// Such a value for the runner: Node's `determineSpecificType` of it, what `String` makes
+// of it, and its JSON.
+function instanceMarker(value) {
+  let string;
+  try {
+    string = String(value);
+  } catch {
+    string = "[object Object]";
+  }
+  return { [JS_MARKER]: "instance", text: specificType(value), string, json: specJSON(value) };
+}
+
+function specificType(value) {
+  if (typeof value === "function") return `function ${value.name}`;
+  if (typeof value === "symbol") return `type symbol (${String(value)})`;
+  if (value.constructor && "name" in value.constructor) return `an instance of ${value.constructor.name}`;
+  return util.inspect(value, { depth: -1 });
 }
 
 // A command's result as the flow sees it: its `args` are the spec's own list, which

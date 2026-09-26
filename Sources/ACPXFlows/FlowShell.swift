@@ -232,6 +232,12 @@ struct FlowShellExecution: Sendable {
         }
     }
 
+    /// `text` up to its first NUL, as a C string reads it.
+    static func cString(_ text: String) -> String {
+        guard let end = text.utf16.firstIndex(of: 0) else { return text }
+        return String(text.utf16[..<end]) ?? text
+    }
+
     /// Whether Node's `spawn` runs the command in a shell: `shell` is `true`, or a path.
     var isShell: Bool {
         switch shell {
@@ -310,10 +316,13 @@ struct FlowShellExecution: Sendable {
                 NodeArgumentError.property("options.shell", "one of type boolean or string", other))
         }
         if let failure = json[FlowJS.argvErrorKey]?.stringValue { throw FlowShellError(failure, name: "TypeError") }
+        // Past Node's checks, a NUL can only come of converting a value that was not a string,
+        // and the argument ends at it, as a C string does — with `shell`, the whole command.
+        arguments = arguments.map(Self.cString)
         if isShell {
             file = "/bin/sh"
             if case .string(let units)? = shell { file = String(decoding: units, as: UTF16.self) }
-            arguments = ["-c", ([command] + args).joined(separator: " ")]
+            arguments = ["-c", Self.cString(([command] + args).joined(separator: " "))]
         }
         if let failure = json[FlowJS.envErrorKey]?.stringValue { throw FlowShellError(failure, name: "TypeError") }
         for (name, value) in env {

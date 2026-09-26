@@ -27,6 +27,10 @@ enum FlowJS {
         case number(Double)
         /// A `Buffer`, typed array or `DataView` given as `stdin`, whose bytes Node writes.
         case bytes([UInt8])
+        /// An object, a function or a symbol given as one of the spec's own members — a URL,
+        /// a Date — which JSON would write as something else: Node's name for its type,
+        /// `String` of it, and its JSON (`toJSON`).
+        case instance(received: String, string: String, json: WireJSON)
     }
 
     static func marker(_ value: WireJSON) -> Marker? {
@@ -37,6 +41,10 @@ enum FlowJS {
         case "unserializable": return .unserializable(value["text"]?.stringValue ?? "")
         case "number": return .number(JavaScriptNumber.parse(value["text"]?.stringValue ?? ""))
         case "bytes": return .bytes(Array(Data(base64Encoded: value["text"]?.stringValue ?? "") ?? Data()))
+        case "instance":
+            return .instance(
+                received: value["text"]?.stringValue ?? "an instance of Object",
+                string: value["string"]?.stringValue ?? "", json: value["json"] ?? .null)
         default: return nil
         }
     }
@@ -49,6 +57,7 @@ enum FlowJS {
         case .unserializable?: return "[object Object]"
         case .number(let number)?: return WireJSON.javaScriptString(forNonFinite: number)
         case .bytes(let bytes)?: return String(decoding: bytes, as: UTF8.self)
+        case .instance(_, let string, _)?: return string
         case nil: return SessionArchive.javaScriptString(value)
         }
     }
@@ -63,6 +72,7 @@ enum FlowJS {
         case .number?: return .null
         case .bytes(let bytes)?:
             return .object([("type", .text("Buffer")), ("data", .array(bytes.map { .number(Double($0)) }))])
+        case .instance(_, _, let json)?: return try written(json)
         case nil: break
         }
         switch value {
@@ -88,6 +98,7 @@ enum FlowJS {
         case .unserializable: return "an instance of Object"
         case .number(let number): return "type number (\(WireJSON.javaScriptString(forNonFinite: number)))"
         case .bytes: return "an instance of Buffer"
+        case .instance(let received, _, _): return received
         }
     }
 }
