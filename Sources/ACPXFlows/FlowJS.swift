@@ -82,11 +82,34 @@ enum FlowJS {
             return .object(try members.compactMap { member in
                 guard let kept = try written(member.value) else { return nil }
                 var copy = member
+                copy.key = unescaped(member.key)
                 copy.value = kept
                 return copy
             })
         default:
             return value
+        }
+    }
+
+    /// An object's key as the flow wrote it: the host escapes one that starts with a NUL
+    /// with another, so none passes for a marker.
+    static func unescaped(_ key: [UInt16]) -> [UInt16] {
+        key.starts(with: [0, 0]) ? Array(key.dropFirst()) : key
+    }
+
+    /// JavaScript's truthiness.
+    static func truthy(_ value: WireJSON?) -> Bool {
+        switch value {
+        case nil, .null?, .bool(false)?: return false
+        case .number(let number)?: return number != 0 && !number.isNaN
+        case .string(let units)?: return !units.isEmpty
+        case let other?:
+            switch marker(other) {
+            case .undefined?: return false
+            case .bigint(let digits)?: return digits != "0"
+            case .number(let number)?: return !number.isNaN
+            default: return true
+            }
         }
     }
 

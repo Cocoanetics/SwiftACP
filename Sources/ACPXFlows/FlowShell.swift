@@ -239,7 +239,9 @@ struct FlowShellExecution: Sendable {
     }
 
     /// Whether Node's `spawn` runs the command in a shell: `shell` is `true`, or a path.
-    var isShell: Bool {
+    var isShell: Bool { Self.runsInShell(shell) }
+
+    static func runsInShell(_ shell: WireJSON?) -> Bool {
         switch shell {
         case .bool(true)?: return true
         case .string(let units)?: return !units.isEmpty
@@ -269,10 +271,13 @@ struct FlowShellExecution: Sendable {
 
     /// acpx's `spec.env`, each value as JavaScript's template string makes it (`${value}`),
     /// `undefined` left out — as the host converted it.
-    var env: [(name: String, value: String)] {
-        (json["env"]?.objectMembers ?? []).compactMap { member in
+    var env: [(name: String, value: String)] { Self.variables(json["env"]) }
+
+    /// An `env` object's variables, each value as `${value}`, `undefined` left out.
+    static func variables(_ env: WireJSON?) -> [(name: String, value: String)] {
+        (env?.objectMembers ?? []).compactMap { member in
             if FlowJS.marker(member.value) == .undefined { return nil }
-            return (String(decoding: member.key, as: UTF16.self), FlowJS.string(member.value))
+            return (String(decoding: FlowJS.unescaped(member.key), as: UTF16.self), FlowJS.string(member.value))
         }
     }
 
@@ -288,6 +293,39 @@ struct FlowShellExecution: Sendable {
     /// for a value of the wrong type, a string with a NUL, or one the host could not
     /// convert.
     func spawnArguments(cwd: String) throws -> (file: String, arguments: [String]) {
+        let spawn = try spawnPlan(cwd: cwd, inheriting: [:])
+        return (spawn.file, spawn.arguments)
+    }
+
+    /// ``spawnArguments(cwd:)``, and where and how `spawn` starts the command. `args` that
+    /// are an object, not a list, are Node's options in place of acpx's own — the command's
+    /// `cwd`, `env`, `shell` and `detached` then come from it, with no arguments.
+    func spawnPlan(cwd: String, inheriting parent: [String: String]) throws -> FlowShellSpawn {
+        guard case .object = json["args"], FlowJS.marker(json["args"] ?? .null) == nil else {
+            let (file, arguments) = try spawnFileAndArguments(
+                cwd: .text(cwd), shell: shell, args: args, env: env, envError: json[FlowJS.envErrorKey]?.stringValue)
+            return FlowShellSpawn(
+                file: file, arguments: arguments, cwd: cwd, environment: environment(inheriting: parent),
+                newSession: true)
+        }
+        let options = json["args"]
+        var variables: [(name: String, value: String)] = []
+        if case .object? = options?["env"] { variables = Self.variables(options?["env"]) }
+        let (file, arguments) = try spawnFileAndArguments(
+            cwd: options?["cwd"], shell: options?["shell"], args: [], env: variables, envError: nil)
+        // `options.env || process.env`.
+        var environment = parent
+        if FlowJS.truthy(options?["env"]) {
+            environment = Dictionary(variables.map { ($0.name, $0.value) }, uniquingKeysWith: { $1 })
+        }
+        return FlowShellSpawn(
+            file: file, arguments: arguments, cwd: options?["cwd"]?.stringValue, environment: environment,
+            newSession: FlowJS.truthy(options?["detached"]))
+    }
+
+    private func spawnFileAndArguments(
+        cwd: WireJSON?, shell: WireJSON?, args: [String], env: [(name: String, value: String)], envError: String?
+    ) throws -> (file: String, arguments: [String]) {
         guard let command else {
             throw FlowShellError.invalidArgType(NodeArgumentError.type("file", "of type string", json["command"]))
         }
@@ -303,10 +341,16 @@ struct FlowShellExecution: Sendable {
                 try FlowShellError.checkNullBytes(String(decoding: units, as: UTF16.self), "args[\(index)]")
             }
         }
-        try FlowShellError.checkNullBytes(
-            cwd, "options.cwd", reason: "must be a string, Uint8Array, or URL without null bytes")
-        var file = command
-        var arguments = args
+        switch cwd {
+        case nil, .null?: break
+        case .string(let units)?:
+            try FlowShellError.checkNullBytes(
+                String(decoding: units, as: UTF16.self), "options.cwd",
+                reason: "must be a string, Uint8Array, or URL without null bytes")
+        case let other?:
+            throw FlowShellError.invalidArgType(NodeArgumentError.property(
+                "options.cwd", "of type string or an instance of Buffer or URL", other))
+        }
         switch shell {
         case nil, .null?, .bool?: break
         case .string(let units)?:
@@ -318,19 +362,30 @@ struct FlowShellExecution: Sendable {
         if let failure = json[FlowJS.argvErrorKey]?.stringValue { throw FlowShellError(failure, name: "TypeError") }
         // Past Node's checks, a NUL can only come of converting a value that was not a string,
         // and the argument ends at it, as a C string does — with `shell`, the whole command.
-        arguments = arguments.map(Self.cString)
-        if isShell {
+        var file = command
+        var arguments = args.map(Self.cString)
+        if Self.runsInShell(shell) {
             file = "/bin/sh"
             if case .string(let units)? = shell { file = String(decoding: units, as: UTF16.self) }
             arguments = ["-c", Self.cString(([command] + args).joined(separator: " "))]
         }
-        if let failure = json[FlowJS.envErrorKey]?.stringValue { throw FlowShellError(failure, name: "TypeError") }
+        if let envError { throw FlowShellError(envError, name: "TypeError") }
         for (name, value) in env {
             try FlowShellError.checkNullBytes(name, "options.env['\(name)']")
             try FlowShellError.checkNullBytes(value, "options.env['\(name)']")
         }
         return (file, arguments)
     }
+}
+
+/// What Node's `spawn` starts: the file and its arguments, where — `nil` for this process's
+/// own directory — with what environment, and whether in a session of its own.
+struct FlowShellSpawn {
+    let file: String
+    let arguments: [String]
+    let cwd: String?
+    let environment: [String: String]
+    let newSession: Bool
 }
 
 /// Node's `ERR_INVALID_ARG_TYPE` messages, with `determineSpecificType`'s account of the

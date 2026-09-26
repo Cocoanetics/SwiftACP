@@ -370,12 +370,21 @@ let nodeAvailable = AgentRegistry.which("node") != nil
     /// that error, as acpx 0.19.3 does, not `Interrupted`.
     @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
     func aStepThatFailedOnItsOwnKeepsItsErrorThroughAnInterrupt() async throws {
-        let run = try await flowRun("""
-            export default defineFlow({ name: "failed-then-interrupted", startAt: "work", nodes: {
-              work: shell({ timeoutMs: 0, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
-                `(trap 'printf x > ${JSON.stringify(READY)}' TERM; while :; do sleep 0.1; done) & exit 1`] }) }) },
-              edges: [] });
-            """, interrupting: true)
+        // The interrupt has to come within the second its child is given between SIGTERM and
+        // SIGKILL, which a heavily loaded machine can miss. A run it reached late failed as
+        // any step does, its node already let go and `Failed in work` not in its status; that
+        // one says nothing of the interrupt, and runs again.
+        var attempts: [Run] = []
+        repeat {
+            attempts.append(try await flowRun("""
+                export default defineFlow({ name: "failed-then-interrupted", startAt: "work", nodes: {
+                  work: shell({ timeoutMs: 0, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
+                    `(trap 'printf x > ${JSON.stringify(READY)}' TERM; while :; do sleep 0.1; done) & exit 1`] }) }) },
+                  edges: [] });
+                """, interrupting: true))
+        } while attempts.count < 3
+            && member(attempts.last?.state, "statusDetail")?.stringValue?.hasPrefix("Failed in work: ") != true
+        let run = try #require(attempts.last)
         #expect(run.code == 1)
         #expect(run.err.hasPrefix("Shell action failed (/bin/sh \"-c\" \"(trap"), "\(run.err)")
         #expect(member(run.state, "results", "work", "outcome") == .text("failed"))

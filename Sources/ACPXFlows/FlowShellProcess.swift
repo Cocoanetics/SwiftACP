@@ -97,15 +97,15 @@ enum FlowShellProcess {
         let startMs = FlowShellClock.nowMs()
         let timeoutMs = FlowShell.resolveTimeout(spec.timeoutMs).map(FlowShell.timerDelayMs)
         try FlowShell.validateMaxBufferBytes(spec.maxBufferBytes)
-        let (file, arguments) = try spec.spawnArguments(cwd: cwd)
+        let spawn = try spec.spawnPlan(cwd: cwd, inheriting: ProcessInfo.processInfo.environment)
         let child: ChildProcess
         do {
             child = try ChildProcess.spawn(
-                command: file, arguments: arguments, cwd: cwd,
-                environment: spec.environment(inheriting: ProcessInfo.processInfo.environment),
-                input: true, newSession: true)
+                command: spawn.file, arguments: spawn.arguments,
+                cwd: spawn.cwd ?? FileManager.default.currentDirectoryPath, environment: spawn.environment,
+                input: true, newSession: spawn.newSession)
         } catch let error as ChildSpawn.SpawnError {
-            throw FlowShellSpawnError(file: file, arguments: arguments, code: error.code)
+            throw FlowShellSpawnError(file: spawn.file, arguments: spawn.arguments, code: error.code)
         }
         let closed = FlowShellEvent()
         var termination: FlowShellTermination?

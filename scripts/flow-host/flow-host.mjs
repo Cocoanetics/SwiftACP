@@ -502,7 +502,7 @@ async function invoke(params) {
     const args = "arg" in params ? [arg, ctx] : [ctx];
     const value = await node[fn](...args);
     if (!attempt.finished) returned.set(attemptId, value);
-    return returnedValue(fn === "exec" ? encodeExecution(value) : value);
+    return returnedValue(fn === "exec" ? encodeExecution(value, ["cwd", "timeoutMs"]) : value);
   } catch (error) {
     attempt.thrown = { error };
     throw error;
@@ -519,7 +519,7 @@ function runShell(attemptId, attempt, execution) {
   attempt.controller.signal.throwIfAborted();
   if (attempt.finished) throw new Error("Flow attempt has finished accepting work");
   path.resolve(".", execution.cwd ?? ".");
-  return request("shell/run", { attemptId, execution: encodeExecution(execution) }).then((result) =>
+  return request("shell/run", { attemptId, execution: encodeExecution(execution, ["cwd"]) }).then((result) =>
     commandResult(result, execution),
   );
 }
@@ -531,13 +531,20 @@ const JS_MARKER = "\u0000acpx";
 const jsMarker = (kind, text) => (text === undefined ? { [JS_MARKER]: kind } : { [JS_MARKER]: kind, text });
 
 // A member of a spec as JSON writes it, a BigInt and a number JSON has no literal for
-// (`NaN`, the infinities) marked within it — or, for what `JSON.stringify` leaves out, or
-// throws on (a cycle), a marker saying so.
+// (`NaN`, the infinities) marked within it, and an object's keys that start with a NUL
+// escaped with another, so none passes for a marker — or, for what `JSON.stringify` leaves
+// out, or throws on (a cycle), a marker saying so.
 function specJSON(value) {
   try {
     const json = JSON.stringify(value, (_key, member) => {
       if (typeof member === "bigint") return jsMarker("bigint", String(member));
       if (typeof member === "number" && !Number.isFinite(member)) return jsMarker("number", String(member));
+      if (member !== null && typeof member === "object" && !Array.isArray(member)) {
+        const keys = Object.keys(member);
+        if (keys.some((key) => key.startsWith("\0"))) {
+          return Object.fromEntries(keys.map((key) => [key.startsWith("\0") ? `\0${key}` : key, member[key]]));
+        }
+      }
       return member;
     });
     return json === undefined ? jsMarker("undefined") : JSON.parse(json);
@@ -551,14 +558,20 @@ function specJSON(value) {
 // converts it, `${value}`, leaving out `undefined`; and the arguments the command gets, as
 // `spawn` makes them — `String(arg)` (a symbol, empty), or with `shell` as `Array.join`
 // does. What converting throws, `spawn` would throw too.
-function encodeExecution(execution) {
+// The spec's own members are what acpx spreads (`{ ...execution }`); `inherited` are the
+// ones it reads off the spec itself, found on its prototype too: `cwd`, and for a shell
+// action `timeoutMs`. A list's holes are read as `undefined`, as Node reads them.
+function encodeExecution(execution, inherited) {
   if (execution === null || typeof execution !== "object") return execution;
   const encoded = {};
-  for (const key of Object.keys(execution)) {
+  const members = Object.keys(execution);
+  for (const key of inherited) if (!Object.hasOwn(execution, key)) members.push(key);
+  for (const key of members) {
     const value = execution[key];
     if (value === undefined) continue;
-    if (key === "args") encoded.args = Array.isArray(value) ? value.map(specJSON) : specJSON(value);
-    else encoded[key] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
+    const name = key.startsWith("\0") ? `\0${key}` : key;
+    if (key === "args") encoded.args = Array.isArray(value) ? Array.from(value, specJSON) : specJSON(value);
+    else encoded[name] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
   }
   const { args, env, shell, stdin } = execution;
   // Bytes Node's `stdin.end` writes as they are: a Buffer, typed array or DataView.
@@ -579,7 +592,7 @@ function encodeExecution(execution) {
   }
   if (Array.isArray(args)) {
     try {
-      encoded["\u0000argv"] = args.map((arg) =>
+      encoded["\u0000argv"] = Array.from(args, (arg) =>
         shell ? (arg == null ? "" : `${arg}`) : typeof arg === "symbol" ? "" : String(arg),
       );
     } catch (error) {
