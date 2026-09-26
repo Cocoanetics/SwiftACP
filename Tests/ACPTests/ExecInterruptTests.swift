@@ -73,18 +73,17 @@ struct ExecInterruptTests {
     /// An agent gone before any prompt went out is reported, as acpx reports it: the
     /// connection closed, in its SDK's words. Should the prompt beat the agent's exit onto
     /// the wire, the run is the agent's disconnect instead, reported just as once (#778);
-    /// which comes first is up to the two processes, in acpx as here.
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func anAgentGoneBeforeThePromptIsReported() async throws {
+    /// which comes first is up to the two processes, in acpx as here. One run a case: the
+    /// time limit counts the wait for the store, which a second run would queue for again.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["text", "quiet"])
+    func anAgentGoneBeforeThePromptIsReported(format: String) async throws {
         let disconnect = "ACP agent disconnected during request (process_exit, exit=3, signal=null)"
-        let text = try await exec("die-after-new", interrupting: false)
-        #expect(text.code == 1)
-        #expect(["ACP connection closed\n", disconnect + "\n"].contains(text.err), "\(text.err)")
-        let quiet = try await exec("die-after-new", format: "quiet", interrupting: false)
-        #expect([
-            "[acpx] error: RUNTIME ACP connection closed\n",
-            "[acpx] error: RUNTIME AGENT_DISCONNECTED \(disconnect)\n"
-        ].contains(quiet.err), "\(quiet.err)")
+        let run = try await exec("die-after-new", format: format, interrupting: false)
+        #expect(run.code == 1)
+        let reported = format == "text" ? ["ACP connection closed\n", disconnect + "\n"] : [
+            "[acpx] error: RUNTIME ACP connection closed\n", "[acpx] error: RUNTIME AGENT_DISCONNECTED \(disconnect)\n"
+        ]
+        #expect(reported.contains(run.err), "\(run.err)")
     }
 
     /// An agent that goes with the prompt out ends the run reported once, in any format,
