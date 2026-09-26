@@ -285,9 +285,11 @@ final class OutputRenderer: @unchecked Sendable {
 
     // MARK: Quiet mode
 
+    /// Only a chunk of text is shown, as acpx's formatters show it: an embedded resource's
+    /// text, say, is the record's (``ACPXCore/ConversationModel``) but no output's.
     private func renderQuiet(_ update: SessionUpdate) {
-        if case .agentMessageChunk(let block) = update, let text = block.text, !finished {
-            quietChunks.append(text)
+        if case .agentMessageChunk(.text(let content)) = update, !finished {
+            quietChunks.append(content.text)
         }
     }
 
@@ -306,9 +308,9 @@ final class OutputRenderer: @unchecked Sendable {
 
         switch update {
         case .agentMessageChunk(let block):
-            if let text = block.text { writeAssistantChunk(text) }
+            if case .text(let content) = block { writeAssistantChunk(content.text) }
         case .agentThoughtChunk(let block):
-            if let text = block.text { thoughtBuffer += text }
+            if case .text(let content) = block { thoughtBuffer += content.text }
         case .userMessageChunk:
             break
         case .toolCall(let call):
