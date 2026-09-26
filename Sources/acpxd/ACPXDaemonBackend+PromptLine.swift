@@ -48,11 +48,16 @@ extension ACPXDaemonBackend {
             }
         } onCancel: {
             // onCancel is synchronous — a Task is the only way onto the actor. A prompt
-            // begun before the drop lands keeps what it began with, and ends as it finds
-            // itself called off.
+            // begun before the drop lands keeps what it began with, and ends below.
             Task { await self.dropWaitingPrompt(recordId, token: token) }
         }
         guard let begun else { throw CancellationError() }
+        // Called off as it began: it ends at once, handing the line on, as acpx's owner
+        // cancels a task it has just taken (Codex review on #196).
+        if Task.isCancelled {
+            promptEnded(recordId, begun, heldTheSlot: false)
+            throw CancellationError()
+        }
         return begun
     }
 

@@ -279,6 +279,46 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A prompt called off as it is handed its turn ends there, handing the line on, rather
+    /// than going on to the agent (Codex review on #196).
+    @Test func aPromptCalledOffAsItBeginsEndsThere() async throws {
+        // Bounded, so that a line that never moves fails rather than hangs.
+        try await withTimeout(milliseconds: 10_000) {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (waits, waiting) = AsyncStream<Void>.makeStream()
+            await daemon.setPromptWaits { _ in waiting.yield() }
+            let first = try await daemon.beginPrompt("s", wait: true)
+            let second = Task { try await daemon.beginPrompt("s", wait: true) }
+            try await nextEvent(waits)
+            await daemon.endPrompt("s", first, thenCancel: second)
+            await #expect(throws: CancellationError.self) { _ = try await second.value }
+            #expect(await daemon.turnIsTheSessions("s") == false)
+            _ = try await daemon.beginPrompt("s", wait: false)
+        }
+    }
+
+    /// A prompt called off before it holds the session sends nothing and keeps nothing, however
+    /// free the session is.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aPromptCalledOffBeforeItHoldsTheSessionSendsNothing() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let calledOff = Task { () -> String in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await limitedPrompt(
+                    daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            }
+            await #expect(throws: CancellationError.self) { _ = try await calledOff.value }
+            #expect(session.prompts == 0)
+            #expect(try #require(SessionStore.loadRecord(session.id)).messages.isEmpty)
+            #expect(await !daemon.turnQueue.isBusy(session.id))
+            await daemon.releaseAll()
+        }
+    }
+
     /// The control a test sends once a turn's controls are sealed, and what it saw.
     private final class SentControl: @unchecked Sendable {
         private let lock = NSLock()
@@ -332,6 +372,16 @@ extension ACPXDaemonBackend {
 
     func setPromptWaits(_ hook: (@Sendable (_ recordId: String) -> Void)?) {
         promptWaits = hook
+    }
+
+    /// End `begun`, and call `next` off in that same step, as it is handed its turn.
+    func endPrompt(_ recordId: String, _ begun: BegunPrompt, thenCancel next: Task<BegunPrompt, Error>) {
+        promptEnded(recordId, begun, heldTheSlot: false)
+        next.cancel()
+    }
+
+    func turnIsTheSessions(_ recordId: String) -> Bool {
+        turns[recordId] != nil
     }
 
     /// End `begun`, and say whose turn the session's is in that same step.

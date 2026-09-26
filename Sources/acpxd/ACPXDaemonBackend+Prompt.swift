@@ -102,6 +102,9 @@ extension ACPXDaemonBackend {
             try await turnQueue.acquire(recordId, wait: true)
             heldTheSlot = true
         }
+        // A free slot is had at once, however the prompt was called off meanwhile: then it
+        // ends here, nothing sent and nothing kept.
+        try Task.checkCancellation()
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over.
         turnStarts(recordId, ttlMs: limits?.ttlMs)
