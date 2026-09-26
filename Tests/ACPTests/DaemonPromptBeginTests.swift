@@ -361,6 +361,40 @@ extension DaemonToolsTests {
         }
     }
 
+    /// So is a prompt sent while the session is being closed or let go, until that is over, as
+    /// acpx's owner refuses a task once it shuts down (`enqueue`) (Codex review on #196).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["close", "release"])
+    func aPromptSentWhileASessionShutsDownIsRefused(how: String) async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            // Something holds the session, which the close waits for.
+            try await daemon.turnQueue.acquire(session.id, wait: true)
+            let (queued, queuing) = AsyncStream<Void>.makeStream()
+            await daemon.turnQueue.setOnQueued { _ in queuing.yield() }
+            let shutdown = Task {
+                how == "close"
+                    ? try await daemon.closeSession(sessionId: session.id)
+                    : try await daemon.releaseSession(sessionId: session.id)
+            }
+            try await nextEvent(queued)
+            await daemon.turnQueue.setOnQueued(nil)
+
+            let client = CallingClient()
+            await #expect(throws: QueueOwnerShuttingDown(inLine: false)) {
+                _ = try await withTimeout(milliseconds: 10_000) {
+                    try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: client)
+                }
+            }
+            #expect(client.failure?.message == "Queue owner is shutting down")
+            await daemon.turnQueue.release(session.id)
+            _ = try await withTimeout(milliseconds: 10_000) { try await shutdown.value }
+            #expect(session.prompts == 0)
+        }
+    }
+
     /// A daemon that is stopping takes no prompt, as acpx's owner takes no task once it shuts
     /// down (`enqueue`): nothing is sent, and nothing kept.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))

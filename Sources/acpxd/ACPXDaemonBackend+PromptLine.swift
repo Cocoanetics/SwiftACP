@@ -25,9 +25,10 @@ extension ACPXDaemonBackend {
     /// begun, else once those before it are over (``promptEnded(_:_:heldTheSlot:)``).
     /// When `wait` is false, a session running anything refuses it with
     /// ``DaemonError/sessionBusy``, and it takes the slot as it begins. A daemon that is
-    /// stopping takes none, as acpx's owner takes no task once it shuts down (`enqueue`).
+    /// stopping takes none, nor does a session being closed or let go, as acpx's owner takes
+    /// no task once it shuts down (`enqueue`).
     func beginPrompt(_ recordId: String, wait: Bool) async throws -> BegunPrompt {
-        guard !stopping else { throw QueueOwnerShuttingDown(inLine: false) }
+        guard !stopping, shuttingDown[recordId] == nil else { throw QueueOwnerShuttingDown(inLine: false) }
         guard wait else {
             try await turnQueue.acquire(recordId, wait: false)
             guard promptLines[recordId] == nil else {
@@ -96,8 +97,20 @@ extension ACPXDaemonBackend {
         return begun
     }
 
-    /// The session's owner shuts down, as acpx's does (`beginShutdown`): the prompts still in
-    /// line are refused, none of them sent.
+    /// The session shuts down, as acpx's owner does (`beginShutdown`) — from now until `body`
+    /// is over: no prompt begins meanwhile, and those still in line are refused, none of them
+    /// sent.
+    func whileShuttingDown<T>(_ recordId: String, _ body: () async throws -> T) async rethrows -> T {
+        shuttingDown[recordId, default: 0] += 1
+        defer {
+            let left = (shuttingDown[recordId] ?? 1) - 1
+            shuttingDown[recordId] = left > 0 ? left : nil
+        }
+        refusePromptsWaiting(recordId)
+        return try await body()
+    }
+
+    /// The prompts still in line are refused, none of them sent.
     func refusePromptsWaiting(_ recordId: String) {
         guard let waiting = promptLines[recordId]?.waiting, !waiting.isEmpty else { return }
         promptLines[recordId]?.waiting = []

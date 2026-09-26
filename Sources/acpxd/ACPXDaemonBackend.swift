@@ -56,6 +56,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     var promptLines: [String: PromptLine] = [:]
     /// Monotonic source of tokens for the prompts waiting to begin.
     var nextPromptToken = 0
+    /// The sessions being closed or let go, by record, with how many closes: no prompt begins
+    /// meanwhile, as acpx's owner takes none once it shuts down.
+    var shuttingDown: [String: Int] = [:]
     /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
     var owners: [String: SessionOwner] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
