@@ -231,7 +231,7 @@ ${n.map(({variableName:o,uniqueLocalName:s})=>`  reactHotLoader.register(${o}, "
 // The loading follows acpx's `src/flows/cli.ts` (v0.19.3); the definition snapshot its
 // `src/flows/store.ts`.
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import Module, { createRequire, register } from "node:module";
 import net from "node:net";
@@ -387,12 +387,51 @@ async function requireTypeScript(file) {
   return await withTypeScriptRequire(() => createRequire(import.meta.url)(file));
 }
 
+// tsx's resolution, for an import in a TypeScript file of a path — not a package: a
+// `.js` it names may be the `.ts` beside it (`.jsx`, `.mjs` and `.cjs` likewise), and one
+// with no extension the first of `.ts`, `.tsx`, `.jsx`, `.js` and `.json` there is.
+const TYPESCRIPT_FILE = /\.(?:[cm]?ts|tsx)$/;
+const MAPPED_EXTENSIONS = {
+  ".js": [".ts", ".tsx", ".js", ".jsx"],
+  ".jsx": [".tsx", ".ts", ".jsx", ".js"],
+  ".cjs": [".cts"],
+  ".mjs": [".mts"],
+};
+const APPENDED_EXTENSIONS = [".ts", ".tsx", ".jsx", ".js", ".json"];
+
+function typeScriptCandidates(specifier) {
+  const extension = path.extname(specifier);
+  if ([".ts", ".tsx", ".mts", ".cts", ".json", ".node"].includes(extension)) return [];
+  const mapped = MAPPED_EXTENSIONS[extension];
+  if (mapped) return mapped.map((replacement) => specifier.slice(0, -extension.length) + replacement);
+  return APPENDED_EXTENSIONS.map((appended) => specifier + appended);
+}
+
+function isFile(file) {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 // tsx's CommonJS `register`, while the flow loads: `require` compiles TypeScript with
-// sucrase, `.tsx` with JSX too.
+// sucrase, `.tsx` with JSX too, and resolves as tsx does.
 async function withTypeScriptRequire(load) {
   const { transform } = await loadSucrase();
   const extensions = Module._extensions;
   const previous = new Map();
+  const resolveFilename = Module._resolveFilename;
+  Module._resolveFilename = function (request, parent, ...rest) {
+    if (parent?.filename && TYPESCRIPT_FILE.test(parent.filename) && /^(?:\.{1,2}\/|\/)/.test(request)) {
+      for (const candidate of typeScriptCandidates(request)) {
+        if (isFile(path.resolve(path.dirname(parent.filename), candidate))) {
+          return resolveFilename.call(this, candidate, parent, ...rest);
+        }
+      }
+    }
+    return resolveFilename.call(this, request, parent, ...rest);
+  };
   for (const extension of [".ts", ".tsx", ".cts", ".mts"]) {
     previous.set(extension, extensions[extension]);
     extensions[extension] = (module, filename) => {
@@ -404,6 +443,7 @@ async function withTypeScriptRequire(load) {
   try {
     return await load();
   } finally {
+    Module._resolveFilename = resolveFilename;
     for (const [extension, handler] of previous) {
       if (handler === undefined) delete extensions[extension];
       else extensions[extension] = handler;
@@ -417,10 +457,45 @@ async function importModuleTypeScript(file) {
   if (!moduleHooksRegistered) {
     moduleHooksRegistered = true;
     const hooks = `
+      import { statSync } from "node:fs";
       import { readFile } from "node:fs/promises";
       import path from "node:path";
       import { fileURLToPath } from "node:url";
       let transform;
+      const TYPESCRIPT_FILE = ${TYPESCRIPT_FILE};
+      const MAPPED_EXTENSIONS = ${JSON.stringify(MAPPED_EXTENSIONS)};
+      const APPENDED_EXTENSIONS = ${JSON.stringify(APPENDED_EXTENSIONS)};
+      ${typeScriptCandidates}
+      function exists(specifier, parentURL) {
+        try {
+          return statSync(fileURLToPath(new URL(specifier, parentURL))).isFile();
+        } catch {
+          return false;
+        }
+      }
+      // tsx's resolution of a path imported by a TypeScript file; a directory is its
+      // index, which Node's own resolver will not take.
+      export async function resolve(specifier, context, nextResolve) {
+        const { parentURL } = context;
+        const fromTypeScript = parentURL?.startsWith("file:") && TYPESCRIPT_FILE.test(new URL(parentURL).pathname);
+        if (!fromTypeScript || !/^(?:\\.{1,2}(?:\\/|$)|\\/|file:)/.test(specifier)) return nextResolve(specifier, context);
+        const directory = specifier === "." || specifier === ".." || specifier.endsWith("/");
+        for (const candidate of directory ? [] : typeScriptCandidates(specifier)) {
+          if (exists(candidate, parentURL)) return nextResolve(candidate, context);
+        }
+        try {
+          if (directory) throw Object.assign(new Error(specifier), { code: "ERR_UNSUPPORTED_DIR_IMPORT" });
+          return await nextResolve(specifier, context);
+        } catch (error) {
+          if (error?.code !== "ERR_UNSUPPORTED_DIR_IMPORT") throw error;
+          const base = specifier.replace(/\\/+$/, "") || specifier;
+          for (const candidate of APPENDED_EXTENSIONS.map((appended) => base + "/index" + appended)) {
+            if (exists(candidate, parentURL)) return nextResolve(candidate, context);
+          }
+          if (directory) return nextResolve(specifier, context);
+          throw error;
+        }
+      }
       // tsx's formats: \`.mts\` a module, \`.cts\` CommonJS, \`.ts\` and \`.tsx\` what the
       // nearest package.json's "type" makes them — CommonJS without one.
       async function formatOf(filePath) {

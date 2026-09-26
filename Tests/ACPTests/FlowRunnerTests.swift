@@ -33,7 +33,10 @@ struct FlowRunnerTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         for (name, content) in files {
-            try content.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            let file = dir.appendingPathComponent(name)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try content.write(to: file, atomically: true, encoding: .utf8)
         }
         let flowFile = dir.appendingPathComponent("test.flow.\(ext)")
         try ("import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n" + body)
@@ -231,6 +234,28 @@ struct FlowRunnerTests {
             ])
         #expect(run.code == 0, "\(run.err)")
         #expect(member(run.state, "outputs", "a")?.stringified == #"{"cts":42,"ts":21,"esm":20}"#)
+    }
+
+    /// A TypeScript flow's imports resolve as tsx resolves them, whichever loader takes the
+    /// flow: a path with no extension, a `.js` or `.mjs` that is the `.ts` or `.mts` beside
+    /// it, and a directory by its index (a Codex finding).
+    @Test(.enabled(if: nodeAvailable), arguments: ["mts", "ts"])
+    func aTypeScriptFlowsImportsResolveAsTsxResolvesThem(_ ext: String) async throws {
+        let run = try await runnerRun("""
+            import { one } from "./bare";
+            import { two } from "./nodenext.js";
+            import { three } from "./lib";
+            import { four } from "./mod.mjs";
+            export default defineFlow({ name: "resolve", startAt: "a", nodes: {
+              a: compute({ run: () => [one(), two(), three(), four()] }) }, edges: [] });
+            """, extension: ext, files: [
+                "bare.ts": "export const one = (): number => 1;\n",
+                "nodenext.ts": "export const two = (): number => 2;\n",
+                "lib/index.ts": "export const three = (): number => 3;\n",
+                "mod.mts": "export const four = (): number => 4;\n"
+            ])
+        #expect(run.code == 0, "\(ext): \(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified == "[1,2,3,4]", "\(ext)")
     }
 
     /// acpx: "requires defineFlow before permission gating".
