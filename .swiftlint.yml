@@ -10,6 +10,8 @@ excluded:
   # Test fixtures (the bundled mock ACP agent is a Python script, not Swift).
   - Tests/SwiftACPTests/Fixtures
   - Tests/ACPTests/Fixtures
+  # The flow host's JavaScript, embedded by scripts/flow-host/build.sh.
+  - Sources/ACPXFlows/FlowHostScripts.swift
 
 disabled_rules:
   # The Data -> String conversions here decode JSONEncoder output, which is

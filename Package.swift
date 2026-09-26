@@ -86,6 +86,17 @@ targets += [
             .product(name: "Logging", package: "swift-log")
         ]
     ),
+    // `flow run`: acpx's flow runner in Swift, with the flow's own code run by a Node host
+    // (`scripts/flow-host`).
+    .target(
+        name: "ACPXFlows",
+        dependencies: [
+            "SwiftACP",
+            "ACPXCore",
+            .product(name: "JSONFoundation", package: "JSONFoundation"),
+            .product(name: "JSONRPCWire", package: "JSONFoundation")
+        ]
+    ),
     .executableTarget(
         name: "acp-mock-agent",
         dependencies: [
@@ -98,6 +109,7 @@ targets += [
         dependencies: [
             "SwiftACP",
             "ACPXCore",
+            "ACPXFlows",
             .product(name: "JSONFoundation", package: "JSONFoundation"),
             .product(name: "SwiftMCP", package: "SwiftMCP"),
             .product(name: "ArgumentParser", package: "swift-argument-parser")
@@ -119,7 +131,7 @@ targets += [
         name: "ACPTests",
         dependencies: [
             "SwiftACP",
-            "ACPXCore", "acpx", "acpxd",
+            "ACPXCore", "ACPXFlows", "acpx", "acpxd",
             .product(name: "SwiftMCP", package: "SwiftMCP")
         ],
         // Both fixtures are read from disk by path (`#filePath`), not from a bundle.
@@ -128,7 +140,7 @@ targets += [
             "Fixtures/image-probe.png", "Fixtures/wirejson-node.json", "Fixtures/v8-json-errors.json",
             "Fixtures/acpx-config-errors.json", "Fixtures/acpx-argv-parse.json",
             "Fixtures/acpx-record-parse.json", "Fixtures/record-agent.py", "Fixtures/acpx-turn-record.json",
-            "Fixtures/acpx-session-archive.json", "Fixtures/retry-agent.py", "Fixtures/watch"
+            "Fixtures/acpx-session-archive.json", "Fixtures/retry-agent.py", "Fixtures/watch", "Fixtures/flows"
         ]
     )
 ]

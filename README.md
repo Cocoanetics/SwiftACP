@@ -153,6 +153,23 @@ existing session with a different config just works; `sessions ensure --mcp-conf
 likewise re-attaches to the session it reuses. `sessions show --format json` and
 `showSession` list the attached set.
 
+### Flows
+
+`acpx flow run <file>` runs an acpx flow — a module that does `export default
+defineFlow({...})` from `"acpx/flows"` — as acpx 0.19.3 runs it, and writes the same run
+bundle under `~/.acpx/flows/runs/`. The runner is Swift. The flow's own code runs in
+Node (22.13 or later, found on `PATH`), which acpx itself needs: the CLI starts a small
+host script with it, and `"acpx/flows"` resolves to acpx's own authoring helpers,
+bundled into the CLI (`scripts/flow-host`).
+
+```sh
+swift run acpx flow run review.flow.mjs --input-json '{"pr": 42}'
+```
+
+TypeScript flows compile with sucrase, to CommonJS as acpx's tsx does (`.mts` as an ES
+module). So far compute, function action and checkpoint nodes run; shell actions and ACP
+nodes follow (#202).
+
 ## Status
 
 A byte-faithful Swift clone of
