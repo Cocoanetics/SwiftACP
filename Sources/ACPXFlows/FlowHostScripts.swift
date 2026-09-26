@@ -288,11 +288,13 @@ let input;
 // node returned stays the value it returned, not a JSON copy of it.
 const outputs = {};
 // What each attempt's callback returned last, until the runner makes it the node's output
-// or forgets the attempt. A callback that settles after its attempt was forgotten — one
-// that ran past its deadline — keeps nothing.
+// or forgets the attempt.
 const returned = new Map();
-const forgotten = new Set();
-const controllers = new Map();
+// Each attempt whose callback is still running: its abort controller, and whether the
+// runner has forgotten it. Forgotten, it is let go here at once — a callback that never
+// settles is then held by nothing but itself, as in acpx — and one that settles later,
+// past its deadline, keeps nothing.
+const running = new Map();
 
 async function loadRuntime() {
   runtime ??= await import(pathToFileURL(RUNTIME_PATH).href);
@@ -335,8 +337,29 @@ async function prepareFlowModuleImport(file, extension) {
     return { flowPath: file };
   }
   const tempPath = path.join(path.dirname(file), `.acpx-flow-load-${randomUUID()}${extension}`);
-  await fs.writeFile(tempPath, rewritten, { mode: 0o600, flag: "wx" });
+  await writePrivateFile(tempPath, rewritten);
   return { flowPath: tempPath, cleanup: () => fs.rm(tempPath, { force: true }) };
+}
+
+// acpx's `writePrivateFile(…, { privateDirectory: false })`: written whole, owner-only,
+// in a temporary directory beside it (fs-safe's `tempFile`), then moved into place.
+async function writePrivateFile(file, text) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const directory = await fs.realpath(path.dirname(file));
+  const scratch = await fs.mkdtemp(path.join(directory, "acpx-write-"));
+  try {
+    const temporary = path.join(scratch, "record.json");
+    const handle = await fs.open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(text, "utf8");
+      await handle.chmod(0o600);
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, path.join(directory, path.basename(file)));
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true });
+  }
 }
 
 // acpx's `loadFlowRuntimeModule`, where tsx compiles TypeScript: `.ts`, `.tsx` and `.cts`
@@ -520,8 +543,8 @@ async function flowTitle(params) {
 async function invoke(params) {
   const { nodeId, fn, attemptId } = params;
   const node = flow.nodes[nodeId];
-  const controller = new AbortController();
-  controllers.set(attemptId, controller);
+  const attempt = { controller: new AbortController(), forgotten: false };
+  running.set(attemptId, attempt);
   const state = params.state;
   state.input = input;
   state.outputs = outputs;
@@ -531,7 +554,7 @@ async function invoke(params) {
     results: state.results,
     state,
     services: {},
-    signal: controller.signal,
+    signal: attempt.controller.signal,
   };
   if (node.nodeType === "action" && "run" in node) {
     ctx.runShell = (execution) => request("shell/run", { attemptId, execution });
@@ -539,11 +562,10 @@ async function invoke(params) {
   try {
     const args = "arg" in params ? [params.arg, ctx] : [ctx];
     const value = await node[fn](...args);
-    if (!forgotten.has(attemptId)) returned.set(attemptId, value);
+    if (!attempt.forgotten) returned.set(attemptId, value);
     return returnedValue(value);
   } finally {
-    controllers.delete(attemptId);
-    forgotten.delete(attemptId);
+    if (running.get(attemptId) === attempt) running.delete(attemptId);
   }
 }
 
@@ -574,7 +596,17 @@ function setOutput(params) {
 
 function cancelAttempt(params) {
   const reason = params.reason === "timeout" ? new TimeoutError(params.timeoutMs) : new InterruptedError();
-  controllers.get(params.attemptId)?.abort(reason);
+  running.get(params.attemptId)?.controller.abort(reason);
+}
+
+// The runner is done with an attempt: nothing of it is kept.
+function forgetAttempt(params) {
+  returned.delete(params.attemptId);
+  const attempt = running.get(params.attemptId);
+  if (attempt) {
+    attempt.forgotten = true;
+    running.delete(params.attemptId);
+  }
 }
 
 // What a callback threw, as acpx's runner records it: the message of an `Error`, else the
@@ -627,8 +659,11 @@ async function handle(message) {
         cancelAttempt(message.params);
         break;
       case "attempt/forget":
-        returned.delete(message.params.attemptId);
-        if (controllers.has(message.params.attemptId)) forgotten.add(message.params.attemptId);
+        forgetAttempt(message.params);
+        break;
+      case "host/tracked":
+        // What the host still holds for attempts, for the runner's tests.
+        result = { running: running.size, returned: returned.size };
         break;
       case "host/exit":
         if (message.id !== undefined) send({ id: message.id, result: null });

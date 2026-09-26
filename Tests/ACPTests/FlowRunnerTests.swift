@@ -9,19 +9,22 @@ import Testing
 /// a directory of its own, so these touch nothing process-wide and need no store isolation
 /// (`FlowRunTests` has the cases that go through the CLI).
 struct FlowRunnerTests {
-    /// A finished run: `err` and `code` are what the CLI would report of its failure.
+    /// A finished run: `err` and `code` are what the CLI would report of its failure;
+    /// `tracked`, what the host still held for attempts once it was over, when asked.
     struct Run {
         var err = ""
         var code: Int32 = 0
         var state: WireJSON?
         var trace: [WireJSON] = []
+        var tracked: WireJSON?
     }
 
     /// Run a flow module — `body` after acpx's helpers are imported — with `input`, beside
-    /// `files`.
+    /// `files`. With `tracking`, the host is asked what it holds for attempts once the run
+    /// is over: not of a host whose callback holds its event loop, which cannot answer.
     private func runnerRun(
         _ body: String, extension ext: String = "mjs", files: [String: String] = [:],
-        input: WireJSON = .object([WireJSON.Member]())
+        input: WireJSON = .object([WireJSON.Member]()), tracking: Bool = false
     ) async throws -> Run {
         let node = try #require(AgentRegistry.which("node"))
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-runner-\(UUID().uuidString)")
@@ -45,6 +48,7 @@ struct FlowRunnerTests {
             run.err = TurnFailureText.message(of: error)
             run.code = error is FlowTimeoutError ? 3 : 1
         }
+        if tracking { run.tracked = try? await host.request("host/tracked") }
         await host.stop()
         if let name = try? FileManager.default.contentsOfDirectory(atPath: runs.path).first {
             let runDir = runs.appendingPathComponent(name)
@@ -250,6 +254,26 @@ struct FlowRunnerTests {
         #expect(run.err == "Timed out after 100ms")
         #expect(member(run.state, "status") == .text("timed_out"))
         #expect(member(run.state, "results", "spin", "outcome") == .text("timed_out"))
+    }
+
+    /// A callback past its deadline that never settles is let go once the runner forgets
+    /// its attempt, as nothing holds it in acpx: a flow timing it out again and again
+    /// leaves the host holding nothing (a Codex finding).
+    @Test(.enabled(if: nodeAvailable))
+    func aTimedOutCallbackThatNeverSettlesIsLetGo() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "stall-again", startAt: "stall", nodes: {
+              stall: compute({ timeoutMs: 50, run: () => new Promise(() => {}) }),
+              count: compute({ run: ({ outputs }) => ({ n: (outputs.count?.n ?? 0) + 1 }) }),
+              done: compute({ run: () => "done" }) },
+              edges: [
+                { from: "stall", switch: { on: "$result.outcome", cases: { timed_out: "count" } } },
+                { from: "count", switch: { on: "$.n", cases: { 1: "stall", 2: "stall", 3: "done" } } }] });
+            """, tracking: true)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "done") == .text("done"))
+        #expect(member(run.state, "results", "stall", "attemptId") == .text("stall#3"))
+        #expect(run.tracked?.stringified == #"{"running":0,"returned":0}"#)
     }
 
     @Test(.enabled(if: nodeAvailable))
