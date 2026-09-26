@@ -173,6 +173,80 @@ import Testing
         await queue.release("s")
     }
 
+    /// Prompts begin one at a time, in the order they came, as acpx's queue owner takes its
+    /// prompt tasks (#173) — and one waiting to begin holds nothing of the session meanwhile.
+    @Test func promptsBeginOneAtATimeInTheOrderTheyCame() async throws {
+        let queue = SessionTurnQueue()
+        let (queued, queuing) = AsyncStream<Void>.makeStream()
+        await queue.setOnQueued { _ in queuing.yield() }
+        let begun = Begun()
+        try await queue.beginPrompt("s", wait: true)
+        let second = Task {
+            try await queue.beginPrompt("s", wait: true)
+            await begun.add(2)
+        }
+        try await nextEvent(queued)
+        let third = Task {
+            try await queue.beginPrompt("s", wait: true)
+            await begun.add(3)
+        }
+        try await nextEvent(queued)
+        try await queue.acquire("s", wait: false)
+        await queue.release("s")
+
+        await queue.endPrompt("s")
+        try await second.value
+        #expect(await begun.order == [2])
+        await queue.endPrompt("s")
+        try await third.value
+        #expect(await begun.order == [2, 3])
+        await queue.endPrompt("s")
+        try await queue.beginPrompt("s", wait: false)
+        await queue.release("s")
+        await queue.endPrompt("s")
+    }
+
+    /// A prompt that will not wait is busy while anything holds the session — the slot, or a
+    /// prompt begun — and otherwise takes both.
+    @Test func aPromptThatWillNotWaitIsBusyWhileAnythingHoldsTheSession() async throws {
+        let queue = SessionTurnQueue()
+        try await queue.acquire("s", wait: true)
+        await #expect(throws: DaemonError.self) { try await queue.beginPrompt("s", wait: false) }
+        await queue.release("s")
+        try await queue.beginPrompt("s", wait: true)
+        await #expect(throws: DaemonError.self) { try await queue.beginPrompt("s", wait: false) }
+        await queue.endPrompt("s")
+
+        try await queue.beginPrompt("s", wait: false)
+        await #expect(throws: DaemonError.self) { try await queue.acquire("s", wait: false) }
+        await #expect(throws: DaemonError.self) { try await queue.beginPrompt("s", wait: false) }
+        await queue.release("s")
+        await queue.endPrompt("s")
+    }
+
+    /// A prompt called off before it begins leaves the line: none begins in its place.
+    @Test func aPromptCalledOffBeforeItBeginsLeavesTheLine() async throws {
+        let queue = SessionTurnQueue()
+        let (queued, queuing) = AsyncStream<Void>.makeStream()
+        await queue.setOnQueued { _ in queuing.yield() }
+        try await queue.beginPrompt("s", wait: true)
+        let waiting = Task { try await queue.beginPrompt("s", wait: true) }
+        try await nextEvent(queued)
+        waiting.cancel()
+        await #expect(throws: CancellationError.self) { try await waiting.value }
+
+        await queue.endPrompt("s")
+        try await queue.beginPrompt("s", wait: false)
+        await queue.release("s")
+        await queue.endPrompt("s")
+    }
+
+    /// The prompts that began, in order.
+    private actor Begun {
+        private(set) var order: [Int] = []
+        func add(_ prompt: Int) { order.append(prompt) }
+    }
+
     @Test(.enabled(if: mockPythonAvailable))
     func concurrentTurnsSerializeAndPreserveHistory() async throws {
         let command = try #require(mockCommand())

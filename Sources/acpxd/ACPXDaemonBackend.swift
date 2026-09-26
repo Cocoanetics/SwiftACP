@@ -81,6 +81,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// For tests: run once a control sent during a prompt is taken on the prompt's ticket,
     /// before it waits for the prompt to go out.
     var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a prompt's turn has sealed its controls, before the turn is over.
+    var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 

@@ -58,13 +58,13 @@ extension ACPXDaemonBackend {
         let expiry = timeout.map { ContinuousClock.now + .milliseconds($0) }
         let sent = WriteMark()
         let previous = ticket.tail
-        let persister = ticket.persister
         let operation = Task { [self] () async throws -> Value in
             await previous?.value
             try await ticket.ready()
             // Past its deadline while it waited: nothing goes out (acpx's `assertActive`).
             if let timeout, let expiry, ContinuousClock.now >= expiry { throw TimeoutError(milliseconds: timeout) }
-            guard let entry = live[recordId] else { throw JSONRPCPeerError.closed }
+            // Its prompt went out, so it holds the session, and has its persister.
+            guard let entry = live[recordId], let persister = ticket.persister else { throw JSONRPCPeerError.closed }
             let record = await persister.record
             sent.mark()
             let response = try await step.request(entry, record, nil)
@@ -94,25 +94,42 @@ extension ACPXDaemonBackend {
     /// turn's last save.
     func sealControls(of recordId: String) async {
         await tickets[recordId]?.seal()?.value
+        await controlsSealed?(recordId)
+    }
+
+    /// A begun prompt is over, as acpx's owner ends the prompt task it took
+    /// (`runPromptTurn`): its ticket sealed and let go — a control from now on runs between
+    /// turns — and its turn no longer the session's. Then the slot, if it held it, goes to
+    /// what waits for it; the owner waits for its next prompt, as acpx's owner does after
+    /// any task it took, one that never held the session too; and the next prompt begins
+    /// (``SessionTurnQueue/endPrompt(_:)``).
+    func promptEnded(_ recordId: String, turn id: UUID, ticket: PromptControlTicket, heldTheSlot: Bool) {
+        ticket.seal()
+        if tickets[recordId] === ticket { tickets[recordId] = nil }
+        if turns[recordId]?.id == id { turns[recordId] = nil }
+        // Called from a `defer`, which can't await; the hop to the queue actor is safe
+        // because release hands the slot to the next FIFO waiter whenever it lands.
+        Task {
+            if heldTheSlot { await turnQueue.release(recordId) }
+            await self.turnEnded(recordId)
+            await turnQueue.endPrompt(recordId)
+        }
     }
 }
 
 /// The controls a prompt's turn takes while it runs: acpx's `PromptControlTicket`. Opened
-/// as the turn starts, ready once its prompt goes out, sealed when the turn is over. Held by
-/// the backend and used only on its actor.
+/// as the prompt begins, ready once its prompt goes out, sealed when the turn is over. Held
+/// by the backend and used only on its actor.
 final class PromptControlTicket: @unchecked Sendable {
-    /// The prompt's persister, whose record a control changes and saves.
-    let persister: TurnPersister
+    /// The prompt's persister, whose record a control changes and saves: set once the prompt
+    /// holds the session, before it goes out.
+    var persister: TurnPersister?
     private(set) var published = false
     private(set) var sealed = false
     /// The controls waiting for the prompt to go out.
     private var waiting: [CheckedContinuation<Void, Error>] = []
     /// The last control taken, which the next runs after: acpx's `rawTail`.
     var tail: Task<Void, Never>?
-
-    init(persister: TurnPersister) {
-        self.persister = persister
-    }
 
     /// The prompt went out, as acpx's owner publishes its controls (`onPromptActive`): the
     /// controls waiting for it run, in turn.

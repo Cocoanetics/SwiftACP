@@ -12,7 +12,7 @@ import Testing
 /// prompt's agent down.
 extension DaemonToolsTests {
     /// A FIFO in `directory` for the agent to signal on, and its path.
-    private func fifo(_ name: String, in directory: URL) throws -> URL {
+    func fifo(_ name: String, in directory: URL) throws -> URL {
         let path = directory.appendingPathComponent(name)
         guard mkfifo(path.path, 0o600) == 0 else { throw POSIXError(.EIO) }
         return path
@@ -20,7 +20,7 @@ extension DaemonToolsTests {
 
     /// Wait for the agent to signal on `fifo` — bounded, so that a signal that never comes
     /// fails the test rather than hangs it.
-    private func signalled(_ fifo: URL) async throws {
+    func signalled(_ fifo: URL) async throws {
         try await withTimeout(milliseconds: 10_000) { try await Self.byteWritten(to: fifo) }
     }
 

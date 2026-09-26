@@ -82,26 +82,32 @@ extension ACPXDaemonBackend {
         }
         let recordId = initial.acpxRecordId
 
-        // One turn per session at a time: queue behind any in-flight turn (or, when
-        // wait == false, reject), so concurrent CLI/MCP callers never drive one
-        // agent — or persist one record — concurrently. Keyed by the record, whose
-        // ACP session a fallback can replace.
-        try await turnQueue.acquire(recordId, wait: wait)
+        // The prompt begins as acpx's queue owner begins the prompt task it takes
+        // (`runPromptTurn`): at once, unless another prompt of the session runs or waits
+        // before it — then once those are over. Keyed by the record, whose ACP session a
+        // fallback can replace. When `wait` is false, a session running anything rejects it.
+        try await turnQueue.beginPrompt(recordId, wait: wait)
+        // Begun, the turn is the session's before it holds the session: a cancel is its
+        // (``cancelSession(sessionId:)``), and so is a control sent, run on the prompt's
+        // agent once the prompt goes out (acpx's `beginPrompt`). A turn that ends before
+        // then fails the controls still waiting.
+        let control = TurnControl()
+        turns[recordId] = control
+        let ticket = PromptControlTicket()
+        tickets[recordId] = ticket
+        var heldTheSlot = !wait
+        defer { promptEnded(recordId, turn: control.id, ticket: ticket, heldTheSlot: heldTheSlot) }
+        // One turn per session at a time, so concurrent CLI/MCP callers never drive one
+        // agent — or persist one record — concurrently: the prompt waits for what holds the
+        // session, the controls sent before it began among them, as acpx's owner waits for
+        // its idle controls (`priorIdle`).
+        if wait {
+            try await turnQueue.acquire(recordId, wait: true)
+            heldTheSlot = true
+        }
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over.
         turnStarts(recordId, ttlMs: limits?.ttlMs)
-        // `defer` can't await; the hop to the queue actor is safe because release
-        // hands the slot to the next FIFO waiter regardless of when it lands.
-        defer {
-            Task {
-                await turnQueue.release(recordId)
-                await self.turnEnded(recordId)
-            }
-        }
-        // The turn runs from here: from now on a cancel is its (``cancelSession(sessionId:)``).
-        let control = TurnControl()
-        turns[recordId] = control
-        defer { turns[recordId] = nil }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
@@ -110,6 +116,14 @@ extension ACPXDaemonBackend {
         // the caller's id may be the one it replaced.
         guard let record = findRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
+        }
+        // Cancelled while it waited, it ends now, as acpx's prompt ends cancelled once it
+        // holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.
+        if turns[recordId]?.cancelAsked == true {
+            await Self.announceTheEnd(
+                of: PromptResponse(stopReason: .cancelled), permissions: PermissionStats(),
+                result: PromptResultCapture(), as: record.acpSessionId, to: Session.current)
+            return ""
         }
         let agentCommand = record.agentCommand
         let cwd = record.cwd
@@ -131,15 +145,8 @@ extension ACPXDaemonBackend {
         // The turn's journal records are keyed by its id, as acpx's by its queue request's.
         let persister = TurnPersister(
             record: prompted, eventBuffer: eventBuffer, requestId: control.id.uuidString.lowercased())
-        // A control sent from now on is the turn's, as acpx's owner takes it on the turn's
-        // ticket (`beginPrompt`): it runs on the prompt's agent once the prompt goes out. A
-        // turn that ends before then fails those still waiting.
-        let ticket = PromptControlTicket(persister: persister)
-        tickets[recordId] = ticket
-        defer {
-            ticket.seal()
-            if tickets[recordId] === ticket { tickets[recordId] = nil }
-        }
+        // The controls the turn takes change and save the prompt's record.
+        ticket.persister = persister
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
