@@ -71,7 +71,7 @@ public enum ReconnectFallback {
 
     /// acpx's `extractAcpError`: the agent's error `error` is, or stands for a few causes
     /// down (``ErrorWithCause``) — a resume's, a model control's.
-    static func agentError(in error: Error) -> JSONRPCErrorBody? {
+    public static func agentError(in error: Error) -> JSONRPCErrorBody? {
         var current: Error? = error
         for _ in 0 ..< 5 {
             guard let candidate = current else { return nil }

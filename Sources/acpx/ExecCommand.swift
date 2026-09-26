@@ -178,8 +178,11 @@ enum ExecCommand {
         default:
             if agentErrorShown {
                 break
-            } else if error is JSONRPCErrorBody {
-                showAgentError(failure, renderer: renderer)
+            } else if let agentError = ReconnectFallback.agentError(in: error) {
+                // The agent's error is on the wire, and acpx's text formatter shows each error
+                // it reads there (`onAcpMessage`): one a control of the session's setup failed
+                // with too. The top level then says nothing more.
+                showAgentError(RunFailure(agentError), renderer: renderer)
             } else {
                 err(failure.message)
                 for hint in remediationHints(
@@ -236,6 +239,12 @@ enum ExecCommand {
                 acpDetails = unavailable.agentError.flatMap { RunFailure($0).acpDetails }
             default:
                 break
+            }
+            // `preferredAcpErrorDetails` of the agent's error a failure came of, as acpx's
+            // `extractAcpError` finds it: a setup control's, say.
+            if acpDetails == nil, !(error is JSONRPCErrorBody),
+               let agentError = ReconnectFallback.agentError(in: error) {
+                acpDetails = RunFailure(agentError).acpDetails
             }
             // `resolveOutputErrorCode`: a runtime failure saying the session is gone.
             if outputCode == "RUNTIME", ReconnectFallback.isResourceNotFound(error) {
