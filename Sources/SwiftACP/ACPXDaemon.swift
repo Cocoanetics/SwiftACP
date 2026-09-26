@@ -38,6 +38,15 @@ public actor ACPXDaemon {
         self.backend = backend
     }
 
+    /// Run what a request asked for to its end, whatever becomes of the request: acpx's
+    /// queue owner runs a prompt or control it has admitted though its client goes away
+    /// (#181). SwiftMCP calls off a request's handler once its client's connection is
+    /// gone, and none of that reaches `work`. `work` keeps the request's task-locals,
+    /// the client's session among them, so the client hears of it for as long as it can.
+    private func admitted<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await Task { try await work() }.value
+    }
+
     /// Create a new session for an agent, persist its `~/.acpx/sessions` record
     /// (the same record the CLI's `sessions new` writes), and return its id.
     ///
@@ -142,9 +151,11 @@ public actor ACPXDaemon {
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
-        try await backend.setMode(
-            sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
+        try await admitted { [backend] in
+            try await backend.setMode(
+                sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
+                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
+        }
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -171,10 +182,12 @@ public actor ACPXDaemon {
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
-        try await backend.setConfigOption(
-            sessionId: sessionId, configId: configId, value: value,
-            nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
-            timeoutMs: timeoutMs)
+        try await admitted { [backend] in
+            try await backend.setConfigOption(
+                sessionId: sessionId, configId: configId, value: value,
+                nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
+                timeoutMs: timeoutMs)
+        }
     }
 
     /// Set a session's model on the live agent via the legacy `session/set_model`
@@ -199,9 +212,11 @@ public actor ACPXDaemon {
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
     ) async throws -> SessionControlResult {
-        try await backend.setModel(
-            sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
+        try await admitted { [backend] in
+            try await backend.setModel(
+                sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
+                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
+        }
     }
 
     /// Close a session: terminate its live agent (if held) and mark the record
@@ -211,7 +226,7 @@ public actor ACPXDaemon {
     /// - Returns: `false` if no such session exists.
     @MCPTool(idempotentHint: true)
     func closeSession(sessionId: String) async throws -> Bool {
-        try await backend.closeSession(sessionId: sessionId)
+        try await admitted { [backend] in try await backend.closeSession(sessionId: sessionId) }
     }
 
     /// Delete closed sessions (optionally per-agent, optionally only those idle
@@ -295,12 +310,14 @@ public actor ACPXDaemon {
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil
     ) async throws -> String {
-        try await backend.runPrompt(
-            sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
-            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-            streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
-            terminalOutputCeiling: terminalOutputCeiling,
-            sessionOptions: Self.turnOptions(sessionOptions, model: model), limits: limits)
+        let options = Self.turnOptions(sessionOptions, model: model)
+        return try await admitted { [backend] in
+            try await backend.runPrompt(
+                sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
+                permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
+                streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
+                terminalOutputCeiling: terminalOutputCeiling, sessionOptions: options, limits: limits)
+        }
     }
 
     /// A turn's session options with its `model`, which a CLI from before `sessionOptions`
@@ -328,7 +345,7 @@ public actor ACPXDaemon {
     /// - Returns: `false` if the session isn't currently live.
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func cancelSession(sessionId: String) async throws -> Bool {
-        try await backend.cancelSession(sessionId: sessionId)
+        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId) }
     }
 
     /// Let go of a session's live agent without closing the session: the daemon stops
@@ -339,6 +356,6 @@ public actor ACPXDaemon {
     /// - Returns: whether the daemon held an agent for it.
     @MCPTool(idempotentHint: true)
     func releaseSession(sessionId: String) async throws -> Bool {
-        try await backend.releaseSession(sessionId: sessionId)
+        try await admitted { [backend] in try await backend.releaseSession(sessionId: sessionId) }
     }
 }
