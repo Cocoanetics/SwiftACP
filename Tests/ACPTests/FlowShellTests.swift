@@ -6,16 +6,84 @@ import Testing
 /// acpx's shell action rules that need no process (`test/flows-shell.test.ts`, v0.19.3),
 /// and the UTF-8 decoding Node's `setEncoding("utf8")` does for its capture.
 struct FlowShellTests {
-    /// acpx: "renderShellCommand quotes arguments consistently".
-    @Test func aCommandIsShownWithItsArgumentsQuoted() {
-        #expect(FlowShell.renderCommand("echo", ["hello", "two words"]) == #"echo "hello" "two words""#)
-        #expect(FlowShell.renderCommand("ls", []) == "ls")
-        #expect(FlowShell.renderCommand("printf", ["a\"b\n"]) == #"printf "a\"b\n""#)
+    /// acpx: "renderShellCommand quotes arguments consistently" — each argument as
+    /// `JSON.stringify` writes the flow's own value: a number bare, `undefined` as nothing,
+    /// and a BigInt, which it refuses, failing.
+    @Test func aCommandIsShownWithItsArgumentsQuoted() throws {
+        #expect(try FlowShell.renderCommand("echo", [.text("hello"), .text("two words")])
+            == #"echo "hello" "two words""#)
+        #expect(try FlowShell.renderCommand("ls", []) == "ls")
+        #expect(try FlowShell.renderCommand("printf", [.text("a\"b\n")]) == #"printf "a\"b\n""#)
+        #expect(try FlowShell.renderCommand("head", [.text("-n"), .number(5), .null]) == #"head "-n" 5 null"#)
+        let undefined = WireJSON.object([(FlowJS.markerKey, .text("undefined"))])
+        #expect(try FlowShell.renderCommand("echo", [undefined]) == "echo")
+        #expect(try FlowShell.renderCommand("echo", [undefined, .text("x")]) == #"echo  "x""#)
+        let bigint = WireJSON.object([(FlowJS.markerKey, .text("bigint")), ("text", .text("5"))])
+        #expect(throws: FlowShellError.self) { try FlowShell.renderCommand("echo", [bigint]) }
     }
 
-    /// acpx: "formatShellActionSummary prefixes rendered commands".
-    @Test func theSummaryPrefixesTheCommand() {
-        #expect(FlowShell.summary("git", ["status", "--short"]) == #"shell: git "status" "--short""#)
+    /// acpx: "formatShellActionSummary prefixes rendered commands" — and `args` that are not
+    /// a list fail it, as `args.map` does.
+    @Test func theSummaryPrefixesTheCommand() throws {
+        let spec = { (args: WireJSON) in
+            FlowShellExecution(json: .object([("command", .text("git")), ("args", args)]))
+        }
+        #expect(try FlowShell.summary(of: spec(.array([.text("status"), .text("--short")])))
+            == #"shell: git "status" "--short""#)
+        #expect(try FlowShell.summary(of: spec(.null)) == "shell: git")
+        let failure = #expect(throws: FlowShellError.self) { try FlowShell.summary(of: spec(.text("status"))) }
+        #expect(failure?.message == "args.map is not a function")
+    }
+
+    /// Node's `util.inspect` of a string, as its `ERR_INVALID_ARG_VALUE` shows one: the
+    /// cases are what Node 22 prints.
+    @Test func aStringIsInspectedAsNodeInspectsIt() {
+        let cases: [(String, String)] = [
+            ("a\u{0}b", #"'a\x00b'"#), ("it's", #""it's""#), (#"say "hi""#, #"'say "hi"'"#),
+            (#"both ' and ""#, #"`both ' and "`"#), (#"all ' " and `"#, #"'all \' " and `'"#),
+            ("tmpl ' \" ${x}", #"'tmpl \' " ${x}'"#), ("\n\t\r\u{8}\u{C}\u{B}", #"'\n\t\r\b\f\x0B'"#),
+            ("\u{7F}\u{85}\u{9F}\u{A0}", "'\\x7F\\x85\\x9F\u{A0}'"), ("é😀", "'é😀'"),
+            (#"a\b"#, #"'a\\b'"#), ("", "''")
+        ]
+        for (text, inspected) in cases {
+            #expect(NodeInspect.string(text) == inspected, "\(text.debugDescription)")
+        }
+        #expect(NodeInspect.string(String(repeating: "line\n", count: 30)).hasPrefix("'line\\n' +\n  'line\\n' +\n"))
+    }
+
+    /// Node's `spawn` refuses a string with a NUL, naming it — the file, an argument, the
+    /// working directory, the shell, an environment variable — before it starts anything.
+    @Test func aNulIsRefusedAsNodeRefusesIt() {
+        func refusal(_ members: [(String, WireJSON?)], cwd: String = "/tmp") -> String? {
+            do {
+                _ = try FlowShellExecution(json: .object(members)).spawnArguments(cwd: cwd)
+                return nil
+            } catch let error as FlowShellError {
+                return error.code == "ERR_INVALID_ARG_VALUE" ? error.message : "wrong code: \(error.message)"
+            } catch {
+                return "\(error)"
+            }
+        }
+        let echo: (String, WireJSON?) = ("command", .text("/bin/echo"))
+        #expect(refusal([("command", .text("/bin/ec\u{0}ho"))])
+            == "The argument 'file' must be a string without null bytes. Received '/bin/ec\\x00ho'")
+        #expect(refusal([echo, ("args", .array([.text("a"), .text("b\u{0}c")]))])
+            == "The argument 'args[1]' must be a string without null bytes. Received 'b\\x00c'")
+        #expect(refusal([echo, ("args", .array([.text("it's\u{0}")]))])
+            == "The argument 'args[0]' must be a string without null bytes. Received \"it's\\x00\"")
+        #expect(refusal([echo], cwd: "/tmp\u{0}x") == "The property 'options.cwd' must be a string, Uint8Array, or URL "
+            + "without null bytes. Received '/tmp\\x00x'")
+        #expect(refusal([echo, ("shell", .text("/bin/s\u{0}h"))])
+            == "The property 'options.shell' must be a string without null bytes. Received '/bin/s\\x00h'")
+        #expect(refusal([echo, ("env", .object([("A", .text("x\u{0}y"))]))])
+            == "The property 'options.env['A']' must be a string without null bytes. Received 'x\\x00y'")
+        #expect(refusal([echo, ("env", .object([("A\u{0}B", .text("x"))]))])
+            == "The property 'options.env['A\u{0}B']' must be a string without null bytes. Received 'A\\x00B'")
+        let long = String(repeating: "x", count: 130) + "\u{0}"
+        #expect(refusal([echo, ("args", .array([.text(long)]))])
+            == "The argument 'args[0]' must be a string without null bytes. Received '"
+            + String(repeating: "x", count: 127) + "...")
+        #expect(refusal([echo, ("args", .array([.text("fine")]))]) == nil)
     }
 
     /// acpx: "resolveShellActionTimeoutMs treats non-positive as no deadline" — and, as its
@@ -75,7 +143,7 @@ struct FlowShellTests {
 
     /// acpx's `createShellFailureError`: how the command ended, and its stderr trimmed.
     @Test func aFailureSaysHowTheCommandEnded() {
-        #expect(FlowShell.failureMessage(command: "sh", args: ["-c", "exit 2"], exitCode: 2, signal: nil,
+        #expect(FlowShell.failureMessage(command: "sh", args: [.text("-c"), .text("exit 2")], exitCode: 2, signal: nil,
             stderr: "  boom\n") == "Shell action failed (sh \"-c\" \"exit 2\"): exit 2\nboom")
         #expect(FlowShell.failureMessage(command: "sleep", args: [], exitCode: nil, signal: "SIGTERM", stderr: "")
             == "Shell action failed (sleep): signal SIGTERM")

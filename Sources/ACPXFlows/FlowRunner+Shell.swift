@@ -27,19 +27,21 @@ extension FlowRunner {
         case let given?: timeout = FlowShell.resolveTimeout(given)
         }
         let effective = spec.with(cwd: cwd, timeoutMs: timeout)
-        state.updateStatusDetail(FlowShell.summary(of: effective))
+        state.updateStatusDetail(try FlowShell.summary(of: effective))
         let (nodeId, attemptId) = (attempt.nodeId, attempt.attemptId)
         try await attempt.own {
             try await self.writeShellStatus(runDir, nodeId: nodeId, attemptId: attemptId)
         }
-        let prepared: WireJSON = .object([
-            ("actionType", .text("shell")), ("command", effective.json["command"]),
-            ("args", effective.json["args"] ?? .array([])), ("cwd", .text(cwd))
-        ])
+        let (command, rawArgs) = (effective.json["command"], effective.rawArgs)
         try await attempt.own {
-            try await self.appendActionTrace(
-                runDir, "action_prepared", nodeId: nodeId, attemptId: attemptId,
-                payload: .object([("action", prepared)]))
+            // Written as `JSON.stringify` writes the flow's values: a BigInt fails it, as in
+            // acpx, once the event has taken its `seq`.
+            try await self.appendActionTrace(runDir, "action_prepared", nodeId: nodeId, attemptId: attemptId) {
+                .object([("action", .object([
+                    ("actionType", .text("shell")), ("command", try command.flatMap(FlowJS.written)),
+                    ("args", try FlowJS.written(.array(rawArgs))), ("cwd", .text(cwd))
+                ]))])
+            }
         }
         let control = shellControl(attempt)
         let result = try await attempt.own {
@@ -53,16 +55,16 @@ extension FlowRunner {
         }
         let action: WireJSON = .object([
             ("actionType", .text("shell")), ("command", .text(result.command)),
-            ("args", .array(result.args.map(WireJSON.text))), ("cwd", .text(result.cwd)),
+            ("args", try FlowJS.written(.array(result.args))), ("cwd", .text(result.cwd)),
             ("exitCode", result.exitCode.map { .number(Double($0)) } ?? .null),
             ("signal", result.signal.map(WireJSON.text) ?? .null), ("durationMs", .number(result.durationMs))
         ])
         try await attempt.own {
-            try await self.appendActionTrace(
-                runDir, "action_completed", nodeId: nodeId, attemptId: attemptId,
-                payload: .object([
+            try await self.appendActionTrace(runDir, "action_completed", nodeId: nodeId, attemptId: attemptId) {
+                .object([
                     ("action", action), ("stdoutArtifact", stdoutArtifact.wire), ("stderrArtifact", stderrArtifact.wire)
-                ]))
+                ])
+            }
         }
         var trace = FlowStepTrace()
         trace["action"] = action
@@ -71,9 +73,11 @@ extension FlowRunner {
         let parsed = node.callbacks.contains("parse")
         let output: FlowValue
         do {
+            // `parse` gets the result as the host makes it of this (its `args` the spec's own);
+            // the node's own output is written as `JSON.stringify` writes it.
             output = parsed
                 ? try await invoke(node, "parse", attempt: attempt, argument: result.wire(timedOut: false))
-                : .json(result.wire(timedOut: false))
+                : .json(try FlowJS.written(result.wire(timedOut: false)) ?? .null)
             try attempt.assertActive()
         } catch {
             throw FlowTracedError(underlying: error, trace: trace)
@@ -119,7 +123,7 @@ extension FlowRunner {
     }
 
     private func appendActionTrace(
-        _ runDir: URL, _ type: String, nodeId: String, attemptId: String, payload: WireJSON
+        _ runDir: URL, _ type: String, nodeId: String, attemptId: String, payload: () throws -> WireJSON
     ) throws {
         try store.appendTrace(runDir, state, scope: "action", type: type, nodeId: nodeId, attemptId: attemptId,
                               payload: payload)
@@ -189,13 +193,15 @@ extension FlowShell {
     }
 
     /// acpx's `formatShellActionSummary` of the spec as given: the command as JavaScript's
-    /// template string makes it, each argument as `JSON.stringify` writes it.
-    static func summary(of spec: FlowShellExecution) -> String {
-        let command = SessionArchive.javaScriptString(spec.json["command"])
-        var args: [WireJSON] = []
-        if case .array(let items)? = spec.json["args"] { args = items }
-        let rendered = args.map { $0.stringified }.joined(separator: " ")
-        return "shell: " + (rendered.isEmpty ? command : "\(command) \(rendered)")
+    /// template string makes it, each argument as `JSON.stringify` writes it — and what
+    /// that throws, or `args.map` does on `args` that are not a list.
+    static func summary(of spec: FlowShellExecution) throws -> String {
+        let command = spec.json["command"].map(FlowJS.string) ?? "undefined"
+        switch spec.json["args"] {
+        case nil, .null?, .array?: break
+        default: throw FlowShellError("args.map is not a function", name: "TypeError")
+        }
+        return "shell: " + (try renderCommand(command, spec.rawArgs))
     }
 }
 

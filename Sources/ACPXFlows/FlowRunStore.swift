@@ -88,7 +88,21 @@ struct FlowRunStore {
         _ runDir: URL, _ state: FlowRunState, scope: String, type: String, nodeId: String? = nil,
         attemptId: String? = nil, sessionId: String? = nil, artifact: FlowArtifactRef? = nil, payload: WireJSON
     ) throws {
+        try appendTrace(
+            runDir, state, scope: scope, type: type, nodeId: nodeId, attemptId: attemptId, sessionId: sessionId,
+            artifact: artifact, payload: { payload })
+    }
+
+    /// ``appendTrace(_:_:scope:type:nodeId:attemptId:sessionId:artifact:payload:)`` with the
+    /// payload made once the event has its `seq`, as acpx takes it before `JSON.stringify`
+    /// can refuse the event: a refused one leaves its number unused.
+    mutating func appendTrace(
+        _ runDir: URL, _ state: FlowRunState, scope: String, type: String, nodeId: String? = nil,
+        attemptId: String? = nil, sessionId: String? = nil, artifact: FlowArtifactRef? = nil,
+        payload makePayload: () throws -> WireJSON
+    ) throws {
         traceSeq += 1
+        let payload = try makePayload()
         let event: WireJSON = .object([
             ("seq", .number(Double(traceSeq))), ("at", .text(nowISO())), ("runId", .text(state.runId)),
             ("scope", .text(scope)), ("type", .text(type)), ("nodeId", nodeId.map(WireJSON.text)),

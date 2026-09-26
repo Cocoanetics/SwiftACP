@@ -6,8 +6,9 @@ import Testing
 /// acpx 0.19.3's shell action and `ctx.runShell` cases for the runner (`test/flows.test.ts`,
 /// `test/flows-managed-command.test.ts`), run by the runner with the flow's code in the
 /// Node host. acpx's managed-command fixture moves its deadlines on mocked timers; here
-/// they are short and real, and a command that must be ready before its deadline is a
-/// shell that installs its `trap` first thing.
+/// they are real, and a command that must be ready before its deadline is a shell that
+/// installs its `trap` first thing, with a deadline of 2 s, which a loaded machine starting
+/// the shell cannot outrun.
 struct FlowShellRunnerTests {
     private func runnerRun(_ body: String) async throws -> FlowRunnerHarness.Run {
         try await FlowRunnerHarness.run(body)
@@ -167,7 +168,7 @@ struct FlowShellRunnerTests {
         let run = try await runnerRun("""
             export default defineFlow({ name: "run-shell-deadline", startAt: "a", nodes: {
               a: action({ run: async ({ runShell }) => {
-                const r = await runShell({ command: "/bin/sh", timeoutMs: 500, args: ["-c",
+                const r = await runShell({ command: "/bin/sh", timeoutMs: 2000, args: ["-c",
                   "trap '' TERM; printf 'partial stdout'; printf 'partial stderr' >&2; while :; do sleep 1; done"] });
                 return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, signal: r.signal,
                   timedOut: r.timedOut };
@@ -204,7 +205,7 @@ struct FlowShellRunnerTests {
         let run = try await runnerRun("""
             import fs from "node:fs";
             export default defineFlow({ name: "outer-timeout", startAt: "a", nodes: {
-              a: action({ timeoutMs: 500, run: async ({ runShell, signal }) => {
+              a: action({ timeoutMs: 2000, run: async ({ runShell, signal }) => {
                 try {
                   const term = \(scratch.js("term"));
                   await runShell({ command: "/bin/sh", args: ["-c",
@@ -226,8 +227,8 @@ struct FlowShellRunnerTests {
             """)
         #expect(run.code == 0, "\(run.err)")
         #expect(member(run.state, "results", "a", "outcome") == .text("timed_out"))
-        #expect(scratch.read("report") == #"{"first":"TimeoutError: Timed out after 500ms","aborted":true,"#
-            + #""next":"TimeoutError: Timed out after 500ms"}"#)
+        #expect(scratch.read("report") == #"{"first":"TimeoutError: Timed out after 2000ms","aborted":true,"#
+            + #""next":"TimeoutError: Timed out after 2000ms"}"#)
         #expect(scratch.read("term") == "term")
     }
 
@@ -237,7 +238,7 @@ struct FlowShellRunnerTests {
         let scratch = Scratch()
         let run = try await runnerRun("""
             export default defineFlow({ name: "shell-outer-timeout", startAt: "slow", nodes: {
-              slow: shell({ timeoutMs: 500, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
+              slow: shell({ timeoutMs: 2000, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
                 `printf $$ > ${JSON.stringify(\(scratch.js("pid")))}; trap 'printf term > `
                   + `${JSON.stringify(\(scratch.js("term")))}' TERM; while :; do sleep 0.1; done`] }) }) },
               edges: [] });
@@ -354,6 +355,62 @@ struct FlowShellRunnerTests {
         #expect(outputs["missing"]?.stringified == #"{"async":{"name":"Error","code":"ENOENT","#
             + #""text":"Error: spawn /nonexistent/tool ENOENT"}}"#)
         #expect(outputs["spawnargs"]?.stringified == #"[-2,"spawn /nonexistent/tool","/nonexistent/tool",["x"]]"#)
+    }
+
+    /// acpx's runner holds the flow's own values: a command gets each argument as Node's
+    /// `spawn` converts it — `String(arg)`, an object by its own `toString`, or with `shell`
+    /// as `Array.join` does — and its result holds the very list the flow gave.
+    @Test(.enabled(if: nodeAvailable))
+    func runShellGivesTheCommandItsArgumentsAsNodeDoes() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "argv", startAt: "a", nodes: {
+              a: action({ run: async ({ runShell }) => {
+                const own = { toString: () => "own" };
+                const plain = { command: "/bin/echo", args: [undefined, null, 5, 5n, {}, [1, 2], true, own] };
+                const one = await runShell(plain);
+                const shelled = { command: "echo", args: [undefined, null, 7n, "x"], shell: true };
+                const two = await runShell(shelled);
+                return [one.stdout, one.args === plain.args, two.stdout, two.args === shelled.args];
+              } }) },
+              edges: [] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified
+            == #"["undefined null 5 5 [object Object] 1,2 true own\n",true,"7 x\n",true]"#)
+    }
+
+    /// A shell action shows its arguments as `JSON.stringify` writes the flow's own values —
+    /// a number bare, in its status and traces; `undefined` as `null` in its output — while
+    /// `parse`, and later nodes, get them as the flow gave them. A BigInt command, which
+    /// `JSON.stringify` refuses, fails the step at its trace, whose `seq` it took, as in acpx.
+    @Test(.enabled(if: nodeAvailable))
+    func aShellActionShowsItsArgumentsAsTheFlowGaveThem() async throws {
+        let run = try await runnerRun("""
+            let given;
+            export default defineFlow({ name: "shown", startAt: "a", nodes: {
+              a: shell({ exec: () => (given = ["-n", 5], { command: "/bin/echo", args: given }),
+                parse: (r) => ({ out: r.stdout, same: r.args === given }) }),
+              m: shell({ exec: () => ({ command: "/bin/echo", args: [undefined, 5] }) }),
+              n: compute({ run: ({ outputs }) => typeof outputs.m.args[0] }),
+              b: shell({ exec: () => ({ command: 5n, args: [] }) }) },
+              edges: [{ from: "a", to: "m" }, { from: "m", to: "n" }, { from: "n", to: "b" }] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == "Do not know how to serialize a BigInt")
+        #expect(member(run.state, "outputs", "a")?.stringified == #"{"out":"5","same":true}"#)
+        #expect(member(run.state, "outputs", "m", "args")?.stringified == "[null,5]")
+        #expect(member(run.state, "outputs", "n") == .text("undefined"))
+        let status = run.trace.first { $0["type"] == .text("node_heartbeat") }?["payload"]?["statusDetail"]
+        #expect(status == .text(#"shell: /bin/echo "-n" 5"#))
+        let prepared = run.trace.first { $0["type"] == .text("action_prepared") }?["payload"]?["action"]?["args"]
+        #expect(prepared?.stringified == #"["-n",5]"#)
+        let tail = Array(run.trace.suffix(3))
+        #expect(tail.compactMap { $0["type"]?.stringValue } == ["node_heartbeat", "node_outcome", "run_failed"])
+        let seqs: [Double] = tail.compactMap { event in
+            guard case .number(let seq)? = event["seq"] else { return nil }
+            return seq
+        }
+        #expect(seqs.count == 3 && seqs[1] == seqs[0] + 2 && seqs[2] == seqs[1] + 1, "\(seqs)")
     }
 
     /// acpx hands every callback of an attempt the attempt's own `signal`: a shell action's

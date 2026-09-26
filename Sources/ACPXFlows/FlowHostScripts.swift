@@ -714,10 +714,13 @@ async function invoke(params) {
     ctx.runShell = (execution) => runShell(attemptId, attempt, execution);
   }
   try {
-    const args = "arg" in params ? [params.arg, ctx] : [ctx];
+    // A shell action's `parse` gets the command's result with the `args` of the spec its
+    // `exec` gave, as acpx's does.
+    const arg = fn === "parse" ? commandResult(params.arg, returned.get(attemptId)) : params.arg;
+    const args = "arg" in params ? [arg, ctx] : [ctx];
     const value = await node[fn](...args);
     if (!attempt.finished) returned.set(attemptId, value);
-    return returnedValue(value);
+    return returnedValue(fn === "exec" ? encodeExecution(value) : value);
   } catch (error) {
     attempt.thrown = { error };
     throw error;
@@ -734,7 +737,74 @@ function runShell(attemptId, attempt, execution) {
   attempt.controller.signal.throwIfAborted();
   if (attempt.finished) throw new Error("Flow attempt has finished accepting work");
   path.resolve(".", execution.cwd ?? ".");
-  return request("shell/run", { attemptId, execution });
+  return request("shell/run", { attemptId, execution: encodeExecution(execution) }).then((result) =>
+    commandResult(result, execution),
+  );
+}
+
+// A value JSON cannot carry in a shell command's spec, marked for the runner (`FlowJS`),
+// which converts and writes the flow's values as acpx's runner does: under a key no flow's
+// object has, and what the value was.
+const JS_MARKER = "\u0000acpx";
+const jsMarker = (kind, text) => (text === undefined ? { [JS_MARKER]: kind } : { [JS_MARKER]: kind, text });
+
+// A member of a spec as JSON writes it, a BigInt within it marked — or, for what
+// `JSON.stringify` leaves out, or throws on (a cycle), a marker saying so.
+function specJSON(value) {
+  try {
+    const json = JSON.stringify(value, (_key, member) =>
+      typeof member === "bigint" ? jsMarker("bigint", String(member)) : member,
+    );
+    return json === undefined ? jsMarker("undefined") : JSON.parse(json);
+  } catch (error) {
+    return jsMarker("unserializable", error instanceof Error ? error.message : String(error));
+  }
+}
+
+// A shell command's spec as the runner reads it, where acpx's runner holds the flow's own
+// object: each member as JSON writes it, each argument by itself; `env` as Node's `spawn`
+// converts it, `${value}`, leaving out `undefined`; and the arguments the command gets, as
+// `spawn` makes them — `String(arg)` (a symbol, empty), or with `shell` as `Array.join`
+// does. What converting throws, `spawn` would throw too.
+function encodeExecution(execution) {
+  if (execution === null || typeof execution !== "object") return execution;
+  const encoded = {};
+  for (const key of Object.keys(execution)) {
+    const value = execution[key];
+    if (key === "args" && Array.isArray(value)) encoded.args = value.map(specJSON);
+    else if (value !== undefined) encoded[key] = specJSON(value);
+  }
+  const { args, env, shell } = execution;
+  if (env !== null && typeof env === "object") {
+    try {
+      encoded.env = Object.fromEntries(
+        Object.entries(env)
+          .filter(([, value]) => value !== undefined)
+          .map(([name, value]) => [name, typeof value === "string" ? value : `${value}`]),
+      );
+    } catch (error) {
+      encoded["\u0000envError"] = error instanceof Error ? error.message : String(error);
+    }
+  }
+  if (Array.isArray(args)) {
+    try {
+      encoded["\u0000argv"] = args.map((arg) =>
+        shell ? (arg == null ? "" : `${arg}`) : typeof arg === "symbol" ? "" : String(arg),
+      );
+    } catch (error) {
+      encoded["\u0000argvError"] = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return encoded;
+}
+
+// A command's result as the flow sees it: its `args` are the spec's own list, which
+// acpx's result holds (`spec.args ?? []`).
+function commandResult(result, execution) {
+  if (result !== null && typeof result === "object" && execution !== null && typeof execution === "object") {
+    result.args = execution.args ?? [];
+  }
+  return result;
 }
 
 // A callback's value as JSON, as acpx writes it (`JSON.stringify`): nothing for
@@ -757,7 +827,10 @@ function returnedValue(value) {
 // acpx's `setNodeValue`: the output a node's attempt produced — its callback's value, or
 // one the runner made — is the node's output from now on.
 function setOutput(params) {
-  const value = "value" in params ? params.value : returned.get(params.attemptId);
+  const node = flow.nodes[params.nodeId];
+  let value = "value" in params ? params.value : returned.get(params.attemptId);
+  // A shell action without `parse` outputs its command's result, whose `args` are its spec's.
+  if ("value" in params && node && "exec" in node) value = commandResult(value, returned.get(params.attemptId));
   returned.delete(params.attemptId);
   Object.defineProperty(outputs, params.nodeId, { value, enumerable: true, configurable: true, writable: true });
 }
@@ -782,13 +855,14 @@ function forgetAttempt(params) {
   running.delete(params.attemptId);
 }
 
-// A request's error as the code acpx runs would have thrown it: a `TypeError` for an
-// argument Node refuses, with its code, as Node's own; else an `Error` of the name given,
-// with the properties Node gives a spawn failure.
+// A request's error as the code acpx runs would have thrown it: a `TypeError` for a value
+// Node or JavaScript refuses — with Node's code, as Node's own — else an `Error` of the
+// name given, with the properties Node gives a spawn failure.
 function requestError({ message, data }) {
   const code = data?.props?.code;
   if (data?.name === "TypeError") {
     const error = Object.assign(new TypeError(message), data.props);
+    if (code === undefined) return error;
     Object.defineProperty(error, "toString", {
       value() {
         return `${this.name} [${code}]: ${this.message}`;

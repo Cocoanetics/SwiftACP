@@ -42,7 +42,7 @@ struct FlowShellProcessTests {
         #expect(allowed.exitCode == 3)
         let script = #"process.stderr.write("boom"); process.exit(2)"#
         let error = await #expect(throws: FlowShellError.self) { _ = try await self.runAction(self.nodeSpec(script)) }
-        let rendered = FlowShell.renderCommand(try #require(Self.node), ["-e", script])
+        let rendered = try FlowShell.renderCommand(try #require(Self.node), [.text("-e"), .text(script)])
         #expect(error?.message == "Shell action failed (\(rendered)): exit 2\nboom")
     }
 

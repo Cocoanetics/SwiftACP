@@ -24,7 +24,8 @@ struct FlowShellControl: Sendable {
 /// with `timedOut`.
 struct FlowShellResult: Sendable {
     let command: String
-    let args: [String]
+    /// The spec's `args ?? []` as the flow gave it (``FlowShellExecution/rawArgs``).
+    let args: [WireJSON]
     let cwd: String
     let stdout: String
     let stderr: String
@@ -38,7 +39,7 @@ struct FlowShellResult: Sendable {
     /// The result as acpx's object is written, `timedOut` last when it has one.
     func wire(timedOut includeTimedOut: Bool) -> WireJSON {
         var members: [(String, WireJSON?)] = [
-            ("command", .text(command)), ("args", .array(args.map(WireJSON.text))), ("cwd", .text(cwd)),
+            ("command", .text(command)), ("args", .array(args)), ("cwd", .text(cwd)),
             ("stdout", .text(stdout)), ("stderr", .text(stderr)), ("combinedOutput", .text(combinedOutput)),
             ("exitCode", exitCode.map { .number(Double($0)) } ?? .null), ("signal", signal.map(WireJSON.text) ?? .null),
             ("durationMs", .number(durationMs))
@@ -96,7 +97,7 @@ enum FlowShellProcess {
         let startMs = FlowShellClock.nowMs()
         let timeoutMs = FlowShell.resolveTimeout(spec.timeoutMs).map(FlowShell.timerDelayMs)
         try FlowShell.validateMaxBufferBytes(spec.maxBufferBytes)
-        let (file, arguments) = try spec.spawnArguments()
+        let (file, arguments) = try spec.spawnArguments(cwd: cwd)
         let child: ChildProcess
         do {
             child = try ChildProcess.spawn(
@@ -117,7 +118,7 @@ enum FlowShellProcess {
                     onCleanupFailure: { first.settle(.failure($0)) })
                 termination = stopper
                 let run = FlowShellRun(
-                    spec: spec, args: spec.args, cwd: cwd, startMs: startMs, mode: mode, closed: closed,
+                    spec: spec, args: spec.rawArgs, cwd: cwd, startMs: startMs, mode: mode, closed: closed,
                     termination: stopper, first: first)
                 child.start(
                     onChunk: { run.chunk($0, $1) }, onClose: { run.streamClosed($0) }, onExit: { run.exited($0) })
@@ -171,7 +172,7 @@ enum FlowShellProcess {
 /// fails it and stops the tree.
 private final class FlowShellRun: @unchecked Sendable {
     private let spec: FlowShellExecution
-    private let args: [String]
+    private let args: [WireJSON]
     private let cwd: String
     private let startMs: Int64
     private let mode: FlowShellProcess.Mode
@@ -186,7 +187,7 @@ private final class FlowShellRun: @unchecked Sendable {
     private var closedStreams = 0
 
     init(
-        spec: FlowShellExecution, args: [String], cwd: String, startMs: Int64, mode: FlowShellProcess.Mode,
+        spec: FlowShellExecution, args: [WireJSON], cwd: String, startMs: Int64, mode: FlowShellProcess.Mode,
         closed: FlowShellEvent, termination: FlowShellTermination, first: FirstResult<FlowShellResult>
     ) {
         self.spec = spec

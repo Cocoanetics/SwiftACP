@@ -326,15 +326,15 @@ public final class FlowHost: @unchecked Sendable {
     }
 
     /// What the host needs to reject with the error acpx's code would: its `name` —
-    /// `TimeoutError`, `InterruptedError`, or the `TypeError` of an argument Node refuses,
-    /// with its code — and the properties Node gives a spawn failure.
+    /// `TimeoutError`, `InterruptedError`, or the `TypeError` of a value Node or JavaScript
+    /// refuses, with Node's code — and the properties Node gives a spawn failure.
     static func javaScriptErrorData(_ error: Error) -> WireJSON? {
         switch error {
         case is FlowTimeoutError: return .object([("name", .text("TimeoutError"))])
         case is FlowInterruptedError: return .object([("name", .text("InterruptedError"))])
         case let shell as FlowShellError:
-            guard let code = shell.code else { return nil }
-            return .object([("name", .text("TypeError")), ("props", .object([("code", .text(code))]))])
+            guard let name = shell.name else { return nil }
+            return .object([("name", .text(name)), ("props", shell.code.map { .object([("code", .text($0))]) })])
         case let spawn as FlowShellSpawnError:
             let code = ChildSpawn.SpawnError(code: spawn.code).name
             return .object([("props", .object([

@@ -7,15 +7,10 @@ import SwiftACP
 /// timeout and capture limit a command runs under.
 enum FlowShell {
     /// acpx's `renderShellCommand`: the command, then each argument as `JSON.stringify`
-    /// writes it.
-    static func renderCommand(_ command: String, _ args: [String]) -> String {
-        let rendered = args.map { WireJSON.text($0).stringified }.joined(separator: " ")
+    /// writes it — nothing for one it leaves out — or the error it throws for one.
+    static func renderCommand(_ command: String, _ args: [WireJSON]) throws -> String {
+        let rendered = try args.map { try FlowJS.written($0)?.stringified ?? "" }.joined(separator: " ")
         return rendered.isEmpty ? command : "\(command) \(rendered)"
-    }
-
-    /// acpx's `formatShellActionSummary`: the step's status while its command runs.
-    static func summary(_ command: String, _ args: [String]) -> String {
-        "shell: " + renderCommand(command, args)
     }
 
     /// acpx's `resolveShellActionTimeoutMs`: the value as given when JavaScript's `> 0`
@@ -57,13 +52,15 @@ enum FlowShell {
         return FlowTimeoutError(timeoutMs: javaScriptNumber(timeout), shown: shown)
     }
 
-    /// acpx's `createShellFailureError`: the command, how it ended, and its stderr.
+    /// acpx's `createShellFailureError`: the command, how it ended, and its stderr. (Its
+    /// arguments were rendered for the step's status already, so they render here.)
     static func failureMessage(
-        command: String, args: [String], exitCode: Int?, signal: String?, stderr: String
+        command: String, args: [WireJSON], exitCode: Int?, signal: String?, stderr: String
     ) -> String {
         let status = signal.map { "signal \($0)" } ?? "exit \(exitCode.map(String.init) ?? "null")"
         let details = stderr.isEmpty ? "" : "\n" + stderr.javaScriptTrimmed
-        return "Shell action failed (\(renderCommand(command, args))): \(status)\(details)"
+        let rendered = (try? renderCommand(command, args)) ?? command
+        return "Shell action failed (\(rendered)): \(status)\(details)"
     }
 
     /// acpx's `validateShellActionMaxBufferBytes`: none, or a non-negative safe integer.
@@ -75,14 +72,17 @@ enum FlowShell {
     }
 }
 
-/// A shell action's failure, in acpx's words — or in Node's, for an argument it refuses,
-/// with the code that makes the error a `TypeError` (`ERR_INVALID_ARG_TYPE`).
+/// A shell action's failure, in acpx's words — or in Node's or JavaScript's, for a value
+/// they refuse: a `TypeError`, with Node's code (`ERR_INVALID_ARG_TYPE`) when it is Node's.
 struct FlowShellError: Error, LocalizedError {
     let message: String
     let code: String?
-    init(_ message: String, code: String? = nil) {
+    /// The error's name, when it is not `Error`: a `TypeError` for one with a code.
+    let name: String?
+    init(_ message: String, code: String? = nil, name: String? = nil) {
         self.message = message
         self.code = code
+        self.name = name ?? (code == nil ? nil : "TypeError")
     }
     var errorDescription: String? { message }
 
@@ -209,10 +209,34 @@ struct FlowShellExecution: Sendable {
     /// `command`, when it is a string.
     var command: String? { json["command"]?.stringValue }
 
-    /// acpx's `spec.args ?? []`, each as JavaScript's `String` makes it.
-    var args: [String] {
+    /// acpx's `spec.args ?? []` as the flow gave it, what the step's status, trace and
+    /// result show: each argument as the host sent it, a value JSON loses marked
+    /// (``FlowJS/Marker``).
+    var rawArgs: [WireJSON] {
         guard case .array(let items)? = json["args"] else { return [] }
-        return items.map { SessionArchive.javaScriptString($0) }
+        return items
+    }
+
+    /// The arguments the command gets, as Node's `spawn` converts them — `String(arg)`, or
+    /// with `shell` as `Array.join` does, `null` and `undefined` empty — as the host made
+    /// them, else from the JSON.
+    var args: [String] {
+        if case .array(let items)? = json[FlowJS.argvKey], items.allSatisfy({ $0.stringValue != nil }) {
+            return items.compactMap(\.stringValue)
+        }
+        return rawArgs.map { arg in
+            if isShell, arg == .null || FlowJS.marker(arg) == .undefined { return "" }
+            return FlowJS.string(arg)
+        }
+    }
+
+    /// Whether Node's `spawn` runs the command in a shell: `shell` is `true`, or a path.
+    var isShell: Bool {
+        switch shell {
+        case .bool(true)?: return true
+        case .string(let units)?: return !units.isEmpty
+        default: return false
+        }
     }
 
     var cwd: WireJSON? { json["cwd"] }
@@ -233,40 +257,66 @@ struct FlowShellExecution: Sendable {
         }
     }
 
-    /// acpx's `{ ...process.env, ...spec.env }`, each value as JavaScript's template string
-    /// makes it (`${value}`).
+    /// acpx's `spec.env`, each value as JavaScript's template string makes it (`${value}`),
+    /// `undefined` left out — as the host converted it.
+    var env: [(name: String, value: String)] {
+        (json["env"]?.objectMembers ?? []).compactMap { member in
+            if FlowJS.marker(member.value) == .undefined { return nil }
+            return (String(decoding: member.key, as: UTF16.self), FlowJS.string(member.value))
+        }
+    }
+
+    /// acpx's `{ ...process.env, ...spec.env }`.
     func environment(inheriting parent: [String: String]) -> [String: String] {
         var environment = parent
-        for member in json["env"]?.objectMembers ?? [] {
-            environment[String(decoding: member.key, as: UTF16.self)] = SessionArchive.javaScriptString(member.value)
-        }
+        for (name, value) in env { environment[name] = value }
         return environment
     }
 
-    /// Node's `normalizeSpawnArguments`: the file and arguments `spawn` runs — a shell's
-    /// `-c` with the command line joined, for `shell` — or the error it throws.
-    func spawnArguments() throws -> (file: String, arguments: [String]) {
+    /// Node's `normalizeSpawnArguments`, in its order: the file and arguments `spawn` runs —
+    /// a shell's `-c` with the command line joined, for `shell` — or the error it throws,
+    /// for a value of the wrong type, a string with a NUL, or one the host could not
+    /// convert.
+    func spawnArguments(cwd: String) throws -> (file: String, arguments: [String]) {
         guard let command else {
             throw FlowShellError.invalidArgType(NodeArgumentError.type("file", "of type string", json["command"]))
         }
-        guard !command.isEmpty else {
-            throw FlowShellError("The argument 'file' cannot be empty. Received ''", code: "ERR_INVALID_ARG_VALUE")
-        }
+        try FlowShellError.checkNullBytes(command, "file")
+        guard !command.isEmpty else { throw FlowShellError.invalidArgValue("file", "", reason: "cannot be empty") }
         switch json["args"] {
         case nil, .null?, .array?: break
-        case .object?: break
+        case .object? where FlowJS.marker(json["args"] ?? .null) == nil: break
         case let other?: throw FlowShellError.invalidArgType(NodeArgumentError.type("args", "of type object", other))
         }
+        for (index, arg) in rawArgs.enumerated() {
+            if case .string(let units) = arg {
+                try FlowShellError.checkNullBytes(String(decoding: units, as: UTF16.self), "args[\(index)]")
+            }
+        }
+        try FlowShellError.checkNullBytes(
+            cwd, "options.cwd", reason: "must be a string, Uint8Array, or URL without null bytes")
+        var file = command
+        var arguments = args
         switch shell {
-        case nil, .null?, .bool(false)?: return (command, args)
-        case .bool(true)?: return ("/bin/sh", ["-c", ([command] + args).joined(separator: " ")])
+        case nil, .null?, .bool?: break
         case .string(let units)?:
-            let path = String(decoding: units, as: UTF16.self)
-            return path.isEmpty ? (command, args) : (path, ["-c", ([command] + args).joined(separator: " ")])
+            try FlowShellError.checkNullBytes(String(decoding: units, as: UTF16.self), "options.shell")
         case let other?:
             throw FlowShellError.invalidArgType(
                 NodeArgumentError.property("options.shell", "one of type boolean or string", other))
         }
+        if let failure = json[FlowJS.argvErrorKey]?.stringValue { throw FlowShellError(failure, name: "TypeError") }
+        if isShell {
+            file = "/bin/sh"
+            if case .string(let units)? = shell { file = String(decoding: units, as: UTF16.self) }
+            arguments = ["-c", ([command] + args).joined(separator: " ")]
+        }
+        if let failure = json[FlowJS.envErrorKey]?.stringValue { throw FlowShellError(failure, name: "TypeError") }
+        for (name, value) in env {
+            try FlowShellError.checkNullBytes(name, "options.env['\(name)']")
+            try FlowShellError.checkNullBytes(value, "options.env['\(name)']")
+        }
+        return (file, arguments)
     }
 }
 
@@ -283,6 +333,7 @@ enum NodeArgumentError {
 
     /// Node's `determineSpecificType`.
     static func received(_ value: WireJSON?) -> String {
+        if let value, let marker = FlowJS.marker(value) { return FlowJS.received(marker) }
         switch value {
         case nil: return "undefined"
         case .null?: return "null"
