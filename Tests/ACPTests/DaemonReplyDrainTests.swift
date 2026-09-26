@@ -161,7 +161,7 @@ extension DaemonToolsTests {
         let mock = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' "
             + "MOCK_REACT_AFTER_GATE='\(gate.path)' \(command)"
         try await withIsolatedStore {
-            try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 100, timeoutMilliseconds: 5000)) {
+            try await TurnReplyDrain.$current.withValue(.acpx) {
                 let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
                 let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
                 let client = CallingClient()
@@ -211,7 +211,7 @@ extension DaemonToolsTests {
         let mock = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' "
             + "MOCK_REACT_AFTER_GATE='\(gate.path)' \(command)"
         try await withIsolatedStore {
-            try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 100, timeoutMilliseconds: 5000)) {
+            try await TurnReplyDrain.$current.withValue(.acpx) {
                 let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
                 let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
                 let client = CallingClient()
