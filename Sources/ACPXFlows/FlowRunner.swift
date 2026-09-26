@@ -37,15 +37,17 @@ public actor FlowRunner {
         public let state: WireJSON
     }
 
-    private let host: FlowHost
+    let host: FlowHost
     private let options: Options
     private let defaultNodeTimeoutMs: Double
-    private var store: FlowRunStore
-    private var state: FlowRunState
+    var store: FlowRunStore
+    var state: FlowRunState
     private var runDir: URL?
     private var attempt: FlowAttempt?
     private var heartbeat: Task<Void, Never>?
-    private var interruption: FlowInterruptedError?
+    var interruption: FlowInterruptedError?
+    /// Whether the steps have begun, with the bundle there to record an interrupt in.
+    private var executing = false
     private var settled = false
     private var settledWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -55,6 +57,11 @@ public actor FlowRunner {
         defaultNodeTimeoutMs = options.timeoutMs ?? Self.defaultStepTimeoutMs
         store = FlowRunStore(outputRoot: options.outputRoot)
         state = FlowRunState(runId: "", flowName: "", runTitle: nil, flowPath: nil, input: .null, now: "")
+        // `ctx.runShell` runs a command for a function action: not here yet (#202, step 2).
+        host.setRequestHandler { method, _ in
+            guard method == "shell/run" else { throw FlowHostError.methodNotFound(method) }
+            throw FlowRunError("ctx.runShell is not supported by SwiftACP's acpx yet")
+        }
     }
 
     // MARK: - The run
@@ -66,6 +73,9 @@ public actor FlowRunner {
         _ = try await host.request("run/start", .object([("input", input)]))
         let runId = FlowRuntimeSupport.runId(flowName: flow.name)
         let runTitle = try await resolveRunTitle(flow, flowPath: flowPath)
+        // Interrupted before the run began — while its title was worked out — it has
+        // nothing to record.
+        if let interruption { throw interruption }
         let runDir = try store.createRunDir(runId)
         self.runDir = runDir
         state = FlowRunState(
@@ -80,6 +90,7 @@ public actor FlowRunner {
     /// acpx's `runWithOwnership`: the run, and — when interrupted — the bundle marked
     /// failed with `Interrupted` once the run has stopped.
     private func runWithOwnership(_ flow: FlowDescription, runDir: URL) async throws -> RunResult {
+        executing = true
         let outcome: Result<RunResult, Error>
         do {
             outcome = .success(try await executeFlowRun(flow, runDir: runDir))
@@ -94,13 +105,15 @@ public actor FlowRunner {
     }
 
     /// The run is interrupted (SIGINT, SIGTERM or SIGHUP): the step running is cancelled,
-    /// and this returns once the run has stopped and recorded it.
+    /// and this returns once the run has stopped and recorded it. Before the steps began —
+    /// its title still being worked out, say — there is nothing to wait for: acpx, which
+    /// listens only once they begin, just exits.
     public func interrupt() async {
         guard interruption == nil else { return }
         let reason = FlowInterruptedError()
         interruption = reason
         attempt?.cancel(reason)
-        if settled { return }
+        if settled || !executing { return }
         await withCheckedContinuation { settledWaiters.append($0) }
     }
 
@@ -135,6 +148,7 @@ public actor FlowRunner {
                 if let waiting = try maybeCompleteCheckpointStep(step, runDir: runDir) { return waiting }
                 try recordFlowStepOutcome(step, runDir: runDir)
                 current = try resolveNextNode(flow, step)
+                forgetAttempt(step)
             }
             return try completeFlowRun(runDir)
         } catch {
@@ -355,105 +369,6 @@ public actor FlowRunner {
         default:
             return FlowRuntimeSupport.isInlineSerializableText(Array(json.stringified.utf16)) ? json : nil
         }
-    }
-
-    // MARK: - After a step
-
-    /// acpx's `maybeCompleteCheckpointStep`: a checkpoint that ran leaves the run waiting.
-    private func maybeCompleteCheckpointStep(_ step: Step, runDir: URL) throws -> RunResult? {
-        guard step.result.outcome == .ok, step.node.nodeType == .checkpoint else { return nil }
-        setOutput(step)
-        state["waitingOn"] = step.nodeId
-        state["updatedAt"] = nowISO()
-        state["status"] = "waiting"
-        // `output?.summary ?? nodeId`: the summary as it is, whatever its type.
-        let summary = step.executed.output.json?["summary"]
-        try recordFlowStepOutcome(step, runDir: runDir, statusDetail: summary == nil || summary == .null
-            ? .text(step.nodeId) : summary)
-        return RunResult(runDir: runDir, state: state.wire)
-    }
-
-    /// acpx's `recordFlowStepOutcome`.
-    private func recordFlowStepOutcome(_ step: Step, runDir: URL, statusDetail: WireJSON? = nil) throws {
-        state["updatedAt"] = nowISO()
-        state.clearActiveNode()
-        state.set("statusDetail", statusDetail)
-        state.steps.append(.object([
-            ("attemptId", .text(step.result.attemptId)), ("nodeId", .text(step.nodeId)),
-            ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
-            ("startedAt", .text(step.result.startedAt)), ("finishedAt", .text(step.result.finishedAt)),
-            ("promptText", step.executed.promptText.map(WireJSON.text) ?? .null),
-            ("rawText", step.executed.rawText.map(WireJSON.text) ?? .null),
-            ("output", step.executed.output.json), ("error", step.result.error.map(WireJSON.text)),
-            ("session", .null), ("agent", .null), ("trace", step.executed.trace?.wire)
-        ]))
-        // acpx's `createNodeOutcomePayload`: the result, then the trace spread in.
-        var payload: [(String, WireJSON?)] = [
-            ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
-            ("durationMs", .number(step.result.durationMs)), ("error", step.result.error.map(WireJSON.text) ?? .null)
-        ]
-        for member in step.executed.trace?.wire.objectMembers ?? [] {
-            payload.append((String(decoding: member.key, as: UTF16.self), member.value))
-        }
-        try store.writeSnapshot(
-            runDir, &state, scope: "node", type: "node_outcome", nodeId: step.nodeId, attemptId: step.result.attemptId,
-            payload: .object(payload))
-    }
-
-    /// acpx's `resolveNextNode`: a step that succeeded is the node's output, and routes
-    /// on it; one that failed goes on only by its result, else fails the run.
-    private func resolveNextNode(_ flow: FlowDescription, _ step: Step) throws -> String? {
-        if step.result.outcome == .ok {
-            setOutput(step)
-            return try FlowGraph.resolveNext(
-                flow.edges, from: step.nodeId, output: step.executed.output, result: step.result.wire,
-                outcome: step.result.outcome.rawValue)
-        }
-        let next = try FlowGraph.resolveNext(
-            flow.edges, from: step.nodeId, output: .undefined, result: step.result.wire,
-            outcome: step.result.outcome.rawValue)
-        if let next { return next }
-        throw step.executionError ?? FlowRunError("undefined")
-    }
-
-    /// acpx's `setNodeValue` for `outputs`, here and in the host, whose callbacks see it:
-    /// a callback's value as the host holds it, anything else as JSON.
-    private func setOutput(_ step: Step) {
-        state.setOutput(step.nodeId, step.executed.output)
-        var params: [(String, WireJSON?)] = [("nodeId", .text(step.nodeId))]
-        if step.executed.outputFromHost {
-            params.append(("attemptId", .text(step.result.attemptId)))
-        } else {
-            params.append(("value", step.executed.output.json ?? .null))
-        }
-        host.notify("outputs/set", .object(params))
-    }
-
-    /// acpx's `completeFlowRun`.
-    private func completeFlowRun(_ runDir: URL) throws -> RunResult {
-        state["status"] = "completed"
-        let finishedAt = nowISO()
-        state["finishedAt"] = finishedAt
-        state["updatedAt"] = finishedAt
-        state.clearActiveNode()
-        try store.writeSnapshot(
-            runDir, &state, scope: "run", type: "run_completed", payload: .object([("status", .text("completed"))]))
-        return RunResult(runDir: runDir, state: state.wire)
-    }
-
-    /// acpx's `persistRunFailure`: the run failed — or timed out — with `error`, once.
-    private func persistRunFailure(_ runDir: URL, _ error: Error) throws {
-        if state["finishedAt"] != nil, state.status == "failed" || state.status == "timed_out" { return }
-        state["status"] = error is FlowTimeoutError ? "timed_out" : "failed"
-        let now = nowISO()
-        state["updatedAt"] = now
-        state["finishedAt"] = now
-        let message = TurnFailureText.message(of: error)
-        state["error"] = message
-        state["statusDetail"] = state["currentNode"].map { "Failed in \($0): \(message)" } ?? message
-        try store.writeSnapshot(
-            runDir, &state, scope: "run", type: "run_failed",
-            payload: .object([("status", .text(state.status)), ("error", .text(message))]))
     }
 }
 

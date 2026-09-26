@@ -287,8 +287,11 @@ let input;
 // `ctx.outputs`: acpx hands every callback the run's own `outputs` object, so what a
 // node returned stays the value it returned, not a JSON copy of it.
 const outputs = {};
-// What each attempt's callback returned last, until the runner makes it the node's output.
+// What each attempt's callback returned last, until the runner makes it the node's output
+// or forgets the attempt. A callback that settles after its attempt was forgotten — one
+// that ran past its deadline — keeps nothing.
 const returned = new Map();
+const forgotten = new Set();
 const controllers = new Map();
 
 async function loadRuntime() {
@@ -536,10 +539,11 @@ async function invoke(params) {
   try {
     const args = "arg" in params ? [params.arg, ctx] : [ctx];
     const value = await node[fn](...args);
-    returned.set(attemptId, value);
+    if (!forgotten.has(attemptId)) returned.set(attemptId, value);
     return returnedValue(value);
   } finally {
     controllers.delete(attemptId);
+    forgotten.delete(attemptId);
   }
 }
 
@@ -564,6 +568,7 @@ function returnedValue(value) {
 // one the runner made — is the node's output from now on.
 function setOutput(params) {
   const value = "value" in params ? params.value : returned.get(params.attemptId);
+  returned.delete(params.attemptId);
   Object.defineProperty(outputs, params.nodeId, { value, enumerable: true, configurable: true, writable: true });
 }
 
@@ -623,6 +628,7 @@ async function handle(message) {
         break;
       case "attempt/forget":
         returned.delete(message.params.attemptId);
+        if (controllers.has(message.params.attemptId)) forgotten.add(message.params.attemptId);
         break;
       case "host/exit":
         if (message.id !== undefined) send({ id: message.id, result: null });

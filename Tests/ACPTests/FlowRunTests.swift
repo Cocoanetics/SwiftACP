@@ -378,7 +378,7 @@ let nodeAvailable = AgentRegistry.which("node") != nil
     // MARK: - While a node runs
 
     /// acpx: "flow run finalizes interrupted bundles on SIGHUP".
-    @Test(.enabled(if: nodeAvailable))
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
     func anInterruptedRunIsRecordedAsFailed() async throws {
         let run = try await flowRun("""
             export default defineFlow({ name: "fixture-interrupt", startAt: "slow", nodes: {
@@ -393,6 +393,31 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(member(run.state, "statusDetail") == .text("Failed in slow: Interrupted"))
         #expect(run.trace.last?["type"] == .text("run_failed"))
         #expect(run.trace.last?["payload"]?["error"] == .text("Interrupted"))
+    }
+
+    /// Interrupted while its title is worked out, the run has not begun and ends at once:
+    /// acpx, which listens for the signal only once the steps begin, just exits.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
+    func anInterruptBeforeTheStepsEndsTheRunAtOnce() async throws {
+        let run = try await flowRun("""
+            export default defineFlow({ name: "slow-title", startAt: "a",
+              run: { title: () => new Promise(() => { fs.writeFileSync(READY, "x"); }) },
+              nodes: { a: compute({ run: () => 1 }) }, edges: [] });
+            """, interrupting: true)
+        #expect(run.code == 130)
+        #expect(run.state == nil)
+    }
+
+    /// `ctx.runShell` comes with shell actions (#202, step 2); until then it fails plainly.
+    @Test(.enabled(if: nodeAvailable))
+    func runShellIsRefusedForNow() async throws {
+        let run = try await flowRun("""
+            export default defineFlow({ name: "shell-helper", startAt: "act",
+              nodes: { act: action({ run: async ({ runShell }) => await runShell({ command: "true" }) }) },
+              edges: [] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == "ctx.runShell is not supported by SwiftACP's acpx yet\n")
     }
 
     @Test(.enabled(if: nodeAvailable))
