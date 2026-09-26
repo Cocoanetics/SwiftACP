@@ -1,6 +1,20 @@
 import Foundation
 import JSONFoundation
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Android)
+import Android
+#elseif canImport(Bionic)
+import Bionic
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(ucrt)
+import ucrt
+#endif
+
 /// Reading what an agent writes to its stdout the way acpx's `createNdJsonMessageStream`
 /// does (`src/acp/ndjson-stream.ts`):
 ///
@@ -49,7 +63,7 @@ struct AgentOutputReader {
         }
         var lines: [Line] = []
         var start = 0
-        while let newline = chunk[start...].firstIndex(of: 0x0A) {
+        while let newline = Self.lineFeed(in: chunk, from: start) {
             fragment += chunk[start..<newline]
             if let line = read(fragment) { lines.append(line) }
             fragment = []
@@ -64,7 +78,7 @@ struct AgentOutputReader {
         var retained = retained
         var start = 0
         while start < chunk.count {
-            let newline = chunk[start...].firstIndex(of: 0x0A)
+            let newline = lineFeed(in: chunk, from: start)
             retained += (newline ?? chunk.count) - start
             if retained > limit { throw AcpMessageLimitError(limit: limit) }
             guard let newline else { return retained }
@@ -72,6 +86,19 @@ struct AgentOutputReader {
             start = newline + 1
         }
         return retained
+    }
+
+    /// Where the first LF in `chunk` is, from `start` on — found with `memchr`: a
+    /// generic search makes an unspecialized call for each byte in a debug build, which
+    /// turns a line of many megabytes into seconds.
+    static func lineFeed(in chunk: [UInt8], from start: Int) -> Int? {
+        guard start < chunk.count else { return nil }
+        return chunk.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress, let found = memchr(base + start, 0x0A, buffer.count - start) else {
+                return nil
+            }
+            return UnsafeRawPointer(base).distance(to: UnsafeRawPointer(found))
+        }
     }
 
     /// acpx's `enqueueNdJsonLine`. Only an object is looked at twice — decoded as a
