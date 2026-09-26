@@ -51,6 +51,8 @@ struct FlowShellResult: Sendable {
 /// A command that could not be started, as Node's `spawn` reports it: `spawn sh ENOENT`.
 struct FlowShellSpawnError: Error, LocalizedError {
     let file: String
+    /// The arguments after the file: Node's `spawnargs`.
+    let arguments: [String]
     let code: Int32
     var errorDescription: String? { "spawn \(file) \(ChildSpawn.SpawnError(code: code).name)" }
 }
@@ -71,9 +73,7 @@ enum FlowShellProcess {
     static func runAction(_ spec: FlowShellExecution, cwd: String, control: FlowShellControl) async throws
         -> FlowShellResult {
         let result = try await run(spec, cwd: cwd, control: control, mode: .node)
-        if result.timedOut {
-            throw FlowTimeoutError(timeoutMs: FlowShell.resolveTimeoutMs(spec.timeoutMs) ?? spec.timeoutMs ?? 0)
-        }
+        if result.timedOut { throw FlowShell.timeoutError(spec) }
         if (result.exitCode ?? 0) != 0 || result.signal != nil, !spec.allowNonZeroExit {
             throw FlowShellError(FlowShell.failureMessage(
                 command: result.command, args: result.args, exitCode: result.exitCode, signal: result.signal,
@@ -94,7 +94,7 @@ enum FlowShellProcess {
         -> FlowShellResult {
         if let reason = control.attempt?.abortReason { throw reason }
         let startMs = FlowShellClock.nowMs()
-        let timeoutMs = FlowShell.resolveTimeoutMs(spec.timeoutMs)
+        let timeoutMs = FlowShell.resolveTimeout(spec.timeoutMs).map(FlowShell.timerDelayMs)
         try FlowShell.validateMaxBufferBytes(spec.maxBufferBytes)
         let (file, arguments) = try spec.spawnArguments()
         let child: ChildProcess
@@ -104,7 +104,7 @@ enum FlowShellProcess {
                 environment: spec.environment(inheriting: ProcessInfo.processInfo.environment),
                 input: true, newSession: true)
         } catch let error as ChildSpawn.SpawnError {
-            throw FlowShellSpawnError(file: file, code: error.code)
+            throw FlowShellSpawnError(file: file, arguments: arguments, code: error.code)
         }
         let closed = FlowShellEvent()
         var termination: FlowShellTermination?
@@ -152,7 +152,7 @@ enum FlowShellProcess {
             }.start()
         case let other?:
             child.closeInput()
-            throw FlowShellError(NodeArgumentError.type(
+            throw FlowShellError.invalidArgType(NodeArgumentError.type(
                 "chunk", "of type string or an instance of Buffer, TypedArray, or DataView", other))
         }
     }
@@ -303,9 +303,9 @@ final class FlowShellTermination: @unchecked Sendable {
                 Task { try? await self.cancel(attempt.terminationSignal) }
             }
         }
-        if let timeoutMs {
+        if let delay = timeoutMs.flatMap(FlowTimer.duration(milliseconds:)) {
             deadline = Task { [self] in
-                try? await Task.sleep(for: .milliseconds(timeoutMs))
+                try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { return }
                 lock.withLock { timedOutFlag = true }
                 try? await cancel("SIGTERM")

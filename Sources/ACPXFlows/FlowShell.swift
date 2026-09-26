@@ -18,11 +18,43 @@ enum FlowShell {
         "shell: " + renderCommand(command, args)
     }
 
-    /// acpx's `resolveShellActionTimeoutMs`: a positive number of milliseconds, else no
-    /// deadline — `0`, a negative number and `NaN` alike.
-    static func resolveTimeoutMs(_ timeoutMs: Double?) -> Double? {
-        guard let timeoutMs, timeoutMs > 0 else { return nil }
+    /// acpx's `resolveShellActionTimeoutMs`: the value as given when JavaScript's `> 0`
+    /// holds for it — a positive number, or a string, boolean or list that converts to one
+    /// — else no deadline: `0`, a negative number, `NaN`, and what converts to none of them.
+    static func resolveTimeout(_ timeoutMs: WireJSON?) -> WireJSON? {
+        guard let timeoutMs, javaScriptNumber(timeoutMs) > 0 else { return nil }
         return timeoutMs
+    }
+
+    /// The delay Node's `setTimeout` runs `timeout` after: its number, at least 1 ms. Node
+    /// runs a delay above 2,147,483,647 ms after 1 ms as well, which times the command out
+    /// at once (openclaw/acpx#812); here such a delay is taken as given.
+    static func timerDelayMs(_ timeout: WireJSON) -> Double {
+        let delay = javaScriptNumber(timeout)
+        return delay >= 1 ? delay : 1
+    }
+
+    /// JavaScript's `Number(value)` for a JSON value: a string as `Number` reads it, a
+    /// boolean as 1 or 0, a list as the text it joins to, `null` as 0, an object as NaN.
+    static func javaScriptNumber(_ value: WireJSON) -> Double {
+        switch value {
+        case .number(let number): return number
+        case .string(let units): return JavaScriptNumber.parse(String(decoding: units, as: UTF16.self))
+        case .bool(let flag): return flag ? 1 : 0
+        case .null: return 0
+        case .array: return JavaScriptNumber.parse(SessionArchive.javaScriptString(value))
+        case .object: return .nan
+        }
+    }
+
+    /// acpx's `new TimeoutError(timeoutMs ?? spec.timeoutMs ?? 0)` for a command past its
+    /// deadline: the message shows the value as JavaScript's `${…}` writes it.
+    static func timeoutError(_ spec: FlowShellExecution) -> FlowTimeoutError {
+        var given = spec.timeoutMs
+        if given == .null { given = nil }
+        let timeout = resolveTimeout(spec.timeoutMs) ?? given ?? .number(0)
+        let shown: String? = if case .number = timeout { nil } else { SessionArchive.javaScriptString(timeout) }
+        return FlowTimeoutError(timeoutMs: javaScriptNumber(timeout), shown: shown)
     }
 
     /// acpx's `createShellFailureError`: the command, how it ended, and its stderr.
@@ -43,11 +75,21 @@ enum FlowShell {
     }
 }
 
-/// A shell action's failure, in acpx's words.
+/// A shell action's failure, in acpx's words — or in Node's, for an argument it refuses,
+/// with the code that makes the error a `TypeError` (`ERR_INVALID_ARG_TYPE`).
 struct FlowShellError: Error, LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    let code: String?
+    init(_ message: String, code: String? = nil) {
+        self.message = message
+        self.code = code
+    }
     var errorDescription: String? { message }
+
+    /// Node's `ERR_INVALID_ARG_TYPE`.
+    static func invalidArgType(_ message: String) -> FlowShellError {
+        FlowShellError(message, code: "ERR_INVALID_ARG_TYPE")
+    }
 }
 
 /// acpx's `createShellOutputCapture`, over what Node's `setEncoding("utf8")` hands it:
@@ -178,11 +220,9 @@ struct FlowShellExecution: Sendable {
     var shell: WireJSON? { json["shell"] }
     var allowNonZeroExit: Bool { json["allowNonZeroExit"] == .bool(true) }
 
-    /// `timeoutMs`, when it is a number.
-    var timeoutMs: Double? {
-        if case .number(let value)? = json["timeoutMs"] { return value }
-        return nil
-    }
+    /// `timeoutMs` as given, which acpx takes as JavaScript compares it
+    /// (``FlowShell/resolveTimeout(_:)``).
+    var timeoutMs: WireJSON? { json["timeoutMs"] }
 
     /// `maxBufferBytes`: a number as it is; anything else, which acpx's check refuses, NaN.
     var maxBufferBytes: Double? {
@@ -207,13 +247,15 @@ struct FlowShellExecution: Sendable {
     /// `-c` with the command line joined, for `shell` — or the error it throws.
     func spawnArguments() throws -> (file: String, arguments: [String]) {
         guard let command else {
-            throw FlowShellError(NodeArgumentError.type("file", "of type string", json["command"]))
+            throw FlowShellError.invalidArgType(NodeArgumentError.type("file", "of type string", json["command"]))
         }
-        guard !command.isEmpty else { throw FlowShellError("The argument 'file' cannot be empty. Received ''") }
+        guard !command.isEmpty else {
+            throw FlowShellError("The argument 'file' cannot be empty. Received ''", code: "ERR_INVALID_ARG_VALUE")
+        }
         switch json["args"] {
         case nil, .null?, .array?: break
         case .object?: break
-        case let other?: throw FlowShellError(NodeArgumentError.type("args", "of type object", other))
+        case let other?: throw FlowShellError.invalidArgType(NodeArgumentError.type("args", "of type object", other))
         }
         switch shell {
         case nil, .null?, .bool(false)?: return (command, args)
@@ -222,7 +264,8 @@ struct FlowShellExecution: Sendable {
             let path = String(decoding: units, as: UTF16.self)
             return path.isEmpty ? (command, args) : (path, ["-c", ([command] + args).joined(separator: " ")])
         case let other?:
-            throw FlowShellError(NodeArgumentError.property("options.shell", "one of type boolean or string", other))
+            throw FlowShellError.invalidArgType(
+                NodeArgumentError.property("options.shell", "one of type boolean or string", other))
         }
     }
 }

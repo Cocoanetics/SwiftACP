@@ -9,11 +9,11 @@ struct SignalListenersTests {
     /// Stands in for the process's signals.
     final class FakeSignals: SignalListeners.Catching, @unchecked Sendable {
         private let lock = NSLock()
-        private var heard: (@Sendable () -> Void)?
+        private var heard: (@Sendable (String) -> Void)?
         private var started = 0
         private var stopped = 0
 
-        func start(_ heard: @escaping @Sendable () -> Void) {
+        func start(_ heard: @escaping @Sendable (String) -> Void) {
             lock.withLock {
                 started += 1
                 self.heard = heard
@@ -31,8 +31,8 @@ struct SignalListenersTests {
         var counts: (started: Int, stopped: Int) { lock.withLock { (started, stopped) } }
 
         /// A signal comes.
-        func signal() {
-            lock.withLock { heard }?()
+        func signal(_ name: String = "SIGINT") {
+            lock.withLock { heard }?(name)
         }
     }
 

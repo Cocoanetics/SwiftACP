@@ -31,10 +31,11 @@ let nodeAvailable = AgentRegistry.which("node") != nil
 
     /// `flow run` on a flow module: `body` after acpx's helpers are imported, or the file
     /// `file` names. `options` go before `flow run`, `arguments` after the file. With
-    /// `interrupting`, a signal arrives once the flow writes to the file `$READY` names.
+    /// `interrupting`, `signal` arrives once the flow writes to the file `$READY` names.
     private func flowRun(
         _ body: String? = nil, file: URL? = nil, options: [String] = [], arguments: [String] = [],
-        interrupting: Bool = false, extension ext: String = "mjs", files: [String: String] = [:]
+        interrupting: Bool = false, signal: String = "SIGINT", extension ext: String = "mjs",
+        files: [String: String] = [:]
     ) async throws -> Run {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -45,7 +46,7 @@ let nodeAvailable = AgentRegistry.which("node") != nil
             try content.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
         }
         if let body {
-            let source = "import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n"
+            let source = "import { defineFlow, action, checkpoint, compute, shell } from \"acpx/flows\";\n"
                 + "import fs from \"node:fs\";\nconst READY = \(ready.path.debugDescription);\n" + body
             try source.write(to: flowFile, atomically: true, encoding: .utf8)
         } else if let file {
@@ -53,7 +54,7 @@ let nodeAvailable = AgentRegistry.which("node") != nil
             try FileManager.default.copyItem(at: file, to: flowFile)
         }
         let source = Interrupts.Source()
-        let watch = interrupting ? try ExecInterruptTests.fire(source, whenWrittenTo: ready) : nil
+        let watch = interrupting ? try ExecInterruptTests.fire(source, whenWrittenTo: ready, signal: signal) : nil
         defer { watch?.cancel() }
         let args = ["--cwd", dir.path] + options + ["flow", "run", flowFile.path] + arguments
         return await withIsolatedStore {
@@ -255,7 +256,7 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         let run = try await flowRun("""
             export default defineFlow({ name: "fixture-interrupt", startAt: "slow", nodes: {
               slow: compute({ run: () => new Promise(() => { fs.writeFileSync(READY, "x"); }) }) }, edges: [] });
-            """, options: ["--format", "json"], interrupting: true)
+            """, options: ["--format", "json"], interrupting: true, signal: "SIGHUP")
         #expect(run.code == 130)
         #expect(run.out.isEmpty && run.err.isEmpty)
         #expect(member(run.state, "status") == .text("failed"))
@@ -278,6 +279,110 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(run.code == 130)
         #expect(member(run.state, "status") == .text("failed"))
         #expect(member(run.state, "error") == .text("Interrupted"))
+    }
+
+    /// A file for a test's command to write to, as a JavaScript string literal, and what it
+    /// holds.
+    private func scratch(_ name: String) -> (path: URL, js: String) {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("flow-\(UUID().uuidString)-\(name)")
+        return (path, WireJSON.text(path.path).stringified)
+    }
+
+    private func contents(_ path: URL) -> String? {
+        defer { try? FileManager.default.removeItem(at: path) }
+        return try? String(contentsOf: path, encoding: .utf8)
+    }
+
+    /// acpx: "POSIX flow interruption forwards SIGINT and waits for shell cleanup" and "one
+    /// foreground Ctrl-C delivers one graceful interrupt to the shell": the command, in a
+    /// session of its own, hears the signal once — the one the run heard (acpx's
+    /// `withInterrupt` hands it on) — and the run waits for it to finish.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)), arguments: ["SIGINT", "SIGTERM", "SIGHUP"])
+    func anInterruptForwardsItsSignalToTheShellCommandOnce(_ signal: String) async throws {
+        let marker = scratch("count")
+        let run = try await flowRun("""
+            const script = "let count=0;process.on('\(signal)',()=>{if(++count>1)process.exit(2);setTimeout(()=>{"
+              + "require('node:fs').writeFileSync(" + JSON.stringify(\(marker.js))
+              + ",String(count));process.exit(0)},200)});"
+              + "for(const s of ['SIGINT','SIGTERM','SIGHUP'])if(s!=='\(signal)')process.on(s,()=>{});"
+              + "require('node:fs').writeFileSync(" + JSON.stringify(READY) + ",'x');setInterval(()=>{},1000)";
+            export default defineFlow({ name: "one-interrupt", startAt: "work", nodes: {
+              work: shell({ timeoutMs: 0,
+                exec: () => ({ command: process.execPath, args: ["-e", script], timeoutMs: 0 }) }) },
+              edges: [] });
+            """, interrupting: true, signal: signal)
+        #expect(run.code == 130)
+        #expect(contents(marker.path) == "1")
+        #expect(member(run.state, "error") == .text("Interrupted"))
+    }
+
+    /// acpx: "foreground interruption reaches descendants after normal shell completion": a
+    /// command's child left running after it exited is still the run's to interrupt.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
+    func anInterruptReachesWhatAFinishedShellActionLeft() async throws {
+        let marker = scratch("signal")
+        let run = try await flowRun("""
+            const child = "process.on('SIGINT',()=>{require('node:fs').writeFileSync(" + JSON.stringify(\(marker.js))
+              + ",'SIGINT');process.exit(0)});process.stdout.write('ready');setInterval(()=>{},1000)";
+            // The wrapper goes once its child is ready.
+            const wrapper = "const c=require('node:child_process').spawn(process.execPath,['-e',"
+              + JSON.stringify(child) + "],{stdio:['ignore','pipe','ignore']});"
+              + "c.stdout.once('data',()=>process.exit(0))";
+            export default defineFlow({ name: "background-signal", startAt: "launch", nodes: {
+              launch: shell({ timeoutMs: 0,
+                exec: () => ({ command: process.execPath, args: ["-e", wrapper], timeoutMs: 0 }) }),
+              waiting: compute({ timeoutMs: 0, run: () => new Promise(() => { fs.writeFileSync(READY, "x"); }) }) },
+              edges: [{ from: "launch", to: "waiting" }] });
+            """, interrupting: true)
+        #expect(run.code == 130)
+        #expect(member(run.state, "results", "launch", "outcome") == .text("ok"))
+        #expect(contents(marker.path) == "SIGINT")
+    }
+
+    /// acpx: "foreground Ctrl-C retains detached descendants when the wrapper exits on
+    /// SIGINT": a descendant in a session of its own, deaf to the signal, is killed once its
+    /// grace is up.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
+    func anInterruptStopsADetachedDescendantItsWrapperLeft() async throws {
+        let (marker, pidFile) = (scratch("wrapper-signal"), scratch("pid"))
+        let run = try await flowRun("""
+            const descendant = "process.on('SIGINT',()=>{});process.on('SIGTERM',()=>{});"
+              + "require('node:fs').writeFileSync(" + JSON.stringify(\(pidFile.js)) + ",String(process.pid));"
+              + "require('node:fs').writeFileSync(" + JSON.stringify(READY) + ",'x');setInterval(()=>{},1000)";
+            const wrapper = "process.on('SIGINT',()=>{require('node:fs').writeFileSync(" + JSON.stringify(\(marker.js))
+              + ",'SIGINT');process.exit(0)});require('node:child_process').spawn(process.execPath,['-e',"
+              + JSON.stringify(descendant) + "],{stdio:'ignore',detached:true});setInterval(()=>{},1000)";
+            export default defineFlow({ name: "wrapper-race", startAt: "work", nodes: {
+              work: shell({ timeoutMs: 0,
+                exec: () => ({ command: process.execPath, args: ["-e", wrapper], timeoutMs: 0 }) }) },
+              edges: [] });
+            """, interrupting: true)
+        #expect(run.code == 130)
+        #expect(contents(marker.path) == "SIGINT")
+        let pid = try #require(pid_t(contents(pidFile.path) ?? ""))
+        #expect(kill(pid, 0) != 0 || ProcessTable.snapshot()?[pid] == nil, "the descendant \(pid) is still running")
+        if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
+    /// acpx's `runWithOwnership`: a step that failed on its own keeps its error when the
+    /// interrupt comes while its command is still being stopped — here, a child deaf to
+    /// the SIGTERM its attempt sent, until the SIGKILL a second later. The run fails with
+    /// that error, as acpx 0.19.3 does, not `Interrupted`.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
+    func aStepThatFailedOnItsOwnKeepsItsErrorThroughAnInterrupt() async throws {
+        let run = try await flowRun("""
+            export default defineFlow({ name: "failed-then-interrupted", startAt: "work", nodes: {
+              work: shell({ timeoutMs: 0, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
+                `(trap 'printf x > ${JSON.stringify(READY)}' TERM; while :; do sleep 0.1; done) & exit 1`] }) }) },
+              edges: [] });
+            """, interrupting: true)
+        #expect(run.code == 1)
+        #expect(run.err.hasPrefix("Shell action failed (/bin/sh \"-c\" \"(trap"), "\(run.err)")
+        #expect(member(run.state, "results", "work", "outcome") == .text("failed"))
+        let error = try #require(member(run.state, "error")?.stringValue)
+        #expect(error.hasPrefix("Shell action failed (/bin/sh") && error.hasSuffix("): exit 1"))
+        #expect(member(run.state, "statusDetail") == .text("Failed in work: \(error)"))
+        #expect(run.trace.last?["payload"]?["error"] == .text(error))
     }
 
     /// Interrupted while its title is worked out, the run has not begun and ends at once:

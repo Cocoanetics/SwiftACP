@@ -32,7 +32,7 @@ enum SessionsWatchCommand {
                     continueWatching: { try await owner.shouldContinue(pendingRequestId: $0) },
                     onEvent: { renderer.render($0) })
             }
-            let listening = Interrupts.listen { watching.cancel() }
+            let listening = Interrupts.listen { _ in watching.cancel() }
             defer { listening.stop() }
             let outcome = await watching.result
             await owner.disconnect()

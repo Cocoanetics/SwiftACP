@@ -27,14 +27,21 @@ package enum ProcessTable {
     package static func snapshot() -> [pid_t: ProcessTableEntry]? {
         #if canImport(Darwin)
         var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
-        for _ in 0..<4 {
+        // Room for the processes started between the two calls: a quarter more, at least
+        // 64, twice that after each time it was not enough. A busy machine starts dozens.
+        var slack = 64
+        for _ in 0..<8 {
             var length = 0
             guard sysctl(&name, u_int(name.count), nil, &length, nil, 0) == 0 else { return nil }
             let stride = MemoryLayout<kinfo_proc>.stride
-            var processes = [kinfo_proc](repeating: kinfo_proc(), count: length / stride + 32)
+            let count = length / stride
+            var processes = [kinfo_proc](repeating: kinfo_proc(), count: count + max(slack, count / 4))
             length = processes.count * stride
             guard sysctl(&name, u_int(name.count), &processes, &length, nil, 0) == 0 else {
-                if errno == ENOMEM { continue }  // the table grew in between
+                if errno == ENOMEM {  // the table grew in between
+                    slack *= 2
+                    continue
+                }
                 return nil
             }
             var table: [pid_t: ProcessTableEntry] = [:]

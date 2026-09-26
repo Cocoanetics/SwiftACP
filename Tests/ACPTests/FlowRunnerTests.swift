@@ -9,64 +9,14 @@ import Testing
 /// a directory of its own, so these touch nothing process-wide and need no store isolation
 /// (`FlowRunTests` has the cases that go through the CLI).
 struct FlowRunnerTests {
-    /// A finished run: `err` and `code` are what the CLI would report of its failure;
-    /// `tracked`, what the host still held for attempts once it was over, and
-    /// `pendingRequests`, how many of its requests the runner still waited on, when asked.
-    struct Run {
-        var err = ""
-        var code: Int32 = 0
-        var state: WireJSON?
-        var trace: [WireJSON] = []
-        var tracked: WireJSON?
-        var pendingRequests: Int?
-    }
+    typealias Run = FlowRunnerHarness.Run
 
-    /// Run a flow module — `body` after acpx's helpers are imported, or as it is without
-    /// `prelude` — with `input`, beside `files`. With `tracking`, the host is asked what it
-    /// holds for attempts once the run is over: not of a host whose callback holds its
-    /// event loop, which cannot answer.
     private func runnerRun(
         _ body: String, extension ext: String = "mjs", files: [String: String] = [:],
         input: WireJSON = .object([WireJSON.Member]()), tracking: Bool = false, prelude: Bool = true
     ) async throws -> Run {
-        let node = try #require(AgentRegistry.which("node"))
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-runner-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        for (name, content) in files {
-            let file = dir.appendingPathComponent(name)
-            try FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try content.write(to: file, atomically: true, encoding: .utf8)
-        }
-        let flowFile = dir.appendingPathComponent("test.flow.\(ext)")
-        try ((prelude ? "import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n" : "") + body)
-            .write(to: flowFile, atomically: true, encoding: .utf8)
-        let runs = dir.appendingPathComponent("runs")
-        let host = try FlowHost.start(node: node, cwd: dir.path, environment: ProcessInfo.processInfo.environment)
-        var run = Run()
-        do {
-            let loaded = try await host.request("flow/load", .object([WireJSON.Member("path", .text(flowFile.path))]))
-            let flow = try FlowDescription(loaded: loaded ?? .null)
-            let runner = FlowRunner(host: host, options: FlowRunner.Options(outputRoot: runs, defaultCwd: dir.path))
-            _ = try await runner.run(flow, input: input, flowPath: flowFile.path)
-        } catch {
-            run.err = TurnFailureText.message(of: error)
-            run.code = error is FlowTimeoutError ? 3 : 1
-        }
-        if tracking {
-            run.tracked = try? await host.request("host/tracked")
-            run.pendingRequests = host.pendingRequestCount
-        }
-        await host.stop()
-        if let name = try? FileManager.default.contentsOfDirectory(atPath: runs.path).first {
-            let runDir = runs.appendingPathComponent(name)
-            run.state = try? WireJSON.parse(String(
-                contentsOf: runDir.appendingPathComponent("projections/run.json"), encoding: .utf8))
-            let trace = (try? String(contentsOf: runDir.appendingPathComponent("trace.ndjson"), encoding: .utf8)) ?? ""
-            run.trace = trace.split(separator: "\n").compactMap { try? WireJSON.parse(String($0)) }
-        }
-        return run
+        try await FlowRunnerHarness.run(
+            body, extension: ext, files: files, input: input, tracking: tracking, prelude: prelude)
     }
 
     private func member(_ value: WireJSON?, _ path: String...) -> WireJSON? {
@@ -312,18 +262,6 @@ struct FlowRunnerTests {
               nodes: { a: compute({ run: () => 1 }) }, edges: [] });
             """, input: try WireJSON.parse(#"{"who":"you"}"#))
         #expect(member(run.state, "runTitle") == expected.map(WireJSON.text))
-    }
-
-    /// `ctx.runShell` comes with shell actions (#202, step 2); until then it fails plainly.
-    @Test(.enabled(if: nodeAvailable))
-    func runShellIsRefusedForNow() async throws {
-        let run = try await runnerRun("""
-            export default defineFlow({ name: "shell-helper", startAt: "act",
-              nodes: { act: action({ run: async ({ runShell }) => await runShell({ command: "true" }) }) },
-              edges: [] });
-            """)
-        #expect(run.code == 1)
-        #expect(run.err == "ctx.runShell is not supported by SwiftACP's acpx yet")
     }
 
     /// A callback holding Node's event loop keeps the host from answering anything, its

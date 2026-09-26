@@ -1,5 +1,6 @@
 @testable import ACPXFlows
 import Foundation
+import SwiftACP
 import Testing
 
 /// acpx's shell action rules that need no process (`test/flows-shell.test.ts`, v0.19.3),
@@ -17,14 +18,49 @@ struct FlowShellTests {
         #expect(FlowShell.summary("git", ["status", "--short"]) == #"shell: git "status" "--short""#)
     }
 
-    /// acpx: "resolveShellActionTimeoutMs treats non-positive as no deadline".
+    /// acpx: "resolveShellActionTimeoutMs treats non-positive as no deadline" — and, as its
+    /// JavaScript compares `timeoutMs > 0`, a string, boolean or list that converts to a
+    /// positive number is a deadline too, kept as given.
     @Test func onlyAPositiveTimeoutIsADeadline() {
-        #expect(FlowShell.resolveTimeoutMs(nil) == nil)
-        #expect(FlowShell.resolveTimeoutMs(0) == nil)
-        #expect(FlowShell.resolveTimeoutMs(-1) == nil)
-        #expect(FlowShell.resolveTimeoutMs(.nan) == nil)
-        #expect(FlowShell.resolveTimeoutMs(50) == 50)
-        #expect(FlowShell.resolveTimeoutMs(.infinity) == .infinity)
+        for none in [nil, .null, .number(0), .number(-1), .number(.nan), .text(""), .text("abc"), .text("-5"),
+                     .bool(false), .array([]), .array([.number(1), .number(2)]), .object([WireJSON.Member]())]
+            as [WireJSON?] {
+            #expect(FlowShell.resolveTimeout(none) == nil, "\(String(describing: none))")
+        }
+        for deadline in [.number(50), .number(.infinity), .number(0.5), .text("100"), .text(" 0x10 "), .bool(true),
+                         .array([.number(150)]), .array([.text("7")])] as [WireJSON] {
+            #expect(FlowShell.resolveTimeout(deadline) == deadline, "\(deadline)")
+        }
+    }
+
+    /// Node's `setTimeout` delay for a deadline: its number, at least 1 ms; and the message
+    /// acpx's `TimeoutError` gives, the value as `${…}` writes it.
+    @Test func aDeadlineRunsAsNodesTimerRunsIt() {
+        #expect(FlowShell.timerDelayMs(.text("100")) == 100)
+        #expect(FlowShell.timerDelayMs(.bool(true)) == 1)
+        #expect(FlowShell.timerDelayMs(.number(0.5)) == 1)
+        #expect(FlowShell.timerDelayMs(.array([.number(150)])) == 150)
+        let message = { (json: WireJSON) in
+            FlowShell.timeoutError(FlowShellExecution(json: .object([("timeoutMs", json)]))).localizedDescription
+        }
+        #expect(message(.text("100")) == "Timed out after 100ms")
+        #expect(message(.bool(true)) == "Timed out after truems")
+        #expect(message(.array([.number(150)])) == "Timed out after 150ms")
+        #expect(message(.number(2.5)) == "Timed out after 2.5ms")
+        #expect(message(.text("abc")) == "Timed out after abcms")
+        #expect(message(.null) == "Timed out after 0ms")
+    }
+
+    /// A delay no clock can hold is no timer: one past ``FlowTimer/maxDelayMs`` outlives any
+    /// run, and much further `Duration.milliseconds` traps.
+    @Test func aDelayNoClockCanHoldIsNoTimer() {
+        #expect(FlowTimer.duration(milliseconds: 50) == .nanoseconds(50_000_000))
+        #expect(FlowTimer.duration(milliseconds: 3_000_000_000) == .nanoseconds(3_000_000_000_000_000))
+        #expect(FlowTimer.duration(milliseconds: FlowTimer.maxDelayMs) == .nanoseconds(1_000_000_000_000_000_000))
+        for none in [1e13, 1e24, 1e308, .infinity, .nan] as [Double] {
+            #expect(FlowTimer.duration(milliseconds: none) == nil, "\(none)")
+        }
+        #expect(FlowTimer.duration(milliseconds: -5) == .zero)
     }
 
     /// acpx: "shell capture rejects invalid limits before spawning".

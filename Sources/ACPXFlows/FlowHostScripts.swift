@@ -290,11 +290,23 @@ const outputs = {};
 // What each attempt's callback returned last, until the runner makes it the node's output
 // or forgets the attempt.
 const returned = new Map();
-// Each attempt whose callback is still running: its abort controller, and whether the
-// runner has forgotten it. Forgotten, it is let go here at once — a callback that never
-// settles is then held by nothing but itself, as in acpx — and one that settles later,
-// past its deadline, keeps nothing.
+// Each attempt the runner has not let go of, as acpx's `FlowAttempt` shows itself to the
+// flow's code: the `signal` every callback of it is handed, aborted with the reason it is
+// cancelled for; whether the runner is done with it; and what a callback of it threw.
+const attempts = new Map();
+// Each attempt whose callback is still running. Forgotten, it is let go here at once — a
+// callback that never settles is then held by nothing but itself, as in acpx — and one
+// that settles later, past its deadline, keeps nothing.
 const running = new Map();
+
+function attemptFor(attemptId) {
+  let attempt = attempts.get(attemptId);
+  if (!attempt) {
+    attempt = { controller: new AbortController(), finished: false, thrown: undefined };
+    attempts.set(attemptId, attempt);
+  }
+  return attempt;
+}
 
 async function loadRuntime() {
   runtime ??= await import(pathToFileURL(RUNTIME_PATH).href);
@@ -685,7 +697,7 @@ async function flowTitle(params) {
 async function invoke(params) {
   const { nodeId, fn, attemptId } = params;
   const node = flow.nodes[nodeId];
-  const attempt = { controller: new AbortController(), forgotten: false };
+  const attempt = attemptFor(attemptId);
   running.set(attemptId, attempt);
   const state = params.state;
   state.input = input;
@@ -699,16 +711,30 @@ async function invoke(params) {
     signal: attempt.controller.signal,
   };
   if (node.nodeType === "action" && "run" in node) {
-    ctx.runShell = (execution) => request("shell/run", { attemptId, execution });
+    ctx.runShell = (execution) => runShell(attemptId, attempt, execution);
   }
   try {
     const args = "arg" in params ? [params.arg, ctx] : [ctx];
     const value = await node[fn](...args);
-    if (!attempt.forgotten) returned.set(attemptId, value);
+    if (!attempt.finished) returned.set(attemptId, value);
     return returnedValue(value);
+  } catch (error) {
+    attempt.thrown = { error };
+    throw error;
   } finally {
     if (running.get(attemptId) === attempt) running.delete(attemptId);
   }
+}
+
+// acpx's `runCallbackShell`, which is `attempt.own(...)` around the command: an attempt no
+// longer taking work refuses at once — with the reason it was cancelled for, or as
+// finished — as does an execution whose `cwd` `path.resolve` refuses. The runner runs the
+// command.
+function runShell(attemptId, attempt, execution) {
+  attempt.controller.signal.throwIfAborted();
+  if (attempt.finished) throw new Error("Flow attempt has finished accepting work");
+  path.resolve(".", execution.cwd ?? ".");
+  return request("shell/run", { attemptId, execution });
 }
 
 // A callback's value as JSON, as acpx writes it (`JSON.stringify`): nothing for
@@ -736,19 +762,46 @@ function setOutput(params) {
   Object.defineProperty(outputs, params.nodeId, { value, enumerable: true, configurable: true, writable: true });
 }
 
+// The runner cancelled an attempt: its `signal` aborted with the reason — for one that
+// failed, what its callback threw, when it failed with that.
 function cancelAttempt(params) {
-  const reason = params.reason === "timeout" ? new TimeoutError(params.timeoutMs) : new InterruptedError();
-  running.get(params.attemptId)?.controller.abort(reason);
+  const attempt = attemptFor(params.attemptId);
+  let reason;
+  if (params.reason === "timeout") reason = new TimeoutError(params.timeoutMs);
+  else if (params.reason === "interrupted") reason = new InterruptedError();
+  else reason = attempt.thrown ? attempt.thrown.error : new Error(params.message);
+  attempt.controller.abort(reason);
 }
 
 // The runner is done with an attempt: nothing of it is kept.
 function forgetAttempt(params) {
   returned.delete(params.attemptId);
-  const attempt = running.get(params.attemptId);
-  if (attempt) {
-    attempt.forgotten = true;
-    running.delete(params.attemptId);
+  const attempt = attempts.get(params.attemptId);
+  if (attempt) attempt.finished = true;
+  attempts.delete(params.attemptId);
+  running.delete(params.attemptId);
+}
+
+// A request's error as the code acpx runs would have thrown it: a `TypeError` for an
+// argument Node refuses, with its code, as Node's own; else an `Error` of the name given,
+// with the properties Node gives a spawn failure.
+function requestError({ message, data }) {
+  const code = data?.props?.code;
+  if (data?.name === "TypeError") {
+    const error = Object.assign(new TypeError(message), data.props);
+    Object.defineProperty(error, "toString", {
+      value() {
+        return `${this.name} [${code}]: ${this.message}`;
+      },
+      writable: true,
+      configurable: true,
+    });
+    return error;
   }
+  const error = new Error(message);
+  if (data?.name) error.name = data.name;
+  if (data?.props) Object.assign(error, data.props);
+  return error;
 }
 
 // What a callback threw, as acpx's runner records it: the message of an `Error`, else the
@@ -771,9 +824,7 @@ async function handle(message) {
     pending.delete(message.id);
     if (!waiting) return;
     if (message.error) {
-      const error = new Error(message.error.message);
-      if (message.error.data?.name) error.name = message.error.data.name;
-      waiting.reject(error);
+      waiting.reject(requestError(message.error));
     } else {
       waiting.resolve(message.result);
     }
@@ -853,6 +904,9 @@ for (const signal of INTERRUPTS) {
 // code they leave (a later `process.exit(7)`: 7). So the host stops holding itself open
 // for the runner, and takes Ctrl-C as acpx then does; it still goes if the runner does.
 function release() {
+  // The run is over: none of its attempts takes work any more.
+  for (const attempt of attempts.values()) attempt.finished = true;
+  attempts.clear();
   for (const signal of INTERRUPTS) {
     process.removeListener(signal, ignore);
   }

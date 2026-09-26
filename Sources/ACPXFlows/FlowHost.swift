@@ -300,7 +300,8 @@ public final class FlowHost: @unchecked Sendable {
                     try? write(.object([
                         ("jsonrpc", .text("2.0")), ("id", id),
                         ("error", .object([
-                            ("code", .number(-32000)), ("message", .text(TurnFailureText.message(of: error)))
+                            ("code", .number(-32000)), ("message", .text(TurnFailureText.message(of: error))),
+                            ("data", Self.javaScriptErrorData(error))
                         ]))
                     ]))
                 }
@@ -321,6 +322,27 @@ public final class FlowHost: @unchecked Sendable {
         } else {
             let result = message["result"]
             waiting.resume(returning: result == .null ? nil : result)
+        }
+    }
+
+    /// What the host needs to reject with the error acpx's code would: its `name` —
+    /// `TimeoutError`, `InterruptedError`, or the `TypeError` of an argument Node refuses,
+    /// with its code — and the properties Node gives a spawn failure.
+    static func javaScriptErrorData(_ error: Error) -> WireJSON? {
+        switch error {
+        case is FlowTimeoutError: return .object([("name", .text("TimeoutError"))])
+        case is FlowInterruptedError: return .object([("name", .text("InterruptedError"))])
+        case let shell as FlowShellError:
+            guard let code = shell.code else { return nil }
+            return .object([("name", .text("TypeError")), ("props", .object([("code", .text(code))]))])
+        case let spawn as FlowShellSpawnError:
+            let code = ChildSpawn.SpawnError(code: spawn.code).name
+            return .object([("props", .object([
+                ("errno", .number(-Double(spawn.code))), ("code", .text(code)),
+                ("syscall", .text("spawn \(spawn.file)")), ("path", .text(spawn.file)),
+                ("spawnargs", .array(spawn.arguments.map(WireJSON.text)))
+            ]))])
+        default: return nil
         }
     }
 

@@ -38,7 +38,7 @@ public actor FlowRunner {
     }
 
     let host: FlowHost
-    private let options: Options
+    let options: Options
     private let defaultNodeTimeoutMs: Double
     var store: FlowRunStore
     var state: FlowRunState
@@ -50,6 +50,16 @@ public actor FlowRunner {
     private var executing = false
     private var settled = false
     private var settledWaiters: [CheckedContinuation<Void, Never>] = []
+    /// The owners of the run's shell commands, which an interrupt stops (acpx's
+    /// `shellOwners`).
+    let shellOwners = FlowShellOwners()
+    /// The run's attempts by id, for a function action's `ctx.runShell`, until forgotten;
+    /// then why each stopped taking work — its cancellation's reason, or none — which a
+    /// callback of it still running is refused with, as acpx's attempt refuses it.
+    var attempts: [String: FlowAttempt] = [:]
+    var retiredAttempts: [String: Error?] = [:]
+    /// The interrupt's stop of the shell commands, once it has begun.
+    private var shellCancellation: Task<Void, Error>?
 
     public init(host: FlowHost, options: Options) {
         self.host = host
@@ -57,10 +67,11 @@ public actor FlowRunner {
         defaultNodeTimeoutMs = options.timeoutMs ?? Self.defaultStepTimeoutMs
         store = FlowRunStore(outputRoot: options.outputRoot)
         state = FlowRunState(runId: "", flowName: "", runTitle: nil, flowPath: nil, input: .null, now: "")
-        // `ctx.runShell` runs a command for a function action: not here yet (#202, step 2).
-        host.setRequestHandler { method, _ in
+        // A function action's `ctx.runShell`, which the host asks the runner to run.
+        host.setRequestHandler { [weak self] method, params in
             guard method == "shell/run" else { throw FlowHostError.methodNotFound(method) }
-            throw FlowRunError("ctx.runShell is not supported by SwiftACP's acpx yet")
+            guard let self else { throw FlowAttemptFinished() }
+            return try await self.runCallbackShell(params)
         }
     }
 
@@ -88,9 +99,10 @@ public actor FlowRunner {
     }
 
     /// acpx's `runWithOwnership`: the run, and — when interrupted — the bundle marked
-    /// failed with `Interrupted` once the run has stopped.
+    /// failed once the run has stopped: with the run's own failure, or `Interrupted`.
     private func runWithOwnership(_ flow: FlowDescription, runDir: URL) async throws -> RunResult {
         executing = true
+        defer { shellOwners.releaseAll() }
         let outcome: Result<RunResult, Error>
         do {
             outcome = .success(try await executeFlowRun(flow, runDir: runDir))
@@ -98,24 +110,46 @@ public actor FlowRunner {
             outcome = .failure(error)
         }
         if case .failure(let error) = outcome, error is FlowHost.Exited { throw error }
-        if let interruption {
-            try? persistRunFailure(runDir, interruption)
-            throw interruption
+        // The interrupt's stop of the shell commands, waited for: its failure is the run's.
+        if let shellCancellation {
+            do {
+                try await shellCancellation.value
+            } catch {
+                var failure = error
+                if case .failure(let runError) = outcome {
+                    failure = FlowShellCleanupError(
+                        "Shell cleanup failed during interruption", errors: [runError, error])
+                }
+                try? persistRunFailure(runDir, failure)
+                throw failure
+            }
         }
-        return try outcome.get()
+        guard let interruption else { return try outcome.get() }
+        // A step that failed on its own before the interrupt reached it keeps its error.
+        var failure: Error = interruption
+        if case .failure(let runError) = outcome { failure = runError }
+        try? persistRunFailure(runDir, failure)
+        throw failure
     }
 
-    /// The run is interrupted (SIGINT, SIGTERM or SIGHUP): the step running is cancelled,
-    /// and this returns once the run has stopped and recorded it. Before the steps began —
-    /// its title still being worked out, say — there is nothing to wait for: acpx, which
-    /// listens only once they begin, just exits.
-    public func interrupt() async {
-        guard interruption == nil else { return }
-        let reason = FlowInterruptedError()
-        interruption = reason
-        attempt?.cancel(reason)
-        if settled || !executing { return }
-        await withCheckedContinuation { settledWaiters.append($0) }
+    /// The run is interrupted by `signal` (SIGINT, SIGTERM or SIGHUP): its shell commands
+    /// are stopped with it and the step running is cancelled. Once the steps have begun,
+    /// the run answers the interrupt, as acpx's `runWithOwnership` does — it fails with its
+    /// own error, a shell cleanup's, or `Interrupted` — and this returns `true` when it has
+    /// stopped and recorded it. Before they began — its title still being worked out, say
+    /// — it returns `false` at once: acpx, which listens only once they begin, just exits.
+    @discardableResult
+    public func interrupt(signal: String = "SIGINT") async -> Bool {
+        if interruption == nil {
+            let reason = FlowInterruptedError()
+            interruption = reason
+            let owners = shellOwners
+            shellCancellation = Task { try await owners.cancelAll(signal) }
+            attempt?.cancel(reason, signal: signal)
+        }
+        guard executing else { return false }
+        if !settled { await withCheckedContinuation { settledWaiters.append($0) } }
+        return true
     }
 
     private func markSettled() {
@@ -197,14 +231,19 @@ public actor FlowRunner {
         let timeoutMs = node.timeoutMs ?? defaultNodeTimeoutMs
         let attempt = FlowAttempt(nodeId: nodeId, attemptId: attemptId, startedAt: startedAt, timeoutMs: timeoutMs)
         let host = self.host
+        // The host aborts the attempt's `signal` with the reason: a timeout, an interrupt, or
+        // the failure it ended with — what its callback threw, when it was that.
         attempt.setOnCancel { reason in
             let timeout = reason as? FlowTimeoutError
+            let kind = timeout != nil ? "timeout" : reason is FlowInterruptedError ? "interrupted" : "failed"
             host.notify("attempt/cancel", .object([
-                ("attemptId", .text(attemptId)), ("reason", .text(timeout == nil ? "interrupted" : "timeout")),
-                ("timeoutMs", timeout.map { .number($0.timeoutMs) })
+                ("attemptId", .text(attemptId)), ("reason", .text(kind)),
+                ("timeoutMs", timeout.map { .number($0.timeoutMs) }),
+                ("message", kind == "failed" ? .text(TurnFailureText.message(of: reason)) : nil)
             ]))
         }
         self.attempt = attempt
+        attempts[attemptId] = attempt
         var executed: Executed
         var outcome = FlowNodeOutcome.ok
         var executionError: Error?
@@ -279,10 +318,10 @@ public actor FlowRunner {
     /// `heartbeatMs` (5 seconds by default; 0 for none), best effort, one at a time.
     private func startHeartbeat(_ node: FlowNode, attempt: FlowAttempt, runDir: URL) {
         let heartbeatMs = max(0, (node.heartbeatMs ?? Self.defaultHeartbeatMs).rounded(.toNearestOrAwayFromZero))
-        guard heartbeatMs > 0 else { return }
+        guard heartbeatMs > 0, let interval = FlowTimer.duration(milliseconds: heartbeatMs) else { return }
         heartbeat = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(heartbeatMs))
+                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, attempt.active, let self else { return }
                 _ = try? await attempt.own(bestEffort: true) { try await self.writeHeartbeat(attempt, runDir: runDir) }
             }
@@ -305,8 +344,8 @@ public actor FlowRunner {
         case .compute, .checkpoint:
             return try await executeCallbackNode(node, attempt: attempt)
         case .action:
-            guard node.hasRun else { throw FlowRunError("Shell action nodes are not supported by SwiftACP's acpx yet") }
-            return try await executeCallbackNode(node, attempt: attempt)
+            if node.hasRun { return try await executeCallbackNode(node, attempt: attempt) }
+            return try await executeShellNode(node, attempt: attempt, runDir: runDir)
         case .acp:
             throw FlowRunError("ACP nodes are not supported by SwiftACP's acpx yet")
         }
@@ -337,7 +376,7 @@ public actor FlowRunner {
 
     /// One callback of `node`, run by the host with the step context acpx builds
     /// (`makeFlowNodeContext`): the run's state as it is now.
-    private func invoke(_ node: FlowNode, _ callback: String, attempt: FlowAttempt, argument: WireJSON? = nil)
+    func invoke(_ node: FlowNode, _ callback: String, attempt: FlowAttempt, argument: WireJSON? = nil)
         async throws -> FlowValue {
         var params: [(String, WireJSON?)] = [
             ("nodeId", .text(node.id)), ("fn", .text(callback)), ("attemptId", .text(attempt.attemptId))
