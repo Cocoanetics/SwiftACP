@@ -42,15 +42,22 @@ public protocol ACPXBackend: Sendable {
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
         permissionMode: String?, nonInteractivePermissions: String?, streamWire: Bool,
-        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, model: String?, limits: PromptLimits?
+        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, sessionOptions: PromptSessionOptions?,
+        limits: PromptLimits?
     ) async throws -> String
     func cancelSession(sessionId: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
+    func releaseSession(sessionId: String) async throws -> Bool
 }
 
 extension ACPXBackend {
     /// A backend that holds no agents live holds none of its sessions.
     public func sessionStatus(sessionId: String) async -> LiveSessionStatus {
         LiveSessionStatus(live: false)
+    }
+
+    /// A backend that holds no agents live has none to let go.
+    public func releaseSession(sessionId: String) async throws -> Bool {
+        false
     }
 }

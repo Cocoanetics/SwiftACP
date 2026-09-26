@@ -160,26 +160,14 @@ enum SessionsCommand {
         let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try context.positionals.first.map(parseSessionName)
-        guard var record = SessionStore.findSession(
+        guard let found = SessionStore.findSession(
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)
         else {
             throw CLIError(missingScopedSessionMessage(agent: agent, name: name))
         }
-        // Let a running daemon drop its live agent first — it owns the connection
-        // (and with it the session's MCP servers), and closes the record itself.
-        // With no daemon reachable there's nothing held, so mark the record here.
-        let acpSessionId = record.acpSessionId
-        let closedByDaemon = try runBlocking {
-            await DaemonClient.closeSession(sessionId: acpSessionId)
-        }
-        if closedByDaemon, let persisted = SessionStore.loadRecord(record.acpxRecordId) {
-            record = persisted
-        } else {
-            record.pid = nil
-            record.closed = true
-            record.closedAt = nowISO()
-            try SessionStore.writeRecord(record)
-        }
+        // A running daemon drops its live agent first — it owns the connection (and with
+        // it the session's MCP servers) — and closes the record itself.
+        let record = try SessionLifecycle.close(found)
 
         switch flags.format {
         case "json":

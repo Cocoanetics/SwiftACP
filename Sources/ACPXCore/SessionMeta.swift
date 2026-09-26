@@ -82,3 +82,36 @@ public enum SessionMeta {
         .object(Dictionary(uniqueKeysWithValues: pairs))
     }
 }
+
+extension SessionAcpxState.SessionOptions {
+    /// A turn's own options, as acpx's CLI sends them with a prompt
+    /// (`sessionOptionsFromGlobalFlags`): its `--model` and ``PromptSessionOptions``;
+    /// `nil` when it gives none.
+    public init?(turnModel model: String?, _ prompt: PromptSessionOptions?) {
+        var options = Self()
+        options.model = model
+        options.allowedTools = prompt?.allowedTools
+        options.maxTurns = prompt?.maxTurns
+        if let text = prompt?.systemPrompt {
+            options.systemPrompt = .string(text)
+        } else if let text = prompt?.appendSystemPrompt {
+            options.systemPrompt = .object(["append": .string(text)])
+        }
+        guard options.model != nil || options.allowedTools != nil || options.maxTurns != nil
+            || options.systemPrompt != nil
+        else { return nil }
+        self = options
+    }
+
+    /// acpx's `mergeSessionOptions`: these over `fallback`, option by option where they
+    /// set one, and the environments merged, these entries over `fallback`'s.
+    public func merged(over fallback: Self?) -> Self {
+        var merged = fallback ?? Self()
+        if let model { merged.model = model }
+        if let allowedTools { merged.allowedTools = allowedTools }
+        if let maxTurns { merged.maxTurns = maxTurns }
+        if let systemPrompt { merged.systemPrompt = systemPrompt }
+        if let env { merged.env = (fallback?.env ?? [:]).merging(env) { _, own in own } }
+        return merged
+    }
+}

@@ -256,4 +256,20 @@ extension DaemonToolsTests {
         #expect(!ReconnectFallback.isResourceNotFound(
             JSONRPCErrorBody(code: -32603, message: "Internal error")))
     }
+
+    /// A failure that stands for the agent's error is judged by that error, as acpx's
+    /// `extractAcpError` follows a failure's `cause`: a model control's, and a resume's
+    /// that came of one — whatever their own words say.
+    @Test func aGoneSessionIsRecognisedThroughWhatAFailureCameOf() async {
+        let gone = JSONRPCErrorBody(code: -32002, message: "Session gone")
+        let control = await #expect(throws: SessionControlError.self) {
+            try await SessionControlError.wrappingModel("session/set_model", modelId: "m2") { throw gone }
+        }
+        guard let control else { return }
+        #expect(ReconnectFallback.isResourceNotFound(control))
+        #expect(ReconnectFallback.isResourceNotFound(SessionResumeError(sessionId: "s", underlying: control)))
+        #expect(ReconnectFallback.isResourceNotFound(SessionResumeError(sessionId: "s", underlying: gone)))
+        let internalError = JSONRPCErrorBody(code: -32603, message: "Internal error")
+        #expect(!ReconnectFallback.isResourceNotFound(SessionResumeError(sessionId: "s", underlying: internalError)))
+    }
 }
