@@ -11,13 +11,25 @@ public enum ModelSupport {
     }
 
     /// acpx's `modelStateFromConfigOptions`: the model picker among the options a
-    /// session reported — none when what it reported is no list.
+    /// session reported — none when what it reported is no list. Of several, the one
+    /// ranked first (``modelConfigPriority(_:)``), and of those the first listed.
     public static func modelState(fromConfigOptions options: JSONValue?) -> ModelState? {
         guard case .array(let options)? = options else { return nil }
+        var selected: (state: ModelState, priority: Int)?
         for value in options {
-            if let state = parseModelConfigOption(value) { return state }
+            guard case .object(let option) = value, let state = parseModelConfigOption(value) else { continue }
+            let priority = modelConfigPriority(option)
+            if priority > selected?.priority ?? -1 { selected = (state, priority) }
         }
-        return nil
+        return selected?.state
+    }
+
+    /// acpx's `modelConfigPriority` (#571): the model's own option — category `model`, id
+    /// `model` — ahead of another in the `model` category, such as a provider selector,
+    /// and that ahead of one with the id `model` but no such category.
+    private static func modelConfigPriority(_ option: [String: JSONValue]) -> Int {
+        guard option["category"] == .string("model") else { return 0 }
+        return option["id"] == .string("model") ? 2 : 1
     }
 
     private static func parseModelConfigOption(_ value: JSONValue) -> ModelState? {
