@@ -20,10 +20,10 @@ import Testing
     }
 
     /// The mock agent, its `session/load` answering as `load` says, logging what it is sent.
-    private static func agent(load: String, log: URL) throws -> String {
+    private static func agent(load: String, log: URL, environment: String = "") throws -> String {
         let command = try #require(mockCommand())
         return "/usr/bin/env MOCK_REQUEST_LOG='\(log.path)' MOCK_SESSION_ID_PER_PROCESS=1 "
-            + "MOCK_LOAD_SESSION=\(load) \(command)"
+            + "MOCK_LOAD_SESSION=\(load) \(environment)\(command)"
     }
 
     /// `acpx --approve-all --agent <agent> --cwd <cwd> <args>`, with `daemon` the one running.
@@ -139,6 +139,27 @@ import Testing
                 + #""message":"Resource not found: session lost-1","data":{"acpxCode":"NO_SESSION","#
                 + #""origin":"cli","sessionId":"unknown"}}}"# + "\n")
             #expect(SessionStore.listSessions().isEmpty)
+        }
+    }
+
+    /// The agent's not-found code makes it `NO_SESSION` whatever its message says: the agent's
+    /// error is the resume's cause, as acpx's `extractAcpError` finds it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aNotFoundCodeIsNoSessionWhateverItsMessage() async throws {
+        let (a, _) = try Self.directories()
+        defer { try? FileManager.default.removeItem(at: a.deletingLastPathComponent()) }
+        let agent = try Self.agent(
+            load: "error", log: a.appendingPathComponent("requests.ndjson"),
+            environment: #"MOCK_LOAD_ERROR='{"code":-32002,"message":"Session gone"}' "#)
+        try await withIsolatedStore {
+            let run = await Self.acpx(["sessions", "new", "--resume-session", "x-1"], agent: agent, cwd: a)
+            #expect(run.code == 4)
+            #expect(run.err == """
+                Failed to resume ACP session x-1: Session gone
+                hint: the saved ACP session is missing or stale; start a fresh session with \
+                `acpx <agent> sessions new`, then retry.
+
+                """)
         }
     }
 

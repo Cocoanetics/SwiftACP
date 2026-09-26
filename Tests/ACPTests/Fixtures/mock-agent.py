@@ -32,7 +32,8 @@ def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
 
 
-# How `session/load` behaves: gone (default) | ok | internal | unsupported.
+# How `session/load` behaves: gone (default) | ok | internal | unsupported | error, which
+# answers with the error object `MOCK_LOAD_ERROR` holds.
 LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
 
 # A `session/load` it takes back first replays the session's history as updates, as
@@ -311,6 +312,8 @@ def main():
             elif LOAD_MODE == "internal":
                 send({"jsonrpc": "2.0", "id": req_id,
                       "error": {"code": -32603, "message": "Internal error"}})
+            elif LOAD_MODE == "error":
+                send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["MOCK_LOAD_ERROR"])})
             else:
                 send({"jsonrpc": "2.0", "id": req_id,
                       "error": {"code": -32002, "message": "Resource not found: session %s"
