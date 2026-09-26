@@ -151,3 +151,108 @@ struct UTF8StreamDecoder {
         return byte >> 6 == 0b10 ? .continuation : .invalid
     }
 }
+
+/// What a shell action's `exec`, or `ctx.runShell`, asked to run: acpx's
+/// `ShellActionExecution` (`runShell` takes no `allowNonZeroExit`), as the JSON the host
+/// sent of it. It is read as leniently as acpx reads it — a spec of the wrong shape still
+/// shows in the step's status and trace — and fails, when started, as Node's `spawn` fails.
+struct FlowShellExecution: Sendable {
+    /// The members as the flow gave them.
+    let json: WireJSON
+
+    init(json: WireJSON) {
+        self.json = json
+    }
+
+    /// `command`, when it is a string.
+    var command: String? { json["command"]?.stringValue }
+
+    /// acpx's `spec.args ?? []`, each as JavaScript's `String` makes it.
+    var args: [String] {
+        guard case .array(let items)? = json["args"] else { return [] }
+        return items.map { SessionArchive.javaScriptString($0) }
+    }
+
+    var cwd: WireJSON? { json["cwd"] }
+    var stdin: WireJSON? { json["stdin"] }
+    var shell: WireJSON? { json["shell"] }
+    var allowNonZeroExit: Bool { json["allowNonZeroExit"] == .bool(true) }
+
+    /// `timeoutMs`, when it is a number.
+    var timeoutMs: Double? {
+        if case .number(let value)? = json["timeoutMs"] { return value }
+        return nil
+    }
+
+    /// `maxBufferBytes`: a number as it is; anything else, which acpx's check refuses, NaN.
+    var maxBufferBytes: Double? {
+        switch json["maxBufferBytes"] {
+        case nil, .null?: return nil
+        case .number(let value)?: return value
+        default: return .nan
+        }
+    }
+
+    /// acpx's `{ ...process.env, ...spec.env }`, each value as JavaScript's template string
+    /// makes it (`${value}`).
+    func environment(inheriting parent: [String: String]) -> [String: String] {
+        var environment = parent
+        for member in json["env"]?.objectMembers ?? [] {
+            environment[String(decoding: member.key, as: UTF16.self)] = SessionArchive.javaScriptString(member.value)
+        }
+        return environment
+    }
+
+    /// Node's `normalizeSpawnArguments`: the file and arguments `spawn` runs — a shell's
+    /// `-c` with the command line joined, for `shell` — or the error it throws.
+    func spawnArguments() throws -> (file: String, arguments: [String]) {
+        guard let command else {
+            throw FlowShellError(NodeArgumentError.type("file", "of type string", json["command"]))
+        }
+        guard !command.isEmpty else { throw FlowShellError("The argument 'file' cannot be empty. Received ''") }
+        switch json["args"] {
+        case nil, .null?, .array?: break
+        case .object?: break
+        case let other?: throw FlowShellError(NodeArgumentError.type("args", "of type object", other))
+        }
+        switch shell {
+        case nil, .null?, .bool(false)?: return (command, args)
+        case .bool(true)?: return ("/bin/sh", ["-c", ([command] + args).joined(separator: " ")])
+        case .string(let units)?:
+            let path = String(decoding: units, as: UTF16.self)
+            return path.isEmpty ? (command, args) : (path, ["-c", ([command] + args).joined(separator: " ")])
+        case let other?:
+            throw FlowShellError(NodeArgumentError.property("options.shell", "one of type boolean or string", other))
+        }
+    }
+}
+
+/// Node's `ERR_INVALID_ARG_TYPE` messages, with `determineSpecificType`'s account of the
+/// value received.
+enum NodeArgumentError {
+    static func type(_ name: String, _ expected: String, _ value: WireJSON?) -> String {
+        "The \"\(name)\" argument must be \(expected). Received \(received(value))"
+    }
+
+    static func property(_ name: String, _ expected: String, _ value: WireJSON?) -> String {
+        "The \"\(name)\" property must be \(expected). Received \(received(value))"
+    }
+
+    /// Node's `determineSpecificType`.
+    static func received(_ value: WireJSON?) -> String {
+        switch value {
+        case nil: return "undefined"
+        case .null?: return "null"
+        case .bool(let flag)?: return "type boolean (\(flag))"
+        case .number(let number)?:
+            if number == 0, number.sign == .minus { return "type number (-0)" }
+            return "type number (\(WireJSON.javaScriptString(for: number)))"
+        case .string(let units)?:
+            var text = String(decoding: units, as: UTF16.self)
+            if units.count > 28 { text = String(decoding: units.prefix(25), as: UTF16.self) + "..." }
+            return text.contains("'") ? "type string (\(WireJSON.text(text).stringified))" : "type string ('\(text)')"
+        case .array?: return "an instance of Array"
+        case .object?: return "an instance of Object"
+        }
+    }
+}

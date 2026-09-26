@@ -148,7 +148,7 @@ extension SessionArchive {
     }
 
     /// JavaScript's `String(value)`.
-    static func javaScriptString(_ value: WireJSON?) -> String {
+    package static func javaScriptString(_ value: WireJSON?) -> String {
         switch value {
         case nil: return "undefined"
         case .null?: return "null"

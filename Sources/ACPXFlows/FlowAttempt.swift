@@ -135,6 +135,20 @@ final class FlowAttempt: @unchecked Sendable {
         let notify: (@Sendable (Error) -> Void)?
     }
 
+    /// acpx's `signal.addEventListener("abort", …)`: `handler` hears the reason when the
+    /// attempt is cancelled. Returns what takes it off again — or `nil`, adding nothing,
+    /// when the attempt is cancelled already.
+    func addAbortListener(_ handler: @escaping @Sendable (Error) -> Void) -> (() -> Void)? {
+        let id = UUID()
+        let added: Bool = lock.withLock {
+            guard reason == nil else { return false }
+            abortHandlers[id] = handler
+            return true
+        }
+        guard added else { return nil }
+        return { [weak self] in _ = self?.lock.withLock { self?.abortHandlers.removeValue(forKey: id) } }
+    }
+
     /// acpx's `registerCancellation`: run at once if the attempt is not active.
     @discardableResult
     func registerCancellation(_ cancel: @escaping @Sendable (String) async throws -> Void) -> () -> Void {
