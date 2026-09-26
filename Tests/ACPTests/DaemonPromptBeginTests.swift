@@ -165,12 +165,12 @@ extension DaemonToolsTests {
                 try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             }
             try await signalled(ready)
-            let (queued, queuing) = AsyncStream<Void>.makeStream()
-            await daemon.turnQueue.setOnQueued { _ in queuing.yield() }
+            let (waits, waiting) = AsyncStream<Void>.makeStream()
+            await daemon.setPromptWaits { _ in waiting.yield() }
             let second = Task {
                 try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             }
-            try await nextEvent(queued)
+            try await nextEvent(waits)
 
             // Once the first prompt's controls are sealed, a control is sent, and waits for
             // the session.
@@ -205,13 +205,78 @@ extension DaemonToolsTests {
     @Test func aPromptOverWithoutHoldingTheSessionHasTheOwnerWaitForTheNext() async throws {
         let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
         await daemon.holdAsAnOwner("owned", ttlMilliseconds: 60_000)
-        try await daemon.turnQueue.beginPrompt("owned", wait: true)
-        await daemon.promptEnded("owned", turn: UUID(), ticket: PromptControlTicket(), heldTheSlot: false)
-        // Handed on once the owner is waiting.
-        try await daemon.turnQueue.beginPrompt("owned", wait: true)
+        let begun = try await daemon.beginPrompt("owned", wait: true)
+        await daemon.promptEnded("owned", begun, heldTheSlot: false).value
         #expect(await daemon.ownerWaitsForItsNextPrompt("owned"))
-        await daemon.turnQueue.endPrompt("owned")
         await daemon.forgetOwner("owned")
+    }
+
+    /// Prompts begin one at a time, in the order they came, as acpx's queue owner takes its
+    /// prompt tasks — the next in the same step the one before ends, its turn the session's
+    /// before it even resumes, as nothing comes between acpx's tasks (Codex review on #196).
+    /// One waiting to begin holds nothing of the session meanwhile.
+    @Test func promptsBeginOneAtATimeInTheOrderTheyCame() async throws {
+        // Bounded, so that a line that never moves fails rather than hangs.
+        try await withTimeout(milliseconds: 10_000) {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (waits, waiting) = AsyncStream<Void>.makeStream()
+            await daemon.setPromptWaits { _ in waiting.yield() }
+            let first = try await daemon.beginPrompt("s", wait: true)
+            let second = Task { try await daemon.beginPrompt("s", wait: true) }
+            try await nextEvent(waits)
+            let third = Task { try await daemon.beginPrompt("s", wait: true) }
+            try await nextEvent(waits)
+            try await daemon.turnQueue.acquire("s", wait: false)
+            await daemon.turnQueue.release("s")
+
+            let afterFirst = await daemon.endPromptAndLook("s", first)
+            let secondBegun = try await second.value
+            #expect(afterFirst == secondBegun.control.id)
+            let afterSecond = await daemon.endPromptAndLook("s", secondBegun)
+            let thirdBegun = try await third.value
+            #expect(afterSecond == thirdBegun.control.id)
+            #expect(await daemon.endPromptAndLook("s", thirdBegun) == nil)
+            _ = try await daemon.beginPrompt("s", wait: false)
+        }
+    }
+
+    /// A prompt that will not wait is busy while anything holds the session — the slot, or a
+    /// prompt begun — and otherwise begins holding the slot.
+    @Test func aPromptThatWillNotWaitIsBusyWhileAnythingHoldsTheSession() async throws {
+        // Bounded, so that a line that never moves fails rather than hangs.
+        try await withTimeout(milliseconds: 10_000) {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await daemon.turnQueue.acquire("s", wait: true)
+            await #expect(throws: DaemonError.self) { try await daemon.beginPrompt("s", wait: false) }
+            await daemon.turnQueue.release("s")
+            let begun = try await daemon.beginPrompt("s", wait: true)
+            await #expect(throws: DaemonError.self) { try await daemon.beginPrompt("s", wait: false) }
+            await daemon.promptEnded("s", begun, heldTheSlot: false).value
+
+            let alone = try await daemon.beginPrompt("s", wait: false)
+            await #expect(throws: DaemonError.self) { try await daemon.turnQueue.acquire("s", wait: false) }
+            await #expect(throws: DaemonError.self) { try await daemon.beginPrompt("s", wait: false) }
+            await daemon.promptEnded("s", alone, heldTheSlot: true).value
+            #expect(await !daemon.turnQueue.isBusy("s"))
+        }
+    }
+
+    /// A prompt called off before it begins leaves the line: none begins in its place.
+    @Test func aPromptCalledOffBeforeItBeginsLeavesTheLine() async throws {
+        // Bounded, so that a line that never moves fails rather than hangs.
+        try await withTimeout(milliseconds: 10_000) {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (waits, waiting) = AsyncStream<Void>.makeStream()
+            await daemon.setPromptWaits { _ in waiting.yield() }
+            let first = try await daemon.beginPrompt("s", wait: true)
+            let calledOff = Task { try await daemon.beginPrompt("s", wait: true) }
+            try await nextEvent(waits)
+            calledOff.cancel()
+            await #expect(throws: CancellationError.self) { try await calledOff.value }
+
+            #expect(await daemon.endPromptAndLook("s", first) == nil)
+            _ = try await daemon.beginPrompt("s", wait: false)
+        }
     }
 
     /// The control a test sends once a turn's controls are sealed, and what it saw.
@@ -263,5 +328,15 @@ extension ACPXDaemonBackend {
 
     func ownerWaitsForItsNextPrompt(_ recordId: String) -> Bool {
         owners[recordId]?.idle != nil
+    }
+
+    func setPromptWaits(_ hook: (@Sendable (_ recordId: String) -> Void)?) {
+        promptWaits = hook
+    }
+
+    /// End `begun`, and say whose turn the session's is in that same step.
+    func endPromptAndLook(_ recordId: String, _ begun: BegunPrompt) -> UUID? {
+        promptEnded(recordId, begun, heldTheSlot: false)
+        return turns[recordId]?.id
     }
 }

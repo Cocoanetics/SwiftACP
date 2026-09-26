@@ -86,17 +86,14 @@ extension ACPXDaemonBackend {
         // (`runPromptTurn`): at once, unless another prompt of the session runs or waits
         // before it — then once those are over. Keyed by the record, whose ACP session a
         // fallback can replace. When `wait` is false, a session running anything rejects it.
-        try await turnQueue.beginPrompt(recordId, wait: wait)
         // Begun, the turn is the session's before it holds the session: a cancel is its
         // (``cancelSession(sessionId:)``), and so is a control sent, run on the prompt's
         // agent once the prompt goes out (acpx's `beginPrompt`). A turn that ends before
         // then fails the controls still waiting.
-        let control = TurnControl()
-        turns[recordId] = control
-        let ticket = PromptControlTicket()
-        tickets[recordId] = ticket
+        let begun = try await beginPrompt(recordId, wait: wait)
+        let (control, ticket) = (begun.control, begun.ticket)
         var heldTheSlot = !wait
-        defer { promptEnded(recordId, turn: control.id, ticket: ticket, heldTheSlot: heldTheSlot) }
+        defer { promptEnded(recordId, begun, heldTheSlot: heldTheSlot) }
         // One turn per session at a time, so concurrent CLI/MCP callers never drive one
         // agent — or persist one record — concurrently: the prompt waits for what holds the
         // session, the controls sent before it began among them, as acpx's owner waits for

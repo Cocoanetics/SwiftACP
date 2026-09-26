@@ -52,6 +52,10 @@ actor ACPXDaemonBackend: ACPXBackend {
     var turns: [String: TurnControl] = [:]
     /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
     var tickets: [String: PromptControlTicket] = [:]
+    /// Each session's prompts in line to begin, by record, while one has begun: see ``PromptLine``.
+    var promptLines: [String: PromptLine] = [:]
+    /// Monotonic source of tokens for the prompts waiting to begin.
+    var nextPromptToken = 0
     /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
     var owners: [String: SessionOwner] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
@@ -83,6 +87,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: run once a prompt's turn has sealed its controls, before the turn is over.
     var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: told the record id whenever a prompt waits to begin behind another.
+    var promptWaits: (@Sendable (_ recordId: String) -> Void)?
 
     let log = Logger(label: "com.cocoanetics.acpx.acpxd.backend")
 

@@ -96,25 +96,6 @@ extension ACPXDaemonBackend {
         await tickets[recordId]?.seal()?.value
         await controlsSealed?(recordId)
     }
-
-    /// A begun prompt is over, as acpx's owner ends the prompt task it took
-    /// (`runPromptTurn`): its ticket sealed and let go — a control from now on runs between
-    /// turns — and its turn no longer the session's. Then the slot, if it held it, goes to
-    /// what waits for it; the owner waits for its next prompt, as acpx's owner does after
-    /// any task it took, one that never held the session too; and the next prompt begins
-    /// (``SessionTurnQueue/endPrompt(_:)``).
-    func promptEnded(_ recordId: String, turn id: UUID, ticket: PromptControlTicket, heldTheSlot: Bool) {
-        ticket.seal()
-        if tickets[recordId] === ticket { tickets[recordId] = nil }
-        if turns[recordId]?.id == id { turns[recordId] = nil }
-        // Called from a `defer`, which can't await; the hop to the queue actor is safe
-        // because release hands the slot to the next FIFO waiter whenever it lands.
-        Task {
-            if heldTheSlot { await turnQueue.release(recordId) }
-            await self.turnEnded(recordId)
-            await turnQueue.endPrompt(recordId)
-        }
-    }
 }
 
 /// The controls a prompt's turn takes while it runs: acpx's `PromptControlTicket`. Opened
