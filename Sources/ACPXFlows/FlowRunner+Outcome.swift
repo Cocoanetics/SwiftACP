@@ -63,9 +63,11 @@ extension FlowRunner {
         throw step.executionError ?? FlowRunError("undefined")
     }
 
-    /// The host need hold no value of a step that is over, whose output is committed.
+    /// The host need hold no value of a step that is over, whose output is committed; nor
+    /// need the runner wait any longer for a callback of it that never settled.
     func forgetAttempt(_ step: Step) {
         host.notify("attempt/forget", .object([("attemptId", .text(step.result.attemptId))]))
+        host.abandon(attempt: step.result.attemptId)
     }
 
     /// acpx's `setNodeValue` for `outputs`, here and in the host, whose callbacks see it:

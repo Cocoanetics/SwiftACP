@@ -10,13 +10,15 @@ import Testing
 /// (`FlowRunTests` has the cases that go through the CLI).
 struct FlowRunnerTests {
     /// A finished run: `err` and `code` are what the CLI would report of its failure;
-    /// `tracked`, what the host still held for attempts once it was over, when asked.
+    /// `tracked`, what the host still held for attempts once it was over, and
+    /// `pendingRequests`, how many of its requests the runner still waited on, when asked.
     struct Run {
         var err = ""
         var code: Int32 = 0
         var state: WireJSON?
         var trace: [WireJSON] = []
         var tracked: WireJSON?
+        var pendingRequests: Int?
     }
 
     /// Run a flow module — `body` after acpx's helpers are imported — with `input`, beside
@@ -48,7 +50,10 @@ struct FlowRunnerTests {
             run.err = TurnFailureText.message(of: error)
             run.code = error is FlowTimeoutError ? 3 : 1
         }
-        if tracking { run.tracked = try? await host.request("host/tracked") }
+        if tracking {
+            run.tracked = try? await host.request("host/tracked")
+            run.pendingRequests = host.pendingRequestCount
+        }
         await host.stop()
         if let name = try? FileManager.default.contentsOfDirectory(atPath: runs.path).first {
             let runDir = runs.appendingPathComponent(name)
@@ -258,7 +263,7 @@ struct FlowRunnerTests {
 
     /// A callback past its deadline that never settles is let go once the runner forgets
     /// its attempt, as nothing holds it in acpx: a flow timing it out again and again
-    /// leaves the host holding nothing (a Codex finding).
+    /// leaves the host holding nothing, nor the runner waiting on it (Codex findings).
     @Test(.enabled(if: nodeAvailable))
     func aTimedOutCallbackThatNeverSettlesIsLetGo() async throws {
         let run = try await runnerRun("""
@@ -274,6 +279,25 @@ struct FlowRunnerTests {
         #expect(member(run.state, "outputs", "done") == .text("done"))
         #expect(member(run.state, "results", "stall", "attemptId") == .text("stall#3"))
         #expect(run.tracked?.stringified == #"{"running":0,"returned":0}"#)
+        #expect(run.pendingRequests == 0)
+    }
+
+    /// Node ids that are array indices come first in `outputs` and `results`, in numeric
+    /// order, as a JavaScript object lists them whatever order they were set in.
+    @Test(.enabled(if: nodeAvailable))
+    func numericNodeIdsAreListedAsJavaScriptListsThem() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "numeric", startAt: "2", nodes: {
+              b: compute({ run: () => "b" }), 2: compute({ run: () => 2 }), 10: compute({ run: () => 10 }),
+              1: compute({ run: () => 1 }), "01": compute({ run: () => "01" }) },
+              edges: [{ from: "2", to: "b" }, { from: "b", to: "10" }, { from: "10", to: "01" },
+                { from: "01", to: "1" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        for container in ["outputs", "results"] {
+            let keys = member(run.state, container)?.objectMembers.map { String(decoding: $0.key, as: UTF16.self) }
+            #expect(keys == ["1", "2", "10", "b", "01"], "\(container)")
+        }
     }
 
     @Test(.enabled(if: nodeAvailable))

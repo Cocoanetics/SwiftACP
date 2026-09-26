@@ -47,6 +47,8 @@ public final class FlowHost: @unchecked Sendable {
     private let lock = NSLock()
     private var nextId = 1
     private var pending: [Int: CheckedContinuation<WireJSON?, Error>] = [:]
+    /// The attempt each pending request was made for, if one.
+    private var pendingAttempts: [Int: String] = [:]
     private var ended = false
     private var requestHandler: RequestHandler?
     /// The host's wait status once it is reaped — under the lock, so that until then its
@@ -100,14 +102,16 @@ public final class FlowHost: @unchecked Sendable {
     }
 
     /// Send `method` and wait for its result — `nil` for JSON `null`. A callback's thrown
-    /// value arrives as ``CallbackError``.
-    public func request(_ method: String, _ params: WireJSON? = nil) async throws -> WireJSON? {
+    /// value arrives as ``CallbackError``. A request made for `attempt` ends, unanswered,
+    /// once the attempt is abandoned (``abandon(attempt:)``).
+    public func request(_ method: String, _ params: WireJSON? = nil, attempt: String? = nil) async throws -> WireJSON? {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WireJSON?, Error>) in
             let id: Int? = lock.withLock {
                 guard !ended else { return nil }
                 let id = nextId
                 nextId += 1
                 pending[id] = continuation
+                pendingAttempts[id] = attempt
                 return id
             }
             guard let id else {
@@ -120,11 +124,29 @@ public final class FlowHost: @unchecked Sendable {
                     ("params", params)
                 ]))
             } catch {
-                let waiting = lock.withLock { pending.removeValue(forKey: id) }
+                let waiting = lock.withLock {
+                    pendingAttempts[id] = nil
+                    return pending.removeValue(forKey: id)
+                }
                 waiting?.resume(throwing: error)
             }
         }
     }
+
+    /// Stop waiting for what was asked for `attempt`: its callback may never settle, and
+    /// the runner, done with the attempt, wants nothing of it. Its answer, should it come,
+    /// is dropped.
+    public func abandon(attempt: String) {
+        let waiting: [CheckedContinuation<WireJSON?, Error>] = lock.withLock {
+            let ids = pendingAttempts.filter { $0.value == attempt }.map(\.key)
+            for id in ids { pendingAttempts[id] = nil }
+            return ids.compactMap { pending.removeValue(forKey: $0) }
+        }
+        for continuation in waiting { continuation.resume(throwing: CancellationError()) }
+    }
+
+    /// How many requests wait for an answer.
+    var pendingRequestCount: Int { lock.withLock { pending.count } }
 
     /// Send `method` without waiting for anything back.
     public func notify(_ method: String, _ params: WireJSON? = nil) {
@@ -249,7 +271,10 @@ public final class FlowHost: @unchecked Sendable {
             return
         }
         guard case .number(let raw)? = message["id"], let id = Int(exactly: raw) else { return }
-        let waiting = lock.withLock { pending.removeValue(forKey: id) }
+        let waiting = lock.withLock {
+            pendingAttempts[id] = nil
+            return pending.removeValue(forKey: id)
+        }
         guard let waiting else { return }
         if let error = message["error"] {
             let data = error["data"]
@@ -265,7 +290,10 @@ public final class FlowHost: @unchecked Sendable {
     private func end() {
         let waiting: [CheckedContinuation<WireJSON?, Error>] = lock.withLock {
             ended = true
-            defer { pending.removeAll() }
+            defer {
+                pending.removeAll()
+                pendingAttempts.removeAll()
+            }
             return Array(pending.values)
         }
         for continuation in waiting { continuation.resume(throwing: Exited()) }

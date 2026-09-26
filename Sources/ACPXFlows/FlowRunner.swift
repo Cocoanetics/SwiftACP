@@ -344,7 +344,7 @@ public actor FlowRunner {
         ]
         if let argument { params.append(("arg", argument)) }
         params.append(("state", state.wire))
-        let reply = try await host.request("node/invoke", .object(params))
+        let reply = try await host.request("node/invoke", .object(params), attempt: attempt.attemptId)
         return FlowValue(reply: reply)
     }
 
