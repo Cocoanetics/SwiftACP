@@ -409,15 +409,33 @@ struct FlowRunnerTests {
         }
     }
 
+    /// A node that runs sends a heartbeat every `heartbeatMs`: this one runs until the
+    /// runner has written two, however slowly the disk takes them — or, with none, until
+    /// its deadline fails the run.
     @Test(.enabled(if: nodeAvailable))
     func aRunningNodeSendsHeartbeats() async throws {
         let run = try await runnerRun("""
+            import fs from "node:fs";
+            import path from "node:path";
+            import { fileURLToPath } from "node:url";
+            const runs = path.join(path.dirname(fileURLToPath(import.meta.url)), "runs");
+            function heartbeats(runId) {
+              try {
+                const trace = fs.readFileSync(path.join(runs, runId, "trace.ndjson"), "utf8");
+                return trace.split("\\n").filter((line) => line.includes('"type":"node_heartbeat"')).length;
+              } catch {
+                return 0;
+              }
+            }
             export default defineFlow({ name: "heartbeat", startAt: "slow", nodes: {
-              slow: compute({ heartbeatMs: 50, statusDetail: "Working",
-                run: () => new Promise((resolve) => setTimeout(() => resolve(1), 400)) }) },
+              slow: compute({ heartbeatMs: 50, timeoutMs: 10000, statusDetail: "Working",
+                run: ({ state }) => new Promise((resolve) => {
+                const check = () => (heartbeats(state.runId) >= 2 ? resolve(1) : setTimeout(check, 10));
+                check();
+              }) }) },
               edges: [] });
             """)
-        #expect(run.code == 0)
+        #expect(run.code == 0, "\(run.err)")
         let heartbeats = run.trace.filter { $0["type"] == .text("node_heartbeat") }
         #expect(heartbeats.count >= 2)
         #expect(heartbeats.allSatisfy { $0["payload"]?["statusDetail"] == .text("Working") })
