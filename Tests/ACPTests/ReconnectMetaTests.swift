@@ -122,6 +122,47 @@ extension DaemonToolsTests {
         }
     }
 
+    /// `acpx --approve-all --format quiet <args>`, with `daemon` the one running, if any: its exit code.
+    private static func acpx(_ args: [String], daemon: MCPServerConfig? = nil) async -> Int32 {
+        await withCheckedContinuation { continuation in
+            Thread {
+                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
+                    Console.$capture.withValue(Console.Capture()) {
+                        runCommandLine(["--approve-all", "--format", "quiet"] + args)
+                    }
+                })
+            }.start()
+        }
+    }
+
+    /// A prompt's flags reach the turn: the CLI sends them with the prompt, and the
+    /// session created with its own is taken back with the prompt's over them.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aPromptsFlagsReachTheLoad() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/model-agent.py")
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = directory.appendingPathComponent("requests.ndjson")
+        let agent = "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' MODEL_AGENT_LOAD=1 '\(python)' '\(fixture.path)'"
+        let scope = ["--agent", agent, "--cwd", directory.path]
+        try await withIsolatedStore {
+            #expect(await Self.acpx(scope + ["--max-turns", "5", "--allowed-tools", "Bash", "sessions", "new"]) == 0)
+            let before = Self.lines(log).count
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let code = await Self.acpx(
+                scope + ["--allowed-tools", "Read", "--append-system-prompt", "Also this", "hi"],
+                daemon: .stdioHandles(server: ACPXDaemon(backend: backend)))
+            await backend.releaseAll()
+            #expect(code == 0)
+            #expect(Self.connects(log, after: before) == [
+                #"session/load {"claudeCode":{"options":{"allowedTools":["Read"],"maxTurns":5}},"#
+                    + #""systemPrompt":{"append":"Also this"}}"#
+            ])
+        }
+    }
+
     /// The CLI's options reach the daemon's turn over MCP, as its prompt sends them.
     @Test(.enabled(if: mockPythonAvailable))
     func aPromptsOptionsReachTheTurnOverMCP() async throws {
