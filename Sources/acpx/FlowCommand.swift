@@ -31,7 +31,10 @@ enum FlowCommand {
                     endInterrupted()
                     await runner.interrupt()
                 })
-                await host.stop()
+                let status = await host.stop()
+                // The flow ended the host after its last answer — a timer's `process.exit()`
+                // — which in acpx ends the process before the result is printed.
+                if host.exitedOnItsOwn { return FlowHost.exitCode(waitStatus: status) }
                 printFlowRunResult(result, format: flags.format)
                 return ExitCodes.success
             } catch is FlowHost.Exited {
@@ -42,7 +45,8 @@ enum FlowCommand {
                 await host.stop()
                 return ExitCodes.interrupted
             } catch {
-                await host.stop()
+                let status = await host.stop()
+                if host.exitedOnItsOwn { return FlowHost.exitCode(waitStatus: status) }
                 throw error
             }
         }

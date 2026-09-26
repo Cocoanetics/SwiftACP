@@ -282,6 +282,34 @@ struct FlowRunnerTests {
         #expect(run.pendingRequests == 0)
     }
 
+    /// A host that exits of its own accord after its last answer — a timer's
+    /// `process.exit(7)` — is told apart from one that exits when asked: `flow run` ends
+    /// with its code, as acpx's own process ends then (a Codex finding).
+    @Test(.enabled(if: nodeAvailable))
+    func aHostThatExitsAfterItsLastAnswerIsToldApart() async throws {
+        let node = try #require(AgentRegistry.which("node"))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-runner-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (name, run) in [("late", "setTimeout(() => process.exit(7), 0); return 1;"), ("plain", "return 1;")] {
+            let flowFile = dir.appendingPathComponent("\(name).flow.mjs")
+            try """
+                import { defineFlow, compute } from "acpx/flows";
+                export default defineFlow({ name: "\(name)", startAt: "a",
+                  nodes: { a: compute({ run: () => { \(run) } }) }, edges: [] });
+                """.write(to: flowFile, atomically: true, encoding: .utf8)
+            let host = try FlowHost.start(node: node, cwd: dir.path, environment: ProcessInfo.processInfo.environment)
+            let loaded = try await host.request("flow/load", .object([WireJSON.Member("path", .text(flowFile.path))]))
+            let options = FlowRunner.Options(outputRoot: dir.appendingPathComponent("runs"), defaultCwd: dir.path)
+            let runner = FlowRunner(host: host, options: options)
+            _ = try await runner.run(FlowDescription(loaded: loaded ?? .null), input: .null, flowPath: flowFile.path)
+            if name == "late" { _ = await host.exitStatus() }
+            let status = await host.stop()
+            #expect(host.exitedOnItsOwn == (name == "late"), "\(name)")
+            #expect(FlowHost.exitCode(waitStatus: status) == (name == "late" ? 7 : 0), "\(name)")
+        }
+    }
+
     /// Node ids that are array indices come first in `outputs` and `results`, in numeric
     /// order, as a JavaScript object lists them whatever order they were set in.
     @Test(.enabled(if: nodeAvailable))

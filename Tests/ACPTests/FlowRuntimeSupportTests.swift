@@ -65,4 +65,38 @@ struct FlowRuntimeSupportTests {
         let items = WireJSON.array((0..<30).map { .text("item-\($0)") })
         #expect(FlowRunner.inlineOutput(.json(items)) == nil)
     }
+
+    /// Node runs whatever the host's cache holds, so none of it is taken on trust: scripts
+    /// changed or turned into links are written again, others' write access to the
+    /// directory is taken away, and a cache that is a link is refused (a Codex finding).
+    @Test func theHostsScriptsAreTakenOnlyAsThisCLIWroteThem() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("flow-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installed = try FlowHostFiles.install(root: root)
+        let directory = URL(fileURLWithPath: installed.host).deletingLastPathComponent()
+        let expected = try Data(contentsOf: URL(fileURLWithPath: installed.host))
+        #expect(expected == Data(FlowHostScripts.host.utf8))
+        #expect(try mode(directory) == 0o700)
+
+        try Data("process.exit(66)".utf8).write(to: URL(fileURLWithPath: installed.host))
+        let decoy = root.appendingPathComponent("decoy.mjs")
+        try Data(FlowHostScripts.runtime.utf8).write(to: decoy)
+        try FileManager.default.removeItem(atPath: installed.runtime)
+        try FileManager.default.createSymbolicLink(atPath: installed.runtime, withDestinationPath: decoy.path)
+        chmod(directory.path, 0o777)
+        _ = try FlowHostFiles.install(root: root)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: installed.host)) == expected)
+        let runtime = try FileManager.default.attributesOfItem(atPath: installed.runtime)
+        #expect(runtime[.type] as? FileAttributeType == .typeRegular)
+        #expect(try mode(directory) & 0o022 == 0)
+
+        let linked = FileManager.default.temporaryDirectory.appendingPathComponent("flow-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: linked) }
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: root)
+        #expect(throws: FlowHostFiles.UnsafeDirectory.self) { _ = try FlowHostFiles.install(root: linked) }
+    }
+
+    private func mode(_ url: URL) throws -> Int {
+        try (FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int ?? 0) & 0o777
+    }
 }

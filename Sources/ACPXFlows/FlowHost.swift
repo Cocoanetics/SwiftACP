@@ -55,6 +55,9 @@ public final class FlowHost: @unchecked Sendable {
     /// pid is still this process's to signal.
     private var waitStatus: Int32?
     private var exitWaiters: [CheckedContinuation<Int32, Never>] = []
+    /// Whether ``stop()`` has asked the host to exit.
+    private var stopRequested = false
+    private var endedOnItsOwn = false
 
     private init(socket: Int32, pid: pid_t) {
         self.socket = socket
@@ -158,6 +161,7 @@ public final class FlowHost: @unchecked Sendable {
     /// ended, asked to or of its own accord.
     @discardableResult
     public func stop() async -> Int32 {
+        lock.withLock { stopRequested = true }
         notify("host/exit")
         if await exitStatus(within: .seconds(1)) == nil {
             lock.withLock {
@@ -169,6 +173,10 @@ public final class FlowHost: @unchecked Sendable {
         return status
     }
 
+    /// Whether the host went — its socket closed, or it exited — before ``stop()`` asked it
+    /// to: the flow ended it, as it would end acpx's own process.
+    public var exitedOnItsOwn: Bool { lock.withLock { endedOnItsOwn } }
+
     /// The exit code that ends a process as the host ended: its own, or — killed by a
     /// signal — 128 and the signal's number, as a shell reports that.
     public static func exitCode(waitStatus status: Int32) -> Int32 {
@@ -177,7 +185,7 @@ public final class FlowHost: @unchecked Sendable {
     }
 
     /// The host's wait status, once it has exited.
-    private func exitStatus() async -> Int32 {
+    func exitStatus() async -> Int32 {
         await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
             let status: Int32? = lock.withLock {
                 if let waitStatus { return waitStatus }
@@ -290,6 +298,7 @@ public final class FlowHost: @unchecked Sendable {
     private func end() {
         let waiting: [CheckedContinuation<WireJSON?, Error>] = lock.withLock {
             ended = true
+            if !stopRequested { endedOnItsOwn = true }
             defer {
                 pending.removeAll()
                 pendingAttempts.removeAll()
@@ -309,6 +318,7 @@ public final class FlowHost: @unchecked Sendable {
                 guard errno == EINTR else { break }
             }
             let (status, waiters): (Int32, [CheckedContinuation<Int32, Never>]) = lock.withLock {
+                if !stopRequested { endedOnItsOwn = true }
                 var status: Int32 = 0
                 while waitpid(pid, &status, 0) < 0, errno == EINTR {}
                 waitStatus = status
@@ -384,8 +394,12 @@ enum TurnFailureText {
     }
 }
 
-/// The host's scripts on disk, where Node can load them: in a directory of the temporary
-/// directory named for what they hold, so a CLI of another version never uses this one's.
+/// The host's scripts on disk, where Node can load them: in a directory of this user's
+/// caches named for what they hold, so a CLI of another version never uses this one's.
+/// Node runs whatever is there, so nothing is taken on trust: the directory must be this
+/// user's and writable by no one else, and each script a file of this user's holding
+/// exactly what this CLI embeds — or it is written again. (A shared temporary directory
+/// would let another user leave scripts there first.)
 enum FlowHostFiles {
     struct Installed {
         let host: String
@@ -393,29 +407,75 @@ enum FlowHostFiles {
         let sucrase: String
     }
 
-    static func install() throws -> Installed {
+    /// A cache directory that is not this user's, or not a directory.
+    struct UnsafeDirectory: Error, LocalizedError {
+        let path: String
+        var errorDescription: String? {
+            "The flow host's cache is not safe to use (not a directory of this user's): \(path)"
+        }
+    }
+
+    static func install(root: URL = cacheRoot()) throws -> Installed {
         let scripts = [
             ("flow-runtime.mjs", FlowHostScripts.runtime), ("flow-sucrase.mjs", FlowHostScripts.sucrase),
             ("flow-host.mjs", FlowHostScripts.host)
         ]
         let contents = scripts.map(\.1).joined(separator: "\u{0}")
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        let directory = root
             .appendingPathComponent("acpx-flow-host-\(FlowRuntimeSupport.shortHash(contents))", isDirectory: true)
-        let fm = FileManager.default
-        if !scripts.allSatisfy({ fm.fileExists(atPath: directory.appendingPathComponent($0.0).path) }) {
-            try fm.createDirectory(
-                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            // Each written whole under a temporary name, then moved into place: another
-            // acpx starting a flow at the same time finds either nothing or the file.
-            for (name, text) in scripts {
-                let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
-                try Data(text.utf8).write(to: temporary)
-                _ = rename(temporary.path, directory.appendingPathComponent(name).path)
+        try makePrivateDirectory(root)
+        try makePrivateDirectory(directory)
+        for (name, text) in scripts {
+            let file = directory.appendingPathComponent(name)
+            let data = Data(text.utf8)
+            guard !holds(file, data) else { continue }
+            // Written whole under a temporary name, then moved into place: another acpx
+            // starting a flow at the same time finds the old file or the new, never half.
+            let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
+            try data.write(to: temporary)
+            guard rename(temporary.path, file.path) == 0 else {
+                let failure = errno
+                unlink(temporary.path)
+                throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
             }
         }
         return Installed(
             host: directory.appendingPathComponent("flow-host.mjs").path,
             runtime: directory.appendingPathComponent("flow-runtime.mjs").path,
             sucrase: directory.appendingPathComponent("flow-sucrase.mjs").path)
+    }
+
+    /// `~/Library/Caches/SwiftACP`: this user's own.
+    static func cacheRoot() -> URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Caches")
+        return caches.appendingPathComponent("SwiftACP", isDirectory: true)
+    }
+
+    /// `directory`, made owner-only if missing; one that is there must be a directory of
+    /// this user's — not a link to one — and loses any write access others have to it.
+    static func makePrivateDirectory(_ directory: URL) throws {
+        var info = stat()
+        if lstat(directory.path, &info) != 0 {
+            guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            guard lstat(directory.path, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        guard info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid() else {
+            throw UnsafeDirectory(path: directory.path)
+        }
+        if info.st_mode & 0o022 != 0, chmod(directory.path, info.st_mode & 0o7777 & ~0o022) != 0 {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EPERM)
+        }
+    }
+
+    /// Whether `file` is a file of this user's — not a link — holding exactly `data`.
+    static func holds(_ file: URL, _ data: Data) -> Bool {
+        var info = stat()
+        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == geteuid(),
+              info.st_mode & 0o022 == 0, info.st_size == off_t(data.count)
+        else { return false }
+        return FileManager.default.contents(atPath: file.path) == data
     }
 }
