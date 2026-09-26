@@ -278,6 +278,9 @@ public actor ACPXDaemon {
     ///   - model: acpx's `--model` for this turn: put on the session before the prompt,
     ///     through the control it advertises, and pinned as the session's model. The
     ///     turn fails before the prompt if the session cannot take it.
+    ///   - sessionOptions: acpx's `--model`, `--allowed-tools`, `--max-turns` and
+    ///     `--system-prompt` for this turn. See ``PromptSessionOptions``. Its model, when
+    ///     it has one, is the turn's; `model` fills in when it has none.
     ///   - limits: acpx's `--timeout`, `--prompt-retries` and `--ttl` for this turn: how
     ///     long each of its steps may take, how often a prompt that failed the way a
     ///     passing fault does is sent again, and how long the session is kept once idle.
@@ -290,13 +293,23 @@ public actor ACPXDaemon {
         sessionId: String, text: String, blocks: [PromptBlock]? = nil, content: [JSONValue]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        model: String? = nil, limits: PromptLimits? = nil
+        model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil
     ) async throws -> String {
         try await backend.runPrompt(
             sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
-            terminalOutputCeiling: terminalOutputCeiling, model: model, limits: limits)
+            terminalOutputCeiling: terminalOutputCeiling,
+            sessionOptions: Self.turnOptions(sessionOptions, model: model), limits: limits)
+    }
+
+    /// A turn's session options with its `model`, which a CLI from before `sessionOptions`
+    /// sends on its own.
+    static func turnOptions(_ options: PromptSessionOptions?, model: String?) -> PromptSessionOptions? {
+        guard let model, options?.model == nil else { return options }
+        var withModel = options ?? PromptSessionOptions()
+        withModel.model = model
+        return withModel
     }
 
     /// Whether the daemon holds a session live — its agent connected and kept between

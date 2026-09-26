@@ -33,7 +33,9 @@ extension ACPXDaemonBackend {
     ///   - nonInteractivePermissions: `deny` (the default) or `fail`.
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none —
     ///     omitted, the daemon's own `ACPX_TERMINAL_MAX_OUTPUT_BYTES`.
-    ///   - model: the turn's `--model`, put on the session before the prompt and pinned.
+    ///   - sessionOptions: the turn's `--model`, put on the session before the prompt and
+    ///     pinned, and its `--allowed-tools`, `--max-turns` and `--system-prompt`: all of
+    ///     them sent as `_meta` if the turn has to connect the session's agent.
     ///   - limits: the turn's `--timeout`, `--prompt-retries` and `--ttl` (``PromptLimits``).
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
@@ -43,7 +45,7 @@ extension ACPXDaemonBackend {
         blocks: [PromptBlock]? = nil, content rawContent: [JSONValue]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        model: String? = nil, limits: PromptLimits? = nil
+        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -141,11 +143,13 @@ extension ACPXDaemonBackend {
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
-        let requestedModel = model?.javaScriptTrimmed
+        let trimmedModel = sessionOptions?.model?.javaScriptTrimmed
+        let requestedModel = trimmedModel?.isEmpty == false ? trimmedModel : nil
         let turn = Turn(
             id: control.id, recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
-            blocks: content,
-            model: requestedModel?.isEmpty == false ? requestedModel : nil, permissions: permissions,
+            blocks: content, model: requestedModel,
+            sessionOptions: SessionAcpxState.SessionOptions(turnModel: requestedModel, sessionOptions),
+            permissions: permissions,
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
@@ -166,6 +170,8 @@ extension ACPXDaemonBackend {
         let blocks: [ContentBlock]
         /// The turn's `--model`, trimmed; `nil` without one.
         let model: String?
+        /// The turn's own session options, its model among them: acpx's task `sessionOptions`.
+        let sessionOptions: SessionAcpxState.SessionOptions?
         let permissions: TurnPermissions
         /// The caller's cap on terminal output, `nil` for none.
         let terminalOutputCeiling: Int?
@@ -271,7 +277,7 @@ extension ACPXDaemonBackend {
             settings: CallerSettings(
                 handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
                 timeoutMilliseconds: turn.timeoutMilliseconds),
-            requestedModel: turn.model, turnAcpx: await persister.acpx,
+            requestedModel: turn.model, turnOptions: turn.sessionOptions, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),
             // acpx logs the exchange that connects the agent with the turn — all of it,

@@ -291,7 +291,8 @@ extension DaemonToolsTests {
         await session.setTransport(client)
         return try await session.work { _ in
             try await daemon.runPrompt(
-                sessionId: sessionId, text: "hi", streamWire: streamWire, model: model, limits: limits)
+                sessionId: sessionId, text: "hi", streamWire: streamWire,
+                sessionOptions: model.map { PromptSessionOptions(model: $0) }, limits: limits)
         }
     }
 

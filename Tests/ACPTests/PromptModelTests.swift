@@ -15,7 +15,7 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let (id, log) = try await pinnedSession(load: true)
             _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
-                .runPrompt(sessionId: id, text: "hi", model: "m2")
+                .runPrompt(sessionId: id, text: "hi", sessionOptions: PromptSessionOptions(model: "m2"))
             #expect(try Self.modelAgentRequests(log) == [
                 "session/load", "session/set_config_option model=m2", "session/prompt"
             ])
@@ -28,7 +28,7 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let (id, log) = try await pinnedSession()
             _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
-                .runPrompt(sessionId: id, text: "hi", model: "m1")
+                .runPrompt(sessionId: id, text: "hi", sessionOptions: PromptSessionOptions(model: "m1"))
             // The session the reconnect starts is started on the turn's model.
             let created = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
                 .first { $0.contains(#""method": "session/new""#) }
@@ -46,7 +46,7 @@ extension DaemonToolsTests {
             let (id, log) = try await pinnedSession(load: true)
             let failure = await #expect(throws: ModelApplication.UnsupportedError.self) {
                 _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
-                    .runPrompt(sessionId: id, text: "hi", model: "bogus")
+                    .runPrompt(sessionId: id, text: "hi", sessionOptions: PromptSessionOptions(model: "bogus"))
             }
             #expect(failure?.localizedDescription == """
                 Cannot apply --model "bogus": the ACP agent did not advertise that model. Available models: m1, m2.
@@ -63,7 +63,7 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let (id, log) = try await pinnedSession { acpx in acpx.desiredConfigOptions = ["effort": "high"] }
             _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
-                .runPrompt(sessionId: id, text: "hi", model: "m2")
+                .runPrompt(sessionId: id, text: "hi", sessionOptions: PromptSessionOptions(model: "m2"))
             #expect(try Self.modelAgentRequests(log) == [
                 "session/new", "session/set_config_option model=m2", "session/prompt"
             ])
@@ -85,7 +85,9 @@ extension DaemonToolsTests {
             try "".write(to: armed, atomically: true, encoding: .utf8)
             try "".write(to: log, atomically: true, encoding: .utf8)
 
-            _ = try await daemon.runPrompt(sessionId: id, text: "second", model: "m1")
+            _ = try await daemon.runPrompt(
+
+                sessionId: id, text: "second", sessionOptions: PromptSessionOptions(model: "m1"))
             #expect(try Self.modelAgentRequests(log) == [
                 "session/set_config_option model=m1", "session/load", "session/prompt"
             ])
@@ -101,10 +103,13 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let (id, log) = try await pinnedSession(load: true, environment: "MODEL_AGENT_EMPTY_REPLIES=1 ")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            _ = try await daemon.runPrompt(sessionId: id, text: "first", model: "m2")
+            _ = try await daemon.runPrompt(
+                sessionId: id, text: "first", sessionOptions: PromptSessionOptions(model: "m2"))
             try "".write(to: log, atomically: true, encoding: .utf8)
 
-            _ = try await daemon.runPrompt(sessionId: id, text: "second", model: "m1")
+            _ = try await daemon.runPrompt(
+
+                sessionId: id, text: "second", sessionOptions: PromptSessionOptions(model: "m1"))
             #expect(try Self.modelAgentRequests(log) == ["session/set_config_option model=m1", "session/prompt"])
             #expect(ModelSupport.advertisedModelState(SessionStore.loadRecord(id)?.acpx)?.currentModelId == "m1")
         }

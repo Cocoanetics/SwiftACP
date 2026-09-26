@@ -312,6 +312,19 @@ extension GlobalFlags {
         if terminal == false { capabilities.terminal = false }
         return capabilities
     }
+
+    /// The session options a prompt sends acpxd beside its `--model`, as acpx's CLI sends
+    /// them with each prompt (`sessionOptionsFromGlobalFlags`); `nil` when it gives none.
+    var promptSessionOptions: PromptSessionOptions? {
+        guard allowedTools != nil || maxTurns != nil || systemPrompt != nil else { return nil }
+        var options = PromptSessionOptions(allowedTools: allowedTools, maxTurns: maxTurns)
+        switch systemPrompt {
+        case .replace(let text)?: options.systemPrompt = text
+        case .append(let text)?: options.appendSystemPrompt = text
+        case nil: break
+        }
+        return options
+    }
 }
 
 /// A value acpx validates outside commander: rejected with a bare message and

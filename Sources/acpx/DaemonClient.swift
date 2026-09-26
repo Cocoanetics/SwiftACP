@@ -251,8 +251,8 @@ enum DaemonClient {
     static func runPrompt(
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
-        terminalOutputCeiling: Int? = nil, model: String? = nil, limits: PromptLimits? = nil,
-        renderer: OutputRenderer
+        terminalOutputCeiling: Int? = nil, model: String? = nil, sessionOptions: PromptSessionOptions? = nil,
+        limits: PromptLimits? = nil, renderer: OutputRenderer
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
@@ -263,7 +263,7 @@ enum DaemonClient {
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
-            limits: limits, streamWire: renderer.streamsWireJSON)
+            sessionOptions: sessionOptions, limits: limits, streamWire: renderer.streamsWireJSON)
     }
 
     /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
@@ -271,7 +271,7 @@ enum DaemonClient {
         on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, content: [JSONValue],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, model: String? = nil,
-        limits: PromptLimits? = nil, streamWire: Bool = false
+        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, streamWire: Bool = false
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
@@ -283,7 +283,8 @@ enum DaemonClient {
                 sessionId: sessionId, text: "", content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 streamWire: streamWire, permissionPolicy: permissionPolicy,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model, limits: limits)
+                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model, sessionOptions: sessionOptions,
+                limits: limits)
         } catch is DecodingError {
             // The turn succeeded; only its ignored text did not decode. SwiftMCP's typed
             // client turns a plain-text result into a JSON string by wrapping it in
