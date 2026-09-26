@@ -30,13 +30,18 @@ extension ACPXDaemonBackend {
     func beginPrompt(_ recordId: String, wait: Bool) async throws -> BegunPrompt {
         guard !stopping, shuttingDown[recordId] == nil else { throw QueueOwnerShuttingDown(inLine: false) }
         guard wait else {
-            try await turnQueue.acquire(recordId, wait: false)
-            guard promptLines[recordId] == nil else {
-                Task { await turnQueue.release(recordId) }
-                throw DaemonError.sessionBusy(recordId)
-            }
+            guard promptLines[recordId] == nil else { throw DaemonError.sessionBusy(recordId) }
+            // Begun before it tries the slot, so that nothing sent meanwhile finds the session
+            // idle (Codex review on #196); a session something holds ends it at once.
             promptLines[recordId] = PromptLine()
-            return promptBegins(recordId)
+            let begun = promptBegins(recordId)
+            do {
+                try await turnQueue.acquire(recordId, wait: false)
+            } catch {
+                promptEnded(recordId, begun, heldTheSlot: false)
+                throw error
+            }
+            return begun
         }
         if promptLines[recordId] == nil {
             promptLines[recordId] = PromptLine()
