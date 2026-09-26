@@ -61,6 +61,29 @@ import Testing
         }
     }
 
+    /// So does a prompt's `--mcp-config`, whose servers acpxd takes before the prompt: a daemon
+    /// gone with them is said as for any other request (Codex review on #197).
+    @Test(.timeLimit(.minutes(1)))
+    func aPromptsServersWhoseDaemonGoesAwayHaveAnUnknownOutcome() async throws {
+        let daemon = try DroppingDaemon()
+        defer { daemon.stop() }
+        let cwd = try DaemonToolsTests.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: cwd) }
+        try await withIsolatedStore {
+            try Self.session(in: cwd)
+            let servers = cwd.appendingPathComponent("mcp.json")
+            try #"{"mcpServers":[{"name":"probe","command":"/usr/bin/true","args":[],"env":[]}]}"#.write(
+                to: servers, atomically: true, encoding: .utf8)
+            let json = await Self.acpx(
+                ["--mcp-config", servers.path, "--format", "json", "prompt", "hi"], cwd: cwd, daemon: daemon)
+            #expect(json.code == 1)
+            #expect(json.out == #"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"#
+                + #""message":"Queue owner disconnected before responding; outcome unknown","#
+                + #""data":{"acpxCode":"RUNTIME","detailCode":"QUEUE_DISCONNECTED_BEFORE_COMPLETION","#
+                + #""origin":"queue","retryable":false,"sessionId":"unknown"}}}"# + "\n", "\(json.out)\(json.err)")
+        }
+    }
+
     /// A daemon gone once the turn's end came has told the CLI the outcome: the turn is done,
     /// as acpx's CLI is done at its owner's `result`, whatever comes after (Codex review on #197).
     @Test(.timeLimit(.minutes(1)))

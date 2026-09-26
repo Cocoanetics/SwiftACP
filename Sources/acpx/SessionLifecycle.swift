@@ -124,6 +124,9 @@ enum SessionLifecycle {
             updated.acpx = acpx
             try SessionStore.writeRecord(updated)
             return updated
+        } catch let disconnected as DaemonClient.OwnerDisconnected {
+            // acpxd went away with the request: said as for any other request it had.
+            throw disconnected
         } catch {
             throw CLIError(error.localizedDescription)
         }
