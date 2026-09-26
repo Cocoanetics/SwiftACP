@@ -43,3 +43,64 @@ extension DaemonToolsTests {
         #expect(try await closeAfterAPrompt(canClose: true, prompting: false) == nil)
     }
 }
+
+/// `releaseSession`, which `sessions new` asks for when the agent gave the new session the
+/// replaced one's id (openclaw/acpx#805): the daemon lets the held agent go, as a close
+/// does, but sends no `session/close` — it could end the new session under that id — and
+/// leaves the record, the new session's by then, as it is.
+extension DaemonToolsTests {
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func releasingASessionLetsItsAgentGoAndLeavesTheSessionOpen() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let closed = directory.appendingPathComponent("closed")
+        try await withIsolatedStore {
+            let session = try await retrySession(
+                in: directory, environment: "RETRY_AGENT_CAN_CLOSE=1 RETRY_AGENT_CLOSED='\(closed.path)' ")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            #expect(await daemon.heldConnection(session.id) != nil)
+            let before = try #require(SessionStore.loadRecord(session.id))
+
+            #expect(try await daemon.releaseSession(sessionId: session.id))
+            #expect(await daemon.heldConnection(session.id) == nil)
+            #expect(!FileManager.default.fileExists(atPath: closed.path), "session/close was sent")
+            let after = try #require(SessionStore.loadRecord(session.id))
+            #expect(after.closed != true)
+            #expect(after.messages.count == before.messages.count)
+            #expect(try await daemon.releaseSession(sessionId: session.id) == false)
+            await daemon.releaseAll()
+        }
+    }
+}
+
+extension DaemonToolsTests {
+    /// A turn still connecting is the session's too: `releaseSession` puts it down and says
+    /// the daemon had the session, so `sessions new` writes its record over whatever the
+    /// turn saved on its way out (Codex review on #184).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func releasingASessionWhoseTurnIsConnectingSaysItHadIt() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ready = directory.appendingPathComponent("ready")
+        guard mkfifo(ready.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory, environment: "RETRY_AGENT_READY='\(ready.path)' ")
+            try session.set("hang-init")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let prompt = Task {
+                try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
+            }
+            try await withTimeout(milliseconds: 10_000) { try await Self.byteWritten(to: ready) }
+            #expect(await daemon.heldConnection(session.id) == nil, "still connecting")
+
+            let released = try await withTimeout(milliseconds: 10_000) {
+                try await daemon.releaseSession(sessionId: session.id)
+            }
+            #expect(released)
+            _ = try? await prompt.value
+            #expect(try #require(SessionStore.loadRecord(session.id)).closed != true)
+            await daemon.releaseAll()
+        }
+    }
+}

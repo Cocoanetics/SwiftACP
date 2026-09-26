@@ -330,4 +330,15 @@ public actor ACPXDaemon {
     func cancelSession(sessionId: String) async throws -> Bool {
         try await backend.cancelSession(sessionId: sessionId)
     }
+
+    /// Let go of a session's live agent without closing the session: the daemon stops
+    /// holding it and ends its agent, and the record stays as it is — what `sessions new`
+    /// asks when the agent gave the new session the id of the one it replaces.
+    ///
+    /// - Parameter sessionId: the acpx record id or the ACP session id.
+    /// - Returns: whether the daemon held an agent for it.
+    @MCPTool(idempotentHint: true)
+    func releaseSession(sessionId: String) async throws -> Bool {
+        try await backend.releaseSession(sessionId: sessionId)
+    }
 }
