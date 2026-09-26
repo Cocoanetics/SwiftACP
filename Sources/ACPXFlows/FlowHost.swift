@@ -62,6 +62,7 @@ public final class FlowHost: @unchecked Sendable {
         for descriptor in descriptors { _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC) }
         var hostEnvironment = environment
         hostEnvironment["ACPX_FLOW_RUNTIME"] = scripts.runtime
+        hostEnvironment["ACPX_FLOW_SUCRASE"] = scripts.sucrase
         hostEnvironment["ACPX_FLOW_FD"] = "3"
         let pid: pid_t
         do {
@@ -284,28 +285,38 @@ enum TurnFailureText {
     }
 }
 
-/// The host's two scripts on disk, where Node can load them: in a directory of the
-/// temporary directory named for what they hold, so a CLI of another version never uses
-/// this one's.
+/// The host's scripts on disk, where Node can load them: in a directory of the temporary
+/// directory named for what they hold, so a CLI of another version never uses this one's.
 enum FlowHostFiles {
-    static func install() throws -> (host: String, runtime: String) {
-        let contents = FlowHostScripts.host + "\u{0}" + FlowHostScripts.runtime
+    struct Installed {
+        let host: String
+        let runtime: String
+        let sucrase: String
+    }
+
+    static func install() throws -> Installed {
+        let scripts = [
+            ("flow-runtime.mjs", FlowHostScripts.runtime), ("flow-sucrase.mjs", FlowHostScripts.sucrase),
+            ("flow-host.mjs", FlowHostScripts.host)
+        ]
+        let contents = scripts.map(\.1).joined(separator: "\u{0}")
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("acpx-flow-host-\(FlowRuntimeSupport.shortHash(contents))", isDirectory: true)
-        let host = directory.appendingPathComponent("flow-host.mjs")
-        let runtime = directory.appendingPathComponent("flow-runtime.mjs")
         let fm = FileManager.default
-        if !(fm.fileExists(atPath: host.path) && fm.fileExists(atPath: runtime.path)) {
+        if !scripts.allSatisfy({ fm.fileExists(atPath: directory.appendingPathComponent($0.0).path) }) {
             try fm.createDirectory(
                 at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             // Each written whole under a temporary name, then moved into place: another
             // acpx starting a flow at the same time finds either nothing or the file.
-            for (url, text) in [(runtime, FlowHostScripts.runtime), (host, FlowHostScripts.host)] {
+            for (name, text) in scripts {
                 let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
                 try Data(text.utf8).write(to: temporary)
-                _ = rename(temporary.path, url.path)
+                _ = rename(temporary.path, directory.appendingPathComponent(name).path)
             }
         }
-        return (host.path, runtime.path)
+        return Installed(
+            host: directory.appendingPathComponent("flow-host.mjs").path,
+            runtime: directory.appendingPathComponent("flow-runtime.mjs").path,
+            sucrase: directory.appendingPathComponent("flow-sucrase.mjs").path)
     }
 }

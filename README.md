@@ -166,8 +166,9 @@ bundled into the CLI (`scripts/flow-host`).
 swift run acpx flow run review.flow.mjs --input-json '{"pr": 42}'
 ```
 
-So far compute, function action and checkpoint nodes run, from `.mjs`, `.js` and `.cjs`
-files. Shell actions, ACP nodes and TypeScript flow files follow (#202).
+TypeScript flows compile with sucrase, to CommonJS as acpx's tsx does (`.mts` as an ES
+module). So far compute, function action and checkpoint nodes run; shell actions and ACP
+nodes follow (#202).
 
 ## Status
 

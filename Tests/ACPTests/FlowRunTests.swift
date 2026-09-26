@@ -33,13 +33,16 @@ let nodeAvailable = AgentRegistry.which("node") != nil
     /// `interrupting`, a signal arrives once the flow writes to the file `$READY` names.
     private func flowRun(
         _ body: String? = nil, file: URL? = nil, options: [String] = [], arguments: [String] = [],
-        interrupting: Bool = false
+        interrupting: Bool = false, extension ext: String = "mjs", files: [String: String] = [:]
     ) async throws -> Run {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flow-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let ready = dir.appendingPathComponent("ready")
-        var flowFile = dir.appendingPathComponent("test.flow.mjs")
+        var flowFile = dir.appendingPathComponent("test.flow.\(ext)")
+        for (name, content) in files {
+            try content.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
         if let body {
             let source = "import { defineFlow, action, checkpoint, compute } from \"acpx/flows\";\n"
                 + "import fs from \"node:fs\";\nconst READY = \(ready.path.debugDescription);\n" + body
@@ -267,6 +270,48 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         #expect(run.code == 0, "\(run.err)")
         #expect(member(run.state, "outputs", "__proto__", "special") == .bool(true))
         #expect(member(run.state, "results", "__proto__", "attemptId") == .text("__proto__#1"))
+    }
+
+    // MARK: - TypeScript
+
+    /// A `.ts` flow is compiled to CommonJS, as acpx's tsx compiles it: TypeScript's own
+    /// syntax, `__dirname`, `require`, and the TypeScript files it imports.
+    @Test(.enabled(if: nodeAvailable))
+    func aTypeScriptFlowLoadsAsAcpxLoadsIt() async throws {
+        let run = try await flowRun("""
+            import { double } from "./helper";
+            enum Route { Done = "done" }
+            interface Item { name: string }
+            const here: string = __dirname;
+            const os = require("node:os");
+            export default defineFlow({ name: "typed", startAt: "pick", nodes: {
+              pick: compute({ run: () => {
+                const item: Item = { name: "a" };
+                return { route: Route.Done, name: item.name, twice: double(21),
+                  hasDir: here.length > 0, platform: typeof os.platform() };
+              } }),
+              done: compute({ run: () => "done" }) },
+              edges: [{ from: "pick", switch: { on: "$.route", cases: { done: "done" } } }] });
+            """, extension: "ts",
+            files: ["helper.ts": "export function double(value: number): number { return value * 2; }\n"])
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "pick")?.stringified
+            == #"{"route":"done","name":"a","twice":42,"hasDir":true,"platform":"string"}"#)
+        #expect(member(run.state, "outputs", "done") == .text("done"))
+    }
+
+    /// An `.mts` flow is compiled as an ES module, as acpx's tsx compiles it — an `enum`
+    /// included, which Node's own type stripping refuses.
+    @Test(.enabled(if: nodeAvailable))
+    func anMtsFlowLoadsAsAModule() async throws {
+        let run = try await flowRun("""
+            enum Kind { Module = "module" }
+            const label: string = Kind.Module;
+            export default defineFlow({ name: "module", startAt: "a",
+              nodes: { a: compute({ run: () => ({ label, meta: typeof import.meta.url }) }) }, edges: [] });
+            """, extension: "mts")
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified == #"{"label":"module","meta":"string"}"#)
     }
 
     // MARK: - Before the run

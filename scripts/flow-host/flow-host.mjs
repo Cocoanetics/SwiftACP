@@ -12,12 +12,16 @@
 // The loading follows acpx's `src/flows/cli.ts` (v0.19.3); the definition snapshot its
 // `src/flows/store.ts`.
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import Module, { createRequire, register } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const RUNTIME_PATH = process.env.ACPX_FLOW_RUNTIME;
+// sucrase, which compiles a TypeScript flow as acpx's tsx does (`flow-sucrase.mjs`).
+const SUCRASE_PATH = process.env.ACPX_FLOW_SUCRASE;
 const FLOW_RUNTIME_SPECIFIER = "acpx/flows";
 const TEXT_MODULE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
 const TYPESCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".cts", ".mts"]);
@@ -114,12 +118,65 @@ async function prepareFlowModuleImport(file, extension) {
 }
 
 // acpx's `loadFlowRuntimeModule`, where tsx compiles TypeScript: `.ts`, `.tsx` and `.cts`
-// to CommonJS, `.mts` as ES modules.
+// to CommonJS, `.mts` as ES modules. sucrase compiles it here, the same way.
 async function loadFlowRuntimeModule(file, extension) {
+  if (extension === ".mts") {
+    return await importModuleTypeScript(file);
+  }
   if (TYPESCRIPT_EXTENSIONS.has(extension)) {
-    throw new Error(
-      `TypeScript flow files (${extension}) are not supported by SwiftACP's acpx yet: rename the flow to .mjs, or write it as JavaScript`,
-    );
+    return await requireTypeScript(file);
+  }
+  return await import(pathToFileURL(file).href);
+}
+
+let sucrase;
+async function loadSucrase() {
+  sucrase ??= await import(pathToFileURL(SUCRASE_PATH).href);
+  return sucrase;
+}
+
+// tsx's CommonJS `register`, as acpx loads with it: while the flow loads, `require`
+// compiles TypeScript — the flow and the TypeScript files it requires — to CommonJS. So
+// `require`, `__dirname` and a flow's npm packages resolve as they do in acpx.
+async function requireTypeScript(file) {
+  const { transform } = await loadSucrase();
+  const extensions = Module._extensions;
+  const previous = new Map();
+  for (const extension of [".ts", ".tsx", ".cts", ".mts"]) {
+    previous.set(extension, extensions[extension]);
+    extensions[extension] = (module, filename) => {
+      const transforms = filename.endsWith(".tsx") ? ["typescript", "jsx", "imports"] : ["typescript", "imports"];
+      const source = readFileSync(filename, "utf8");
+      module._compile(transform(source, { transforms, filePath: filename, production: true }).code, filename);
+    };
+  }
+  try {
+    return createRequire(import.meta.url)(file);
+  } finally {
+    for (const [extension, handler] of previous) {
+      if (handler === undefined) delete extensions[extension];
+      else extensions[extension] = handler;
+    }
+  }
+}
+
+// tsx's ES module loader, for `.mts`: TypeScript modules compiled as they are imported.
+let moduleHooksRegistered = false;
+async function importModuleTypeScript(file) {
+  if (!moduleHooksRegistered) {
+    moduleHooksRegistered = true;
+    const hooks = `
+      import { readFile } from "node:fs/promises";
+      import { fileURLToPath } from "node:url";
+      let transform;
+      export async function load(url, context, nextLoad) {
+        if (!/\\.(ts|mts|cts|tsx)$/.test(new URL(url).pathname)) return nextLoad(url, context);
+        transform ??= (await import(${JSON.stringify(pathToFileURL(SUCRASE_PATH).href)})).transform;
+        const filePath = fileURLToPath(url);
+        const source = await readFile(filePath, "utf8");
+        return { format: "module", shortCircuit: true, source: transform(source, { transforms: ["typescript"], filePath }).code };
+      }`;
+    register(`data:text/javascript,${encodeURIComponent(hooks)}`);
   }
   return await import(pathToFileURL(file).href);
 }
