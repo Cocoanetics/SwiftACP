@@ -82,12 +82,26 @@ package final class ChildProcess: @unchecked Sendable {
         input: Bool = false, newSession: Bool = true, withoutCloseFrom: Bool = false,
         withoutChangeDirectory: Bool = false
     ) throws -> ChildProcess {
-        let variables = environment ?? ProcessInfo.processInfo.environment
+        let variables = (environment ?? ProcessInfo.processInfo.environment).map { (name: $0.key, value: $0.value) }
+        return try spawn(
+            command: command, arguments: arguments, cwd: cwd, orderedEnvironment: variables, input: input,
+            newSession: newSession, withoutCloseFrom: withoutCloseFrom, withoutChangeDirectory: withoutChangeDirectory)
+    }
+
+    /// `spawn` with the environment as the command's `environ` lists it, in order — as Node
+    /// builds one — rather than a dictionary's order.
+    package static func spawn(
+        command: String, arguments: [String], cwd: String,
+        orderedEnvironment variables: [(name: String, value: String)],
+        input: Bool = false, newSession: Bool = true, withoutCloseFrom: Bool = false,
+        withoutChangeDirectory: Bool = false
+    ) throws -> ChildProcess {
         // C ends a string at its first NUL, so one holding it would run as something
         // else; Node refuses it outright (`ERR_INVALID_ARG_VALUE`), and so does this.
-        let strings = [command, cwd] + arguments + variables.flatMap { [$0.key, $0.value] }
+        let strings = [command, cwd] + arguments + variables.flatMap { [$0.name, $0.value] }
         guard !strings.contains(where: { $0.contains("\0") }) else { throw SpawnError(code: EINVAL) }
-        let executable = try ChildSpawn.resolveExecutable(command, cwd: cwd, path: variables["PATH"])
+        let path = variables.last { $0.name == "PATH" }?.value
+        let executable = try ChildSpawn.resolveExecutable(command, cwd: cwd, path: path)
         var opened: [Int32] = []
         func pipe(nonBlockingReadEnd: Bool = true) throws -> (read: Int32, write: Int32) {
             let pipe = try ChildSpawn.makePipe(nonBlockingReadEnd: nonBlockingReadEnd)
@@ -101,7 +115,7 @@ package final class ChildProcess: @unchecked Sendable {
             let stdin = input ? try pipe(nonBlockingReadEnd: false) : nil
             let pid = try ChildSpawn.launch(
                 executable, argv: [command] + arguments, cwd: cwd,
-                environment: variables.map { "\($0.key)=\($0.value)" }, stdin: stdin.map { .pipe($0.read) } ?? .null,
+                environment: variables.map { "\($0.name)=\($0.value)" }, stdin: stdin.map { .pipe($0.read) } ?? .null,
                 stdout: stdout.write, stderr: stderr.write, newSession: newSession, withoutCloseFrom: withoutCloseFrom,
                 withoutChangeDirectory: withoutChangeDirectory)
             [stdout.write, stderr.write].forEach { close($0) }

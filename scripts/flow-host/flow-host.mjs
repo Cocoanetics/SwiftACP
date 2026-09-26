@@ -17,7 +17,7 @@ import fs from "node:fs/promises";
 import Module, { createRequire, register } from "node:module";
 import net from "node:net";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import util from "node:util";
 
 const RUNTIME_PATH = process.env.ACPX_FLOW_RUNTIME;
@@ -563,29 +563,34 @@ function specJSON(value) {
 // action `timeoutMs`. A list's holes are read as `undefined`, as Node reads them.
 function encodeExecution(execution, inherited) {
   if (execution === null || typeof execution !== "object") return execution;
-  const encoded = {};
+  // Null-prototype, so a member named `__proto__` is a member.
+  const encoded = Object.create(null);
+  // What acpx's spread copies, each member read once; `args`, `env`, `shell` and `stdin`
+  // are taken from these alone, never from the prototype.
+  const own = Object.create(null);
   const members = Object.keys(execution);
-  for (const key of inherited) if (!Object.hasOwn(execution, key)) members.push(key);
-  for (const key of members) {
-    const value = execution[key];
+  for (const key of members) own[key] = execution[key];
+  for (const key of inherited) if (!Object.hasOwn(execution, key)) own[key] = execution[key];
+  for (const [key, value] of Object.entries(own)) {
     if (value === undefined) continue;
     const name = key.startsWith("\0") ? `\0${key}` : key;
-    if (key === "args") encoded.args = Array.isArray(value) ? Array.from(value, specJSON) : specJSON(value);
+    if (key === "args") encoded.args = encodeArgs(value);
     else encoded[name] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
   }
-  const { args, env, shell, stdin } = execution;
+  const copied = (key) => (Object.hasOwn(execution, key) ? own[key] : undefined);
+  const args = copied("args");
+  const env = copied("env");
+  const shell = copied("shell");
+  const stdin = copied("stdin");
   // Bytes Node's `stdin.end` writes as they are: a Buffer, typed array or DataView.
   if (ArrayBuffer.isView(stdin)) {
     encoded.stdin = jsMarker("bytes", Buffer.from(stdin.buffer, stdin.byteOffset, stdin.byteLength).toString("base64"));
   }
-  if (env !== null && typeof env === "object") {
+  // acpx spreads `env` (`{ ...process.env, ...spec.env }`): an object's own members, a
+  // string's or a list's characters and items by index, nothing of a number.
+  if (env !== undefined && env !== null) {
     try {
-      encoded.env = Object.fromEntries(
-        Object.entries(env)
-          .filter(([, value]) => value !== undefined)
-          // Node refuses a NUL only in a string; a converted value's ends at it, as C's.
-          .map(([name, value]) => [name, typeof value === "string" ? value : `${value}`.split("\0")[0]]),
-      );
+      encoded.env = environment(Object.entries({ ...env }));
     } catch (error) {
       encoded["\u0000envError"] = error instanceof Error ? error.message : String(error);
     }
@@ -602,6 +607,53 @@ function encodeExecution(execution, inherited) {
   return encoded;
 }
 
+// Variables as Node's `spawn` makes them, `${value}`, `undefined` left out. Node refuses a
+// NUL only in a string; a converted value's ends at it, as C's does.
+function environment(entries) {
+  return Object.fromEntries(
+    entries
+      .filter(([, value]) => value !== undefined)
+      .map(([name, value]) => [name, typeof value === "string" ? value : `${value}`.split("\0")[0]]),
+  );
+}
+
+// `args`: a list by index, its holes `undefined`; an object — which Node's `spawn` takes as
+// its options in place of acpx's own — as Node reads options: its own members, each with
+// its type, `env` by `for…in` (prototype included) and converted, a file URL `cwd` as its
+// path; anything else as JSON writes it.
+function encodeArgs(args) {
+  if (Array.isArray(args)) return Array.from(args, specJSON);
+  if (args === null || typeof args !== "object") return specJSON(args);
+  const options = Object.create(null);
+  const read = Object.create(null);
+  for (const key of Object.keys(args)) {
+    const value = (read[key] = args[key]);
+    if (value === undefined) continue;
+    options[key.startsWith("\0") ? `\0${key}` : key] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
+  }
+  const { cwd, env } = read;
+  // A Buffer `cwd` Node lets through, and its native spawn then ignores.
+  if (Buffer.isBuffer(cwd)) delete options.cwd;
+  else if (cwd instanceof URL) {
+    try {
+      options.cwd = fileURLToPath(cwd);
+    } catch (error) {
+      options.cwd = jsMarker("refused", error.message);
+      options.cwd.code = error.code;
+    }
+  }
+  if (env) {
+    try {
+      const entries = [];
+      for (const name in env) entries.push([name, env[name]]);
+      options.env = environment(entries);
+    } catch (error) {
+      options.env = jsMarker("refused", error instanceof Error ? error.message : String(error));
+    }
+  }
+  return options;
+}
+
 // An object, a function or a symbol, which Node's checks name by its type ("an instance
 // of URL"), where JSON would write something else of it — through `toJSON`, or nothing.
 function typedByNode(value) {
@@ -610,7 +662,7 @@ function typedByNode(value) {
 }
 
 // Such a value for the runner: Node's `determineSpecificType` of it, what `String` makes
-// of it, and its JSON.
+// of it, its JSON, and what `Number` makes of it (`timeoutMs > 0` compares that).
 function instanceMarker(value) {
   let string;
   try {
@@ -618,7 +670,13 @@ function instanceMarker(value) {
   } catch {
     string = "[object Object]";
   }
-  return { [JS_MARKER]: "instance", text: specificType(value), string, json: specJSON(value) };
+  let number;
+  try {
+    number = String(Number(value));
+  } catch {
+    number = "NaN";
+  }
+  return { [JS_MARKER]: "instance", text: specificType(value), string, json: specJSON(value), number };
 }
 
 function specificType(value) {

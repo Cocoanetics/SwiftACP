@@ -188,4 +188,61 @@ struct FlowShellSpecTests {
             .array([.text("/usr\n"), .text("/")]), .array([.text("[object Object]\n"), dir])
         ]))
     }
+
+    /// acpx spreads `env` into the command's environment (`{ ...process.env, ...spec.env }`):
+    /// an object's own members, a string's characters and a list's items by index, nothing
+    /// of a number.
+    @Test(.enabled(if: nodeAvailable))
+    func envIsSpreadAsAcpxSpreadsIt() async throws {
+        let run = try await runnerRun("""
+            const variables = (runShell, env) => runShell({ command: "/bin/sh", env,
+              args: ["-c", 'env | grep -E "^(0|1|X)=" | sort | tr "\\n" ";"'] }).then((r) => r.stdout);
+            export default defineFlow({ name: "env-spread", startAt: "a", nodes: {
+              a: action({ run: async ({ runShell }) => [
+                await variables(runShell, "ab"), await variables(runShell, ["p", "q"]), await variables(runShell, 5),
+                await variables(runShell, Object.assign(Object.create({ X: "inherited" }), { 1: "own" })),
+              ] }) },
+              edges: [] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a") == .array([
+            .text("0=a;1=b;"), .text("0=p;1=q;"), .text(""), .text("1=own;")
+        ]))
+    }
+
+    /// Node's options, when `args` is an object, as Node reads them: each value with its
+    /// type, a file URL as its path, a Buffer `cwd` let through and then ignored; and what is
+    /// left of a spec: an inherited `args` gone with the spread, a `timeoutMs` object by its
+    /// number. The environment comes in Node's order: this process's variables, then the
+    /// spec's new ones in its order.
+    @Test(.enabled(if: nodeAvailable))
+    func optionsAndTheEnvironmentAreNodes() async throws {
+        let run = try await runnerRun("""
+            const attempt = (runShell, execution) =>
+              runShell(execution).then((r) => [r.stdout, r.timedOut], (e) => `${e.code}: ${e.message}`);
+            export default defineFlow({ name: "node-options", startAt: "a", nodes: {
+              a: action({ run: async ({ runShell }) => {
+                const env = await runShell({ command: "/usr/bin/env", env: { Z: "1", A: "2" } });
+                return [
+                  await attempt(runShell, Object.assign(Object.create({ args: ["no"] }), { command: "/bin/echo" })),
+                  await attempt(runShell, { command: "echo", args: { shell: new Boolean(true) } }),
+                  await attempt(runShell, { command: "/bin/pwd", args: { cwd: new URL("file:///usr") } }),
+                  await attempt(runShell, { command: "/bin/pwd", args: { cwd: new URL("https://example.com/") } }),
+                  await attempt(runShell, { command: "/bin/sh", args: ["-c", "sleep 1"], timeoutMs: new Number(100) }),
+                  env.stdout.trim().split("\\n").map((line) => line.split("=")[0]).slice(-2).join(","),
+                ];
+              } }) },
+              edges: [] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a") == .array([
+            .array([.text("\n"), .bool(false)]),
+            .text(#"ERR_INVALID_ARG_TYPE: The "options.shell" property must be one of type boolean or string. "#
+                + "Received an instance of Boolean"),
+            .array([.text("/usr\n"), .bool(false)]),
+            .text("ERR_INVALID_URL_SCHEME: The URL must be of scheme file"),
+            .array([.text(""), .bool(true)]),
+            .text("Z,A")
+        ]))
+    }
 }

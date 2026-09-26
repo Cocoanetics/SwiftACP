@@ -2,6 +2,10 @@ import ACPXCore
 import Foundation
 import SwiftACP
 
+#if canImport(Darwin)
+import Darwin
+#endif
+
 /// acpx's shell action rules that need no process (`src/flows/executors/shell.ts` and
 /// `shell-output.ts`, v0.19.3): how a command is shown, what a failure says, and the
 /// timeout and capture limit a command runs under.
@@ -39,8 +43,10 @@ enum FlowShell {
         case .null: return 0
         case .array: return JavaScriptNumber.parse(SessionArchive.javaScriptString(value))
         case .object:
-            if case .number(let number)? = FlowJS.marker(value) { return number }
-            return .nan
+            switch FlowJS.marker(value) {
+            case .number(let number)?, .instance(_, _, _, let number)?: return number
+            default: return .nan
+            }
         }
     }
 
@@ -281,11 +287,38 @@ struct FlowShellExecution: Sendable {
         }
     }
 
-    /// acpx's `{ ...process.env, ...spec.env }`.
-    func environment(inheriting parent: [String: String]) -> [String: String] {
+    /// acpx's `{ ...process.env, ...spec.env }`, in the order Node lists it: this process's
+    /// variables in their order, each the spec sets taking its value in place, then the
+    /// spec's new ones in its order.
+    func environment(inheriting parent: [(name: String, value: String)]) -> [(name: String, value: String)] {
         var environment = parent
-        for (name, value) in env { environment[name] = value }
+        for (name, value) in env {
+            if let index = environment.firstIndex(where: { $0.name == name }) {
+                environment[index].value = value
+            } else {
+                environment.append((name, value))
+            }
+        }
         return environment
+    }
+
+    /// This process's environment in `environ`'s order, which Node's `process.env` lists.
+    /// Swift has no name for `environ` itself, so it is looked up as a symbol.
+    static var processEnvironment: [(name: String, value: String)] {
+        typealias Environ = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+        guard let handle = dlopen(nil, RTLD_NOW), let address = dlsym(handle, "environ"),
+              var entry = address.assumingMemoryBound(to: Environ?.self).pointee else {
+            return ProcessInfo.processInfo.environment.map { ($0.key, $0.value) }
+        }
+        var variables: [(name: String, value: String)] = []
+        while let pointer = entry.pointee {
+            let text = String(cString: pointer)
+            if let equals = text.firstIndex(of: "=") {
+                variables.append((String(text[..<equals]), String(text[text.index(after: equals)...])))
+            }
+            entry += 1
+        }
+        return variables
     }
 
     /// Node's `normalizeSpawnArguments`, in its order: the file and arguments `spawn` runs —
@@ -293,14 +326,14 @@ struct FlowShellExecution: Sendable {
     /// for a value of the wrong type, a string with a NUL, or one the host could not
     /// convert.
     func spawnArguments(cwd: String) throws -> (file: String, arguments: [String]) {
-        let spawn = try spawnPlan(cwd: cwd, inheriting: [:])
+        let spawn = try spawnPlan(cwd: cwd, inheriting: [])
         return (spawn.file, spawn.arguments)
     }
 
     /// ``spawnArguments(cwd:)``, and where and how `spawn` starts the command. `args` that
     /// are an object, not a list, are Node's options in place of acpx's own — the command's
     /// `cwd`, `env`, `shell` and `detached` then come from it, with no arguments.
-    func spawnPlan(cwd: String, inheriting parent: [String: String]) throws -> FlowShellSpawn {
+    func spawnPlan(cwd: String, inheriting parent: [(name: String, value: String)]) throws -> FlowShellSpawn {
         guard case .object = json["args"], FlowJS.marker(json["args"] ?? .null) == nil else {
             let (file, arguments) = try spawnFileAndArguments(
                 cwd: .text(cwd), shell: shell, args: args, env: env, envError: json[FlowJS.envErrorKey]?.stringValue)
@@ -310,14 +343,18 @@ struct FlowShellExecution: Sendable {
         }
         let options = json["args"]
         var variables: [(name: String, value: String)] = []
-        if case .object? = options?["env"] { variables = Self.variables(options?["env"]) }
-        let (file, arguments) = try spawnFileAndArguments(
-            cwd: options?["cwd"], shell: options?["shell"], args: [], env: variables, envError: nil)
-        // `options.env || process.env`.
-        var environment = parent
-        if FlowJS.truthy(options?["env"]) {
-            environment = Dictionary(variables.map { ($0.name, $0.value) }, uniquingKeysWith: { $1 })
+        var envError: String?
+        if let env = options?["env"], case .object = env {
+            switch FlowJS.marker(env) {
+            case nil: variables = Self.variables(env)
+            case .refused(let message, _)?: envError = message
+            default: break
+            }
         }
+        let (file, arguments) = try spawnFileAndArguments(
+            cwd: options?["cwd"], shell: options?["shell"], args: [], env: variables, envError: envError)
+        // `options.env || process.env`.
+        let environment = FlowJS.truthy(options?["env"]) ? variables : parent
         return FlowShellSpawn(
             file: file, arguments: arguments, cwd: options?["cwd"]?.stringValue, environment: environment,
             newSession: FlowJS.truthy(options?["detached"]))
@@ -348,6 +385,9 @@ struct FlowShellExecution: Sendable {
                 String(decoding: units, as: UTF16.self), "options.cwd",
                 reason: "must be a string, Uint8Array, or URL without null bytes")
         case let other?:
+            if case .refused(let message, let code)? = FlowJS.marker(other) {
+                throw FlowShellError(message, code: code, name: "TypeError")
+            }
             throw FlowShellError.invalidArgType(NodeArgumentError.property(
                 "options.cwd", "of type string or an instance of Buffer or URL", other))
         }
@@ -384,7 +424,7 @@ struct FlowShellSpawn {
     let file: String
     let arguments: [String]
     let cwd: String?
-    let environment: [String: String]
+    let environment: [(name: String, value: String)]
     let newSession: Bool
 }
 
