@@ -61,6 +61,23 @@ import Testing
         }
     }
 
+    /// A daemon gone once the turn's end came has told the CLI the outcome: the turn is done,
+    /// as acpx's CLI is done at its owner's `result`, whatever comes after (Codex review on #197).
+    @Test(.timeLimit(.minutes(1)))
+    func aPromptWhoseDaemonGoesAwayOnceItEndedIsDone() async throws {
+        let daemon = try DroppingDaemon(endingTheTurn: true)
+        defer { daemon.stop() }
+        let cwd = try DaemonToolsTests.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: cwd) }
+        try await withIsolatedStore {
+            try Self.session(in: cwd)
+            let text = await Self.acpx(["prompt", "hi"], cwd: cwd, daemon: daemon)
+            #expect(text.code == 0, "\(text.err)")
+            #expect(text.out.hasSuffix("[done] end_turn\n"), "\(text.out)")
+            #expect(!text.err.contains("outcome unknown"))
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func aControlWhoseDaemonGoesAwayHasAnUnknownOutcome() async throws {
         let daemon = try DroppingDaemon()
@@ -87,7 +104,7 @@ import Testing
 
 /// A daemon stand-in on a loopback port: it answers MCP's handshake, then — as an acpxd
 /// that goes away with the request — closes the connection as a tool call arrives, all but
-/// `sessionStatus`, which it refuses.
+/// `sessionStatus`, which it refuses. `endingTheTurn`, it first sends a prompt's turn end.
 final class DroppingDaemon: @unchecked Sendable {
     let port: UInt16
     private let listener: Int32
@@ -96,7 +113,7 @@ final class DroppingDaemon: @unchecked Sendable {
         .tcp(config: MCPServerTcpConfig(host: "127.0.0.1", port: port))
     }
 
-    init() throws {
+    init(endingTheTurn: Bool = false) throws {
         listener = socket(AF_INET, SOCK_STREAM, 0)
         guard listener >= 0 else { throw POSIXError(.EIO) }
         var address = sockaddr_in()
@@ -116,7 +133,19 @@ final class DroppingDaemon: @unchecked Sendable {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
         }
         port = UInt16(bigEndian: actual.sin_port)
-        Thread { Self.acceptConnections(on: listener) }.start()
+        let turnEnd = endingTheTurn ? try Self.turnEnd() : nil
+        Thread { Self.acceptConnections(on: listener, turnEnd: turnEnd) }.start()
+    }
+
+    /// The log notification that ends a turn, as acpxd sends it before a prompt's result.
+    private static func turnEnd() throws -> Data {
+        let event = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(TurnEndedEvent(stopReason: "end_turn", permissions: PermissionStats())))
+        let notification: [String: Any] = [
+            "jsonrpc": "2.0", "method": "notifications/message",
+            "params": ["level": "info", "logger": "gone-1", "data": event]
+        ]
+        return try JSONSerialization.data(withJSONObject: notification) + Data([0x0A])
     }
 
     /// Stop taking connections.
@@ -125,15 +154,15 @@ final class DroppingDaemon: @unchecked Sendable {
         close(listener)
     }
 
-    private static func acceptConnections(on listener: Int32) {
+    private static func acceptConnections(on listener: Int32, turnEnd: Data?) {
         while true {
             let connection = accept(listener, nil, nil)
             guard connection >= 0 else { return }
-            Thread { serve(connection) }.start()
+            Thread { serve(connection, turnEnd: turnEnd) }.start()
         }
     }
 
-    private static func serve(_ connection: Int32) {
+    private static func serve(_ connection: Int32, turnEnd: Data?) {
         defer { close(connection) }
         var pending = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
@@ -160,6 +189,9 @@ final class DroppingDaemon: @unchecked Sendable {
                 case "tools/call" where params?["name"] as? String == "sessionStatus":
                     reply["error"] = ["code": -32603, "message": "not here"]
                 case "tools/call":
+                    if let turnEnd, params?["name"] as? String == "runPrompt" {
+                        _ = turnEnd.withUnsafeBytes { write(connection, $0.baseAddress, turnEnd.count) }
+                    }
                     return
                 default:
                     reply["result"] = [String: Any]()

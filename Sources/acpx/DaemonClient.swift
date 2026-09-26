@@ -19,7 +19,10 @@ actor StopReasonBox {
     private(set) var cost: JSONValue?
     /// Whether the turn ended with no answer to its prompt (``TurnEndedEvent/unanswered``).
     private(set) var unanswered = false
+    /// Whether the turn's end came: its outcome, as acpx's CLI has it in the owner's `result`.
+    private(set) var ended = false
     func set(_ ended: TurnEndedEvent) {
+        self.ended = true
         value = StopReason(rawValue: ended.stopReason)
         permissions = ended.permissions
         usage = ended.usage
@@ -293,8 +296,10 @@ enum DaemonClient {
         } catch {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
-            if (error as? JSONRPCPeerError) == .closed { throw OwnerDisconnected(waitingFor: "prompt completion") }
-            throw error
+            // A daemon gone with the turn leaves its outcome unknown — unless the turn's end
+            // came first, which is its outcome.
+            guard (error as? JSONRPCPeerError) == .closed else { throw error }
+            guard await stopReason.ended else { throw OwnerDisconnected(waitingFor: "prompt completion") }
         }
         // Ordered delivery means the terminal event was handled before the tool
         // result resumed this call; default defensively if it somehow wasn't.
