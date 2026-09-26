@@ -32,7 +32,8 @@ def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
 
 
-# How `session/load` behaves: gone (default) | ok | internal | unsupported.
+# How `session/load` behaves: gone (default) | ok | internal | unsupported | error, which
+# answers with the error object `MOCK_LOAD_ERROR` holds.
 LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
 
 # A `session/load` it takes back first replays the session's history as updates, as
@@ -270,6 +271,8 @@ def main():
                     # MOCK_LOAD_SESSION picks how `session/load` behaves (see below);
                     # only `unsupported` stops advertising it.
                     "loadSession": LOAD_MODE != "unsupported",
+                    # MOCK_CAN_CLOSE advertises `session/close`, which it answers with `{}`.
+                    **({"sessionCapabilities": {"close": {}}} if os.environ.get("MOCK_CAN_CLOSE") else {}),
                     "promptCapabilities": {
                         "image": bool(os.environ.get("MOCK_IMAGE_CAPABLE")),
                         "audio": False,
@@ -289,6 +292,8 @@ def main():
             if os.environ.get("MOCK_NEW_META"):
                 result["_meta"] = json.loads(os.environ["MOCK_NEW_META"])
             respond(req_id, result)
+        elif method == "session/close" and os.environ.get("MOCK_CAN_CLOSE"):
+            respond(req_id, {})
         elif method == "session/load" and LOAD_MODE != "unsupported":
             # `gone` (the default) is the usual reason a fresh agent process cannot
             # load a session: it no longer has it. `ok` takes it back; `internal`
@@ -311,6 +316,8 @@ def main():
             elif LOAD_MODE == "internal":
                 send({"jsonrpc": "2.0", "id": req_id,
                       "error": {"code": -32603, "message": "Internal error"}})
+            elif LOAD_MODE == "error":
+                send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["MOCK_LOAD_ERROR"])})
             else:
                 send({"jsonrpc": "2.0", "id": req_id,
                       "error": {"code": -32002, "message": "Resource not found: session %s"
