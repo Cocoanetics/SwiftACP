@@ -76,12 +76,19 @@ enum ExecCommand {
         // Whether the prompt may go again depends on what the connection had of the
         // agent meanwhile.
         let sideEffects = PromptSideEffects()
-        await handle.connection.setWireMessageObserver { sideEffects.observe($0, $1) }
+        // What the session offers, as the run's controls find it: acpx's `controlState`,
+        // which takes in what the agent announces as it arrives.
+        let control = ModelApplication.ControlState()
+        await handle.connection.setWireMessageObserver {
+            sideEffects.observe($0, $1)
+            control.observe($0, $1)
+        }
         let session: ACPSession
         do {
             session = try await openSession(
                 on: handle, agent: agent, mcpServers: mcpServers, meta: meta, model: flags.model,
-                configOptions: configOptions, timeoutMs: flags.timeoutMs, quiet: quietOutput(flags))
+                configOptions: configOptions, control: control, timeoutMs: flags.timeoutMs,
+                quiet: quietOutput(flags))
         } catch {
             await handle.close()
             return reportFailure(error, renderer: renderer, format: flags.format)
@@ -116,7 +123,8 @@ enum ExecCommand {
     /// within `timeoutMs`. A warning about them goes to stderr, unless `quiet`.
     static func openSession(
         on handle: ACPAgent, agent: AgentInvocation, mcpServers: [MCPServerSpec], meta: JSONValue?,
-        model: String?, configOptions: [ModelApplication.ConfigOptionAssignment], timeoutMs: Int?, quiet: Bool
+        model: String?, configOptions: [ModelApplication.ConfigOptionAssignment],
+        control: ModelApplication.ControlState = ModelApplication.ControlState(), timeoutMs: Int?, quiet: Bool
     ) async throws -> ACPSession {
         let connection = handle.connection
         let request = NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta)
@@ -125,7 +133,7 @@ enum ExecCommand {
         }
         try await ModelApplication.applySessionControls(
             connection: connection, session: response, model: model, configOptions: configOptions,
-            agentCommand: agent.agentCommand, timeoutMilliseconds: timeoutMs,
+            agentCommand: agent.agentCommand, timeoutMilliseconds: timeoutMs, control: control,
             onWarning: quiet ? nil : { Console.errLine("[acpx] warning: \($0)") })
         return ACPSession(id: response.sessionId, agent: handle, modes: response.modes)
     }

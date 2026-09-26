@@ -280,14 +280,9 @@ public enum ReconnectReplay {
             var acpx = state ?? SessionAcpxState()
             ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
             state = acpx
-            guard let response else {
-                var current = models
-                current.currentModelId = modelId
-                return ModelReplay(models: current, options: nil)
-            }
-            return ModelReplay(
-                models: ModelSupport.modelState(fromConfigOptions: response.configOptions),
-                options: response.configOptions)
+            // What the selection left in the record: a reply reporting no options
+            // acknowledged the model, and the session still offers it (acpx 0.19.3, #778).
+            return ModelReplay(models: ModelSupport.advertisedModelState(acpx), options: response?.configOptions)
         } catch {
             throw SessionReplayError(.model, """
                 Failed to replay saved session model \(modelId) on ACP session \(target.sessionId): \
@@ -319,8 +314,10 @@ public enum ReconnectReplay {
                 var acpx = state ?? SessionAcpxState()
                 ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
                 state = acpx
-                accepted = response.configOptions
-                replayed = OptionsReplay(models: ModelSupport.modelState(fromConfigOptions: response.configOptions))
+                // Read back from the record, which keeps the options a reply reporting none
+                // left as they were (acpx 0.19.3, #778).
+                if case .array(let options)? = acpx.configOptions { accepted = options } else { accepted = nil }
+                replayed = OptionsReplay(models: ModelSupport.advertisedModelState(acpx))
             } catch {
                 throw SessionReplayError(.configOption, """
                     Failed to replay saved session config option \(configId) on ACP session \(target.sessionId): \

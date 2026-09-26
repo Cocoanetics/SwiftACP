@@ -9,7 +9,9 @@ import Testing
 /// members (#121): a new session's as `sessions new` sets them, a prompt's and a
 /// control's as the clone each builds (`cloneSessionAcpxState`), a read record's as
 /// acpx's parser builds it — and a member set since in its place, or last. Each order
-/// with the agent is the one acpx wrote for the same steps on `model-agent.py`.
+/// with the agent is the one acpx wrote for the same steps on `model-agent.py`. A new
+/// session's model is selected as acpx 0.19.3 selects it (#778), which builds the block
+/// anew: 0.19.1 set it in place, with `session_options` first on a legacy model list.
 extension DaemonToolsTests {
     /// How `sessions new` leaves the block, by what the agent advertises and the model asked for.
     struct NewSession: Sendable, CustomTestStringConvertible {
@@ -31,7 +33,7 @@ extension DaemonToolsTests {
             "current_model_id", "available_models", "available_model_names", "model_control"
         ]),
         NewSession(legacy: true, model: "m2", order: [
-            "session_options", "current_model_id", "available_models", "available_model_names", "model_control"
+            "current_model_id", "available_models", "available_model_names", "model_control", "session_options"
         ])
     ])
     func aNewSessionsBlockIsInTheOrderAcpxSetsIt(_ expected: NewSession) async throws {
