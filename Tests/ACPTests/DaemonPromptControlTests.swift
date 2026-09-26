@@ -181,6 +181,45 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A control waiting for a prompt the held agent could not be sent — its stdin closed,
+    /// so the write failed — runs on the fresh launch the turn goes to: the failed write
+    /// leaves no note that the prompt went out (Codex review on #207). The notes of the
+    /// turn's prompts never come here, so only what the turn takes itself counts.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aControlWaitingForAPromptThatCouldNotBeSentRunsOnTheFreshLaunch() async throws {
+        let armed = NSTemporaryDirectory() + "exit-agent-stdin-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: armed) }
+        let command = try Self.exitAgent("EXIT_AGENT_CLOSE_STDIN_ARMED='\(armed)'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            // The first prompt's agent closes its stdin as it answers, and runs on, held.
+            try "".write(toFile: armed, atomically: true, encoding: .utf8)
+            try await prompt(daemon, id, text: "first", client: CallingClient())
+            let first = try #require(SessionStore.loadRecord(id)?.pid)
+
+            await daemon.setPromptNoted { _, _ in }
+            // As the prompt to the held agent is about to be written, a control waits for it.
+            let (taken, taking) = AsyncStream<Void>.makeStream()
+            let (controls, sending) = AsyncStream<Task<SessionControlResult, Error>>.makeStream()
+            await daemon.setControlTakenHook { _ in taking.yield() }
+            await daemon.setPromptGoingOut { _ in
+                await daemon.setPromptGoingOut(nil)
+                sending.yield(Task { try await daemon.setMode(sessionId: id, modeId: "plan") })
+                var waiting = taken.makeAsyncIterator()
+                _ = await waiting.next()
+            }
+            try await prompt(daemon, id, text: "second", client: CallingClient())
+            #expect(try #require(SessionStore.loadRecord(id)?.pid) != first)
+            var sent = controls.makeAsyncIterator()
+            let control = try #require(await sent.next())
+            let result = try await withTimeout(milliseconds: 10_000) { try await control.value }
+            #expect(!result.resumed)
+            #expect(try #require(SessionStore.loadRecord(id)).acpx?.desiredModeId == "plan")
+            await daemon.releaseAll()
+        }
+    }
+
     /// Past its deadline once its request went out, a control puts the prompt's agent down,
     /// as acpx's control closes the prompt's client; the caller hears `TIMEOUT` at once.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))

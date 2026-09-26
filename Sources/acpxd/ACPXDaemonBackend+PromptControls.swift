@@ -191,8 +191,13 @@ final class WriteMark: @unchecked Sendable {
         }
     }
 
+    /// The write failed: the agent does not have it, and a note it left that no one took
+    /// is withdrawn — the prompt never went out.
     func unmark() {
-        lock.withLock { marked = false }
+        lock.withLock {
+            marked = false
+            noted = false
+        }
     }
 
     var happened: Bool {
