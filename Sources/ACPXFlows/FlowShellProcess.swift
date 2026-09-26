@@ -138,24 +138,33 @@ enum FlowShellProcess {
         return try outcome.get()
     }
 
-    /// acpx's `writeShellStdin`: what the spec gives, then the pipe's end — a child that
-    /// closed it early is no matter, its exit tells. Written on a thread of its own, as
-    /// Node writes without waiting.
+    /// acpx's `writeShellStdin`: what the spec gives — a string as UTF-8, or the bytes of a
+    /// Buffer, typed array or DataView — then the pipe's end. A child that closed it early
+    /// is no matter, its exit tells.
     private static func writeStdin(_ child: ChildProcess, _ stdin: WireJSON?) throws {
+        if let stdin, case .bytes(let bytes)? = FlowJS.marker(stdin) {
+            write(bytes, to: child)
+            return
+        }
         switch stdin {
         case nil, .null?:
             child.closeInput()
         case .string(let units)?:
-            let bytes = Array(String(decoding: units, as: UTF16.self).utf8)
-            Thread {
-                try? child.write(bytes)
-                child.closeInput()
-            }.start()
+            write(Array(String(decoding: units, as: UTF16.self).utf8), to: child)
         case let other?:
             child.closeInput()
             throw FlowShellError.invalidArgType(NodeArgumentError.type(
                 "chunk", "of type string or an instance of Buffer, TypedArray, or DataView", other))
         }
+    }
+
+    /// `bytes` written on a thread of their own, as Node writes without waiting, then the
+    /// pipe's end.
+    private static func write(_ bytes: [UInt8], to child: ChildProcess) {
+        Thread {
+            try? child.write(bytes)
+            child.closeInput()
+        }.start()
     }
 
     /// acpx's `throwIfShellCancelled`: an attempt cancelled while the command ran fails

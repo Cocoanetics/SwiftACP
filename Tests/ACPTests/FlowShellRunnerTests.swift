@@ -413,6 +413,34 @@ struct FlowShellRunnerTests {
         #expect(seqs.count == 3 && seqs[1] == seqs[0] + 2 && seqs[2] == seqs[1] + 1, "\(seqs)")
     }
 
+    /// What JSON cannot carry reaches the runner as acpx's runner sees it: the bytes of a
+    /// Buffer, typed array or DataView as `stdin`; `maxBufferBytes: Infinity`, which acpx's
+    /// check refuses; a `timeoutMs` of `NaN`, which is no deadline; `NaN` as an argument.
+    @Test(.enabled(if: nodeAvailable))
+    func runShellTakesWhatJSONCannotCarry() async throws {
+        let run = try await runnerRun("""
+            const attempt = (runShell, execution) =>
+              runShell(execution).then((r) => r.stdout, (e) => `${e.name}: ${e.message}`);
+            export default defineFlow({ name: "beyond-json", startAt: "a", nodes: {
+              a: action({ run: async ({ runShell }) => {
+                const bytes = new Uint8Array([0, 118, 105, 101, 119, 0]);
+                return [
+                  await attempt(runShell, { command: "/bin/cat", stdin: Buffer.from("hi") }),
+                  await attempt(runShell, { command: "/bin/cat", stdin: new Uint8Array([111, 107]) }),
+                  await attempt(runShell, { command: "/bin/cat", stdin: new DataView(bytes.buffer, 1, 4) }),
+                  await attempt(runShell, { command: "/bin/echo", args: ["x"], maxBufferBytes: Infinity }),
+                  await attempt(runShell, {
+                    command: "/bin/sh", args: ["-c", "sleep 0.2; printf done"], timeoutMs: NaN }),
+                  await attempt(runShell, { command: "/bin/echo", args: [NaN, -Infinity] }),
+                ];
+              } }) },
+              edges: [] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified == #"["hi","ok","view","#
+            + #""Error: Shell action maxBufferBytes must be a non-negative safe integer","done","NaN -Infinity\n"]"#)
+    }
+
     /// acpx hands every callback of an attempt the attempt's own `signal`: a shell action's
     /// `exec` and `parse` share it.
     @Test(.enabled(if: nodeAvailable))

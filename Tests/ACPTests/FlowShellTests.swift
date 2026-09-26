@@ -35,6 +35,27 @@ struct FlowShellTests {
         #expect(failure?.message == "args.map is not a function")
     }
 
+    /// The markers for what JSON cannot carry, read as acpx's JavaScript reads the values:
+    /// a non-finite number written as `null` and converted by `String`, refused as a
+    /// capture limit, taken as a timeout; the bytes of a binary `stdin`.
+    @Test func whatJSONCannotCarryReadsAsJavaScriptReadsIt() throws {
+        let marker = { (kind: String, text: String) in
+            WireJSON.object([(FlowJS.markerKey, .text(kind)), ("text", .text(text))])
+        }
+        let infinity = marker("number", "Infinity")
+        #expect(FlowJS.marker(infinity) == .number(.infinity))
+        #expect(try FlowJS.written(infinity) == .null)
+        #expect(FlowJS.string(marker("number", "-Infinity")) == "-Infinity")
+        #expect(FlowJS.string(marker("number", "NaN")) == "NaN")
+        #expect(NodeArgumentError.received(marker("number", "NaN")) == "type number (NaN)")
+        #expect(FlowShell.resolveTimeout(infinity) == infinity)
+        #expect(FlowShell.resolveTimeout(marker("number", "NaN")) == nil)
+        let limit = FlowShellExecution(json: .object([("maxBufferBytes", infinity)])).maxBufferBytes
+        #expect(limit == .infinity)
+        #expect(throws: FlowShellError.self) { try FlowShell.validateMaxBufferBytes(limit) }
+        #expect(FlowJS.marker(marker("bytes", "aGk=")) == .bytes([104, 105]))
+    }
+
     /// Node's `util.inspect` of a string, as its `ERR_INVALID_ARG_VALUE` shows one: the
     /// cases are what Node 22 prints.
     @Test func aStringIsInspectedAsNodeInspectsIt() {

@@ -22,6 +22,11 @@ enum FlowJS {
         case bigint(String)
         /// A value `JSON.stringify` throws for, a cycle, by the message it throws.
         case unserializable(String)
+        /// A number JSON has no literal for — `NaN`, `Infinity`, `-Infinity` — which it
+        /// writes as `null`.
+        case number(Double)
+        /// A `Buffer`, typed array or `DataView` given as `stdin`, whose bytes Node writes.
+        case bytes([UInt8])
     }
 
     static func marker(_ value: WireJSON) -> Marker? {
@@ -30,6 +35,8 @@ enum FlowJS {
         case "undefined": return .undefined
         case "bigint": return .bigint(value["text"]?.stringValue ?? "")
         case "unserializable": return .unserializable(value["text"]?.stringValue ?? "")
+        case "number": return .number(JavaScriptNumber.parse(value["text"]?.stringValue ?? ""))
+        case "bytes": return .bytes(Array(Data(base64Encoded: value["text"]?.stringValue ?? "") ?? Data()))
         default: return nil
         }
     }
@@ -40,6 +47,8 @@ enum FlowJS {
         case .undefined?: return "undefined"
         case .bigint(let digits)?: return digits
         case .unserializable?: return "[object Object]"
+        case .number(let number)?: return WireJSON.javaScriptString(forNonFinite: number)
+        case .bytes(let bytes)?: return String(decoding: bytes, as: UTF8.self)
         case nil: return SessionArchive.javaScriptString(value)
         }
     }
@@ -51,6 +60,9 @@ enum FlowJS {
         case .undefined?: return nil
         case .bigint?: throw FlowShellError("Do not know how to serialize a BigInt", name: "TypeError")
         case .unserializable(let message)?: throw FlowShellError(message, name: "TypeError")
+        case .number?: return .null
+        case .bytes(let bytes)?:
+            return .object([("type", .text("Buffer")), ("data", .array(bytes.map { .number(Double($0)) }))])
         case nil: break
         }
         switch value {
@@ -74,6 +86,8 @@ enum FlowJS {
         case .undefined: return "undefined"
         case .bigint(let digits): return "type bigint (\(digits)n)"
         case .unserializable: return "an instance of Object"
+        case .number(let number): return "type number (\(WireJSON.javaScriptString(forNonFinite: number)))"
+        case .bytes: return "an instance of Buffer"
         }
     }
 }
@@ -140,6 +154,13 @@ enum NodeInspect {
         case 0x0D: return "\\r"
         default: return "\\x" + (unit < 0x10 ? "0" : "") + String(unit, radix: 16, uppercase: true)
         }
+    }
+}
+
+extension WireJSON {
+    /// JavaScript's `String(number)` for one JSON has no literal for.
+    static func javaScriptString(forNonFinite number: Double) -> String {
+        number.isNaN ? "NaN" : number > 0 ? "Infinity" : "-Infinity"
     }
 }
 

@@ -529,13 +529,16 @@ function runShell(attemptId, attempt, execution) {
 const JS_MARKER = "\u0000acpx";
 const jsMarker = (kind, text) => (text === undefined ? { [JS_MARKER]: kind } : { [JS_MARKER]: kind, text });
 
-// A member of a spec as JSON writes it, a BigInt within it marked — or, for what
-// `JSON.stringify` leaves out, or throws on (a cycle), a marker saying so.
+// A member of a spec as JSON writes it, a BigInt and a number JSON has no literal for
+// (`NaN`, the infinities) marked within it — or, for what `JSON.stringify` leaves out, or
+// throws on (a cycle), a marker saying so.
 function specJSON(value) {
   try {
-    const json = JSON.stringify(value, (_key, member) =>
-      typeof member === "bigint" ? jsMarker("bigint", String(member)) : member,
-    );
+    const json = JSON.stringify(value, (_key, member) => {
+      if (typeof member === "bigint") return jsMarker("bigint", String(member));
+      if (typeof member === "number" && !Number.isFinite(member)) return jsMarker("number", String(member));
+      return member;
+    });
     return json === undefined ? jsMarker("undefined") : JSON.parse(json);
   } catch (error) {
     return jsMarker("unserializable", error instanceof Error ? error.message : String(error));
@@ -555,7 +558,11 @@ function encodeExecution(execution) {
     if (key === "args" && Array.isArray(value)) encoded.args = value.map(specJSON);
     else if (value !== undefined) encoded[key] = specJSON(value);
   }
-  const { args, env, shell } = execution;
+  const { args, env, shell, stdin } = execution;
+  // Bytes Node's `stdin.end` writes as they are: a Buffer, typed array or DataView.
+  if (ArrayBuffer.isView(stdin)) {
+    encoded.stdin = jsMarker("bytes", Buffer.from(stdin.buffer, stdin.byteOffset, stdin.byteLength).toString("base64"));
+  }
   if (env !== null && typeof env === "object") {
     try {
       encoded.env = Object.fromEntries(

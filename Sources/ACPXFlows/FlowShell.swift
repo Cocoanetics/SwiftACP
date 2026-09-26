@@ -38,7 +38,9 @@ enum FlowShell {
         case .bool(let flag): return flag ? 1 : 0
         case .null: return 0
         case .array: return JavaScriptNumber.parse(SessionArchive.javaScriptString(value))
-        case .object: return .nan
+        case .object:
+            if case .number(let number)? = FlowJS.marker(value) { return number }
+            return .nan
         }
     }
 
@@ -253,7 +255,9 @@ struct FlowShellExecution: Sendable {
         switch json["maxBufferBytes"] {
         case nil, .null?: return nil
         case .number(let value)?: return value
-        default: return .nan
+        case let other?:
+            if case .number(let value)? = FlowJS.marker(other) { return value }
+            return .nan
         }
     }
 
