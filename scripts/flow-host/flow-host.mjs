@@ -165,6 +165,12 @@ async function loadSucrase() {
 // compiles TypeScript — the flow and the TypeScript files it requires — to CommonJS. So
 // `require`, `__dirname` and a flow's npm packages resolve as they do in acpx.
 async function requireTypeScript(file) {
+  return await withTypeScriptRequire(() => createRequire(import.meta.url)(file));
+}
+
+// tsx's CommonJS `register`, while the flow loads: `require` compiles TypeScript with
+// sucrase, `.tsx` with JSX too.
+async function withTypeScriptRequire(load) {
   const { transform } = await loadSucrase();
   const extensions = Module._extensions;
   const previous = new Map();
@@ -177,7 +183,7 @@ async function requireTypeScript(file) {
     };
   }
   try {
-    return createRequire(import.meta.url)(file);
+    return await load();
   } finally {
     for (const [extension, handler] of previous) {
       if (handler === undefined) delete extensions[extension];
@@ -193,18 +199,40 @@ async function importModuleTypeScript(file) {
     moduleHooksRegistered = true;
     const hooks = `
       import { readFile } from "node:fs/promises";
+      import path from "node:path";
       import { fileURLToPath } from "node:url";
       let transform;
+      // tsx's formats: \`.mts\` a module, \`.cts\` CommonJS, \`.ts\` and \`.tsx\` what the
+      // nearest package.json's "type" makes them — CommonJS without one.
+      async function formatOf(filePath) {
+        if (filePath.endsWith(".mts")) return "module";
+        if (filePath.endsWith(".cts")) return "commonjs";
+        for (let dir = path.dirname(filePath); ; dir = path.dirname(dir)) {
+          let text;
+          try {
+            text = await readFile(path.join(dir, "package.json"), "utf8");
+          } catch (error) {
+            if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+          }
+          if (text !== undefined) return JSON.parse(text).type === "module" ? "module" : "commonjs";
+          if (path.dirname(dir) === dir) return "commonjs";
+        }
+      }
       export async function load(url, context, nextLoad) {
         if (!/\\.(ts|mts|cts|tsx)$/.test(new URL(url).pathname)) return nextLoad(url, context);
-        transform ??= (await import(${JSON.stringify(pathToFileURL(SUCRASE_PATH).href)})).transform;
         const filePath = fileURLToPath(url);
+        const format = await formatOf(filePath);
+        transform ??= (await import(${JSON.stringify(pathToFileURL(SUCRASE_PATH).href)})).transform;
         const source = await readFile(filePath, "utf8");
-        return { format: "module", shortCircuit: true, source: transform(source, { transforms: ["typescript"], filePath }).code };
+        // CommonJS compiled as such, so Node finds its exports as it does a module's.
+        const transforms = ["typescript"];
+        if (filePath.endsWith(".tsx")) transforms.push("jsx");
+        if (format === "commonjs") transforms.push("imports");
+        return { format, shortCircuit: true, source: transform(source, { transforms, filePath, production: true }).code };
       }`;
     register(`data:text/javascript,${encodeURIComponent(hooks)}`);
   }
-  return await import(pathToFileURL(file).href);
+  return await withTypeScriptRequire(() => import(pathToFileURL(file).href));
 }
 
 function findFlowDefinition(rt, module) {

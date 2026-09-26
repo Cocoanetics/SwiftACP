@@ -212,6 +212,27 @@ struct FlowRunnerTests {
         #expect(member(run.state, "outputs", "a")?.stringified == #"{"label":"module","meta":"string"}"#)
     }
 
+    /// An `.mts` flow's imports take the formats tsx gives them: a `.cts` helper is
+    /// CommonJS, and so is a `.ts` one with no package.json making it a module, whether it
+    /// assigns `module.exports` or writes `export` (a Codex finding).
+    @Test(.enabled(if: nodeAvailable))
+    func anMtsFlowImportsCommonJSHelpersAsTsxDoes() async throws {
+        let run = try await runnerRun("""
+            import cjs from "./helper.cts";
+            import legacy from "./legacy.ts";
+            import { quadruple } from "./modern.ts";
+            export default defineFlow({ name: "formats", startAt: "a", nodes: {
+              a: compute({ run: () => ({ cts: cjs.double(21), ts: legacy.triple(7), esm: quadruple(5) }) }) },
+              edges: [] });
+            """, extension: "mts", files: [
+                "helper.cts": "const double = (n: number): number => n * 2;\nmodule.exports = { double };\n",
+                "legacy.ts": "module.exports = { triple: (n: number): number => n * 3 };\n",
+                "modern.ts": "export function quadruple(n: number): number { return n * 4; }\n"
+            ])
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified == #"{"cts":42,"ts":21,"esm":20}"#)
+    }
+
     /// acpx: "requires defineFlow before permission gating".
     @Test(.enabled(if: nodeAvailable))
     func aModuleWithoutDefineFlowIsRefused() async throws {
