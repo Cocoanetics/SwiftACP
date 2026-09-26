@@ -163,6 +163,32 @@ import Testing
         }
     }
 
+    /// A requested model the resumed session refuses as gone fails the resume the same way:
+    /// the model control's error is the resume's cause, and the agent's error is behind it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aModelRefusedAsGoneMakesTheResumeNoSession() async throws {
+        let (a, _) = try Self.directories()
+        defer { try? FileManager.default.removeItem(at: a.deletingLastPathComponent()) }
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/model-agent.py")
+        let agent = "/usr/bin/env MODEL_AGENT_LOAD=1 MODEL_AGENT_LEGACY=1 "
+            + #"MODEL_AGENT_MODEL_ERROR='{"code":-32002,"message":"Session gone"}' "#
+            + "'\(python)' '\(fixture.path)'"
+        try await withIsolatedStore {
+            let run = await Self.acpx(
+                ["--model", "m2", "sessions", "new", "--resume-session", "old-1"], agent: agent, cwd: a)
+            #expect(run.code == 4)
+            #expect(run.err == """
+                Failed to resume ACP session old-1: Failed session/set_model for model "m2": Session gone \
+                (ACP -32002)
+                hint: the saved ACP session is missing or stale; start a fresh session with \
+                `acpx <agent> sessions new`, then retry.
+
+                """)
+        }
+    }
+
     /// The agent's own failure fails the resume as a runtime error, with the hints for one.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anAgentsFailureFailsTheResume() async throws {

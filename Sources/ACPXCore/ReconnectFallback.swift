@@ -57,17 +57,28 @@ public enum ReconnectFallback {
         return !sessionHasAgentMessages && code == -32603
     }
 
-    /// acpx's `isAcpResourceNotFoundError`: a not-found code, or session-not-found
-    /// wording in the message, anywhere in the error's data, or — for an error that did
-    /// not come from the agent — in its description.
+    /// acpx's `isAcpResourceNotFoundError`: of the agent's error the failure is or came of
+    /// (``agentError(in:)``), a not-found code, or session-not-found wording in its message
+    /// or anywhere in its data; else such wording in the failure's own description.
     public static func isResourceNotFound(_ error: Error) -> Bool {
-        if let resume = error as? SessionResumeError { return isResourceNotFound(resume.underlying) }
-        guard let acp = error as? JSONRPCErrorBody else {
-            return isSessionNotFoundText(error.localizedDescription)
+        if let acp = agentError(in: error) {
+            if resourceNotFoundCodes.contains(acp.code) { return true }
+            if isSessionNotFoundText(acp.message) { return true }
+            if hasSessionNotFoundHint(acp.data, depth: 0) { return true }
         }
-        if resourceNotFoundCodes.contains(acp.code) { return true }
-        if isSessionNotFoundText(acp.message) { return true }
-        return hasSessionNotFoundHint(acp.data, depth: 0)
+        return isSessionNotFoundText(error.localizedDescription)
+    }
+
+    /// acpx's `extractAcpError`: the agent's error `error` is, or stands for a few causes
+    /// down (``ErrorWithCause``) — a resume's, a model control's.
+    static func agentError(in error: Error) -> JSONRPCErrorBody? {
+        var current: Error? = error
+        for _ in 0 ..< 5 {
+            guard let candidate = current else { return nil }
+            if let acp = candidate as? JSONRPCErrorBody { return acp }
+            current = (candidate as? ErrorWithCause)?.cause
+        }
+        return nil
     }
 
     /// acpx's `isSessionNotFoundText`.

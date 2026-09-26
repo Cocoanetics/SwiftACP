@@ -189,9 +189,11 @@ public enum SessionEngine {
 
 /// A resume that failed: acpx's `Failed to resume ACP session <id>: <why>`, the agent's
 /// error kept as its cause.
-public struct SessionResumeError: LocalizedError {
+public struct SessionResumeError: ErrorWithCause, LocalizedError {
     public let sessionId: String
     public let underlying: any Error
+
+    public var cause: Error? { underlying }
 
     public var errorDescription: String? {
         "Failed to resume ACP session \(sessionId): \(TurnFailure.message(of: underlying))"
