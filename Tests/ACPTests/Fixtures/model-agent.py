@@ -16,7 +16,8 @@ that list instead, read at launch, so a test can change what a later launch offe
 what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
 names a file: while it exists, the next model request removes it and the agent exits
 without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_option` with
-`{}`, reporting no options back. `MODEL_AGENT_EXTRA_OPTION` names one more select to
+`{}`, reporting no options back. `MODEL_AGENT_MODEL_ERROR` holds an error object the model's
+request (`session/set_model`, or the `model` option) is answered with. `MODEL_AGENT_EXTRA_OPTION` names one more select to
 advertise after `effort`, with the values `x` (current) and `y`. During a prompt,
 `MODEL_AGENT_COMMANDS=1` sends an `available_commands_update` and `MODEL_AGENT_MODE_UPDATE`
 a `current_mode_update` to the mode it names, before the answer.
@@ -36,6 +37,7 @@ else:
 NAMES = {"m1": "One", "m2": "Two"}
 EXIT_ON_MODEL = os.environ.get("MODEL_AGENT_EXIT_ON_MODEL")
 EMPTY_REPLIES = os.environ.get("MODEL_AGENT_EMPTY_REPLIES") == "1"
+MODEL_ERROR = os.environ.get("MODEL_AGENT_MODEL_ERROR")
 EXTRA = os.environ.get("MODEL_AGENT_EXTRA_OPTION")
 if EXTRA:
     CURRENT[EXTRA] = "x"
@@ -91,6 +93,10 @@ def main():
         method, req_id = message.get("method"), message.get("id")
         if exits_on(method, message.get("params", {})):
             sys.exit(3)
+        if MODEL_ERROR and (method == "session/set_model" or (
+                method == "session/set_config_option" and message.get("params", {}).get("configId") == "model")):
+            send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(MODEL_ERROR)})
+            continue
 
         if method == "initialize":
             send({"jsonrpc": "2.0", "id": req_id, "result": {
