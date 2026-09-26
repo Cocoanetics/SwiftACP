@@ -196,12 +196,43 @@ function isFile(file) {
   }
 }
 
+// tsx's `import.meta` in CommonJS: the file's dirname, filename and URL, the URL with the
+// namespace the flow loads under. sucrase leaves `import.meta` as it is — which would also
+// make Node take the module for an ES module — so its tokens are swapped for that object.
+function withImportMeta(code, namespace) {
+  if (!code.includes("import.meta")) return code;
+  const { parse, TokenType } = sucrase;
+  const { tokens } = parse(code, false, false, false);
+  let result = "";
+  let last = 0;
+  const text = (token) => code.slice(token.start, token.end);
+  for (let index = 0; index + 2 < tokens.length; index += 1) {
+    const [keyword, dot, name] = [tokens[index], tokens[index + 1], tokens[index + 2]];
+    // sucrase reads the `import` of `import.meta` as a name; one after `.` is a property.
+    const before = tokens[index - 1]?.type;
+    if (before === TokenType.dot || before === TokenType.questionDot) continue;
+    if (keyword.type !== TokenType._import && !(keyword.type === TokenType.name && text(keyword) === "import")) continue;
+    if (dot.type !== TokenType.dot || name.type !== TokenType.name || text(name) !== "meta") continue;
+    result += code.slice(last, keyword.start) + "__acpxImportMeta";
+    last = name.end;
+  }
+  if (last === 0) return code;
+  result += code.slice(last);
+  // On the first line, after any "use strict", so lines keep their numbers.
+  const declaration = "const __acpxImportMeta = { dirname: __dirname, filename: __filename, "
+    + `url: require("node:url").pathToFileURL(__filename).href + "?namespace=${namespace}" };`;
+  const prologue = /^"use strict";/.exec(result)?.[0] ?? "";
+  return prologue + declaration + result.slice(prologue.length);
+}
+
 // tsx's CommonJS `register`, while the flow loads: `require` compiles TypeScript with
 // sucrase, `.tsx` with JSX too, and resolves as tsx does.
 async function withTypeScriptRequire(load) {
   const { transform } = await loadSucrase();
   const extensions = Module._extensions;
   const previous = new Map();
+  // tsx loads each flow under a namespace of its own, which its `import.meta.url` carries.
+  const namespace = randomUUID();
   const resolveFilename = Module._resolveFilename;
   Module._resolveFilename = function (request, parent, ...rest) {
     if (parent?.filename && TYPESCRIPT_FILE.test(parent.filename) && /^(?:\.{1,2}\/|\/)/.test(request)) {
@@ -218,7 +249,9 @@ async function withTypeScriptRequire(load) {
     extensions[extension] = (module, filename) => {
       const transforms = filename.endsWith(".tsx") ? ["typescript", "jsx", "imports"] : ["typescript", "imports"];
       const source = readFileSync(filename, "utf8");
-      module._compile(transform(source, { transforms, filePath: filename, production: true }).code, filename);
+      const { code } = transform(source, { transforms, filePath: filename, production: true });
+      // CommonJS, as tsx compiles it, whatever the package's "type" would make Node take.
+      module._compile(withImportMeta(code, namespace), filename, "commonjs");
     };
   }
   try {

@@ -258,6 +258,24 @@ struct FlowRunnerTests {
         #expect(member(run.state, "outputs", "a")?.stringified == "[1,2,3,4]", "\(ext)")
     }
 
+    /// A `.ts` flow is CommonJS as tsx compiles it, whatever its package's "type", and its
+    /// `import.meta` is tsx's: the file's dirname, filename and URL, the URL with the
+    /// namespace the flow loads under (a Codex finding).
+    @Test(.enabled(if: nodeAvailable), arguments: [false, true])
+    func aTypeScriptFlowsImportMetaIsTsxs(_ inModulePackage: Bool) async throws {
+        let run = try await runnerRun("""
+            const own = require("node:url").pathToFileURL(__filename).href;
+            export default defineFlow({ name: "meta", startAt: "a", nodes: {
+              a: compute({ run: () => ({ keys: Object.keys(import.meta), dirname: import.meta.dirname === __dirname,
+                filename: import.meta.filename === __filename,
+                url: import.meta.url.startsWith(own + "?namespace=") }) }) },
+              edges: [] });
+            """, extension: "ts", files: inModulePackage ? ["package.json": #"{"type":"module"}"#] : [:])
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs", "a")?.stringified
+            == #"{"keys":["dirname","filename","url"],"dirname":true,"filename":true,"url":true}"#)
+    }
+
     /// acpx: "requires defineFlow before permission gating".
     @Test(.enabled(if: nodeAvailable))
     func aModuleWithoutDefineFlowIsRefused() async throws {
