@@ -238,21 +238,19 @@ public enum ModelSupport {
 
     /// acpx's `applyInitialModelSelection`: what applying the requested model to a new
     /// session leaves in its record. The advertised model state is taken from the
-    /// agent's reply to the model's config option when there was one, else from what
-    /// `session/new` advertised; a model that was applied is the current one.
+    /// options the agent's reply reported, when it reported any, else from what
+    /// `session/new` advertised; a model that was applied is selected, as
+    /// ``applyModelSelection(_:response:to:)`` selects one — a reply reporting no
+    /// options acknowledges it (acpx 0.19.3, #778).
     public static func applyInitialModelSelection(
-        _ application: ModelApplication.Application, requestedModel: String?, originalModels: ModelState?,
-        to state: inout SessionAcpxState
+        _ application: ModelApplication.Application, originalModels: ModelState?, to state: inout SessionAcpxState
     ) {
         let replied = application.response?.configOptions
         applyConfigOptions(replied, to: &state)
-        if let models = application.response != nil ? modelState(fromConfigOptions: replied) : originalModels {
+        if let models = replied != nil ? modelState(fromConfigOptions: replied) : originalModels {
             applyAdvertisedModelState(models, to: &state)
         }
-        guard application.applied else { return }
-        let current = modelState(fromConfigOptions: replied)?.currentModelId ?? requestedModel
-        state.currentModelId = current.flatMap { $0.javaScriptTrimmed.isEmpty ? nil : $0.javaScriptTrimmed }
-        // acpx's `setCurrentModelId` deletes the member for a blank model.
-        if state.currentModelId == nil { state.forget("current_model_id") }
+        guard application.applied, let modelId = application.modelId else { return }
+        applyModelSelection(modelId, response: application.response, to: &state)
     }
 }

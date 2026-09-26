@@ -164,23 +164,4 @@ struct ModelApplicationTests {
         let agent = try ConfigFields.agent(try WireJSON.parse(entry), name: "claude", "config.json")
         #expect(ModelApplication.supportsLegacyClaudeCodeModelMetadata(agent.command))
     }
-
-    // MARK: - Carrying advertised state across responses
-
-    @Test func advertisedStateFollowsTheLatestConfigOptions() {
-        let select = JSONValue.object([
-            "id": .string("model"), "type": .string("select"), "category": .string("model"),
-            "currentValue": .string("m2"),
-            "options": .array([.object(["value": .string("m2"), "name": .string("Two")])])
-        ])
-        let state = ModelApplication.advance(nil, with: [select])
-        #expect(state?.currentModelId == "m2")
-        // A response with no model option clears config-derived state…
-        #expect(ModelApplication.advance(state, with: []) == nil)
-        // …but leaves legacy state alone: config options never carried it, so they
-        // cannot have withdrawn it.
-        let legacy = ModelSupport.ModelState(
-            configId: nil, currentModelId: "m1", availableModels: [])
-        #expect(ModelApplication.advance(legacy, with: nil)?.currentModelId == "m1")
-    }
 }

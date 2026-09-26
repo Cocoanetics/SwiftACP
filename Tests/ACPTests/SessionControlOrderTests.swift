@@ -11,9 +11,10 @@ import Testing
 /// The expected traces were captured from npm acpx 0.19.1 against the same
 /// advertisement, so these pin the order rather than merely describing it.
 struct SessionControlOrderTests {
-    /// Launches the config-option fixture and returns the requests it received.
+    /// Launches the config-option fixture and returns the requests it received. With
+    /// `emptyReplies`, it acknowledges each option set with `{}`, reporting no options.
     private func trace(
-        legacy: Bool = false, model: String?,
+        legacy: Bool = false, emptyReplies: Bool = false, model: String?,
         configOptions: [ModelApplication.ConfigOptionAssignment]
     ) async throws -> [(method: String, params: JSONValue)] {
         let python = try #require(AgentRegistry.which("python3"))
@@ -27,6 +28,7 @@ struct SessionControlOrderTests {
         var environment = ProcessInfo.processInfo.environment
         environment["MODEL_AGENT_LOG"] = log.path
         if legacy { environment["MODEL_AGENT_LEGACY"] = "1" }
+        if emptyReplies { environment["MODEL_AGENT_EMPTY_REPLIES"] = "1" }
 
         let command = "'\(python)' '\(fixture.path)'"
         let agent = try await ACPAgent.launch(
@@ -111,6 +113,25 @@ struct SessionControlOrderTests {
             Available models: m1, m2.
             """)
         #expect(seen.isEmpty)
+    }
+
+    /// A reply that reports no options acknowledges what was set, and the session still
+    /// offers what it did, as acpx 0.19.3 keeps it (#778): a later value for the model's
+    /// option is checked against the models, after an acknowledged model or option alike.
+    @Test(.enabled(if: mockPythonAvailable), arguments: [
+        ("m2", [ModelApplication.ConfigOptionAssignment(configId: "model", value: "bogus")]),
+        (nil, [.init(configId: "effort", value: "high"), .init(configId: "model", value: "bogus")])
+    ])
+    func anAcknowledgedSelectionLeavesTheModelsToCheckAgainst(
+        model: String?, configOptions: [ModelApplication.ConfigOptionAssignment]
+    ) async throws {
+        let error = await #expect(throws: ModelApplication.UnsupportedError.self) {
+            _ = try await trace(emptyReplies: true, model: model, configOptions: configOptions)
+        }
+        #expect(error?.message == """
+            Cannot apply --model "bogus": the ACP agent did not advertise that model. \
+            Available models: m1, m2.
+            """)
     }
 
     /// Nothing is sent when the invocation asked for nothing — `exec` with no

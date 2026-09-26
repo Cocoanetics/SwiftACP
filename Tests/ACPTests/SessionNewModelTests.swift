@@ -21,8 +21,11 @@ import Testing
 
     /// Creates a session on the model fixture with `model` requested, returning the
     /// record it wrote and the session requests the agent received — and, with
-    /// `thenPrompt`, what a daemon turn on it sent next.
-    private func create(legacy: Bool = false, model: String?, thenPrompt: Bool = false) async throws -> Created {
+    /// `thenPrompt`, what a daemon turn on it sent next. With `emptyReplies`, the agent
+    /// acknowledges each option set with `{}`, reporting no options.
+    private func create(
+        legacy: Bool = false, emptyReplies: Bool = false, model: String?, thenPrompt: Bool = false
+    ) async throws -> Created {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
@@ -30,7 +33,8 @@ import Testing
             try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
             let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
             let command = "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' "
-                + (legacy ? "MODEL_AGENT_LEGACY=1 " : "") + "'\(python)' '\(fixture.path)'"
+                + (legacy ? "MODEL_AGENT_LEGACY=1 " : "") + (emptyReplies ? "MODEL_AGENT_EMPTY_REPLIES=1 " : "")
+                + "'\(python)' '\(fixture.path)'"
             var options = SessionAcpxState.SessionOptions()
             options.model = model
             var created = Created(record: nil, requests: [])
@@ -70,6 +74,15 @@ import Testing
         }
     }
 
+    /// The `currentValue` of option `id` in what `acpx` keeps of the session's options.
+    private static func currentValue(of id: String, in acpx: SessionAcpxState?) -> String? {
+        guard case .array(let options)? = acpx?.configOptions else { return nil }
+        for case .object(let option) in options where option["id"] == .string(id) {
+            if case .string(let value)? = option["currentValue"] { return value }
+        }
+        return nil
+    }
+
     @Test(.enabled(if: mockPythonAvailable))
     func aModelOptionIsSetThroughIt() async throws {
         let created = try await create(model: "m2")
@@ -96,6 +109,22 @@ import Testing
         #expect(acpx.currentModelId == "m2")
         #expect(acpx.availableModelNames == ["m1": "One", "m2": "Two"])
         #expect(acpx.modelControl == "legacy_set_model")
+    }
+
+    /// An agent that acknowledges the model with `{}`, reporting no options, is taken at
+    /// its word, as acpx 0.19.3 takes it (#778): the options `session/new` gave stay,
+    /// with the model's own at the one set.
+    @Test(.enabled(if: mockPythonAvailable))
+    func anAcknowledgedModelIsTheModelOptionsValue() async throws {
+        let created = try await create(emptyReplies: true, model: "m2")
+        #expect(created.requests == ["session/new", "session/set_config_option model=m2"])
+        let acpx = try #require(created.record?.acpx)
+        #expect(acpx.currentModelId == "m2")
+        #expect(acpx.availableModels == ["m1", "m2"])
+        #expect(acpx.modelControl == "config_option")
+        #expect(acpx.sessionOptions?.model == "m2")
+        #expect(Self.currentValue(of: "model", in: acpx) == "m2")
+        #expect(Self.currentValue(of: "effort", in: acpx) == "low")
     }
 
     /// The model the session is on already costs no request.
@@ -147,6 +176,55 @@ import Testing
             return
         }
         #expect(model["currentValue"] == .string("m2"))
+    }
+
+    /// A reconnect that puts the pinned model back on an agent acknowledging it with `{}`
+    /// keeps what the record says of the session's models: acpx 0.19.3 reads them back
+    /// from the record (#778), where the reply's missing options left none.
+    @Test(.enabled(if: mockPythonAvailable))
+    func anAcknowledgedReplayKeepsTheModels() async throws {
+        let created = try await create(emptyReplies: true, model: "m2", thenPrompt: true)
+        #expect(created.turn == ["session/new", "session/set_config_option model=m2", "session/prompt"])
+        let acpx = try #require(created.afterTurn?.acpx)
+        #expect(acpx.currentModelId == "m2")
+        #expect(acpx.availableModels == ["m1", "m2"])
+        #expect(acpx.modelControl == "config_option")
+        #expect(Self.currentValue(of: "model", in: acpx) == "m2")
+    }
+
+    /// Saved options put back on an agent that acknowledges each with `{}` are checked
+    /// against the options the record keeps, as acpx 0.19.3 checks them (#778): a saved
+    /// value the session no longer offers is not sent, and the models stay known.
+    @Test(.enabled(if: mockPythonAvailable))
+    func acknowledgedOptionsAreCheckedAgainstTheRecord() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
+        try await withIsolatedStore {
+            try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+            let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+            var record = try await SessionEngine.createSession(
+                agentCommand: "/usr/bin/env MODEL_AGENT_LOG='\(log.path)' MODEL_AGENT_EMPTY_REPLIES=1 "
+                    + "MODEL_AGENT_EXTRA_OPTION=extra '\(python)' '\(fixture.path)'",
+                cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll, authCredentials: [:],
+                authPolicy: "skip")
+            // `z` is no value `extra` offers: saved when it did, say.
+            var acpx = try #require(record.acpx)
+            acpx.desiredConfigOptions = ["effort": "high", "extra": "z"]
+            record.acpx = acpx
+            try SessionStore.writeRecord(record)
+
+            let before = Self.requests(log).count
+            _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
+                .runPrompt(sessionId: record.acpxRecordId, text: "hi")
+            #expect(Array(Self.requests(log).dropFirst(before))
+                == ["session/new", "session/set_config_option effort=high", "session/prompt"])
+            let restored = try #require(SessionStore.loadRecord(record.acpxRecordId)?.acpx)
+            #expect(restored.currentModelId == "m1")
+            #expect(restored.availableModels == ["m1", "m2"])
+            #expect(restored.modelControl == "config_option")
+            #expect(Self.currentValue(of: "effort", in: restored) == "high")
+        }
     }
 
     /// A model chosen later with `set model` is the one pinned: a reconnect puts it back,
