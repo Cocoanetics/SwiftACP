@@ -152,8 +152,10 @@ struct ExecInterruptTests {
     }
 
     /// Fire `source` when something is written to the FIFO at `path`, which this makes.
-    static func fire(_ source: Interrupts.Source, whenWrittenTo path: URL) throws -> DispatchSourceRead {
-        try whenWritten(to: path) { source.fire() }
+    static func fire(
+        _ source: Interrupts.Source, whenWrittenTo path: URL, signal: String = "SIGINT"
+    ) throws -> DispatchSourceRead {
+        try whenWritten(to: path) { source.fire(signal) }
     }
 
     /// Call `action` when something is written to the FIFO at `path`, which this makes.

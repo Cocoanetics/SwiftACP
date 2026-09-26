@@ -10,31 +10,38 @@ import Musl
 #endif
 
 /// One live process, as the process table shows it.
-struct ProcessTableEntry: Sendable, Equatable {
-    let pid: pid_t
-    let parentPid: pid_t
-    let groupPid: pid_t
+package struct ProcessTableEntry: Sendable, Equatable {
+    package let pid: pid_t
+    package let parentPid: pid_t
+    package let groupPid: pid_t
     /// When it started, in ``ProcessTable``'s units. A pid seen again with another
     /// birth is another process.
-    let birth: UInt64
+    package let birth: UInt64
 }
 
 /// The system's process table, read natively where acpx runs `ps` (macOS) or reads
 /// `/proc` (Linux). Zombies are left out: they cannot be signalled into exiting, and
 /// their parent will reap them.
-enum ProcessTable {
+package enum ProcessTable {
     /// Every live process, or `nil` when the table cannot be read.
-    static func snapshot() -> [pid_t: ProcessTableEntry]? {
+    package static func snapshot() -> [pid_t: ProcessTableEntry]? {
         #if canImport(Darwin)
         var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
-        for _ in 0..<4 {
+        // Room for the processes started between the two calls: a quarter more, at least
+        // 64, twice that after each time it was not enough. A busy machine starts dozens.
+        var slack = 64
+        for _ in 0..<8 {
             var length = 0
             guard sysctl(&name, u_int(name.count), nil, &length, nil, 0) == 0 else { return nil }
             let stride = MemoryLayout<kinfo_proc>.stride
-            var processes = [kinfo_proc](repeating: kinfo_proc(), count: length / stride + 32)
+            let count = length / stride
+            var processes = [kinfo_proc](repeating: kinfo_proc(), count: count + max(slack, count / 4))
             length = processes.count * stride
             guard sysctl(&name, u_int(name.count), &processes, &length, nil, 0) == 0 else {
-                if errno == ENOMEM { continue }  // the table grew in between
+                if errno == ENOMEM {  // the table grew in between
+                    slack *= 2
+                    continue
+                }
                 return nil
             }
             var table: [pid_t: ProcessTableEntry] = [:]

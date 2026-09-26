@@ -236,7 +236,8 @@ import fs from "node:fs/promises";
 import Module, { createRequire, register } from "node:module";
 import net from "node:net";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import util from "node:util";
 
 const RUNTIME_PATH = process.env.ACPX_FLOW_RUNTIME;
 // sucrase, which compiles a TypeScript flow as acpx's tsx does (`flow-sucrase.mjs`).
@@ -290,11 +291,23 @@ const outputs = {};
 // What each attempt's callback returned last, until the runner makes it the node's output
 // or forgets the attempt.
 const returned = new Map();
-// Each attempt whose callback is still running: its abort controller, and whether the
-// runner has forgotten it. Forgotten, it is let go here at once — a callback that never
-// settles is then held by nothing but itself, as in acpx — and one that settles later,
-// past its deadline, keeps nothing.
+// Each attempt the runner has not let go of, as acpx's `FlowAttempt` shows itself to the
+// flow's code: the `signal` every callback of it is handed, aborted with the reason it is
+// cancelled for; whether the runner is done with it; and what a callback of it threw.
+const attempts = new Map();
+// Each attempt whose callback is still running. Forgotten, it is let go here at once — a
+// callback that never settles is then held by nothing but itself, as in acpx — and one
+// that settles later, past its deadline, keeps nothing.
 const running = new Map();
+
+function attemptFor(attemptId) {
+  let attempt = attempts.get(attemptId);
+  if (!attempt) {
+    attempt = { controller: new AbortController(), finished: false, thrown: undefined };
+    attempts.set(attemptId, attempt);
+  }
+  return attempt;
+}
 
 async function loadRuntime() {
   runtime ??= await import(pathToFileURL(RUNTIME_PATH).href);
@@ -685,7 +698,7 @@ async function flowTitle(params) {
 async function invoke(params) {
   const { nodeId, fn, attemptId } = params;
   const node = flow.nodes[nodeId];
-  const attempt = { controller: new AbortController(), forgotten: false };
+  const attempt = attemptFor(attemptId);
   running.set(attemptId, attempt);
   const state = params.state;
   state.input = input;
@@ -699,16 +712,206 @@ async function invoke(params) {
     signal: attempt.controller.signal,
   };
   if (node.nodeType === "action" && "run" in node) {
-    ctx.runShell = (execution) => request("shell/run", { attemptId, execution });
+    ctx.runShell = (execution) => runShell(attemptId, attempt, execution);
   }
   try {
-    const args = "arg" in params ? [params.arg, ctx] : [ctx];
+    // A shell action's `parse` gets the command's result with the `args` of the spec its
+    // `exec` gave, as acpx's does.
+    const arg = fn === "parse" ? commandResult(params.arg, returned.get(attemptId)) : params.arg;
+    const args = "arg" in params ? [arg, ctx] : [ctx];
     const value = await node[fn](...args);
-    if (!attempt.forgotten) returned.set(attemptId, value);
-    return returnedValue(value);
+    if (!attempt.finished) returned.set(attemptId, value);
+    return returnedValue(fn === "exec" ? encodeExecution(value, ["cwd", "timeoutMs"]) : value);
+  } catch (error) {
+    attempt.thrown = { error };
+    throw error;
   } finally {
     if (running.get(attemptId) === attempt) running.delete(attemptId);
   }
+}
+
+// acpx's `runCallbackShell`, which is `attempt.own(...)` around the command: an attempt no
+// longer taking work refuses at once — with the reason it was cancelled for, or as
+// finished — as does an execution whose `cwd` `path.resolve` refuses. The runner runs the
+// command.
+function runShell(attemptId, attempt, execution) {
+  attempt.controller.signal.throwIfAborted();
+  if (attempt.finished) throw new Error("Flow attempt has finished accepting work");
+  path.resolve(".", execution.cwd ?? ".");
+  return request("shell/run", { attemptId, execution: encodeExecution(execution, ["cwd"]) }).then((result) =>
+    commandResult(result, execution),
+  );
+}
+
+// A value JSON cannot carry in a shell command's spec, marked for the runner (`FlowJS`),
+// which converts and writes the flow's values as acpx's runner does: under a key no flow's
+// object has, and what the value was.
+const JS_MARKER = "\u0000acpx";
+const jsMarker = (kind, text) => (text === undefined ? { [JS_MARKER]: kind } : { [JS_MARKER]: kind, text });
+
+// A member of a spec as JSON writes it, a BigInt and a number JSON has no literal for
+// (`NaN`, the infinities) marked within it, and an object's keys that start with a NUL
+// escaped with another, so none passes for a marker — or, for what `JSON.stringify` leaves
+// out, or throws on (a cycle), a marker saying so.
+function specJSON(value) {
+  try {
+    const json = JSON.stringify(value, (_key, member) => {
+      if (typeof member === "bigint") return jsMarker("bigint", String(member));
+      if (typeof member === "number" && !Number.isFinite(member)) return jsMarker("number", String(member));
+      if (member !== null && typeof member === "object" && !Array.isArray(member)) {
+        const keys = Object.keys(member);
+        if (keys.some((key) => key.startsWith("\0"))) {
+          return Object.fromEntries(keys.map((key) => [key.startsWith("\0") ? `\0${key}` : key, member[key]]));
+        }
+      }
+      return member;
+    });
+    return json === undefined ? jsMarker("undefined") : JSON.parse(json);
+  } catch (error) {
+    return jsMarker("unserializable", error instanceof Error ? error.message : String(error));
+  }
+}
+
+// A shell command's spec as the runner reads it, where acpx's runner holds the flow's own
+// object: each member as JSON writes it, each argument by itself; `env` as Node's `spawn`
+// converts it, `${value}`, leaving out `undefined`; and the arguments the command gets, as
+// `spawn` makes them — `String(arg)` (a symbol, empty), or with `shell` as `Array.join`
+// does. What converting throws, `spawn` would throw too.
+// The spec's own members are what acpx spreads (`{ ...execution }`); `inherited` are the
+// ones it reads off the spec itself, found on its prototype too: `cwd`, and for a shell
+// action `timeoutMs`. A list's holes are read as `undefined`, as Node reads them.
+function encodeExecution(execution, inherited) {
+  if (execution === null || typeof execution !== "object") return execution;
+  // Null-prototype, so a member named `__proto__` is a member.
+  const encoded = Object.create(null);
+  // What acpx's spread copies, each member read once; `args`, `env`, `shell` and `stdin`
+  // are taken from these alone, never from the prototype.
+  const own = Object.create(null);
+  const members = Object.keys(execution);
+  for (const key of members) own[key] = execution[key];
+  for (const key of inherited) if (!Object.hasOwn(execution, key)) own[key] = execution[key];
+  for (const [key, value] of Object.entries(own)) {
+    if (value === undefined) continue;
+    const name = key.startsWith("\0") ? `\0${key}` : key;
+    if (key === "args") encoded.args = encodeArgs(value);
+    else encoded[name] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
+  }
+  const copied = (key) => (Object.hasOwn(execution, key) ? own[key] : undefined);
+  const args = copied("args");
+  const env = copied("env");
+  const shell = copied("shell");
+  const stdin = copied("stdin");
+  // Bytes Node's `stdin.end` writes as they are: a Buffer, typed array or DataView.
+  if (ArrayBuffer.isView(stdin)) {
+    encoded.stdin = jsMarker("bytes", Buffer.from(stdin.buffer, stdin.byteOffset, stdin.byteLength).toString("base64"));
+  }
+  // acpx spreads `env` (`{ ...process.env, ...spec.env }`): an object's own members, a
+  // string's or a list's characters and items by index, nothing of a number.
+  if (env !== undefined && env !== null) {
+    try {
+      encoded.env = environment(Object.entries({ ...env }));
+    } catch (error) {
+      encoded["\u0000envError"] = error instanceof Error ? error.message : String(error);
+    }
+  }
+  if (Array.isArray(args)) {
+    try {
+      encoded["\u0000argv"] = Array.from(args, (arg) =>
+        shell ? (arg == null ? "" : `${arg}`) : typeof arg === "symbol" ? "" : String(arg),
+      );
+    } catch (error) {
+      encoded["\u0000argvError"] = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return encoded;
+}
+
+// Variables as Node's `spawn` makes them, `${value}`, `undefined` left out. Node refuses a
+// NUL only in a string; a converted value's ends at it, as C's does.
+function environment(entries) {
+  return Object.fromEntries(
+    entries
+      .filter(([, value]) => value !== undefined)
+      .map(([name, value]) => [name, typeof value === "string" ? value : `${value}`.split("\0")[0]]),
+  );
+}
+
+// `args`: a list by index, its holes `undefined`; an object — which Node's `spawn` takes as
+// its options in place of acpx's own — as Node reads options: its own members, each with
+// its type, `env` by `for…in` (prototype included) and converted, a file URL `cwd` as its
+// path; anything else as JSON writes it.
+function encodeArgs(args) {
+  if (Array.isArray(args)) return Array.from(args, specJSON);
+  if (args === null || typeof args !== "object") return specJSON(args);
+  const options = Object.create(null);
+  const read = Object.create(null);
+  for (const key of Object.keys(args)) {
+    const value = (read[key] = args[key]);
+    if (value === undefined) continue;
+    options[key.startsWith("\0") ? `\0${key}` : key] = typedByNode(value) ? instanceMarker(value) : specJSON(value);
+  }
+  const { cwd, env } = read;
+  // A Buffer `cwd` Node lets through, and its native spawn then ignores.
+  if (Buffer.isBuffer(cwd)) delete options.cwd;
+  else if (cwd instanceof URL) {
+    try {
+      options.cwd = fileURLToPath(cwd);
+    } catch (error) {
+      options.cwd = jsMarker("refused", error.message);
+      options.cwd.code = error.code;
+    }
+  }
+  if (env) {
+    try {
+      const entries = [];
+      for (const name in env) entries.push([name, env[name]]);
+      options.env = environment(entries);
+    } catch (error) {
+      options.env = jsMarker("refused", error instanceof Error ? error.message : String(error));
+    }
+  }
+  return options;
+}
+
+// An object, a function or a symbol, which Node's checks name by its type ("an instance
+// of URL"), where JSON would write something else of it — through `toJSON`, or nothing.
+function typedByNode(value) {
+  const type = typeof value;
+  return (type === "object" && value !== null && !Array.isArray(value)) || type === "function" || type === "symbol";
+}
+
+// Such a value for the runner: Node's `determineSpecificType` of it, what `String` makes
+// of it, its JSON, and what `Number` makes of it (`timeoutMs > 0` compares that).
+function instanceMarker(value) {
+  let string;
+  try {
+    string = String(value);
+  } catch {
+    string = "[object Object]";
+  }
+  let number;
+  try {
+    number = String(Number(value));
+  } catch {
+    number = "NaN";
+  }
+  return { [JS_MARKER]: "instance", text: specificType(value), string, json: specJSON(value), number };
+}
+
+function specificType(value) {
+  if (typeof value === "function") return `function ${value.name}`;
+  if (typeof value === "symbol") return `type symbol (${String(value)})`;
+  if (value.constructor && "name" in value.constructor) return `an instance of ${value.constructor.name}`;
+  return util.inspect(value, { depth: -1 });
+}
+
+// A command's result as the flow sees it: its `args` are the spec's own list, which
+// acpx's result holds (`spec.args ?? []`).
+function commandResult(result, execution) {
+  if (result !== null && typeof result === "object" && execution !== null && typeof execution === "object") {
+    result.args = execution.args ?? [];
+  }
+  return result;
 }
 
 // A callback's value as JSON, as acpx writes it (`JSON.stringify`): nothing for
@@ -731,24 +934,55 @@ function returnedValue(value) {
 // acpx's `setNodeValue`: the output a node's attempt produced — its callback's value, or
 // one the runner made — is the node's output from now on.
 function setOutput(params) {
-  const value = "value" in params ? params.value : returned.get(params.attemptId);
+  const node = flow.nodes[params.nodeId];
+  let value = "value" in params ? params.value : returned.get(params.attemptId);
+  // A shell action without `parse` outputs its command's result, whose `args` are its spec's.
+  if ("value" in params && node && "exec" in node) value = commandResult(value, returned.get(params.attemptId));
   returned.delete(params.attemptId);
   Object.defineProperty(outputs, params.nodeId, { value, enumerable: true, configurable: true, writable: true });
 }
 
+// The runner cancelled an attempt: its `signal` aborted with the reason — for one that
+// failed, what its callback threw, when it failed with that.
 function cancelAttempt(params) {
-  const reason = params.reason === "timeout" ? new TimeoutError(params.timeoutMs) : new InterruptedError();
-  running.get(params.attemptId)?.controller.abort(reason);
+  const attempt = attemptFor(params.attemptId);
+  let reason;
+  if (params.reason === "timeout") reason = new TimeoutError(params.timeoutMs);
+  else if (params.reason === "interrupted") reason = new InterruptedError();
+  else reason = attempt.thrown ? attempt.thrown.error : new Error(params.message);
+  attempt.controller.abort(reason);
 }
 
 // The runner is done with an attempt: nothing of it is kept.
 function forgetAttempt(params) {
   returned.delete(params.attemptId);
-  const attempt = running.get(params.attemptId);
-  if (attempt) {
-    attempt.forgotten = true;
-    running.delete(params.attemptId);
+  const attempt = attempts.get(params.attemptId);
+  if (attempt) attempt.finished = true;
+  attempts.delete(params.attemptId);
+  running.delete(params.attemptId);
+}
+
+// A request's error as the code acpx runs would have thrown it: a `TypeError` for a value
+// Node or JavaScript refuses — with Node's code, as Node's own — else an `Error` of the
+// name given, with the properties Node gives a spawn failure.
+function requestError({ message, data }) {
+  const code = data?.props?.code;
+  if (data?.name === "TypeError") {
+    const error = Object.assign(new TypeError(message), data.props);
+    if (code === undefined) return error;
+    Object.defineProperty(error, "toString", {
+      value() {
+        return `${this.name} [${code}]: ${this.message}`;
+      },
+      writable: true,
+      configurable: true,
+    });
+    return error;
   }
+  const error = new Error(message);
+  if (data?.name) error.name = data.name;
+  if (data?.props) Object.assign(error, data.props);
+  return error;
 }
 
 // What a callback threw, as acpx's runner records it: the message of an `Error`, else the
@@ -771,9 +1005,7 @@ async function handle(message) {
     pending.delete(message.id);
     if (!waiting) return;
     if (message.error) {
-      const error = new Error(message.error.message);
-      if (message.error.data?.name) error.name = message.error.data.name;
-      waiting.reject(error);
+      waiting.reject(requestError(message.error));
     } else {
       waiting.resolve(message.result);
     }
@@ -853,6 +1085,9 @@ for (const signal of INTERRUPTS) {
 // code they leave (a later `process.exit(7)`: 7). So the host stops holding itself open
 // for the runner, and takes Ctrl-C as acpx then does; it still goes if the runner does.
 function release() {
+  // The run is over: none of its attempts takes work any more.
+  for (const attempt of attempts.values()) attempt.finished = true;
+  attempts.clear();
   for (const signal of INTERRUPTS) {
     process.removeListener(signal, ignore);
   }
