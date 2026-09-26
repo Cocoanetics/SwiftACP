@@ -15,9 +15,10 @@ struct CompareRunOnceTests {
     }
 
     /// `compare` in JSON over a `retry-agent.py` in each of `modes`. The signal comes as
-    /// the agent at `interrupting` gets its prompt.
+    /// the agent at `interrupting` gets its prompt; the deadlines waiting as the agent at
+    /// `timingOut` gets its prompt pass then (``DeadlineSource``).
     private func compare(
-        _ modes: [String], _ options: [String] = [], interrupting: Int? = nil
+        _ modes: [String], _ options: [String] = [], interrupting: Int? = nil, timingOut: Int? = nil
     ) async throws -> Compared {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -27,11 +28,16 @@ struct CompareRunOnceTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let ready = dir.appendingPathComponent("ready")
         let source = Interrupts.Source()
-        let watch = interrupting == nil ? nil : try ExecInterruptTests.fire(source, whenWrittenTo: ready)
+        let deadlines = DeadlineSource()
+        // The agent whose prompt the signal comes at, or the deadline.
+        let prompted = interrupting ?? timingOut
+        let watch = try prompted.map { _ in
+            try ExecInterruptTests.whenWritten(to: ready) { interrupting == nil ? deadlines.fire() : source.fire() }
+        }
         defer { watch?.cancel() }
         let agents = modes.enumerated().map { index, mode in
             "/usr/bin/env RETRY_AGENT_MODE=\(mode) RETRY_AGENT_ATTEMPTS='\(dir.path)/attempts-\(index)' "
-                + (index == interrupting ? "RETRY_AGENT_READY='\(ready.path)' " : "") + "'\(python)' '\(fixture.path)'"
+                + (index == prompted ? "RETRY_AGENT_READY='\(ready.path)' " : "") + "'\(python)' '\(fixture.path)'"
         }
         let arguments = ["--format", "json", "--cwd", dir.path, "--approve-all"] + options
             + ["compare"] + agents + ["hi"]
@@ -41,7 +47,9 @@ struct CompareRunOnceTests {
             let code: Int32 = await withCheckedContinuation { continuation in
                 Thread {
                     let code = Console.$capture.withValue(capture) {
-                        Interrupts.$source.withValue(source) { runCommandLine(arguments) }
+                        Interrupts.$source.withValue(source) {
+                            DeadlineSource.$current.withValue(deadlines) { runCommandLine(arguments) }
+                        }
                     }
                     continuation.resume(returning: code)
                 }.start()
@@ -76,14 +84,18 @@ struct CompareRunOnceTests {
         #expect(row["final_message"] as? String == "hello")
     }
 
+    /// A run past `--timeout` is a `cancelled` row, and `compare` goes on to the next agent.
+    /// The timeout bounds every step of every run, the next agent's launch too, so it is as
+    /// long as the test may take; the first agent's deadline passes as it gets its prompt,
+    /// which it never answers.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aRunPastTheTimeoutIsACancelledRow() async throws {
-        let compared = try await compare(["hang-prompt", "ok"], ["--timeout", "0.3"])
+        let compared = try await compare(["hang-prompt", "ok"], ["--timeout", "60"], timingOut: 0)
         #expect(compared.code == ExitCodes.timeout)
         let row = try #require(compared.rows.first)
         #expect(row["status"] as? String == "cancelled")
         #expect(row["stop_reason"] is NSNull)
-        #expect(row["error"] as? String == "Timed out after 300ms")
+        #expect(row["error"] as? String == "Timed out after 60000ms")
         #expect(compared.rows.last?["status"] as? String == "ok")
     }
 

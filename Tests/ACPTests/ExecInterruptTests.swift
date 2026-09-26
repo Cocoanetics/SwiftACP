@@ -152,9 +152,14 @@ struct ExecInterruptTests {
     }
 
     /// Fire `source` when something is written to the FIFO at `path`, which this makes.
+    static func fire(_ source: Interrupts.Source, whenWrittenTo path: URL) throws -> DispatchSourceRead {
+        try whenWritten(to: path) { source.fire() }
+    }
+
+    /// Call `action` when something is written to the FIFO at `path`, which this makes.
     /// Opened for reading and writing, so that neither side waits for the other and no
     /// end of it is seen while the agent has yet to open it.
-    static func fire(_ source: Interrupts.Source, whenWrittenTo path: URL) throws -> DispatchSourceRead {
+    static func whenWritten(to path: URL, _ action: @escaping @Sendable () -> Void) throws -> DispatchSourceRead {
         guard mkfifo(path.path, 0o600) == 0 else { throw POSIXError(.EIO) }
         let fd = open(path.path, O_RDWR | O_NONBLOCK)
         guard fd >= 0 else { throw POSIXError(.EIO) }
@@ -163,7 +168,7 @@ struct ExecInterruptTests {
             var byte: UInt8 = 0
             guard read(fd, &byte, 1) > 0 else { return }
             reader.cancel()
-            source.fire()
+            action()
         }
         reader.setCancelHandler { close(fd) }
         reader.resume()
