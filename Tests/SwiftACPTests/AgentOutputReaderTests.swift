@@ -76,6 +76,19 @@ import Testing
         }
     }
 
+    /// The LF search `push` and `countLineBytes` share: from where it starts on, at
+    /// either end of the chunk, or none.
+    @Test func aLineFeedIsFoundFromWhereTheSearchStarts() {
+        let bytes = Array("a\nbc\n".utf8)
+        #expect(AgentOutputReader.lineFeed(in: bytes, from: 0) == 1)
+        #expect(AgentOutputReader.lineFeed(in: bytes, from: 1) == 1)
+        #expect(AgentOutputReader.lineFeed(in: bytes, from: 2) == 4)
+        #expect(AgentOutputReader.lineFeed(in: bytes, from: 5) == nil)
+        #expect(AgentOutputReader.lineFeed(in: Array("\n".utf8), from: 0) == 0)
+        #expect(AgentOutputReader.lineFeed(in: Array("abc".utf8), from: 0) == nil)
+        #expect(AgentOutputReader.lineFeed(in: [], from: 0) == nil)
+    }
+
     /// acpx's `readMaxAcpMessageBytes`.
     @Test func theLimitIsReadAsAcpxReadsIt() throws {
         func bytes(_ value: String?) throws -> Int? {
