@@ -53,7 +53,10 @@ enum SessionLifecycle {
             agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd) {
             // Reusing a session still honours `--mcp-config`: ensure promises a
             // session set up the way this invocation asked for.
-            let reused = try applyExplicitMcpServers(to: existing, config: context.config)
+            var reused = try applyExplicitMcpServers(to: existing, config: context.config)
+            // And `--model`, as acpx's `ensureSessionWithOwnership` puts it on the session it
+            // keeps (`setSessionModel`), which fails the command if the session cannot take it.
+            if let model = flags.model { reused = try setModel(model, on: reused, flags: flags) }
             printEnsured(reused, created: false, format: flags.format)
             return ExitCodes.success
         }
@@ -63,6 +66,25 @@ enum SessionLifecycle {
         printCreatedBanner(record, agentName: agent.agentName, flags: flags)
         printEnsured(record, created: true, format: flags.format)
         return ExitCodes.success
+    }
+
+    /// Put `model` on `record`'s session through acpxd, as `set model` does, and return the
+    /// record as that leaves it.
+    private static func setModel(
+        _ model: String, on record: SessionRecord, flags: GlobalFlags
+    ) throws -> SessionRecord {
+        let recordId = record.acpxRecordId
+        let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
+        _ = try runBlocking {
+            do {
+                return try await DaemonClient.setModel(
+                    sessionId: recordId, modelId: model, nonInteractivePermissions: flags.nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs)
+            } catch let unavailable as DaemonUnavailable {
+                throw CLIError(unavailable.cliMessage)
+            }
+        }
+        return SessionStore.loadRecord(recordId) ?? record
     }
 
     /// Apply an explicit `--mcp-config` to a session that already exists, so a reused
