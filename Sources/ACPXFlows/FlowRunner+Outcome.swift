@@ -68,6 +68,9 @@ extension FlowRunner {
     func forgetAttempt(_ step: Step) {
         host.notify("attempt/forget", .object([("attemptId", .text(step.result.attemptId))]))
         host.abandon(attempt: step.result.attemptId)
+        if let attempt = attempts.removeValue(forKey: step.result.attemptId) {
+            retiredAttempts[step.result.attemptId] = .some(attempt.abortReason)
+        }
     }
 
     /// acpx's `setNodeValue` for `outputs`, here and in the host, whose callbacks see it:

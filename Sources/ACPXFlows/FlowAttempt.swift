@@ -6,10 +6,27 @@ import SwiftACP
 /// (exit 3), as any timeout.
 public struct FlowTimeoutError: Error, LocalizedError, OutputErrorMeta, Equatable {
     public let timeoutMs: Double
-    public var errorDescription: String? { "Timed out after \(WireJSON.javaScriptString(for: timeoutMs))ms" }
+    /// The timeout as acpx's message shows it, when it was given as other than a number:
+    /// `${timeoutMs}` of the value (a shell command's `timeoutMs: "100"`).
+    var shown: String?
+    public var errorDescription: String? {
+        "Timed out after \(shown ?? WireJSON.javaScriptString(for: timeoutMs))ms"
+    }
     public var outputCode: String? { "TIMEOUT" }
     public var detailCode: String? { nil }
     public var origin: String? { nil }
+}
+
+/// A flow's delay as a `Duration`: `nil` for one past about 31 years, which no run
+/// outlives. (`Duration.milliseconds` traps from about 10²³ ms.) Node runs a delay above
+/// 2,147,483,647 ms after 1 ms instead (openclaw/acpx#812); here a delay is taken as given.
+enum FlowTimer {
+    static let maxDelayMs = 1e12
+
+    static func duration(milliseconds: Double) -> Duration? {
+        guard milliseconds.isFinite, milliseconds <= maxDelayMs else { return nil }
+        return .nanoseconds(Int64(max(0, milliseconds) * 1_000_000))
+    }
 }
 
 /// acpx's `InterruptedError`: `Interrupted`.
@@ -61,16 +78,17 @@ final class FlowAttempt: @unchecked Sendable {
         self.nodeId = nodeId
         self.attemptId = attemptId
         self.startedAt = startedAt
+        let delay = timeoutMs.flatMap { $0 > 0 ? FlowTimer.duration(milliseconds: $0) : nil }
         if let timeoutMs, timeoutMs > 0 {
             self.timeoutMs = timeoutMs
-            deadline = ContinuousClock.now + .milliseconds(timeoutMs)
+            deadline = delay.map { ContinuousClock.now + $0 }
         } else {
             self.timeoutMs = nil
             deadline = nil
         }
-        if let timeoutMs = self.timeoutMs {
+        if let timeoutMs = self.timeoutMs, let delay {
             timer = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(timeoutMs))
+                try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { return }
                 self?.cancel(FlowTimeoutError(timeoutMs: timeoutMs))
             }
@@ -135,9 +153,23 @@ final class FlowAttempt: @unchecked Sendable {
         let notify: (@Sendable (Error) -> Void)?
     }
 
+    /// acpx's `signal.addEventListener("abort", …)`: `handler` hears the reason when the
+    /// attempt is cancelled. Returns what takes it off again — or `nil`, adding nothing,
+    /// when the attempt is cancelled already.
+    func addAbortListener(_ handler: @escaping @Sendable (Error) -> Void) -> (() -> Void)? {
+        let id = UUID()
+        let added: Bool = lock.withLock {
+            guard reason == nil else { return false }
+            abortHandlers[id] = handler
+            return true
+        }
+        guard added else { return nil }
+        return { [weak self] in _ = self?.lock.withLock { self?.abortHandlers.removeValue(forKey: id) } }
+    }
+
     /// acpx's `registerCancellation`: run at once if the attempt is not active.
     @discardableResult
-    func registerCancellation(_ cancel: @escaping @Sendable (String) async throws -> Void) -> () -> Void {
+    func registerCancellation(_ cancel: @escaping @Sendable (String) async throws -> Void) -> @Sendable () -> Void {
         let id = UUID()
         let registered: Bool = lock.withLock {
             guard accepting, reason == nil else { return false }
@@ -285,12 +317,6 @@ final class FlowAttempt: @unchecked Sendable {
         if let reason = abortReason { failures.append(reason) }
         failures += errors
         return FlowAttemptCleanupError(errors: failures)
-    }
-}
-
-extension Duration {
-    static func milliseconds(_ value: Double) -> Duration {
-        .nanoseconds(Int64(min(value * 1_000_000, Double(Int64.max))))
     }
 }
 

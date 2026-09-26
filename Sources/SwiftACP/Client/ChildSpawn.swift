@@ -15,11 +15,15 @@ import Musl
 /// programs commonly ignore `SIGPIPE`), and nothing but its three standard descriptors
 /// inherited. A terminal's command and an agent are both started here (see
 /// ``ChildProcess``).
-enum ChildSpawn {
+package enum ChildSpawn {
     /// Why a child could not be started: the errno, named as Node names it.
-    struct SpawnError: Error, Equatable {
-        let code: Int32
-        var name: String { errnoNames[code] ?? "UNKNOWN" }
+    package struct SpawnError: Error, Equatable {
+        package let code: Int32
+        package var name: String { errnoNames[code] ?? "UNKNOWN" }
+
+        package init(code: Int32) {
+            self.code = code
+        }
     }
 
     /// Where a child's standard input comes from.
@@ -414,7 +418,7 @@ enum ChildSpawn {
         return TerminalExitStatus(signal: signalNames[signal] ?? "")
     }
 
-    static let signalNames: [Int32: String] = {
+    package static let signalNames: [Int32: String] = {
         var names: [Int32: String] = [
             SIGHUP: "SIGHUP", SIGINT: "SIGINT", SIGQUIT: "SIGQUIT", SIGILL: "SIGILL", SIGTRAP: "SIGTRAP",
             SIGABRT: "SIGABRT", SIGBUS: "SIGBUS", SIGFPE: "SIGFPE", SIGKILL: "SIGKILL", SIGUSR1: "SIGUSR1",

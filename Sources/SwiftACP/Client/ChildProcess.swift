@@ -27,17 +27,17 @@ import Musl
 /// in everything already in the pipes — all it wrote before exiting — and only then
 /// reaps it and reports the exit, under the same lock as ``send(_:)``: a signal never
 /// reaches a process that reused its pid, and output read after the exit is all there.
-final class ChildProcess: @unchecked Sendable {
+package final class ChildProcess: @unchecked Sendable {
     /// Why a process could not be started: the errno, named as Node names it.
-    typealias SpawnError = ChildSpawn.SpawnError
+    package typealias SpawnError = ChildSpawn.SpawnError
 
     /// One of the process's output pipes.
-    enum Output: Sendable, Equatable {
+    package enum Output: Sendable, Equatable {
         case stdout
         case stderr
     }
 
-    let pid: pid_t
+    package let pid: pid_t
     /// Stdout's and stderr's read ends, in that order.
     private let outputDescriptors: [Int32]
     /// Written to by ``stopReading()`` to wake the reader out of `poll`.
@@ -77,7 +77,7 @@ final class ChildProcess: @unchecked Sendable {
     ///     without `closefrom` (Linux; ignored elsewhere).
     ///   - withoutChangeDirectory: for tests, change into `cwd` as on a glibc without the
     ///     `addchdir` spawn action.
-    static func spawn(
+    package static func spawn(
         command: String, arguments: [String], cwd: String, environment: [String: String]?,
         input: Bool = false, newSession: Bool = true, withoutCloseFrom: Bool = false,
         withoutChangeDirectory: Bool = false
@@ -134,7 +134,7 @@ final class ChildProcess: @unchecked Sendable {
     ///
     /// - Parameter readerStartsLate: for tests, the slowest reader there can be: it
     ///   starts when the exit needs it to, or else once the exit has been reported.
-    func start(
+    package func start(
         onOutput: @escaping @Sendable ([UInt8]) -> Void, onExit: @escaping @Sendable (Int32?) -> Void,
         readerStartsLate: Bool = false
     ) {
@@ -144,7 +144,7 @@ final class ChildProcess: @unchecked Sendable {
     /// ``start(onOutput:onExit:readerStartsLate:)``, telling the pipes apart: `onChunk`
     /// gets each chunk with the pipe it was read from, and `onClose` each pipe that
     /// reached its end — not one ``stopReading()`` closed.
-    func start(
+    package func start(
         onChunk: @escaping @Sendable (Output, [UInt8]) -> Void,
         onClose: @escaping @Sendable (Output) -> Void = { _ in },
         onExit: @escaping @Sendable (Int32?) -> Void, readerStartsLate: Bool = false
@@ -169,7 +169,7 @@ final class ChildProcess: @unchecked Sendable {
 
     /// Stop reading output: the pipes are closed, and whatever still writes to them
     /// gets `EPIPE` — Node's `stdout.destroy()`.
-    func stopReading() {
+    package func stopReading() {
         lock.withLock {
             guard !stopped else { return }
             stopped = true
@@ -188,19 +188,19 @@ final class ChildProcess: @unchecked Sendable {
     /// Send `signal` to the process, unless it has already been reaped — then its pid
     /// may belong to another process. Returns whether the signal was sent.
     @discardableResult
-    func send(_ signal: Int32) -> Bool {
+    package func send(_ signal: Int32) -> Bool {
         lock.withLock { !reaped && kill(pid, signal) == 0 }
     }
 
     /// Whether the process has exited and been reaped.
-    var hasBeenReaped: Bool { lock.withLock { reaped } }
+    package var hasBeenReaped: Bool { lock.withLock { reaped } }
 
     // MARK: - Input
 
     /// Write all of `bytes` to the process's stdin, waiting while its pipe is full.
     /// Throws ``SpawnError`` with the errno — `EPIPE` once the process closed its end,
     /// `EBADF` after ``closeInput()`` or without a stdin pipe.
-    func write(_ bytes: [UInt8]) throws {
+    package func write(_ bytes: [UInt8]) throws {
         try inputLock.withLock {
             guard let descriptor = inputDescriptor else { throw SpawnError(code: EBADF) }
             try Self.whileSIGPIPEIsBlocked {
@@ -223,7 +223,7 @@ final class ChildProcess: @unchecked Sendable {
 
     /// Close the process's stdin, which it reads as its end — Node's `stdin.end()`.
     /// A write under way finishes first.
-    func closeInput() {
+    package func closeInput() {
         inputLock.withLock {
             guard let descriptor = inputDescriptor else { return }
             close(descriptor)
@@ -369,7 +369,7 @@ final class ChildProcess: @unchecked Sendable {
     }
 
     /// Node's `(code, signal)` for a wait status — see ``ChildSpawn/exitStatus(_:)``.
-    static func exitStatus(_ status: Int32?) -> TerminalExitStatus {
+    package static func exitStatus(_ status: Int32?) -> TerminalExitStatus {
         ChildSpawn.exitStatus(status)
     }
 }

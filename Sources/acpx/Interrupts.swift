@@ -18,18 +18,18 @@ enum Interrupts {
     /// which every listener present hears.
     final class Source: @unchecked Sendable {
         private let lock = NSLock()
-        private var listeners: [Int: @Sendable () -> Void] = [:]
+        private var listeners: [Int: @Sendable (String) -> Void] = [:]
         private var nextId = 0
 
-        func fire() {
-            let heard: [@Sendable () -> Void] = lock.withLock {
+        func fire(_ signal: String = "SIGINT") {
+            let heard: [@Sendable (String) -> Void] = lock.withLock {
                 defer { listeners = [:] }
                 return listeners.keys.sorted().compactMap { listeners[$0] }
             }
-            for listener in heard { listener() }
+            for listener in heard { listener(signal) }
         }
 
-        fileprivate func add(_ listener: @escaping @Sendable () -> Void) -> Int {
+        fileprivate func add(_ listener: @escaping @Sendable (String) -> Void) -> Int {
             lock.withLock {
                 defer { nextId += 1 }
                 listeners[nextId] = listener
@@ -55,9 +55,18 @@ enum Interrupts {
     final class Heard: @unchecked Sendable {
         private let lock = NSLock()
         private var came = false
+        private var name: String?
 
-        func heard() { lock.withLock { came = true } }
+        func heard(_ signal: String = "SIGINT") {
+            lock.withLock {
+                came = true
+                name = name ?? signal
+            }
+        }
+
         var happened: Bool { lock.withLock { came } }
+        /// The signal that came first, if one did.
+        var signal: String? { lock.withLock { name } }
 
         /// Record a signal, saying whether it is the first.
         func first() -> Bool {
@@ -79,7 +88,7 @@ enum Interrupts {
     /// Call `heard` at the first signal from now on, unless stopped before: on the test's
     /// ``source`` if it has one, else on the process's signals, which others may be
     /// listening to meanwhile.
-    static func listen(_ heard: @escaping @Sendable () -> Void) -> Listening {
+    static func listen(_ heard: @escaping @Sendable (_ signal: String) -> Void) -> Listening {
         if let source {
             let id = source.add(heard)
             return Listening { source.remove(id) }
@@ -98,19 +107,30 @@ enum Interrupts {
         _ run: @escaping @Sendable () async throws -> T,
         onInterrupt: @escaping @Sendable (_ endInterrupted: @escaping @Sendable () -> Void) async -> Void
     ) async throws -> T {
+        try await withInterrupt(run, onSignal: { _, endInterrupted in await onInterrupt(endInterrupted) })
+    }
+
+    /// ``withInterrupt(_:onInterrupt:)``, `onSignal` told which signal came — acpx's
+    /// `onInterrupt(signal)`, which a flow forwards to the shell commands it runs.
+    static func withInterrupt<T: Sendable>(
+        _ run: @escaping @Sendable () async throws -> T,
+        onSignal: @escaping @Sendable (
+            _ signal: String, _ endInterrupted: @escaping @Sendable () -> Void
+        ) async -> Void
+    ) async throws -> T {
         let outcome = FirstOutcome<T>()
         // Heard once, whether by the listener, before it listened (``heardBefore``), or both.
         let once = Heard()
-        let interrupt: @Sendable () -> Void = {
+        let interrupt: @Sendable (String) -> Void = { signal in
             guard once.first() else { return }
             Task {
-                await onInterrupt { outcome.reserve() }
+                await onSignal(signal) { outcome.reserve() }
                 outcome.settleReserved(.failure(InterruptedError()))
             }
         }
         let listening = listen(interrupt)
         defer { listening.stop() }
-        if heardBefore?.happened == true { interrupt() }
+        if let heard = heardBefore, heard.happened { interrupt(heard.signal ?? "SIGINT") }
         Task {
             do {
                 outcome.settle(.success(try await run()))
@@ -130,13 +150,13 @@ final class SignalListeners: @unchecked Sendable {
 
     /// Where the signals come from: caught while there are listeners, left alone when not.
     protocol Catching: Sendable {
-        func start(_ heard: @escaping @Sendable () -> Void)
+        func start(_ heard: @escaping @Sendable (_ signal: String) -> Void)
         func stop()
     }
 
     private let catching: Catching
     private let lock = NSLock()
-    private var listeners: [Int: @Sendable () -> Void] = [:]
+    private var listeners: [Int: @Sendable (String) -> Void] = [:]
     private var nextId = 0
     private var caught = false
 
@@ -144,16 +164,20 @@ final class SignalListeners: @unchecked Sendable {
         self.catching = catching
     }
 
-    func add(_ listener: @escaping @Sendable () -> Void) -> Int {
+    func add(_ listener: @escaping @Sendable (_ signal: String) -> Void) -> Int {
         lock.withLock {
             defer { nextId += 1 }
             listeners[nextId] = listener
             if !caught {
                 caught = true
-                catching.start { [weak self] in self?.heard() }
+                catching.start { [weak self] signal in self?.heard(signal) }
             }
             return nextId
         }
+    }
+
+    func add(_ listener: @escaping @Sendable () -> Void) -> Int {
+        add { _ in listener() }
     }
 
     func remove(_ id: Int) {
@@ -164,15 +188,15 @@ final class SignalListeners: @unchecked Sendable {
     }
 
     /// A signal came: each listener hears it, once.
-    func heard() {
-        let heard: [@Sendable () -> Void] = lock.withLock {
+    func heard(_ signal: String) {
+        let heard: [@Sendable (String) -> Void] = lock.withLock {
             defer {
                 listeners = [:]
                 release()
             }
             return listeners.keys.sorted().compactMap { listeners[$0] }
         }
-        for listener in heard { listener() }
+        for listener in heard { listener(signal) }
     }
 
     /// Leave the signals to their default actions again. Called with `lock` held.
@@ -189,12 +213,13 @@ private final class ProcessSignals: SignalListeners.Catching, @unchecked Sendabl
     private let lock = NSLock()
     private var sources: [DispatchSourceSignal] = []
 
-    func start(_ heard: @escaping @Sendable () -> Void) {
+    func start(_ heard: @escaping @Sendable (_ signal: String) -> Void) {
         lock.withLock {
             for number in Self.signals {
                 signal(number, SIG_IGN)
                 let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-                source.setEventHandler(handler: heard)
+                let name = number == SIGINT ? "SIGINT" : number == SIGTERM ? "SIGTERM" : "SIGHUP"
+                source.setEventHandler { heard(name) }
                 sources.append(source)
                 source.resume()
             }

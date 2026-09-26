@@ -99,7 +99,7 @@ enum CompareCommand {
     /// after it runs.
     static func runAgents(_ agents: [String], _ run: (String) -> Row) -> (rows: [Row], interrupted: Bool) {
         let signal = Interrupts.Heard()
-        let listening = Interrupts.listen { signal.heard() }
+        let listening = Interrupts.listen { signal.heard($0) }
         defer { listening.stop() }
         var rows: [Row] = []
         for agentName in agents {

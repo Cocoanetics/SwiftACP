@@ -27,9 +27,9 @@ enum FlowCommand {
                 let runner = FlowRunner(host: host, options: options)
                 let result = try await Interrupts.withInterrupt({
                     try await runner.run(flow, input: input, flowPath: flowPath)
-                }, onInterrupt: { endInterrupted in
-                    endInterrupted()
-                    await runner.interrupt()
+                }, onSignal: { signal, endInterrupted in
+                    // Under way, the run answers the interrupt itself; not yet, it ends at once.
+                    if await !runner.interrupt(signal: signal) { endInterrupted() }
                 })
                 // The flow ended the host after its last answer — a timer's `process.exit()`
                 // — which in acpx ends the process before the result is printed.
@@ -42,7 +42,7 @@ enum FlowCommand {
                 // The flow's own code ended the host — `process.exit()`, a crash — and in acpx
                 // that is acpx's process: it ends as the host did, printing nothing more.
                 return FlowHost.exitCode(waitStatus: await host.stop())
-            } catch is InterruptedError {
+            } catch is InterruptedError, is FlowInterruptedError {
                 await host.stop()
                 return ExitCodes.interrupted
             } catch {
