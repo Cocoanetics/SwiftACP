@@ -1,4 +1,5 @@
 @testable import ACPXFlows
+import Dispatch
 import Foundation
 import SwiftACP
 import Testing
@@ -7,8 +8,9 @@ import Testing
 /// `test/flows-managed-command.test.ts`), run by the runner with the flow's code in the
 /// Node host. acpx's managed-command fixture moves its deadlines on mocked timers; here
 /// they are real, and a command that must be ready before its deadline is a shell that
-/// installs its `trap` first thing, with a deadline of 2 s, which a loaded machine starting
-/// the shell cannot outrun.
+/// installs its `trap` first thing — or, for a node's deadline, one that passes once the
+/// command says it is ready (``FlowDeadlines``): a loaded machine can take longer than a
+/// 2 s deadline to start a shell.
 struct FlowShellRunnerTests {
     private func runnerRun(_ body: String) async throws -> FlowRunnerHarness.Run {
         try await FlowRunnerHarness.run(body)
@@ -16,6 +18,22 @@ struct FlowShellRunnerTests {
 
     private func member(_ value: WireJSON?, _ path: String...) -> WireJSON? {
         path.reduce(value) { $0?[$1] }
+    }
+
+    /// Pass `deadlines` once something is written to a FIFO at `path`, made here and held
+    /// open for reading, so the writer never waits for a reader.
+    private static func fire(_ deadlines: FlowDeadlines, whenWritten path: URL) throws -> DispatchSourceRead {
+        guard mkfifo(path.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        let fd = open(path.path, O_RDWR | O_NONBLOCK)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        let reader = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
+        reader.setEventHandler {
+            var buffer = [UInt8](repeating: 0, count: 64)
+            if read(fd, &buffer, buffer.count) > 0 { deadlines.fire() }
+        }
+        reader.setCancelHandler { close(fd) }
+        reader.resume()
+        return reader
     }
 
     /// A file for a test's command to write to, as a JavaScript string literal.
@@ -232,17 +250,26 @@ struct FlowShellRunnerTests {
         #expect(scratch.read("term") == "term")
     }
 
-    /// acpx: "FlowRunner reaps shell child when outer node deadline expires".
+    /// acpx: "FlowRunner reaps shell child when outer node deadline expires". The deadline
+    /// passes once the command is ready — its trap set, its pid written — however long a busy
+    /// machine took to start it: on CI, a 2 s deadline once came first (#214).
     @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
     func aNodeDeadlineReapsItsShellCommand() async throws {
         let scratch = Scratch()
-        let run = try await runnerRun("""
-            export default defineFlow({ name: "shell-outer-timeout", startAt: "slow", nodes: {
-              slow: shell({ timeoutMs: 2000, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
-                `printf $$ > ${JSON.stringify(\(scratch.js("pid")))}; trap 'printf term > `
-                  + `${JSON.stringify(\(scratch.js("term")))}' TERM; while :; do sleep 0.1; done`] }) }) },
-              edges: [] });
-            """)
+        let deadlines = FlowDeadlines()
+        let watch = try Self.fire(deadlines, whenWritten: scratch.path("ready"))
+        defer { watch.cancel() }
+        let run = try await FlowAttempt.$deadlines.withValue(deadlines) {
+            try await runnerRun("""
+                export default defineFlow({ name: "shell-outer-timeout", startAt: "slow", nodes: {
+                  slow: shell({ timeoutMs: 60000, exec: () => ({ command: "/bin/sh", timeoutMs: 0, args: ["-c",
+                    `trap 'printf term > ${JSON.stringify(\(scratch.js("term")))}' TERM; `
+                      + `printf $$ > ${JSON.stringify(\(scratch.js("pid")))}; `
+                      + `printf ready > ${JSON.stringify(\(scratch.js("ready")))}; `
+                      + `while :; do sleep 0.1; done`] }) }) },
+                  edges: [] });
+                """)
+        }
         #expect(run.code == 3)
         #expect(member(run.state, "status") == .text("timed_out"))
         #expect(member(run.state, "results", "slow", "outcome") == .text("timed_out"))
