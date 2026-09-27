@@ -238,8 +238,10 @@ extension ACPXDaemonBackend {
                 return (existing, replacedExited)
             }
             replacedExited = true
-            // Re-checked after the suspension above: only drop the entry that died.
+            // Re-checked after the suspension above: only drop the entry that died — and what a
+            // creation's token kept of it (#219 review).
             if live[recordId]?.agent === existing.agent { live.removeValue(forKey: recordId) }
+            madeCreations = madeCreations.filter { $0.value.agent !== existing.agent }
             await existing.agent.close()
         }
         return (nil, replacedExited)

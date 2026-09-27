@@ -263,17 +263,25 @@ final class FlowDaemonTurnStop: @unchecked Sendable {
         lock.withLock { didStop = true }
         let (recordId, turnToken) = (self.recordId, self.turnToken)
         let task = Task {
-            let running = (try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)) == true
+            let cancelled = try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)
             let settled = try? await withTimeout(milliseconds: FlowTurnOwner.cancelWaitMilliseconds) {
                 await self.waitForEnd()
             }
-            // Only this turn's agent is put down, while it runs: one not begun ends as it begins,
-            // and what the session has once it has ended is another's (#219 review).
-            if settled == nil, running {
+            // Only this turn's agent is put down, while it runs: what the session has once it has
+            // ended is another's (#219 review).
+            if settled == nil, Self.forcesRelease(cancelled: cancelled) {
                 _ = await DaemonClient.releaseSession(sessionId: recordId, turnToken: turnToken)
             }
         }
         lock.withLock { stopping = task }
+    }
+
+    /// Whether a turn still going past its grace has its agent put down, given what the cancel
+    /// said: yes when the cancel found the turn running, or went unanswered — the release is the
+    /// turn's own, and does nothing once it has ended — but not when it found the turn not yet
+    /// begun, which ends as it begins (#219 review).
+    static func forcesRelease(cancelled: Bool?) -> Bool {
+        cancelled != false
     }
 
     /// The turn is over: a stop under way stops waiting for it, and is done before this returns.

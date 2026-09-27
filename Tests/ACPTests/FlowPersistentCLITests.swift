@@ -89,6 +89,15 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A stopped turn still going past its grace has its agent put down when the cancel found it
+    /// running or went unanswered — the release is the turn's own — and not when the cancel found
+    /// it not yet begun, as it then ends as it begins (#219 review).
+    @Test func aStoppedTurnsReleaseFollowsWhatItsCancelSaid() {
+        #expect(FlowDaemonTurnStop.forcesRelease(cancelled: true))
+        #expect(FlowDaemonTurnStop.forcesRelease(cancelled: nil))
+        #expect(!FlowDaemonTurnStop.forcesRelease(cancelled: false))
+    }
+
     /// Wait until something writes to the FIFO at `path` — read on a thread of its own, not one
     /// of Swift's, as opening it waits for its writer.
     private static func waitForWrite(to path: URL) async {

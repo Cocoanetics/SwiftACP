@@ -45,15 +45,44 @@ extension DaemonToolsTests {
 
     /// A call-off whose creation never came goes after a minute: each creation prunes those older,
     /// so a long-lived daemon doesn't keep them (#219 review). What a creation made stays, however
-    /// long, until its agent is let go.
-    @Test func callOffsKeptAMinuteAreLetGo() async throws {
-        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-        #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
-        #expect(await daemon.creationCalledOff("made", madeAs: "a", agent: StandInAgent()) == false)
-        let later = Date(timeIntervalSinceNow: 61)
-        #expect(await daemon.creationCalledOff("later", madeAs: "b", agent: StandInAgent(), now: later) == false)
-        #expect(await daemon.calledOffCreations.isEmpty)
-        #expect(await daemon.madeCreations.keys.sorted() == ["later", "made"])
+    /// long, while its agent is held — and goes once it is not.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func callOffsKeptAMinuteAreLetGo() async throws {
+        let command = "/usr/bin/env MOCK_SESSION_ID_PER_PROCESS=1 " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
+            _ = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "held"))
+            let later = Date(timeIntervalSinceNow: 61)
+            #expect(await daemon.creationCalledOff("gone", madeAs: "x", agent: StandInAgent(), now: later) == false)
+            #expect(await daemon.calledOffCreations.isEmpty)
+            #expect(await daemon.madeCreations.keys.sorted() == ["gone", "held"])
+            // The next creation drops what was kept of one whose agent is not held.
+            #expect(await daemon.creationCalledOff("next", madeAs: "y", agent: StandInAgent(), now: later) == false)
+            #expect(await daemon.madeCreations.keys.sorted() == ["held", "next"])
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A held agent that died before its session's first turn goes with what its creation's token
+    /// kept of it: the turn that finds it dead and takes the session back leaves nothing of it
+    /// (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDeadHeldAgentLeavesNothingOfItsCreation() async throws {
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "made"))
+            #expect(await daemon.madeCreations["made"] != nil)
+            await (try #require(await daemon.live[id]?.agent)).close()
+            _ = try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
+            #expect(await daemon.madeCreations["made"] == nil)
+            await daemon.releaseAll()
+        }
     }
 
     /// A call-off stays while its creation is under way, however long the agent takes: one that

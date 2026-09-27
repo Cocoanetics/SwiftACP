@@ -137,11 +137,12 @@ extension ACPXDaemonBackend {
 
     /// Let go of the call-offs kept a minute (#219 review): by then the creation they name has
     /// come, or never will — unless it is still under way, however long its agent takes. What a
-    /// creation made is kept until its agent is let go (``evict(_:)``), which a call-off or its
-    /// caller's release of it does, or its first turn.
+    /// creation made is kept while its agent is the one held for its session: until that agent
+    /// is let go (``evict(_:)``), or found dead, however it went.
     private func pruneCreationTokens(now: Date) {
         calledOffCreations = calledOffCreations.filter {
             creatingTokens.contains($0.key) || now.timeIntervalSince($0.value) < 60
         }
+        madeCreations = madeCreations.filter { live[$0.value.recordId]?.agent === $0.value.agent }
     }
 }
