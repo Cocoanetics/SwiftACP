@@ -291,6 +291,9 @@ final class FlowShellTermination: @unchecked Sendable {
     /// For tests: the cooperative pool has no thread free for the command's stop until its
     /// result is in — a stop begun waits for ``dispose()`` — as on a busy machine.
     @TaskLocal static var poolIsBusy = false
+    /// For tests: how long after its deadline the command's timer fires, as on a machine too
+    /// busy to run it on time.
+    @TaskLocal static var timerIsLateBy: Duration = .zero
 
     /// Where deadlines fire.
     private static let deadlines = DispatchQueue(label: "acpx.flow.shell.deadline")
@@ -298,9 +301,11 @@ final class FlowShellTermination: @unchecked Sendable {
     private let child: ChildProcess
     private let closed: FlowShellEvent
     private let onCleanupFailure: @Sendable (Error) -> Void
-    /// The attempt the command runs for: its own deadline, when it has passed as well, comes
-    /// first — acpx's timer for it, set first for no later a time, fires first.
+    /// The attempt the command runs for: its own deadline, when no later than the command's
+    /// and passed as well, comes first — acpx's timer for it, set first, fires first.
     private let attempt: FlowAttempt?
+    /// When the command's deadline passes.
+    private let deadlineAt: ContinuousClock.Instant?
     /// Fired by ``dispose()``, what a stop waits for while ``poolIsBusy``.
     private let busyPool: FlowShellEvent?
     private let lock = NSLock()
@@ -322,6 +327,8 @@ final class FlowShellTermination: @unchecked Sendable {
         self.closed = closed
         self.onCleanupFailure = onCleanupFailure
         attempt = control.attempt
+        let delay = timeoutMs.flatMap(FlowTimer.duration(milliseconds:))
+        deadlineAt = delay.map { ContinuousClock.now + $0 }
         busyPool = Self.poolIsBusy ? FlowShellEvent() : nil
         if let attempt = control.attempt {
             let listening = attempt.addAbortListener { [self] _ in begin(attempt.terminationSignal) }
@@ -331,12 +338,13 @@ final class FlowShellTermination: @unchecked Sendable {
                 begin(attempt.terminationSignal)
             }
         }
-        if let delay = timeoutMs.flatMap(FlowTimer.duration(milliseconds:)) {
+        if let delay {
+            let fires = delay + Self.timerIsLateBy
             lock.withLock {
                 guard stopping == nil, !released else { return }
                 let timer = DispatchSource.makeTimerSource(queue: Self.deadlines)
                 timer.setEventHandler { [weak self] in self?.deadlinePassed() }
-                timer.schedule(deadline: .now() + .nanoseconds(Int(delay / .nanoseconds(1))))
+                timer.schedule(deadline: .now() + .nanoseconds(Int(fires / .nanoseconds(1))))
                 deadline = timer
                 timer.resume()
             }
@@ -367,10 +375,13 @@ final class FlowShellTermination: @unchecked Sendable {
     }
 
     /// acpx's deadline: unless it was cleared, the command timed out, and is stopped. An
-    /// attempt past its own deadline — its timer on the cooperative pool, late on a busy
-    /// machine — times out first, and its stop clears this deadline.
+    /// attempt past a deadline of its own no later than this one — its timer on the
+    /// cooperative pool, late on a busy machine — times out first, and its stop clears this
+    /// deadline. An earlier deadline of the command's stays its own, however late it fires.
     private func deadlinePassed() {
-        attempt?.checkDeadline()
+        if let attempt, let attemptDeadline = attempt.deadline, let deadlineAt, attemptDeadline <= deadlineAt {
+            attempt.checkDeadline()
+        }
         lock.withLock {
             guard deadline != nil else { return }
             timedOutFlag = true

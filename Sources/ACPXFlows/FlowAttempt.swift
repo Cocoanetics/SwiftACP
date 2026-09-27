@@ -87,7 +87,8 @@ final class FlowAttempt: @unchecked Sendable {
     let startedAt: String
 
     private let timeoutMs: Double?
-    private let deadline: ContinuousClock.Instant?
+    /// When the attempt times out, if it has a deadline.
+    let deadline: ContinuousClock.Instant?
     private let lock = NSLock()
     private var accepting = true
     private var finished = false
