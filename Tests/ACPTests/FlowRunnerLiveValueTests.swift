@@ -140,4 +140,40 @@ struct FlowRunnerLiveValueTests {
         #expect(run.trace.last?["type"] == .text("node_started"))
         #expect(run.trace.last?["nodeId"] == .text("add"))
     }
+
+    /// A checkpoint's waiting state holds `outputs` as the flow's code does — here a `toJSON` an
+    /// earlier node put on it — though it is written as the checkpoint's output is committed
+    /// (#206 review).
+    @Test(.enabled(if: nodeAvailable))
+    func aCheckpointsWaitingStateKeepsOutputsOwnJSON() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-tojson-checkpoint", startAt: "a", nodes: {
+              a: compute({ run: ({ outputs }) => { outputs.toJSON = () => ["custom"]; return "first"; } }),
+              wait: checkpoint({ summary: "Waiting here" }) },
+              edges: [{ from: "a", to: "wait" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "status") == .text("waiting"))
+        #expect(member(run.state, "outputs") == .array([.text("custom")]))
+    }
+
+    /// An output JSON no longer has anything for — its `toJSON` now returns `undefined` — is left
+    /// out wherever it was recorded: its node's result, its step and the step's `outputInline`,
+    /// and `outputs`, as `JSON.stringify` of acpx's state leaves it out (#206 review).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputJSONNoLongerWritesIsLeftOut() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-output-omitted", startAt: "a", nodes: {
+              a: compute({ run: () => ({ x: 1 }) }),
+              b: compute({ run: ({ outputs }) => { outputs.a.toJSON = () => undefined; return "second"; } }) },
+              edges: [{ from: "a", to: "b" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs")?.stringified == #"{"b":"second"}"#)
+        #expect(member(run.state, "results", "a")?.hasMember("output") == false)
+        guard case .array(let steps)? = run.state?["steps"] else { throw FlowRunError("no steps") }
+        #expect(steps.first?.hasMember("output") == false)
+        #expect(member(steps.first, "trace")?.hasMember("outputInline") == false)
+        #expect(try WireJSON.parse(try #require(run.files["projections/steps.json"])) == .array(steps))
+    }
 }

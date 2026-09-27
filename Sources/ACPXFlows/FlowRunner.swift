@@ -205,7 +205,7 @@ public actor FlowRunner {
                 if step.executed.outputFromHost, let live = returned[step.result.attemptId] {
                     step = try recordLive(live, of: step)
                 }
-                if let waiting = try maybeCompleteCheckpointStep(step, runDir: runDir) { return waiting }
+                if let waiting = try await maybeCompleteCheckpointStep(step, runDir: runDir) { return waiting }
                 try recordFlowStepOutcome(step, runDir: runDir)
                 current = try resolveNextNode(flow, step)
                 forgetAttempt(step)

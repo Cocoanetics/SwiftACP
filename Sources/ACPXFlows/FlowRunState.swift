@@ -54,6 +54,10 @@ struct FlowRunState: Sendable {
     var liveOutputs: FlowValue?
     var results = JSObject()
     var steps: [WireJSON] = []
+    /// The attempts whose output JSON has nothing for now — a `toJSON` of it returns `undefined`
+    /// — which the steps and results holding it leave out when written, as `JSON.stringify`
+    /// does, keeping its place should it have JSON again (#206 review).
+    var omittedOutputs: Set<String> = []
     var sessionBindings = JSObject()
 
     /// The state acpx's `FlowRunner.run` starts with.
@@ -100,10 +104,32 @@ struct FlowRunState: Sendable {
         case .unrepresentable?: object["outputs"] = nil
         default: object["outputs"] = outputs.wire
         }
-        object["results"] = results.wire
-        object["steps"] = .array(steps)
+        object["results"] = omittingOutputs(results.wire)
+        object["steps"] = stepsWire
         object["sessionBindings"] = sessionBindings.wire
         return object.wire
+    }
+
+    /// The steps as `JSON.stringify` writes them (`projections/steps.json`).
+    var stepsWire: WireJSON {
+        .array(steps.map(withoutOmittedOutput))
+    }
+
+    /// `results` with each record's output left out when JSON has nothing for it now.
+    private func omittingOutputs(_ results: WireJSON) -> WireJSON {
+        guard case .object(let members) = results, !omittedOutputs.isEmpty else { return results }
+        return .object(members.map { WireJSON.Member(key: $0.key, value: withoutOmittedOutput($0.value)) })
+    }
+
+    /// A step or a node's result, its output — and its trace's `outputInline` — left out when
+    /// JSON has nothing for it now.
+    private func withoutOmittedOutput(_ record: WireJSON) -> WireJSON {
+        guard let attemptId = record["attemptId"]?.stringValue, omittedOutputs.contains(attemptId) else {
+            return record
+        }
+        var without = record.removing("output")
+        if let trace = record["trace"] { without = without.replacing("trace", with: trace.removing("outputInline")) }
+        return without
     }
 
     /// acpx's `createLiveState` (`projections/live.json`).

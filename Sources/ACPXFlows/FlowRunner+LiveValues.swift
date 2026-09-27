@@ -47,8 +47,11 @@ extension FlowRunner {
         for member in attempts {
             let attemptId = String(decoding: member.key, as: UTF16.self)
             switch FlowValue(reply: member.value) {
-            case .json(let value): values[attemptId] = value
+            case .json(let value):
+                values[attemptId] = value
+                state.omittedOutputs.remove(attemptId)
             case .unserializable(let message) where written.contains(attemptId): throw FlowRunError(message)
+            case .unrepresentable where written.contains(attemptId): state.omittedOutputs.insert(attemptId)
             default: break
             }
         }
@@ -64,8 +67,8 @@ extension FlowRunner {
     /// longer write fails the run, as acpx's write of the step throws.
     func recordLive(_ live: FlowValue, of step: Step) throws -> Step {
         switch live {
-        case .json(let value):
-            let patched = step.withLive(value)
+        case .json, .unrepresentable:
+            let patched = step.withLive(live)
             if patched.result.outcome == .ok { state.results[patched.nodeId] = patched.result.wire }
             return patched
         case .unserializable(let message) where step.result.outcome == .ok:
@@ -131,15 +134,16 @@ extension FlowRunner {
 }
 
 extension FlowRunner.Step {
-    /// The step with `value` — its output as the flow's code holds it now — as its output: in
-    /// what it executed, its trace's `outputInline`, and its result, when it has one.
-    func withLive(_ value: WireJSON) -> FlowRunner.Step {
+    /// The step with `value` — its output as the flow's code holds it now, or nothing JSON can
+    /// write — as its output: in what it executed, its trace's `outputInline`, and its result,
+    /// when it has one.
+    func withLive(_ value: FlowValue) -> FlowRunner.Step {
         guard case .json = executed.output else { return self }
         var executed = self.executed
-        executed.output = .json(value)
-        if executed.trace?.members["outputInline"] != nil { executed.trace?.members["outputInline"] = value }
+        executed.output = value
+        if executed.trace?.members["outputInline"] != nil { executed.trace?.members["outputInline"] = value.json }
         var result = self.result
-        if case .json = result.output { result.output = .json(value) }
+        if case .json = result.output { result.output = value }
         return FlowRunner.Step(executed: executed, result: result, node: node, executionError: executionError)
     }
 }

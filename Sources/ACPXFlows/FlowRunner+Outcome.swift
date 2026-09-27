@@ -7,9 +7,12 @@ import SwiftACP
 // `FlowRunner.swift` to keep each file inside the 500-line limit.
 extension FlowRunner {
     /// acpx's `maybeCompleteCheckpointStep`: a checkpoint that ran leaves the run waiting.
-    func maybeCompleteCheckpointStep(_ step: Step, runDir: URL) throws -> RunResult? {
+    func maybeCompleteCheckpointStep(_ step: Step, runDir: URL) async throws -> RunResult? {
         guard step.result.outcome == .ok, step.node.nodeType == .checkpoint else { return nil }
         setOutput(step)
+        // Written at once, the waiting state holds `outputs` as the flow's code does, the
+        // checkpoint's own among them — a `toJSON` of it included (#206 review).
+        try await refreshLiveValues()
         state["waitingOn"] = step.nodeId
         state["updatedAt"] = nowISO()
         state["status"] = "waiting"
