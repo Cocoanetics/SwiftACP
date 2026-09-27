@@ -275,7 +275,7 @@ enum DaemonClient {
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, model: String? = nil,
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, streamWire: Bool = false,
-        direct: Bool = false, fs: Bool? = nil
+        direct: Bool = false, fs: Bool? = nil, turnToken: String? = nil
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
@@ -293,7 +293,7 @@ enum DaemonClient {
                 sessionId: sessionId, content: content, wait: wait, permissionMode: permissionMode,
                 nonInteractivePermissions: nonInteractivePermissions, streamWire: streamWire,
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model,
-                sessionOptions: sessionOptions, limits: limits, direct: direct, fs: fs))
+                sessionOptions: sessionOptions, limits: limits, direct: direct, fs: fs, turnToken: turnToken))
         } catch {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
@@ -422,10 +422,10 @@ enum DaemonClient {
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel. A daemon
     /// that could not send the cancel throws why.
-    static func cancelSession(sessionId: String) async throws -> Bool {
+    static func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
         do {
             return try await withClient(spawnIfNeeded: false) {
-                try await $0.cancelSession(sessionId: sessionId)
+                try await $0.cancelSession(sessionId: sessionId, turnToken: turnToken)
             }
         } catch is DaemonUnavailable {
             // acpx with no queue owner: nothing holds the turn.

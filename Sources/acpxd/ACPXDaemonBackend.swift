@@ -50,6 +50,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     let turnQueue = SessionTurnQueue()
     /// The turn each session runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The tokens of turns a cancel named before they began, and when: each ends as it
+    /// begins (``claimTurnToken(_:for:)``).
+    var calledOffTurns: [String: Date] = [:]
     /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
     var tickets: [String: PromptControlTicket] = [:]
     /// Each session's prompts in line to begin, by record, while one has begun: see ``PromptLine``.
@@ -401,7 +404,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
 
-    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:)``
+    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:turnToken:)``
     /// as the tool calls it.
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
@@ -414,7 +417,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: mode.streamWire, permissionPolicy: permissionPolicy,
             terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
-            direct: mode.direct, fs: mode.fs)
+            direct: mode.direct, fs: mode.fs, turnToken: mode.turnToken)
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the

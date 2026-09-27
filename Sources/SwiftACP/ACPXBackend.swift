@@ -46,7 +46,7 @@ public protocol ACPXBackend: Sendable {
         permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, sessionOptions: PromptSessionOptions?,
         limits: PromptLimits?
     ) async throws -> String
-    func cancelSession(sessionId: String) async throws -> Bool
+    func cancelSession(sessionId: String, turnToken: String?) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
     func releaseSession(sessionId: String) async throws -> Bool
 }
@@ -76,18 +76,21 @@ public struct SessionCreationMode: Sendable {
 
 /// How a turn runs, beside what it sends: whether its whole exchange is streamed back
 /// (``ACPXDaemon``'s `runPrompt` `streamWire`), whether it runs as acpx's
-/// `sendSessionDirect` runs a flow's persistent turn (`direct`), and whether an agent it
+/// `sendSessionDirect` runs a flow's persistent turn (`direct`), whether an agent it
 /// connects is offered the filesystem methods (`fs`, acpx's `--no-fs`; `nil`, as the
-/// session was created).
+/// session was created), and the caller's name for it, which a cancel can give before the
+/// turn begins (`turnToken`).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool
     public var fs: Bool?
+    public var turnToken: String?
 
-    public init(streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil) {
+    public init(streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, turnToken: String? = nil) {
         self.streamWire = streamWire
         self.direct = direct
         self.fs = fs
+        self.turnToken = turnToken
     }
 }
 

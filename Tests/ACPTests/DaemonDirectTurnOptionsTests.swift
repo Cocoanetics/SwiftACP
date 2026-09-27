@@ -132,6 +132,63 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A cancel that names a direct turn before acpxd has begun it calls the turn off: it
+    /// ends as it begins, its prompt never sent, however the cancel and the turn crossed —
+    /// as acpx's flow runner closes the client a stopped direct turn would prompt on (#219
+    /// review). A turn with another name runs.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectTurnCalledOffBeforeItBeganIsNeverSent() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requests = directory.appendingPathComponent("requests.log")
+        let command = "/usr/bin/env MOCK_REQUEST_LOG='\(requests.path)' " + (try #require(mockCommand()))
+        let logged = { (try? String(contentsOf: requests, encoding: .utf8)) ?? "" }
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            #expect(try await daemon.cancelSession(sessionId: id, turnToken: "stopped") == false)
+            let calledOff = try await daemon.runPrompt(
+                sessionId: id, text: "hi", permissionMode: "approve-all", direct: true, turnToken: "stopped")
+            #expect(calledOff.isEmpty)
+            #expect(!logged().contains("session/prompt"), "\(logged())")
+            let answered = try await daemon.runPrompt(
+                sessionId: id, text: "hi", permissionMode: "approve-all", direct: true, turnToken: "next")
+            #expect(answered.contains("You said: hi"), "\(answered)")
+            #expect(logged().contains("session/prompt"))
+        }
+    }
+
+    /// A flow run with `--mcp-config` gives its persistent sessions the file's servers, as
+    /// acpx's runner gives every client the invocation's (#219 review). acpxd here is one
+    /// in process.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowsOwnMcpServersReachItsPersistentSession() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requests = directory.appendingPathComponent("requests.log")
+        let mcp = directory.appendingPathComponent("mcp.json")
+        try #"{"mcpServers":[{"name":"flow-tools","command":"true"}]}"#
+            .write(to: mcp, atomically: true, encoding: .utf8)
+        let command = "/usr/bin/env MOCK_REQUEST_LOG='\(requests.path)' " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let config = try ConfigLoader.load(cwd: directory.path, mcpConfigPath: mcp.path)
+            let sessions = FlowAgentSessions(
+                flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
+                permission: .approveAll, permissionRules: nil, mcpServers: try config.mcpServerSpecs())
+            let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+            let agent = FlowAgent(agentName: "mock", agentCommand: command, agentArgv: nil, cwd: directory.path)
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            _ = try await DaemonClient.$standIn.withValue(daemon) {
+                try await sessions.createPersistent(
+                    agent: agent, name: "flow-main", control: FlowTurnControl(attempt: attempt))
+            }
+            let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
+            #expect(logged.contains("session/new") && logged.contains("flow-tools"), "\(logged)")
+            await backend.releaseAll()
+        }
+    }
+
     /// The options' model is kept with a session made for a flow's first turn, with the
     /// rest of them, as acpx's `createSessionWithClient` records its options. The session's
     /// current model stays the agent's, as acpx 0.19.3's `sessions new --model` leaves it on

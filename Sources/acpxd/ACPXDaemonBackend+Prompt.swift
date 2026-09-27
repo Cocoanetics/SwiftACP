@@ -46,7 +46,7 @@ extension ACPXDaemonBackend {
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
-        fs: Bool? = nil
+        fs: Bool? = nil, turnToken: String? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -98,6 +98,7 @@ extension ACPXDaemonBackend {
             // Told to the client as acpx's owner tells it, the turn's error.
             return try await reportingFailure(of: recordId, errors: TurnErrorWatch()) { throw refused }
         }
+        if let turnToken { claimTurnToken(turnToken, for: recordId) }
         let (control, ticket) = (begun.control, begun.ticket)
         var heldTheSlot = !wait
         defer { promptEnded(recordId, begun, heldTheSlot: heldTheSlot) }

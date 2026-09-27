@@ -330,6 +330,8 @@ public actor ACPXDaemon {
     ///   - fs: acpx's `--no-fs` for an agent the turn connects, as acpx's flow runner gives it
     ///     every client it makes: `false` withholds the filesystem methods. Omitted, the
     ///     agent is offered what the session was created with.
+    ///   - turnToken: the caller's name for the turn, which `cancelSession` can give: a
+    ///     cancel that named it before it began ends it as it begins, nothing sent.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -339,14 +341,15 @@ public actor ACPXDaemon {
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
-        direct: Bool? = nil, fs: Bool? = nil
+        direct: Bool? = nil, fs: Bool? = nil, turnToken: String? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
             try await backend.runPrompt(
                 sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-                mode: PromptTurnMode(streamWire: streamWire ?? false, direct: direct ?? false, fs: fs),
+                mode: PromptTurnMode(
+                    streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, turnToken: turnToken),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }
@@ -373,11 +376,15 @@ public actor ACPXDaemon {
 
     /// Cancel an in-flight prompt for a session.
     ///
-    /// - Parameter sessionId: the ACP session id of the live session.
+    /// - Parameters:
+    ///   - sessionId: the ACP session id of the live session.
+    ///   - turnToken: cancel only the turn `runPrompt` was given this token for — and, when it
+    ///     has not begun yet, end it as it begins, nothing sent, as acpx's flow runner closes
+    ///     the client a stopped direct turn would prompt on. Omitted, whatever turn runs.
     /// - Returns: `false` if the session isn't currently live.
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func cancelSession(sessionId: String) async throws -> Bool {
-        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId) }
+    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
+        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId, turnToken: turnToken) }
     }
 
     /// Let go of a session's live agent without closing the session: the daemon stops

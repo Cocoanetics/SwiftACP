@@ -10,7 +10,8 @@ extension DaemonClient {
     static func promptArguments(
         sessionId: String, content: [JSONValue], wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         streamWire: Bool, permissionPolicy: PermissionRules?, terminalOutputCeiling: Int, model: String?,
-        sessionOptions: PromptSessionOptions?, limits: PromptLimits?, direct: Bool = false, fs: Bool? = nil
+        sessionOptions: PromptSessionOptions?, limits: PromptLimits?, direct: Bool = false, fs: Bool? = nil,
+        turnToken: String? = nil
     ) throws -> JSONDictionary {
         var arguments: JSONDictionary = [
             "sessionId": .string(sessionId), "text": .string(""), "content": .array(content), "wait": .bool(wait),
@@ -25,6 +26,7 @@ extension DaemonClient {
         if let limits { arguments["limits"] = try MCPClientArgumentEncoder.encode(limits) }
         if direct { arguments["direct"] = .bool(true) }
         if let fs { arguments["fs"] = .bool(fs) }
+        if let turnToken { arguments["turnToken"] = .string(turnToken) }
         return arguments
     }
 }

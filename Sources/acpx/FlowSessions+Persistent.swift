@@ -26,8 +26,10 @@ extension FlowAgentSessions {
         defer { stopListening() }
         let recordId: String
         do {
+            // The flow's own servers, from `--mcp-config`, as acpx's runner gives its client the
+            // invocation's; without, acpxd takes the configured ones (#219 review).
             recordId = try await ACPXDaemon.Client(proxy: proxy).newSession(
-                agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: nil,
+                agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: config.sessionMcpServers,
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules)
@@ -66,7 +68,10 @@ extension FlowAgentSessions {
         let proxy = try await DaemonClient.connect(spawnIfNeeded: true) { proxy in
             await proxy.setLogNotificationHandler(FlowTurnLog(turn, stopReason: stopReason))
         }
-        let stop = FlowDaemonTurnStop(recordId: turn.recordId)
+        // The turn's name, which the stop's cancel gives: a stop that comes before acpxd has
+        // begun the turn calls it off there, however the two cross (#219 review).
+        let turnToken = UUID().uuidString.lowercased()
+        let stop = FlowDaemonTurnStop(recordId: turn.recordId, turnToken: turnToken)
         let stopListening = turn.control.onStop { stop.stop() }
         defer { stopListening() }
         Self.beforeSending?()
@@ -83,7 +88,7 @@ extension FlowAgentSessions {
                 on: proxy, stopReason: stopReason, sessionId: turn.recordId, content: content, wait: true,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, terminalOutputCeiling: ceiling,
-                streamWire: true, direct: true, fs: flags.fs)
+                streamWire: true, direct: true, fs: flags.fs, turnToken: turnToken)
         } catch {
             await stop.turnEnded()
             await proxy.disconnect()
@@ -163,23 +168,25 @@ final class FlowTurnLog: MCPServerProxyLogNotificationHandling, @unchecked Senda
 /// cancelled, and unless the turn ends within 2.5 s its agent is let go.
 final class FlowDaemonTurnStop: @unchecked Sendable {
     private let recordId: String
+    private let turnToken: String?
     private let lock = NSLock()
     private var ended = false
     private var didStop = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var stopping: Task<Void, Never>?
 
-    init(recordId: String) {
+    init(recordId: String, turnToken: String? = nil) {
         self.recordId = recordId
+        self.turnToken = turnToken
     }
 
     var stopped: Bool { lock.withLock { didStop } }
 
     func stop() {
         lock.withLock { didStop = true }
-        let recordId = self.recordId
+        let (recordId, turnToken) = (self.recordId, self.turnToken)
         let task = Task {
-            _ = try? await DaemonClient.cancelSession(sessionId: recordId)
+            _ = try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)
             let settled = try? await withTimeout(milliseconds: FlowTurnOwner.cancelWaitMilliseconds) {
                 await self.waitForEnd()
             }
