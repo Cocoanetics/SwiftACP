@@ -31,6 +31,9 @@ extension DaemonClient {
             arguments["callerConfig"] = try MCPClientArgumentEncoder.encode(callerConfig)
         }
         if mode.verbose { arguments["verbose"] = .bool(true) }
+        if let environment = mode.environment {
+            arguments["environment"] = .object(environment.mapValues { .string($0) })
+        }
         return arguments
     }
 }

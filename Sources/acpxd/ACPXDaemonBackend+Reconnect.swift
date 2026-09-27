@@ -136,8 +136,8 @@ extension ACPXDaemonBackend {
                 try await withTimeout(milliseconds: timeout, {
                     try await ACPAgent.launch(
                         agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
-                        capabilities: capabilities, environment: AgentEnvironment.forAgent(
-                            authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
+                        capabilities: capabilities, environment: settings.agentEnvironment(
+                            auth: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
                         authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
                         onRawWire: connectTap, onStderr: settings.stderr?.observer)
@@ -273,6 +273,16 @@ extension ACPXDaemonBackend {
         /// Where what the agent writes to stderr goes, when the caller asks (a verbose flow's
         /// turn); else nowhere.
         var stderr: AgentStderrRelay?
+        /// The environment the agent starts over, when the caller brings its own (a flow's
+        /// turn); else the daemon's.
+        var environment: [String: String]?
+
+        /// The environment the agent starts with: the caller's, else the daemon's, with the
+        /// credentials and the session's own variables laid over it, as acpx builds it.
+        func agentEnvironment(auth: [String: String], sessionEnv: [String: String]?) -> [String: String] {
+            AgentEnvironment.forAgent(
+                authCredentials: auth, sessionEnv: sessionEnv, over: environment ?? ProcessInfo.processInfo.environment)
+        }
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.

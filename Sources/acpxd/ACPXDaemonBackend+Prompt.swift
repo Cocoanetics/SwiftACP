@@ -47,7 +47,7 @@ extension ACPXDaemonBackend {
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
         fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil,
-        verbose: Bool = false
+        verbose: Bool = false, environment: [String: String]? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -162,7 +162,7 @@ extension ACPXDaemonBackend {
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
             capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
-            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose))
+            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose), environment: environment)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await relayingStderr(turn.stderr, logger: recordId) {
             try await lettingDirectAgentGo(direct, recordId) {
@@ -209,6 +209,8 @@ extension ACPXDaemonBackend {
         let callerConfig: CallerConfig?
         /// Where what the agent writes to stderr goes as the turn runs; `nil`, nowhere.
         let stderr: AgentStderrRelay?
+        /// The environment an agent the turn connects starts over; `nil`, the daemon's own.
+        let environment: [String: String]?
     }
 
     private func attemptWithRetry(_ turn: Turn, wasHeld: Bool) async throws -> String {
@@ -283,7 +285,7 @@ extension ACPXDaemonBackend {
                 handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
                 timeoutMilliseconds: turn.timeoutMilliseconds, sameSessionOnly: turn.direct,
                 capabilities: turn.capabilities, authPolicy: turn.authPolicy, callerConfig: turn.callerConfig,
-                stderr: turn.stderr),
+                stderr: turn.stderr, environment: turn.environment),
             requestedModel: turn.model, turnOptions: turn.sessionOptions, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),

@@ -193,7 +193,8 @@ actor ACPXDaemonBackend: ACPXBackend {
                     name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
                     authPolicy: authPolicy, mcpServers: configServers,
                     sessionMcpServers: mcpServers, meta: meta, sessionOptions: options, capabilities: .acpx(fs: fs),
-                    handlers: handlers, inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                    handlers: handlers, baseEnvironment: creation.environment, inheritStderr: inheritAgentStderr,
+                    onStderr: stderr?.observer)
             }
             return record.acpxRecordId
         }
@@ -210,7 +211,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 authPolicy: authPolicy, mcpServers: configServers,
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
                 capabilities: .acpx(fs: fs), recordsCapabilities: false, writesRecord: false, handlers: handlers,
-                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                baseEnvironment: creation.environment, inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
         }
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         return try await keepMadeSession(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
@@ -433,7 +434,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
 
-    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:authPolicy:turnToken:callerConfig:verbose:)``
+    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:authPolicy:turnToken:callerConfig:verbose:environment:)``
     /// as the tool calls it.
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
@@ -447,7 +448,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             streamWire: mode.streamWire, permissionPolicy: permissionPolicy,
             terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
             direct: mode.direct, fs: mode.fs, authPolicy: mode.authPolicy, turnToken: mode.turnToken,
-            callerConfig: mode.callerConfig, verbose: mode.verbose)
+            callerConfig: mode.callerConfig, verbose: mode.verbose, environment: mode.environment)
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the

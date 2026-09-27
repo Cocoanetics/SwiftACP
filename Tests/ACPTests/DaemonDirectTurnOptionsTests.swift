@@ -395,7 +395,8 @@ extension DaemonToolsTests {
             permissionPolicy: nil, terminalOutputCeiling: 0, model: nil, sessionOptions: nil, limits: nil,
             mode: PromptTurnMode(
                 streamWire: true, direct: true, fs: false, authPolicy: "fail", turnToken: "t",
-                callerConfig: CallerConfig(auth: ["token": "secret"], mcpServers: []), verbose: true))
+                callerConfig: CallerConfig(auth: ["token": "secret"], mcpServers: []), verbose: true,
+                environment: ["FLOWVAR": "set"]))
         #expect(arguments["streamWire"] == .bool(true))
         #expect(arguments["direct"] == .bool(true))
         #expect(arguments["fs"] == .bool(false))
@@ -403,6 +404,7 @@ extension DaemonToolsTests {
         #expect(arguments["turnToken"] == .string("t"))
         #expect(try arguments["callerConfig"]?.decoded(CallerConfig.self).auth == ["token": "secret"])
         #expect(arguments["verbose"] == .bool(true))
+        #expect(arguments["environment"] == .object(["FLOWVAR": .string("set")]))
     }
 
     /// What `client` was sent of the agent's stderr (``AgentStderrEvent``).

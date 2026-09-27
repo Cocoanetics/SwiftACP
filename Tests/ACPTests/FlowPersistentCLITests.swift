@@ -109,6 +109,46 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A flow's persistent session's agents start over the flow's own environment — the one
+    /// that makes the session, and the one a later turn takes it back with — as acpx starts a
+    /// flow's agents in the flow's process, not over acpxd's (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowsAgentsStartOverItsEnvironment() async throws {
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        let environment = { (value: String) in ProcessInfo.processInfo.environment.merging(["FLOWVAR": value]) { $1 } }
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, environment: environment("made")))
+            let first = try await daemon.runPrompt(
+                sessionId: id, text: "env FLOWVAR", permissionMode: "approve-all", direct: true)
+            #expect(first.contains("FLOWVAR=made"), "\(first)")
+            let later = try await daemon.runPrompt(
+                sessionId: id, text: "env FLOWVAR", permissionMode: "approve-all", direct: true,
+                environment: environment("later"))
+            #expect(later.contains("FLOWVAR=later"), "\(later)")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// The credentials in a flow's own environment sign its persistent session's agent in, as
+    /// acpx finds them in the flow's process: under `fail`, a sign-in found only there is found
+    /// (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowsEnvironmentCredentialsSignItsAgentIn() async throws {
+        let command = "/usr/bin/env MOCK_AUTH_METHODS=token " + (try #require(mockCommand()))
+        let environment = ProcessInfo.processInfo.environment.merging(["ACPX_AUTH_TOKEN": "secret"]) { $1 }
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                sessionOptions: nil,
+                creation: SessionCreationMode(holdAgent: true, authPolicy: "fail", environment: environment))
+            await daemon.releaseAll()
+        }
+    }
+
     /// A stopped turn still going past its grace has its agent put down when the cancel found it
     /// running or went unanswered — the release is the turn's own — and not when the cancel found
     /// it not yet begun, as it then ends as it begins (#219 review).

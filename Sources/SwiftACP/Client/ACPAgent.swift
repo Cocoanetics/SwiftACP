@@ -156,7 +156,7 @@ public final class ACPAgent: Sendable {
                 capabilities: capabilities, clientInfo: clientInfo)
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
-                authCredentials: authCredentials, authPolicy: authPolicy)
+                authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment)
             #if os(macOS) || os(Linux)
             // acpx's `captureAgentDescendants`: once `initialize` is over, and again each
             // time a session is open, however it was opened — adapters start their
@@ -311,11 +311,13 @@ public final class ACPAgent: Sendable {
         connection: ACPAgentConnection,
         methods: [AuthMethod],
         authCredentials: [String: String],
-        authPolicy: String
+        authPolicy: String,
+        environment: [String: String]
     ) async throws {
         guard !methods.isEmpty else { return }
         for method in methods {
-            let hasEnv = AgentEnvironment.readEnvCredential(methodId: method.id) != nil
+            // The environment the agent runs with: the starting process's, or the caller's own.
+            let hasEnv = AgentEnvironment.readEnvCredential(methodId: method.id, in: environment) != nil
             let configCredential = AgentEnvironment.resolveConfiguredAuthCredential(
                 methodId: method.id, authCredentials: authCredentials)
             let hasConfig =

@@ -39,7 +39,7 @@ extension FlowAgentSessions {
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, authPolicy: flags.authPolicy, callerConfig: callerConfig,
-                verbose: flags.verbose, creationToken: creationToken)
+                verbose: flags.verbose, creationToken: creationToken, environment: ProcessInfo.processInfo.environment)
         } catch {
             await proxy.disconnect()
             // No answer came, or a failure did: whatever acpxd makes of it is let go, now or as it
@@ -131,7 +131,8 @@ extension FlowAgentSessions {
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, terminalOutputCeiling: ceiling, mode: PromptTurnMode(
                     streamWire: true, direct: true, fs: flags.fs, authPolicy: flags.authPolicy, turnToken: turnToken,
-                    callerConfig: callerConfig, verbose: flags.verbose))
+                    callerConfig: callerConfig, verbose: flags.verbose,
+                    environment: ProcessInfo.processInfo.environment))
         } catch {
             await stop.turnEnded()
             await proxy.disconnect()

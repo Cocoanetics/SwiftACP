@@ -74,8 +74,9 @@ public struct CallerConfig: Codable, Sendable, Equatable {
 /// (`permissionMode`, `nonInteractivePermissions`, `permissionPolicy`) — how it signs in
 /// (`authPolicy`, acpx's `--auth-policy`; `nil`, as configured), the config it is started with
 /// (`callerConfig`; `nil`, the one where the session works), whether what the agent writes
-/// to stderr is streamed to the caller (`verbose`, acpx's `--verbose`), and the caller's name for
-/// the creation, which ``ACPXBackend/callOffCreation(creationToken:)`` can give (`creationToken`).
+/// to stderr is streamed to the caller (`verbose`, acpx's `--verbose`), the caller's name for
+/// the creation, which ``ACPXBackend/callOffCreation(creationToken:)`` can give (`creationToken`),
+/// and the environment the agent starts over (`environment`; `nil`, the daemon's own).
 public struct SessionCreationMode: Sendable {
     public var holdAgent: Bool
     public var fs: Bool?
@@ -86,11 +87,13 @@ public struct SessionCreationMode: Sendable {
     public var callerConfig: CallerConfig?
     public var verbose: Bool
     public var creationToken: String?
+    public var environment: [String: String]?
 
     public init(
         holdAgent: Bool = false, fs: Bool? = nil, permissionMode: String? = nil,
         nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil,
-        callerConfig: CallerConfig? = nil, verbose: Bool = false, creationToken: String? = nil
+        callerConfig: CallerConfig? = nil, verbose: Bool = false, creationToken: String? = nil,
+        environment: [String: String]? = nil
     ) {
         self.holdAgent = holdAgent
         self.fs = fs
@@ -101,6 +104,7 @@ public struct SessionCreationMode: Sendable {
         self.callerConfig = callerConfig
         self.verbose = verbose
         self.creationToken = creationToken
+        self.environment = environment
     }
 }
 
@@ -111,8 +115,9 @@ public struct SessionCreationMode: Sendable {
 /// session was created), how that agent signs in (`authPolicy`, acpx's `--auth-policy`;
 /// `nil`, as configured), the caller's name for the turn, which a cancel can give before it
 /// begins (`turnToken`), the config that agent is started with (`callerConfig`; `nil`, the one
-/// where the session works), and whether what the agent writes to stderr is streamed to the
-/// caller (`verbose`, acpx's `--verbose`).
+/// where the session works), whether what the agent writes to stderr is streamed to the
+/// caller (`verbose`, acpx's `--verbose`), and the environment that agent starts over
+/// (`environment`; `nil`, the daemon's own).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool
@@ -121,10 +126,12 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var turnToken: String?
     public var callerConfig: CallerConfig?
     public var verbose: Bool
+    public var environment: [String: String]?
 
     public init(
         streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, authPolicy: String? = nil,
-        turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false
+        turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false,
+        environment: [String: String]? = nil
     ) {
         self.streamWire = streamWire
         self.direct = direct
@@ -133,6 +140,7 @@ public struct PromptTurnMode: Sendable, Equatable {
         self.turnToken = turnToken
         self.callerConfig = callerConfig
         self.verbose = verbose
+        self.environment = environment
     }
 }
 

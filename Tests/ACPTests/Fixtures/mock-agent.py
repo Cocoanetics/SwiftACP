@@ -170,6 +170,16 @@ def handle_prompt(req_id, params):
             "code": -32603, "message": "Internal error", "data": {"details": "model overloaded"}}})
         return
 
+    # "env NAME": the reply is NAME=<its value in the agent's environment>, and the turn ends.
+    if text.startswith("env "):
+        name = text[len("env "):].strip()
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "%s=%s" % (name, os.environ.get(name, ""))},
+        })
+        respond(req_id, {"stopReason": "end_turn"})
+        return
+
     # "stderr TEXT": the text on stderr, then the reply as usual.
     if text.startswith("stderr "):
         sys.stderr.write(text[len("stderr "):] + "\n")
