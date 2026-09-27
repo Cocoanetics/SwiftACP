@@ -15,8 +15,9 @@ extension ACPXDaemonBackend {
         _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?, token: String?
     ) async throws -> String {
         let recordId = held.record.acpxRecordId
-        try await holdAsNew(held, sessionSpecs: sessionSpecs, stderr: stderr)
-        // From a task of its own, as this one's cancellation would refuse the release.
+        try await holdAsNew(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
+        // Called off as it was held: from a task of its own, as this one's cancellation would
+        // refuse the release.
         if Task.isCancelled || creationCalledOff(token, madeAs: recordId) {
             await Task { _ = try? await self.releaseSession(sessionId: recordId) }.value
             throw CancellationError()
@@ -30,9 +31,11 @@ extension ACPXDaemonBackend {
     /// would reach the new session too, and once whatever turn it runs is over, as that turn is
     /// nobody's to call off. The session's turn slot is held throughout, so no prompt starts an
     /// agent in between; and the new record is written once more, over whatever the old one's
-    /// turn saved on its way out.
+    /// turn saved on its way out. A creation called off before it would take that place — the
+    /// slot had, or while it waited for it — takes nobody's place: its own agent goes, and the
+    /// session held under the id stays as it is (#219 review).
     private func holdAsNew(
-        _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?
+        _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?, token: String?
     ) async throws {
         let recordId = held.record.acpxRecordId
         let taken = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
@@ -47,6 +50,11 @@ extension ACPXDaemonBackend {
         } catch {
             await held.agent.close()
             throw error
+        }
+        guard !isCalledOff(token) else {
+            await turnQueue.release(recordId)
+            await held.agent.close()
+            throw CancellationError()
         }
         let outcome: Result<Void, Error>
         do {
@@ -64,6 +72,12 @@ extension ACPXDaemonBackend {
             await held.agent.close()
             throw error
         }
+    }
+
+    /// Whether the creation under `token` has been called off: its call cancelled, or its token
+    /// called off. The call-off stays, for ``creationCalledOff(_:madeAs:)``.
+    private func isCalledOff(_ token: String?) -> Bool {
+        Task.isCancelled || token.map { calledOffCreations[$0] != nil } == true
     }
 
     /// Call off the session a `newSession` makes under `creationToken`: one made is let go, and

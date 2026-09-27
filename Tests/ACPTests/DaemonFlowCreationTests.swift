@@ -107,6 +107,64 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A creation called off before its agent is held takes nobody's place under the id it was
+    /// given: another flow's session held there stays, its agent untouched, and the creation's
+    /// own agent goes (#219 review). The mock gives every session the same id.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCalledOffCreationTakesNobodysPlace() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
+            let kept = try #require(await daemon.live[id]?.agent)
+            let released = try await daemon.callOffCreation(creationToken: "stopped")
+            #expect(!released)
+            await #expect(throws: CancellationError.self) {
+                _ = try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true, creationToken: "stopped"))
+            }
+            #expect(await daemon.live[id]?.agent === kept)
+            #expect(await !kept.connection.isClosed)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A creation called off while it waits for the slot of the session held under its id — that
+    /// session's turn running — takes nobody's place either, once the turn is over (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCreationCalledOffAsItWaitsTakesNobodysPlace() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: cwd)
+            let (turnGoesOut, creationWaits) = (HoldGate(), HoldGate())
+            await daemon.setPromptGoingOut { _ in turnGoesOut.open() }
+            let turn = Task {
+                try await daemon.runPrompt(sessionId: id, text: "hold turn", permissionMode: "approve-all")
+            }
+            await turnGoesOut.wait()
+            let kept = try #require(await daemon.live[id]?.agent)
+            await daemon.turnQueue.setBeforeAcquire { _ in creationWaits.open() }
+            let creating = Task {
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true, creationToken: "late"))
+            }
+            await creationWaits.wait()
+            let released = try await daemon.callOffCreation(creationToken: "late")
+            #expect(!released)
+            #expect(try await daemon.cancelSession(sessionId: id))
+            _ = try? await turn.value
+            await #expect(throws: CancellationError.self) { _ = try await creating.value }
+            #expect(await daemon.live[id]?.agent === kept)
+            #expect(await !kept.connection.isClosed)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).
