@@ -14,7 +14,7 @@ extension FlowRunner {
     static let liveValuesWaitMilliseconds = 5_000
 
     /// The run's live values, as the host holds them now, into the state a snapshot writes: the
-    /// input; `outputs` as the flow's code holds it, since `ctx.outputs` is acpx's `state.outputs`
+    /// input — left out when JSON has nothing for it; `outputs` as the flow's code holds it, since `ctx.outputs` is acpx's `state.outputs`
     /// — a member a callback replaced, deleted or added is so — and each step's output, in the
     /// step and the node's result, by the attempt that produced it. What the host cannot say
     /// stays as it was.
@@ -34,6 +34,7 @@ extension FlowRunner {
         guard let current = reply ?? nil else { return [:] }
         switch FlowValue(reply: current["input"]) {
         case .json(let input): state.set("input", input)
+        case .unrepresentable: state.set("input", nil)
         case .unserializable(let message): throw FlowRunError(message)
         default: break
         }
@@ -69,7 +70,7 @@ extension FlowRunner {
         switch live {
         case .json, .unrepresentable:
             let patched = step.withLive(live)
-            if patched.result.outcome == .ok { state.results[patched.nodeId] = patched.result.wire }
+            if patched.result.outcome == .ok { state.keepResult(patched.result) }
             return patched
         case .unserializable(let message) where step.result.outcome == .ok:
             throw FlowRunError(message)
@@ -88,18 +89,19 @@ extension FlowRunner {
 
     /// The run's input once its title is worked out: a title function is handed the input
     /// itself, as acpx's is, so a change it makes is the run's — in its state and in the input
-    /// artifact — and one JSON can no longer write fails the run, as acpx's write of it throws
-    /// (#206 review).
-    func inputAfterTitle(_ flow: FlowDescription, given input: WireJSON) async throws -> WireJSON {
-        guard case .function? = flow.title else { return input }
+    /// artifact, where one JSON has nothing for is written `undefined` — and one JSON can no
+    /// longer write fails the run, as acpx's write of it throws (#206 review).
+    func inputAfterTitle(_ flow: FlowDescription, given input: WireJSON) async throws -> FlowValue {
+        guard case .function? = flow.title else { return .json(input) }
         let host = self.host
         let reply = try? await withTimeout(milliseconds: Self.liveValuesWaitMilliseconds) {
             try await host.request("state/current", .object([WireJSON.Member]()))
         }
         switch FlowValue(reply: (reply ?? nil)?["input"]) {
-        case .json(let value): return value
+        case .json(let value): return .json(value)
+        case .unrepresentable: return .unrepresentable
         case .unserializable(let message): throw FlowRunError(message)
-        default: return input
+        default: return .json(input)
         }
     }
 
@@ -110,8 +112,9 @@ extension FlowRunner {
         try? persistRunFailure(runDir, error)
     }
 
-    /// The attempts whose outputs the state writes, in a step or a node's result that has one.
-    /// A step whose own value JSON could not write has none: it failed.
+    /// The attempts whose outputs the state holds, in a step or a node's result that has one —
+    /// though JSON has nothing for it now (``FlowRunState/keepOutput(_:of:)``). A step whose own
+    /// value JSON could not write has none: it failed.
     private var writtenAttempts: Set<String> {
         let records = state.steps + state.results.keys.compactMap { state.results[$0] }
         return Set(records.compactMap { record in
@@ -136,19 +139,31 @@ extension FlowRunner {
 extension FlowRunner.Step {
     /// The step with `value` — its output as the flow's code holds it now, or nothing JSON can
     /// write — as its output: in what it executed, its trace's `outputInline`, and its result,
-    /// when it has one.
+    /// when it has one. An `outputInline` keeps its place while JSON has nothing for it: the
+    /// state leaves it out when written, and writes it there again once JSON has.
     func withLive(_ value: FlowValue) -> FlowRunner.Step {
-        guard case .json = executed.output else { return self }
+        guard executed.output.holdsAnObject else { return self }
         var executed = self.executed
         executed.output = value
-        if executed.trace?.members["outputInline"] != nil { executed.trace?.members["outputInline"] = value.json }
+        if let json = value.json, executed.trace?.members["outputInline"] != nil {
+            executed.trace?.members["outputInline"] = json
+        }
         var result = self.result
-        if case .json = result.output { result.output = value }
+        if result.output.holdsAnObject { result.output = value }
         return FlowRunner.Step(executed: executed, result: result, node: node, executionError: executionError)
     }
 }
 
 extension FlowValue {
+    /// Whether this can be an object the flow's code still holds, whose JSON can change: JSON,
+    /// or nothing JSON can write for now.
+    var holdsAnObject: Bool {
+        switch self {
+        case .json, .unrepresentable: return true
+        case .undefined, .unserializable: return false
+        }
+    }
+
     /// A callback's value, as the host reports it.
     init(reply: WireJSON?) {
         if let message = reply?["unserializable"]?.stringValue {

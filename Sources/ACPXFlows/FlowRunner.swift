@@ -84,7 +84,7 @@ public actor FlowRunner {
         self.options = options
         defaultNodeTimeoutMs = options.timeoutMs ?? Self.defaultStepTimeoutMs
         store = FlowRunStore(outputRoot: options.outputRoot)
-        state = FlowRunState(runId: "", flowName: "", runTitle: nil, flowPath: nil, input: .null, now: "")
+        state = FlowRunState(runId: "", flowName: "", runTitle: nil, flowPath: nil, input: .json(.null), now: "")
         // A function action's `ctx.runShell`, which the host asks the runner to run.
         host.setRequestHandler { [weak self] method, params in
             guard method == "shell/run" else { throw FlowHostError.methodNotFound(method) }
@@ -111,7 +111,7 @@ public actor FlowRunner {
         state = FlowRunState(
             runId: runId, flowName: flow.name, runTitle: runTitle, flowPath: flowPath, input: input, now: nowISO())
         let inputArtifact = try store.writeArtifact(
-            runDir, state, content: .value(.json(input)), mediaType: "application/json", extension: "json",
+            runDir, state, content: .value(input), mediaType: "application/json", extension: "json",
             emitTrace: false)
         try store.initializeRunBundle(runDir, snapshot: flow.snapshot, state: state, inputArtifact: inputArtifact)
         return try await withPendingSessionsReleased { try await runWithOwnership(flow, runDir: runDir) }
@@ -319,7 +319,7 @@ public actor FlowRunner {
         } else {
             result.error = executionError.map(TurnFailureText.message(of:)) ?? "undefined"
         }
-        state.results[nodeId] = result.wire
+        state.keepResult(result)
         return Step(executed: executed, result: result, node: node, executionError: executionError)
     }
 

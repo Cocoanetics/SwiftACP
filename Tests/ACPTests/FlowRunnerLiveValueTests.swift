@@ -176,4 +176,87 @@ struct FlowRunnerLiveValueTests {
         #expect(member(steps.first, "trace")?.hasMember("outputInline") == false)
         #expect(try WireJSON.parse(try #require(run.files["projections/steps.json"])) == .array(steps))
     }
+
+    /// An input JSON has nothing for — its `toJSON` returns `undefined` — is left out of the
+    /// run's state, as `JSON.stringify` of acpx's leaves it out; set so by a title function, the
+    /// input artifact reads `undefined`, as acpx's `writeArtifact` writes it (#206 review).
+    @Test(.enabled(if: nodeAvailable), arguments: [false, true])
+    func anInputJSONHasNothingForIsLeftOut(byTitle: Bool) async throws {
+        let leave = "input.toJSON = () => undefined;"
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-input-gone",
+              run: { title: ({ input }) => { \(byTitle ? leave : "") return "Titled"; } }, startAt: "a",
+              nodes: { a: compute({ run: ({ input }) => { \(byTitle ? "" : leave) return "first"; } }) },
+              edges: [] });
+            """, input: .object([("given", .text("yes"))]))
+        #expect(run.code == 0, "\(run.err)")
+        #expect(run.state?.hasMember("input") == false)
+        #expect(run.state?.hasMember("outputs") == true)
+        let started = run.trace.first { $0["type"]?.stringValue == "run_started" }
+        let artifact = try #require(member(started, "payload", "inputArtifact", "path")?.stringValue)
+        #expect(run.files[artifact] == (byTitle ? "undefined\n" : "{\n  \"given\": \"yes\"\n}\n"))
+    }
+
+    /// An output JSON had nothing for as its step ended keeps its place in the step and its
+    /// node's result, as acpx's state holds the object itself: given JSON again by a later node,
+    /// it is written there (#206 review).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputWithoutJSONKeepsItsPlace() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-omitted-returns", startAt: "a", nodes: {
+              a: compute({ run: () => ({ x: 1, toJSON: () => undefined }) }),
+              b: compute({ run: ({ outputs }) => { outputs.a.toJSON = () => ({ back: true }); return "second"; } }) },
+              edges: [{ from: "a", to: "b" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        let back = WireJSON.object([("back", .bool(true))])
+        guard case .array(let steps)? = run.state?["steps"] else { throw FlowRunError("no steps") }
+        #expect(member(steps.first, "output") == back)
+        #expect(steps.first?.objectMembers.map { String(decoding: $0.key, as: UTF16.self) } == [
+            "attemptId", "nodeId", "nodeType", "outcome", "startedAt", "finishedAt", "promptText", "rawText",
+            "output", "session", "agent", "trace"
+        ])
+        #expect(member(run.state, "results", "a", "output") == back)
+        #expect(member(steps.first, "trace")?.hasMember("outputArtifact") == true)
+    }
+
+    /// An output JSON had nothing for still fails the run once JSON throws for it — a BigInt a
+    /// later `toJSON` returns — though no member of `outputs` holds it any more: acpx's step and
+    /// result still do, and its write of them throws (#206 review).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputWithoutJSONStillFailsTheRunOnceJSONThrows() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-omitted-bigint", startAt: "a", nodes: {
+              a: compute({ run: () => ({ x: 1, toJSON: () => undefined }) }),
+              b: compute({ run: ({ outputs }) => {
+                const kept = outputs.a; delete outputs.a; kept.toJSON = () => 1n; return "second"; } }),
+              c: compute({ run: () => "after" }) },
+              edges: [{ from: "a", to: "b" }, { from: "b", to: "c" }] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == "Do not know how to serialize a BigInt")
+        #expect(member(run.state, "status") == .text("running"))
+        #expect(run.trace.last?["nodeId"] == .text("b"))
+    }
+
+    /// An `outputInline` keeps its place while its output has no JSON — set so as its step is
+    /// recorded — and is written there again once a later node gives it JSON; the step's
+    /// `node_outcome`, written meanwhile, leaves it out (#206 review).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputInlineKeepsItsPlaceWhileItsOutputHasNoJSON() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-inline-slot", startAt: "a", nodes: {
+              a: compute({ run: () => {
+                const value = { x: 1 }; setImmediate(() => { value.toJSON = () => undefined; }); return value; } }),
+              b: compute({ run: ({ outputs }) => { outputs.a.toJSON = () => ({ y: 2 }); return "second"; } }) },
+              edges: [{ from: "a", to: "b" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        let later = WireJSON.object([("y", .number(2))])
+        guard case .array(let steps)? = run.state?["steps"] else { throw FlowRunError("no steps") }
+        #expect(member(steps.first, "output") == later)
+        #expect(member(steps.first, "trace") == .object([("outputInline", later)]))
+        let outcome = run.trace.first { $0["type"]?.stringValue == "node_outcome" && $0["nodeId"] == .text("a") }
+        #expect(member(outcome, "payload")?.hasMember("outputInline") == false)
+    }
 }

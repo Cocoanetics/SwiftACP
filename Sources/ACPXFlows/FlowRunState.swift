@@ -54,14 +54,16 @@ struct FlowRunState: Sendable {
     var liveOutputs: FlowValue?
     var results = JSObject()
     var steps: [WireJSON] = []
-    /// The attempts whose output JSON has nothing for now — a `toJSON` of it returns `undefined`
-    /// — which the steps and results holding it leave out when written, as `JSON.stringify`
-    /// does, keeping its place should it have JSON again (#206 review).
+    /// The attempts whose output JSON has nothing for now — a function, a `toJSON` returning
+    /// `undefined` — which the steps and results holding it leave out when written, as
+    /// `JSON.stringify` does. They keep its place, as acpx's state holds the object itself: a
+    /// later `toJSON` can give it JSON there again, or make the write throw (#206 review).
     var omittedOutputs: Set<String> = []
     var sessionBindings = JSObject()
 
-    /// The state acpx's `FlowRunner.run` starts with.
-    init(runId: String, flowName: String, runTitle: String?, flowPath: String?, input: WireJSON, now: String) {
+    /// The state acpx's `FlowRunner.run` starts with: an input JSON has nothing for is left out,
+    /// in its place.
+    init(runId: String, flowName: String, runTitle: String?, flowPath: String?, input: FlowValue, now: String) {
         self["runId"] = runId
         self["flowName"] = flowName
         self["runTitle"] = runTitle
@@ -69,7 +71,7 @@ struct FlowRunState: Sendable {
         self["startedAt"] = now
         self["updatedAt"] = now
         self["status"] = "running"
-        members["input"] = input
+        members["input"] = input.json
         // Placeholders for the containers, so they keep their place among the members.
         for key in ["outputs", "results", "steps", "sessionBindings"] { members[key] = .object([WireJSON.Member]()) }
     }
@@ -172,6 +174,27 @@ struct FlowRunState: Sendable {
         self["statusDetail"] = detail
     }
 
+    /// `output`, `attemptId`'s, as a step or a node's result keeps it: its JSON — or, when JSON
+    /// has nothing for it now, a placeholder in its place, left out when written
+    /// (``omittedOutputs``). `nil` for none.
+    mutating func keepOutput(_ output: FlowValue, of attemptId: String) -> WireJSON? {
+        switch output {
+        case .json(let value):
+            omittedOutputs.remove(attemptId)
+            return value
+        case .unrepresentable:
+            omittedOutputs.insert(attemptId)
+            return .null
+        default:
+            return nil
+        }
+    }
+
+    /// `result` as the state keeps it (``keepOutput(_:of:)``).
+    mutating func keepResult(_ result: FlowNodeResult) {
+        results[result.nodeId] = result.wire(output: keepOutput(result.output, of: result.attemptId))
+    }
+
     /// acpx's `setNodeValue`: `outputs[nodeId]` defined as an own property, so any id —
     /// `__proto__` among them — is an ordinary key.
     mutating func setOutput(_ nodeId: String, _ value: FlowValue) {
@@ -217,11 +240,14 @@ struct FlowNodeResult: Sendable {
 
     var durationMs: Double { FlowRuntimeSupport.durationMs(from: startedAt, to: finishedAt) }
 
-    var wire: WireJSON {
+    var wire: WireJSON { wire(output: output.json) }
+
+    /// The result, `output` its output member — `nil` for none.
+    func wire(output: WireJSON?) -> WireJSON {
         .object([
             ("attemptId", .text(attemptId)), ("nodeId", .text(nodeId)), ("nodeType", .text(nodeType)),
             ("outcome", .text(outcome.rawValue)), ("startedAt", .text(startedAt)), ("finishedAt", .text(finishedAt)),
-            ("durationMs", .number(durationMs)), ("output", output.json), ("error", error.map(WireJSON.text))
+            ("durationMs", .number(durationMs)), ("output", output), ("error", error.map(WireJSON.text))
         ])
     }
 }

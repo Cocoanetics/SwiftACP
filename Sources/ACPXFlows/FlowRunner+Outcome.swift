@@ -28,12 +28,13 @@ extension FlowRunner {
         state["updatedAt"] = nowISO()
         state.clearActiveNode()
         state.set("statusDetail", statusDetail)
+        let output = state.keepOutput(step.executed.output, of: step.result.attemptId)
         state.steps.append(.object([
             ("attemptId", .text(step.result.attemptId)), ("nodeId", .text(step.nodeId)),
             ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
             ("startedAt", .text(step.result.startedAt)), ("finishedAt", .text(step.result.finishedAt)),
             ("promptText", step.executed.promptText ?? .null), ("rawText", step.executed.rawText ?? .null),
-            ("output", step.executed.output.json), ("error", step.result.error.map(WireJSON.text)),
+            ("output", output), ("error", step.result.error.map(WireJSON.text)),
             ("session", step.executed.sessionInfo ?? .null), ("agent", step.executed.agentInfo ?? .null),
             ("trace", step.executed.trace?.wire)
         ]))
@@ -42,8 +43,12 @@ extension FlowRunner {
             ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
             ("durationMs", .number(step.result.durationMs)), ("error", step.result.error.map(WireJSON.text) ?? .null)
         ]
+        // The trace as JSON writes it now: an `outputInline` with nothing for it is left out.
+        let omitted = state.omittedOutputs.contains(step.result.attemptId)
         for member in step.executed.trace?.wire.objectMembers ?? [] {
-            payload.append((String(decoding: member.key, as: UTF16.self), member.value))
+            let key = String(decoding: member.key, as: UTF16.self)
+            if omitted, key == "outputInline" { continue }
+            payload.append((key, member.value))
         }
         try store.writeSnapshot(
             runDir, &state, scope: "node", type: "node_outcome", nodeId: step.nodeId, attemptId: step.result.attemptId,
