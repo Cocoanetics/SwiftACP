@@ -16,6 +16,10 @@ extension ExecCommand {
         var permissions: PermissionStats
     }
 
+    /// Told as each pause before a retry begins, in tests: what an agent does during the
+    /// pause can then wait for it, rather than for a clock the retry's setup must beat.
+    @TaskLocal static var pauseBegins: (@Sendable () -> Void)?
+
     /// How `exec` sends its prompt: acpx's `--timeout` for each attempt, its
     /// `--prompt-retries`, and whether the retry notice stays off stderr — under quiet
     /// output and `--json-strict`, as acpx's `suppressSdkConsoleErrors`.
@@ -100,6 +104,7 @@ extension ExecCommand {
                 // What the agent sends meanwhile is shown as it comes, as acpx's formatter
                 // shows it — and calls the retry off.
                 pause.render(with: renderer)
+                Self.pauseBegins?()
                 do {
                     try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
                 } catch {
