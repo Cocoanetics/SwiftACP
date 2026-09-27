@@ -1,4 +1,6 @@
 @testable import ACPXCore
+@testable import ACPXFlows
+@testable import acpx
 @testable import acpxd
 import Foundation
 import SwiftACP
@@ -88,6 +90,45 @@ extension DaemonToolsTests {
                 #expect(text.contains(expected), "\(mode ?? "default"): \(text)")
                 await daemon.releaseAll()
             }
+        }
+    }
+
+    /// A persistent turn stopped while the CLI reached acpxd — a cold daemon takes a while —
+    /// is never sent, as acpx's direct turn checks its signal before it prompts, and the
+    /// session's kept agent is let go (#219 review). acpxd here is one in process: the
+    /// session's turn slot is asked for once, by the release — never by the turn.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aPersistentTurnStoppedAsItReachesTheDaemonIsNotSent() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requests = directory.appendingPathComponent("requests.log")
+        let command = "/usr/bin/env MOCK_REQUEST_LOG='\(requests.path)' " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await backend.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
+            let sessions = FlowAgentSessions(
+                flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
+                permission: .approveAll, permissionRules: nil, mcpServers: [])
+            let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+            let turn = FlowPersistentTurn(
+                recordId: id, prompt: [.text("hi")], onMessage: { _, _ in }, control: FlowTurnControl(attempt: attempt))
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            let slots = Lines()
+            await backend.turnQueue.setBeforeAcquire { recordId in slots.add(recordId) }
+            let stopAsItIsSent: @Sendable () -> Void = { attempt.cancel(FlowTimeoutError(timeoutMs: 10)) }
+            await #expect(throws: FlowTimeoutError.self) {
+                try await DaemonClient.$standIn.withValue(daemon) {
+                    try await FlowAgentSessions.$beforeSending.withValue(stopAsItIsSent) {
+                        try await sessions.runPersistent(turn)
+                    }
+                }
+            }
+            #expect(slots.all == [id])
+            let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
+            #expect(!logged.contains("session/prompt"), "\(logged)")
+            #expect(await !backend.sessionStatus(sessionId: id).live)
+            await backend.releaseAll()
         }
     }
 

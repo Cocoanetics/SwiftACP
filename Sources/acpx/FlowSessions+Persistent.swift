@@ -11,6 +11,10 @@ import SwiftMCP
 // it directly — taken back as itself or not at all, its agent let go when it ends, and every
 // message of it streamed back for the run's bundle. Split from `FlowSessions.swift`.
 extension FlowAgentSessions {
+    /// Runs in a test once a persistent turn's daemon is reached and its stop listened for,
+    /// just before the turn is sent.
+    @TaskLocal static var beforeSending: (@Sendable () -> Void)?
+
     /// acpx's `createSessionWithClient` with the flow runner's options: acpxd makes the
     /// session and keeps its agent, answering its requests meanwhile as the flow's turns are
     /// answered. A stop calls it off: the call is dropped, and acpxd stops making a session
@@ -56,6 +60,8 @@ extension FlowAgentSessions {
 
     private func runDirect(_ turn: FlowPersistentTurn) async throws {
         try turn.control.check()
+        let content = try turn.prompt.map { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode($0)) }
+        let ceiling = try TerminalOutputLimit.ceiling()
         let stopReason = StopReasonBox()
         let proxy = try await DaemonClient.connect(spawnIfNeeded: true) { proxy in
             await proxy.setLogNotificationHandler(FlowTurnLog(turn, stopReason: stopReason))
@@ -63,12 +69,20 @@ extension FlowAgentSessions {
         let stop = FlowDaemonTurnStop(recordId: turn.recordId)
         let stopListening = turn.control.onStop { stop.stop() }
         defer { stopListening() }
-        let content = try turn.prompt.map { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode($0)) }
+        Self.beforeSending?()
+        // Stopped while acpxd was being reached — a cold daemon takes a while — the turn is
+        // not sent, as acpx's direct turn checks its signal before it prompts: the stop that
+        // just ran found no turn to cancel (#219 review).
+        if let reason = turn.control.stopReason {
+            await stop.turnEnded()
+            await proxy.disconnect()
+            throw reason
+        }
         do {
             _ = try await DaemonClient.runPrompt(
                 on: proxy, stopReason: stopReason, sessionId: turn.recordId, content: content, wait: true,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                permissionPolicy: permissionRules, terminalOutputCeiling: try TerminalOutputLimit.ceiling(),
+                permissionPolicy: permissionRules, terminalOutputCeiling: ceiling,
                 streamWire: true, direct: true, fs: flags.fs)
         } catch {
             await stop.turnEnded()
