@@ -94,9 +94,10 @@ public enum SessionEngine {
     /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
     /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
     /// false, the record is returned unwritten, for a caller that writes it once it keeps the
-    /// session — acpxd, where the id the agent gives may be another session's. The agent starts
-    /// over `baseEnvironment` when given — its caller's own — else this process's, and caps its
-    /// terminals by `terminalOutputCeiling`.
+    /// session — acpxd, where the id the agent gives may be another session's. The agent, and
+    /// the commands it runs through the client's terminals, start over `baseEnvironment` when
+    /// given — its caller's own — else this process's; its terminals are capped by
+    /// `terminalOutputCeiling`.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -131,7 +132,8 @@ public enum SessionEngine {
                 authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
                 over: baseEnvironment ?? ProcessInfo.processInfo.environment),
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling, onStderr: onStderr)
+            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling,
+            terminalEnvironment: baseEnvironment, onStderr: onStderr)
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,

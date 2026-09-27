@@ -17,6 +17,10 @@ extension ACPXDaemonBackend {
         var idle: Task<Void, Never>?
         /// How many turns it ran: a wait that ends looks whether one came since it began.
         var turnsRun = 0
+        /// The environment of the prompt that started it, which every agent it starts starts
+        /// over, as acpx's queue owner starts its agent in the environment of the CLI that
+        /// spawned it; `nil`, the daemon's own (#222).
+        var environment: [String: String]?
     }
 
     /// acpx's `normalizeQueueOwnerTtlMs`: five minutes when not given (or negative), and
@@ -27,10 +31,11 @@ extension ACPXDaemonBackend {
     }
 
     /// A prompt's turn starts: the session's owner stops waiting for it. A session with
-    /// none gets one, with the prompt's TTL; a running one keeps its own, as acpx's
-    /// owner keeps the TTL it was started with.
-    func turnStarts(_ recordId: String, ttlMs: Int?) {
-        var owner = owners[recordId] ?? SessionOwner(ttlMilliseconds: Self.ownerTTL(ttlMs))
+    /// none gets one, with the prompt's TTL and `environment`; a running one keeps its own,
+    /// as acpx's owner keeps the TTL and the environment it was started with.
+    func turnStarts(_ recordId: String, ttlMs: Int?, environment: [String: String]? = nil) {
+        var owner = owners[recordId]
+            ?? SessionOwner(ttlMilliseconds: Self.ownerTTL(ttlMs), environment: environment)
         owner.idle?.cancel()
         owner.idle = nil
         owner.turnsRun += 1

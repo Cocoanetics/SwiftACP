@@ -26,15 +26,15 @@ public protocol ACPXBackend: Sendable {
     ) async throws -> Bool
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?
+        timeoutMs: Int?, environment: [String: String]?
     ) async throws -> SessionControlResult
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]?
     ) async throws -> SessionControlResult
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?
+        timeoutMs: Int?, environment: [String: String]?
     ) async throws -> SessionControlResult
     func closeSession(sessionId: String) async throws -> Bool
     func pruneSessions(
@@ -120,7 +120,8 @@ public struct SessionCreationMode: Sendable {
 /// begins (`turnToken`), the config that agent is started with (`callerConfig`; `nil`, the one
 /// where the session works), whether what the agent writes to stderr is streamed to the
 /// caller (`verbose`, acpx's `--verbose`), and the environment that agent starts over
-/// (`environment`; `nil`, the daemon's own).
+/// (`environment`; `nil`, the daemon's own) — for a queued turn, the one its session's owner
+/// was started with (#222).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool

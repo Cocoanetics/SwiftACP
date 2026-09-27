@@ -102,6 +102,10 @@ public final class ACPAgent: Sendable {
 
     /// Spawn an agent's ACP adapter, run the `initialize` handshake, and return
     /// a ready agent. Throws if the adapter can't launch or the handshake fails.
+    ///
+    /// The commands the agent runs through the client's terminals start over
+    /// `terminalEnvironment` — the client's own environment, for a host running agents for
+    /// other processes — as acpx's client spawns them in its process; `nil`, this process's.
     public static func launch(
         agent name: String,
         argv: [String]? = nil,
@@ -115,6 +119,7 @@ public final class ACPAgent: Sendable {
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
+        terminalEnvironment: [String: String]? = nil,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil,
         onStderr: RawWireTap.StderrObserver? = nil
@@ -127,7 +132,8 @@ public final class ACPAgent: Sendable {
         // acpx builds its terminal manager with its client, before the agent starts —
         // so a bad `ACPX_TERMINAL_MAX_OUTPUT_BYTES` fails the launch outright, and a
         // command the agent starts while it answers `initialize` is capped already.
-        let terminals = try terminalManager(for: capabilities, cwd: cwd, ceiling: terminalOutputCeiling)
+        let terminals = try terminalManager(
+            for: capabilities, cwd: cwd, ceiling: terminalOutputCeiling, environment: terminalEnvironment)
         // Read when the client starts, before anything else: a bad value is refused.
         let maxMessageBytes = try AcpMessageLimit.bytes()
         let spec = try AgentRegistry.launch(
@@ -239,7 +245,8 @@ public final class ACPAgent: Sendable {
     /// The ceiling is read whether or not terminals are advertised: acpx builds its
     /// terminal manager with every client, so `--no-terminal` does not excuse a bad one.
     private static func terminalManager(
-        for capabilities: ClientCapabilities, cwd: String, ceiling source: TerminalOutputLimit.Source
+        for capabilities: ClientCapabilities, cwd: String, ceiling source: TerminalOutputLimit.Source,
+        environment: [String: String]?
     ) throws -> (any ACPTerminalHandler)? {
         let ceiling: Int?
         switch source {
@@ -248,9 +255,9 @@ public final class ACPAgent: Sendable {
         }
         #if os(macOS) || os(Linux)
         guard capabilities.terminal else { return nil }
-        return TerminalManager(cwd: cwd, outputCeiling: ceiling)
+        return TerminalManager(cwd: cwd, outputCeiling: ceiling, environment: environment)
         #else
-        _ = ceiling
+        _ = (ceiling, environment)
         return nil
         #endif
     }
@@ -282,6 +289,7 @@ public final class ACPAgent: Sendable {
         inheritStderr: Bool = true,
         overrides: [String: String] = [:],
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
+        terminalEnvironment: [String: String]? = nil,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil,
         onStderr: RawWireTap.StderrObserver? = nil
@@ -294,7 +302,8 @@ public final class ACPAgent: Sendable {
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
-            onClientRequest: onClientRequest, onRawWire: onRawWire, onStderr: onStderr)
+            terminalEnvironment: terminalEnvironment, onClientRequest: onClientRequest, onRawWire: onRawWire,
+            onStderr: onStderr)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.
