@@ -131,15 +131,22 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - agentArgv: the argv the caller resolved for `agentCommand`, which is then taken as
     ///     it is; `nil` to resolve and split the command here.
     ///   - sessionOptions: the session's options, recorded and sent as `_meta`.
-    ///   - holdAgent: keep the creating agent as the session's live one, for its first turn.
-    ///   - fs: acpx's `--no-fs`: `false` withholds the filesystem methods from the creating
-    ///     agent, and records it unless that agent is held (a flow says it with each turn).
+    ///   - creation: how the session is made (``SessionCreationMode``): its agent kept for
+    ///     its first turn (`holdAgent`), `fs` — `false` withholds the filesystem methods from
+    ///     the creating agent, and records it unless that agent is held (a flow says it with
+    ///     each turn) — and how the agent's requests are answered meanwhile, as a turn's are.
     /// - Returns: the new session's acpx record id.
     func newSession(
-        agentCommand: String, agentArgv: [String]? = nil, cwd rawCwd: String, name: String? = nil,
-        mcpServers: [McpServerConfig]? = nil, sessionOptions promptOptions: PromptSessionOptions? = nil,
-        holdAgent: Bool = false, fs: Bool? = nil
+        agentCommand: String, agentArgv: [String]?, cwd rawCwd: String, name: String?,
+        mcpServers: [McpServerConfig]?, sessionOptions promptOptions: PromptSessionOptions?,
+        creation: SessionCreationMode
     ) async throws -> String {
+        let (holdAgent, fs) = (creation.holdAgent, creation.fs)
+        // The agent's requests while the session is made are answered by the caller's mode and
+        // rules — a flow's own, as acpx's runner makes its client with them.
+        let handlers = try TurnPermissions(
+            mode: creation.permissionMode, nonInteractive: creation.nonInteractivePermissions,
+            rules: creation.permissionPolicy).handlers
         // A session held for a flow's first turn is made where it is asked for, as acpx's
         // `createSessionWithClient` makes it: a working directory that is not there fails
         // the agent's launch.
@@ -160,7 +167,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
                 authPolicy: config.authPolicy, mcpServers: configServers,
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
-                capabilities: .acpx(fs: fs), inheritStderr: inheritAgentStderr)
+                capabilities: .acpx(fs: fs), handlers: handlers, inheritStderr: inheritAgentStderr)
             return record.acpxRecordId
         }
         guard !stopping else { throw DaemonError.stopping }
@@ -169,11 +176,24 @@ actor ACPXDaemonBackend: ACPXBackend {
             name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
             authPolicy: config.authPolicy, mcpServers: configServers,
             sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
-            capabilities: .acpx(fs: fs), recordsCapabilities: false, inheritStderr: inheritAgentStderr)
+            capabilities: .acpx(fs: fs), recordsCapabilities: false, handlers: handlers,
+            inheritStderr: inheritAgentStderr)
         let recordId = held.record.acpxRecordId
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         _ = try await hold(held.agent, on: held.session, sessionSpecs: sessionSpecs, for: recordId, via: nil)
         return recordId
+    }
+
+    /// ``newSession(agentCommand:agentArgv:cwd:name:mcpServers:sessionOptions:creation:)`` with
+    /// its agent kept or not, and offered the filesystem or not; its requests approved.
+    func newSession(
+        agentCommand: String, agentArgv: [String]? = nil, cwd: String, name: String? = nil,
+        mcpServers: [McpServerConfig]? = nil, sessionOptions: PromptSessionOptions? = nil,
+        holdAgent: Bool = false, fs: Bool? = nil
+    ) async throws -> String {
+        try await newSession(
+            agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
+            sessionOptions: sessionOptions, creation: SessionCreationMode(holdAgent: holdAgent, fs: fs))
     }
 
     /// Replace a session's own MCP servers and persist them (see `newSession`'s

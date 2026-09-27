@@ -77,16 +77,25 @@ public actor ACPXDaemon {
     ///     creates the session — and, as `sessions new --no-fs` records it, from every agent
     ///     that runs it later, unless the agent is held for a flow, whose turns each say it
     ///     again (`runPrompt`'s `fs`), as acpx's flow runner does. Omitted, they are offered.
+    ///   - permissionMode: how the creating agent's permission requests and file writes are
+    ///     answered, as `runPrompt`'s: `approve-all`, `approve-reads` or `deny-all` — a flow's
+    ///     own mode, as acpx's runner makes its client with it. Omitted, `approve-all`.
+    ///   - nonInteractivePermissions: `deny` or `fail`, as `runPrompt`'s. Omitted, `deny`.
+    ///   - permissionPolicy: per-tool rules before `permissionMode`, as `runPrompt`'s.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
         agentCommand: String, cwd: String, name: String? = nil,
         mcpServers: [McpServerConfig]? = nil, agentArgv: [String]? = nil,
-        sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil
+        sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
+        permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
+        permissionPolicy: PermissionRules? = nil
     ) async throws -> String {
         try await backend.newSession(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
-            sessionOptions: sessionOptions, holdAgent: holdAgent ?? false, fs: fs)
+            sessionOptions: sessionOptions, creation: SessionCreationMode(
+                holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
+                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy))
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and

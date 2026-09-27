@@ -12,8 +12,9 @@ import SwiftMCP
 // message of it streamed back for the run's bundle. Split from `FlowSessions.swift`.
 extension FlowAgentSessions {
     /// acpx's `createSessionWithClient` with the flow runner's options: acpxd makes the
-    /// session and keeps its agent. A stop calls it off: the call is dropped, and acpxd stops
-    /// making a session nobody waits for.
+    /// session and keeps its agent, answering its requests meanwhile as the flow's turns are
+    /// answered. A stop calls it off: the call is dropped, and acpxd stops making a session
+    /// nobody waits for.
     func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord {
         try control.check()
         let proxy = try await DaemonClient.connect(spawnIfNeeded: true)
@@ -23,7 +24,9 @@ extension FlowAgentSessions {
         do {
             recordId = try await ACPXDaemon.Client(proxy: proxy).newSession(
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: nil,
-                agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs)
+                agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
+                permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
+                permissionPolicy: permissionRules)
         } catch {
             await proxy.disconnect()
             if let reason = control.stopReason { throw reason }
@@ -39,8 +42,19 @@ extension FlowAgentSessions {
     /// acpx's `sendSessionDirect` with the flow runner's options: acpxd runs the turn
     /// directly, streaming every message of it into the turn's capture. Once the attempt
     /// stops the turn, its prompt is cancelled and given 2.5 s, then its agent let go
-    /// (acpx's `ownDirectClient`).
+    /// (acpx's `ownDirectClient`). A turn that fails lets the session's agent go too, as
+    /// acpx's closes the client it was given however it ends: one that failed before acpxd
+    /// took the kept agent would leave it kept, with no owner to let it go.
     func runPersistent(_ turn: FlowPersistentTurn) async throws {
+        do {
+            try await runDirect(turn)
+        } catch {
+            _ = await DaemonClient.releaseSession(sessionId: turn.recordId)
+            throw error
+        }
+    }
+
+    private func runDirect(_ turn: FlowPersistentTurn) async throws {
         try turn.control.check()
         let stopReason = StopReasonBox()
         let proxy = try await DaemonClient.connect(spawnIfNeeded: true) { proxy in

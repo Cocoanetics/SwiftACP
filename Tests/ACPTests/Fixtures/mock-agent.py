@@ -283,6 +283,11 @@ def main():
             session_update(terminal_session, {
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after the terminal"}})
             continue
+        if method is None and req_id == "mock-new-ask" and "new" in pending_fs:
+            with open(os.environ["MOCK_ASK_AT_NEW"], "w", encoding="utf-8") as output:
+                output.write(json.dumps(message.get("result", message.get("error"))))
+            respond(pending_fs.pop("new"), {"sessionId": SESSION_ID})
+            continue
         if method is None and req_id == "mock-fs" and "prompt" in pending_fs:
             prompt_id, fs_session = pending_fs.pop("prompt")
             error = message.get("error")
@@ -319,6 +324,17 @@ def main():
         elif method == "session/new" and os.environ.get("MOCK_NEW_ERROR"):
             # MOCK_NEW_ERROR: the JSON-RPC error (JSON) to answer `session/new` with.
             send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["MOCK_NEW_ERROR"])})
+        elif method == "session/new" and os.environ.get("MOCK_ASK_AT_NEW") and "new" not in pending_fs:
+            # MOCK_ASK_AT_NEW=<path>: a permission question before `session/new` is answered;
+            # the client's answer goes to the path, then the session is opened.
+            pending_fs["new"] = req_id
+            send({"jsonrpc": "2.0", "id": "mock-new-ask", "method": "session/request_permission", "params": {
+                "sessionId": SESSION_ID,
+                "toolCall": {"toolCallId": "call-new", "title": "a question while the session opens"},
+                "options": [
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                ]}})
         elif method == "session/new":
             # MOCK_NEW_META / MOCK_LOAD_META: the `_meta` (JSON) of the replies that
             # open a session, where an agent names its own session id.

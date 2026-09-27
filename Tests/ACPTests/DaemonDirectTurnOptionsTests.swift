@@ -67,6 +67,30 @@ extension DaemonToolsTests {
         }
     }
 
+    /// The agent that makes a flow's session has its requests answered as the flow's turns
+    /// are, as acpx's runner makes its client with the flow's permission mode (#219 review):
+    /// a question it asks while the session opens is refused under `deny-all`, and allowed
+    /// by default.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func theAgentMakingAHeldSessionIsAnsweredAsTheFlowsTurnsAre() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mock = try #require(mockCommand())
+        for (mode, expected) in [("deny-all", "reject"), (nil, "allow")] as [(String?, String)] {
+            let answer = directory.appendingPathComponent("answer-\(mode ?? "default")")
+            try await withIsolatedStore {
+                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+                _ = try await daemon.newSession(
+                    agentCommand: "/usr/bin/env MOCK_ASK_AT_NEW='\(answer.path)' " + mock, agentArgv: nil,
+                    cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true, permissionMode: mode))
+                let text = try String(contentsOf: answer, encoding: .utf8)
+                #expect(text.contains(expected), "\(mode ?? "default"): \(text)")
+                await daemon.releaseAll()
+            }
+        }
+    }
+
     /// The options' model is kept with a session made for a flow's first turn, with the
     /// rest of them, as acpx's `createSessionWithClient` records its options. The session's
     /// current model stays the agent's, as acpx 0.19.3's `sessions new --model` leaves it on

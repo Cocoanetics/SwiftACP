@@ -41,6 +41,7 @@ public enum SessionEngine {
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
+        handlers: ACPClientHandlers? = nil,
         inheritStderr: Bool = false,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
@@ -49,7 +50,7 @@ public enum SessionEngine {
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
             mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
-            inheritStderr: inheritStderr, onModelWarning: onModelWarning)
+            handlers: handlers, inheritStderr: inheritStderr, onModelWarning: onModelWarning)
         var record = held.record
         let handle = held.agent
         // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
@@ -75,7 +76,8 @@ public enum SessionEngine {
     /// up to the record, which is written with the agent still running
     /// (`createSessionRecordWithClient`) — and the agent kept, on the session, for the
     /// caller to use and close. With `recordsCapabilities` false, what `capabilities`
-    /// withholds stays off the record, for a caller that says it with each turn.
+    /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
+    /// when given, answer the agent's requests in place of `permission`'s.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -92,6 +94,7 @@ public enum SessionEngine {
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
         recordsCapabilities: Bool = true,
+        handlers: ACPClientHandlers? = nil,
         inheritStderr: Bool = false,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> HeldSession {
@@ -99,8 +102,8 @@ public enum SessionEngine {
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
         let handle = try await ACPAgent.launch(
-            agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission, permissionRules: permissionRules,
-            capabilities: capabilities,
+            agent: agentCommand, argv: agentArgv, cwd: cwd,
+            handlers: handlers ?? .standard(permission: permission, rules: permissionRules), capabilities: capabilities,
             environment: AgentEnvironment.forAgent(authCredentials: authCredentials, sessionEnv: sessionOptions?.env),
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr)

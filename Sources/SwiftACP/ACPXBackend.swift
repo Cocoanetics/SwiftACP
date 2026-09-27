@@ -16,7 +16,7 @@ import JSONFoundation
 public protocol ACPXBackend: Sendable {
     func newSession(
         agentCommand: String, agentArgv: [String]?, cwd: String, name: String?, mcpServers: [McpServerConfig]?,
-        sessionOptions: PromptSessionOptions?, holdAgent: Bool, fs: Bool?
+        sessionOptions: PromptSessionOptions?, creation: SessionCreationMode
     ) async throws -> String
     func listSessions(agentCommand: String?) async -> [SessionSummary]
     func showSession(sessionId: String) async throws -> SessionDetail
@@ -49,6 +49,29 @@ public protocol ACPXBackend: Sendable {
     func cancelSession(sessionId: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
     func releaseSession(sessionId: String) async throws -> Bool
+}
+
+/// How a session is made, beside where and with what (``ACPXDaemon``'s `newSession`):
+/// whether its agent is kept for its first turn (`holdAgent`), what that agent is offered
+/// (`fs`, acpx's `--no-fs`), and how its requests are answered until then — as a turn's are
+/// (`permissionMode`, `nonInteractivePermissions`, `permissionPolicy`).
+public struct SessionCreationMode: Sendable {
+    public var holdAgent: Bool
+    public var fs: Bool?
+    public var permissionMode: String?
+    public var nonInteractivePermissions: String?
+    public var permissionPolicy: PermissionRules?
+
+    public init(
+        holdAgent: Bool = false, fs: Bool? = nil, permissionMode: String? = nil,
+        nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil
+    ) {
+        self.holdAgent = holdAgent
+        self.fs = fs
+        self.permissionMode = permissionMode
+        self.nonInteractivePermissions = nonInteractivePermissions
+        self.permissionPolicy = permissionPolicy
+    }
 }
 
 /// How a turn runs, beside what it sends: whether its whole exchange is streamed back
