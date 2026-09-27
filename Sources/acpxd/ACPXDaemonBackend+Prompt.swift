@@ -70,30 +70,36 @@ extension ACPXDaemonBackend {
         // Begun, the turn is the session's before it holds the session: a cancel is its
         // (``cancelSession(sessionId:)``), and so is a control sent, run on the prompt's
         // agent once the prompt goes out (acpx's `beginPrompt`). A turn that ends before
-        // then fails the controls still waiting.
-        let begun: BegunPrompt
+        // then fails the controls still waiting. A direct turn — a flow's — begins apart from
+        // the owner's line, as acpx's `sendSessionDirect` takes only the session's turn (#225).
+        let started: StartedTurn
+        var heldTheSlot: Bool
         do {
-            begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
+            (started, heldTheSlot) = try await startTurn(recordId, direct: direct, wait: wait, turnToken: turnToken)
         } catch let refused as QueueOwnerShuttingDown {
-            // Told to the client as acpx's owner tells it, the turn's error.
-            return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
+            return try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
         }
-        let (control, ticket) = (begun.control, begun.ticket)
-        var heldTheSlot = !wait
-        defer { promptEnded(recordId, begun, heldTheSlot: heldTheSlot) }
+        let control = started.control
+        defer { turnOver(recordId, started, heldTheSlot: heldTheSlot) }
         // One turn per session at a time, so concurrent CLI/MCP callers never drive one
         // agent — or persist one record — concurrently: the prompt waits for what holds the
-        // session, the controls sent before it began among them, as acpx's owner waits for
-        // its idle controls (`priorIdle`).
-        if wait {
-            try await turnQueue.acquire(recordId, wait: true)
+        // session — a direct turn, the controls sent before it began — as acpx's waits for the
+        // session's turn (`waitForSessionTurn`): within its `--timeout`, until a cancel ends
+        // the wait, the turn cancelled then with nothing sent (#225).
+        if !heldTheSlot {
+            do {
+                try await takeSlot(for: recordId, turn: control.id, within: direct ? nil : timeout)
+            } catch let timedOut as TimeoutError {
+                return try await failedBeforeItsAttempt(timedOut, of: recordId, direct: direct)
+            } catch where turnControl(recordId, control.id)?.cancelAsked == true {
+                return await Self.endedCancelled(as: initial.acpSessionId)
+            }
             heldTheSlot = true
         }
-        turns[recordId]?.running = true
+        changeTurn(recordId, control.id) { $0.running = true }
         // Begun for a session another took the place of since, it is refused (#219 review).
-        if turns[recordId]?.refused == true {
-            let refused = QueueOwnerShuttingDown(inLine: true)
-            return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
+        if turnControl(recordId, control.id)?.refused == true {
+            return try await failedBeforeItsAttempt(QueueOwnerShuttingDown(inLine: true), of: recordId, direct: direct)
         }
         // A free slot is had at once, however the prompt was called off meanwhile: then it
         // ends here, nothing sent and nothing kept — a direct turn's agent with it, as acpx's
@@ -118,15 +124,12 @@ extension ACPXDaemonBackend {
             guard let record = findRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
             return record
         }
-        // Cancelled while it waited, it ends now, as acpx's prompt ends cancelled once it
-        // holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.
-        if turns[recordId]?.cancelAsked == true {
+        // Cancelled as it took the session, it ends now, as acpx's prompt ends cancelled once
+        // it holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.
+        if turnControl(recordId, control.id)?.cancelAsked == true {
             // A direct turn's agent goes with it, as acpx closes the client it was handed however it ends.
             if direct { await evict(recordId) }
-            await Self.announceTheEnd(
-                of: PromptResponse(stopReason: .cancelled), permissions: PermissionStats(),
-                result: PromptResultCapture(), as: record.acpSessionId, to: Session.current)
-            return ""
+            return await Self.endedCancelled(as: record.acpSessionId)
         }
         let agentCommand = record.agentCommand
         let cwd = record.cwd
@@ -150,7 +153,7 @@ extension ACPXDaemonBackend {
         let persister = TurnPersister(
             record: prompted, eventBuffer: eventBuffer, requestId: direct ? nil : control.id.uuidString.lowercased())
         // The controls the turn takes change and save the prompt's record.
-        ticket.persister = persister
+        started.ticket?.persister = persister
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
@@ -273,8 +276,7 @@ extension ACPXDaemonBackend {
         // fails to connect at all.
         errors.reset()
         // Until this attempt's prompt goes out, a cancel waits for it.
-        turns[recordId]?.prompt = nil
-        turns[recordId]?.answered = false
+        promptUnsent(recordId: recordId, turn: turn.id)
         // A reconnect that has to start a new session hands it to the persister, so the
         // turn's saves carry it on instead of writing the old session back; what the
         // connecting put on the wire goes to the calling client first.
@@ -389,7 +391,7 @@ extension ACPXDaemonBackend {
             let failure = await permissionFailure(of: turn, on: connection, boundSessionId) ?? error
             throw await failedAttempt(
                 failure, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
-                wireFeed: wireFeed, recordId: recordId, persister: persister, direct: turn.direct)
+                wireFeed: wireFeed, recordId: recordId, turn: turn.id, persister: persister, direct: turn.direct)
         }
     }
 }

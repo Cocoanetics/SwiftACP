@@ -50,8 +50,12 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Internal (not private) so the prompt turns in `ACPXDaemonBackend+Prompt.swift`
     /// can take a session's slot.
     let turnQueue = SessionTurnQueue()
-    /// The turn each session runs, by record: see ``TurnControl``.
+    /// The turn each session's queue owner runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The direct turns — a flow's — each session runs or has waiting for it, by record, in the
+    /// order they began, outside its queue owner, as acpx's `sendSessionDirect` takes only the
+    /// session's turn (#225). Only one has the session at a time.
+    var directTurns: [String: [TurnControl]] = [:]
     /// The tokens of turns a cancel named before they began, and when: each ends as it
     /// begins (``claimTurnToken(_:for:)``).
     var calledOffTurns: [String: Date] = [:]
@@ -464,28 +468,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         // A creation's token keeps its agent no longer: nothing is left for a call-off.
         madeCreations = madeCreations.filter { $0.value.agent !== entry.agent }
         await entry.agent.close()
-    }
-
-    /// Let every held agent go the way acpx's queue owner does when it stops
-    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
-    /// into its record, best effort — no pid, and the connection it was closed on unless
-    /// it had ended before.
-    func releaseAll() async {
-        // Before anything is let go: a turn whose agent this closes must not start another.
-        stopping = true
-        // The prompts still in line are refused, as each owner acpx stops refuses its own.
-        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
-        for recordId in owners.keys { forgetOwner(recordId) }
-        while let recordId = live.keys.first {
-            guard let entry = live.removeValue(forKey: recordId) else { continue }
-            await entry.agent.close()
-            // A turn the close ends saves its record first.
-            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
-            defer { Task { await turnQueue.release(recordId) } }
-            guard var record = findRecord(recordId) else { continue }
-            record.applyLifecycle(entry.agent.lifecycle)
-            try? SessionStore.writeRecord(record)
-        }
     }
 
     /// Whether `error` indicates the agent no longer has the session (ACP has no

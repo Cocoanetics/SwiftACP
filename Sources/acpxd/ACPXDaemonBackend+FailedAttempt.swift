@@ -30,6 +30,12 @@ extension ACPXDaemonBackend {
         }
     }
 
+    /// A turn that fails before its attempt — refused, or timed out waiting for the session —
+    /// told to the client as acpx's owner tells it: the turn's error.
+    func failedBeforeItsAttempt(_ error: Error, of recordId: String, direct: Bool) async throws -> String {
+        try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw error }
+    }
+
     /// What a direct turn fails with when it needed a permission question nobody could be
     /// asked: acpx's client then fails its prompt with that, however the prompt ended
     /// (`throwPromptPermissionFailureIfPresent`). `nil` otherwise, and for a queued turn,
@@ -75,12 +81,13 @@ extension ACPXDaemonBackend {
     ///   (``wrapUp(failedAttemptOn:error:retried:recordId:persister:direct:)``).
     func failedAttempt(
         _ error: Error, on entry: Live, wrote: WriteMark, retriesOnAFreshLaunch: Bool, relay: TurnRelay,
-        wireFeed: TurnWireFeed, recordId: String, persister: TurnPersister, direct: Bool = false
+        wireFeed: TurnWireFeed, recordId: String, turn id: UUID, persister: TurnPersister, direct: Bool = false
     ) async -> Error {
         takePromptNote(of: recordId, from: wrote)
         let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
             ? AgentExitedBeforeTheTurn(underlying: error) : error
-        let retrying = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure) && turns[recordId]?.retried != true
+        let retrying = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure)
+            && turnControl(recordId, id)?.retried != true
         // Before anything else waits: a control arriving meanwhile waits for the retry.
         let handedOn = retrying && !wireFeed.agentAnswered && handControlsOn(from: recordId)
         await relay.end()

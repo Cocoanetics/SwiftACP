@@ -383,9 +383,9 @@ extension DaemonToolsTests {
         #expect(client.sent <= AgentStderrRelay.attachedChunkLimit + 1)
     }
 
-    /// A call-off stays while its turn waits to begin behind another, however long: begun past
-    /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
-    /// review).
+    /// A call-off stays while its turn waits to begin behind another in its owner's line, however
+    /// long: begun past the minute other call-offs are kept, the turn still ends at once, nothing
+    /// sent (#219 review). A flow's direct turn begins at once instead (#225).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCallOffOutlastsATurnWaitingToBegin() async throws {
         let directory = try Self.scratchDirectory()
@@ -400,13 +400,12 @@ extension DaemonToolsTests {
             await daemon.setPromptGoingOut { _ in firstGoesOut.open() }
             await daemon.setPromptWaits { _ in secondWaits.open() }
             let first = Task {
-                try await daemon.runPrompt(
-                    sessionId: id, text: "hold turn", permissionMode: "approve-all", direct: true)
+                try await daemon.runPrompt(sessionId: id, text: "hold turn", permissionMode: "approve-all")
             }
             await firstGoesOut.wait()
             let second = Task {
                 try await daemon.runPrompt(
-                    sessionId: id, text: "second", permissionMode: "approve-all", direct: true, turnToken: "queued")
+                    sessionId: id, text: "second", permissionMode: "approve-all", turnToken: "queued")
             }
             await secondWaits.wait()
             let cancelledTheFirst = try await daemon.cancelSession(sessionId: id, turnToken: "queued")

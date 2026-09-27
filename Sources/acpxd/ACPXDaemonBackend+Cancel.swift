@@ -42,6 +42,10 @@ extension ACPXDaemonBackend {
         var refused = false
         /// Whether it has the session's slot: what it connects or runs on is its own from then on.
         var running = false
+        /// Its wait for the session's slot, once begun, which a cancel cuts short: it then ends
+        /// cancelled, nothing sent, as acpx's queued prompt ends once its owner's cancel aborts
+        /// its wait for the session's turn (`waitForSessionTurn`, #225).
+        var slotWait: Task<Void, Error>?
     }
 
     /// Cancel the turn a session runs, as acpx's owner answers `cancelPrompt`.
@@ -50,23 +54,35 @@ extension ACPXDaemonBackend {
     /// - Returns: whether the session runs a turn: `false` when it is idle, and then
     ///   nothing is sent.
     ///
-    /// Given the `turnToken` its caller gave a turn, only that turn is cancelled. One that
-    /// has not begun yet is called off: it ends as it begins, nothing sent — as acpx's flow
-    /// runner closes the client a stopped direct turn would prompt on (#219 review).
+    /// Without a `turnToken` it reaches the session's queue owner alone, as acpx's cancel
+    /// does: the owner's turn, waiting for the session or running — never a flow's direct turn,
+    /// which runs out of its reach (#225). Given the token its caller gave a turn — a flow's
+    /// direct turn — only that turn is cancelled; one that has not begun yet is called off: it
+    /// ends as it begins, nothing sent — as acpx's flow runner closes the client a stopped
+    /// direct turn would prompt on (#219 review).
     func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
         guard let record = findRecord(sessionId) else { return false }
-        guard let turn = turns[record.acpxRecordId], turnToken == nil || turn.token == turnToken else {
-            if let turnToken { callOff(turnToken) }
-            return false
+        let recordId = record.acpxRecordId
+        if let turnToken {
+            let owners = turns[recordId].flatMap { $0.token == turnToken ? $0 : nil }
+            guard let turn = directTurn(recordId, token: turnToken) ?? owners else {
+                callOff(turnToken)
+                return false
+            }
+            try await cancel(turn, of: recordId)
+            return true
         }
-        turns[record.acpxRecordId]?.cancelAsked = true
-        if let prompt = turn.prompt {
-            try await prompt.connection.cancel(sessionId: prompt.sessionId)
-        } else {
-            turns[record.acpxRecordId]?.cancelPending = true
-            turn.pause?.cancel()
-        }
+        guard let turn = turns[recordId] else { return false }
+        try await cancel(turn, of: recordId)
         return true
+    }
+
+    /// Cancel what runs on `recordId`'s session, its owner's turn and a direct one alike: a
+    /// close or a let-go ends the session under both.
+    func cancelEveryTurn(_ recordId: String) async {
+        for turn in everyTurn(recordId) {
+            try? await cancel(turn, of: recordId)
+        }
     }
 
     /// Keep `token` as a turn's a cancel named before it began; tokens kept a minute
@@ -88,13 +104,23 @@ extension ACPXDaemonBackend {
         if calledOffTurns.removeValue(forKey: token) != nil { turns[recordId]?.cancelAsked = true }
     }
 
+    /// Turn `id`'s attempt begins: until its prompt goes out, a cancel waits for it
+    /// (``promptWritten(recordId:turn:to:sessionId:note:)``).
+    func promptUnsent(recordId: String, turn id: UUID) {
+        changeTurn(recordId, id) {
+            $0.prompt = nil
+            $0.answered = false
+        }
+    }
+
     /// Turn `id`'s prompt was answered: a cancel has nothing to send it from now on, as
     /// acpx's client clears its active prompt at the answer (`clearActivePrompt`) — while
     /// the turn waits for the agent's requests from it and its updates after the answer.
     func promptAnswered(recordId: String, turn id: UUID) {
-        guard turns[recordId]?.id == id else { return }
-        turns[recordId]?.prompt = nil
-        turns[recordId]?.answered = true
+        changeTurn(recordId, id) {
+            $0.prompt = nil
+            $0.answered = true
+        }
     }
 
     /// Turn `id`'s prompt began to be written to `connection`: a cancel goes to it from
@@ -106,12 +132,12 @@ extension ACPXDaemonBackend {
     ) async {
         guard note.takeNote() else { return }
         // The prompt went out: the controls sent meanwhile run on its agent now, as acpx's
-        // owner publishes them (`onPromptActive`).
+        // owner publishes them (`onPromptActive`) — a queued turn's: a direct one has no ticket.
         if turns[recordId]?.id == id { tickets[recordId]?.publish() }
-        guard turns[recordId]?.id == id, turns[recordId]?.answered == false else { return }
-        turns[recordId]?.prompt = (connection, sessionId)
-        guard turns[recordId]?.cancelPending == true else { return }
-        turns[recordId]?.cancelPending = false
+        guard let turn = turnControl(recordId, id), !turn.answered else { return }
+        changeTurn(recordId, id) { $0.prompt = (connection, sessionId) }
+        guard turn.cancelPending else { return }
+        changeTurn(recordId, id) { $0.cancelPending = false }
         do {
             try await connection.cancel(sessionId: sessionId)
         } catch {
