@@ -424,9 +424,11 @@ public final class ACPAgent: Sendable {
         if let agent = transport as? AgentProcessTransport {
             // As acpx's `retireNativeResources` closes a client (#142): marked closing, the
             // agent ended — its end, recorded as acpx records it, failing what still waits
-            // in its words — and only then the connection closed.
+            // in its words once the connection has read it — and only then the connection
+            // closed, which would fail it as closed instead.
             agent.close()
             await agent.terminate()
+            await connection.waitUntilClosed()
             await connection.close()
             return
         }
