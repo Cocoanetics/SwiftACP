@@ -90,13 +90,18 @@ extension ACPXDaemonBackend {
             heldTheSlot = true
         }
         turns[recordId]?.running = true
-        // A free slot is had at once, however the prompt was called off meanwhile: then it
-        // ends here, nothing sent and nothing kept.
-        try Task.checkCancellation()
         // Begun for a session another took the place of since, it is refused (#219 review).
         if turns[recordId]?.refused == true {
             let refused = QueueOwnerShuttingDown(inLine: true)
             return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
+        }
+        // A free slot is had at once, however the prompt was called off meanwhile: then it
+        // ends here, nothing sent and nothing kept — a direct turn's agent with it, as acpx's
+        // closes the client it was handed however it ends, from a task this cancellation
+        // cannot cut short (#219 review).
+        if Task.isCancelled {
+            if direct { await Task { await self.evict(recordId) }.value }
+            throw CancellationError()
         }
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as

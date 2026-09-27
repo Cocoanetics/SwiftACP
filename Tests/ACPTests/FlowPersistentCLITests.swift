@@ -68,6 +68,27 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A direct turn called off as it has the session's slot, before anything is sent, lets its
+    /// agent go too, as acpx's direct turn closes the client it was handed however it ends — a
+    /// caller of the direct tool has nothing else to let it go (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectTurnCancelledAsItBeginsLetsItsAgentGo() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            #expect(await daemon.sessionStatus(sessionId: id).live)
+            // The turn is cancelled from within, as it takes the slot.
+            await daemon.turnQueue.setBeforeAcquire { _ in withUnsafeCurrentTask { $0?.cancel() } }
+            let turn = Task {
+                try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
+            }
+            await #expect(throws: CancellationError.self) { _ = try await turn.value }
+            #expect(await !daemon.sessionStatus(sessionId: id).live)
+            await daemon.releaseAll()
+        }
+    }
+
     /// Wait until something writes to the FIFO at `path` — read on a thread of its own, not one
     /// of Swift's, as opening it waits for its writer.
     private static func waitForWrite(to path: URL) async {
