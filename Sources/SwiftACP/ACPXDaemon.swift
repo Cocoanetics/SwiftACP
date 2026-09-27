@@ -65,14 +65,28 @@ public actor ACPXDaemon {
     ///     again on every reconnect (`session/load` / `session/resume`), so they
     ///     survive daemon and adapter restarts. Omitted = use the config-file
     ///     servers; `[]` = none.
+    ///   - agentArgv: the argv to launch the agent as, when the caller has resolved it —
+    ///     recorded as the session's `agent_argv`. Omitted, the daemon splits the command.
+    ///   - sessionOptions: the session's options (model, allowed tools, turns, system
+    ///     prompt), recorded on it and sent as `_meta` with `session/new`; its model is put
+    ///     on the session. Omitted, none.
+    ///   - holdAgent: keep the agent that created the session, as the session's live agent,
+    ///     for its first turn — as acpx's `createSessionWithClient` keeps its client for a
+    ///     flow's first turn. Omitted, the agent is closed once the record is written.
+    ///   - fs: acpx's `--no-fs`: `false` withholds the filesystem methods from the agent that
+    ///     creates the session — and, as `sessions new --no-fs` records it, from every agent
+    ///     that runs it later, unless the agent is held for a flow, whose turns each say it
+    ///     again (`runPrompt`'s `fs`), as acpx's flow runner does. Omitted, they are offered.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
         agentCommand: String, cwd: String, name: String? = nil,
-        mcpServers: [McpServerConfig]? = nil
+        mcpServers: [McpServerConfig]? = nil, agentArgv: [String]? = nil,
+        sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil
     ) async throws -> String {
         try await backend.newSession(
-            agentCommand: agentCommand, cwd: cwd, name: name, mcpServers: mcpServers)
+            agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
+            sessionOptions: sessionOptions, holdAgent: holdAgent ?? false, fs: fs)
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
@@ -300,6 +314,13 @@ public actor ACPXDaemon {
     ///     long each of its steps may take, how often a prompt that failed the way a
     ///     passing fault does is sent again, and how long the session is kept once idle.
     ///     See ``PromptLimits``. Omitted, no limit, no retry, and five minutes.
+    ///   - direct: run the turn as acpx's `sendSessionDirect` runs a flow's persistent
+    ///     turn: the session is taken back as itself or not at all, the agent is let go
+    ///     when the turn ends, and the journal has the turn's messages without turn records.
+    ///     Omitted, as a queued prompt.
+    ///   - fs: acpx's `--no-fs` for an agent the turn connects, as acpx's flow runner gives it
+    ///     every client it makes: `false` withholds the filesystem methods. Omitted, the
+    ///     agent is offered what the session was created with.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -308,15 +329,17 @@ public actor ACPXDaemon {
         sessionId: String, text: String, blocks: [PromptBlock]? = nil, content: [JSONValue]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil
+        model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
+        direct: Bool? = nil, fs: Bool? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
             try await backend.runPrompt(
                 sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-                streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
-                terminalOutputCeiling: terminalOutputCeiling, sessionOptions: options, limits: limits)
+                mode: PromptTurnMode(streamWire: streamWire ?? false, direct: direct ?? false, fs: fs),
+                permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
+                sessionOptions: options, limits: limits)
         }
     }
 

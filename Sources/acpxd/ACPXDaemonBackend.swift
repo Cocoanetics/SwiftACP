@@ -128,24 +128,52 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - mcpServers: the session's own MCP servers, replacing the cwd's config-file
     ///     ones (like `--mcp-config`); persisted on the record and replayed on every
     ///     reconnect. `nil` = config-file servers; `[]` = none.
+    ///   - agentArgv: the argv the caller resolved for `agentCommand`, which is then taken as
+    ///     it is; `nil` to resolve and split the command here.
+    ///   - sessionOptions: the session's options, recorded and sent as `_meta`.
+    ///   - holdAgent: keep the creating agent as the session's live one, for its first turn.
+    ///   - fs: acpx's `--no-fs`: `false` withholds the filesystem methods from the creating
+    ///     agent, and records it unless that agent is held (a flow says it with each turn).
     /// - Returns: the new session's acpx record id.
     func newSession(
-        agentCommand: String, cwd rawCwd: String, name: String? = nil,
-        mcpServers: [McpServerConfig]? = nil
+        agentCommand: String, agentArgv: [String]? = nil, cwd rawCwd: String, name: String? = nil,
+        mcpServers: [McpServerConfig]? = nil, sessionOptions promptOptions: PromptSessionOptions? = nil,
+        holdAgent: Bool = false, fs: Bool? = nil
     ) async throws -> String {
-        let cwd = try resolveCwd(rawCwd)
+        // A session held for a flow's first turn is made where it is asked for, as acpx's
+        // `createSessionWithClient` makes it: a working directory that is not there fails
+        // the agent's launch.
+        let cwd = holdAgent ? ACPXPaths.resolve(rawCwd, base: FileManager.default.currentDirectoryPath)
+            : try resolveCwd(rawCwd)
         let config = try ConfigLoader.load(cwd: cwd, ownMcpServers: mcpServers != nil)
         // Only normalize the config-file servers when they're the ones being sent:
         // a caller supplying its own set must not be refused over an unrelated bad
         // entry in the cwd's config.
         let configServers = mcpServers == nil ? try config.mcpServerSpecs() : []
         let launch = config.agentLaunch(for: agentCommand)
-        let record = try await SessionEngine.createSession(
-            agentCommand: launch.command, agentArgv: launch.argv, cwd: cwd,
+        let (command, argv) = agentArgv.map { (agentCommand, Optional($0)) } ?? (launch.command, launch.argv)
+        let options = SessionAcpxState.SessionOptions(turnModel: promptOptions?.model, promptOptions)
+        let meta = SessionMeta.build(options: options, agentCommand: command)
+        guard holdAgent else {
+            let record = try await SessionEngine.createSession(
+                agentCommand: command, agentArgv: argv, cwd: cwd,
+                name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
+                authPolicy: config.authPolicy, mcpServers: configServers,
+                sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
+                capabilities: .acpx(fs: fs), inheritStderr: inheritAgentStderr)
+            return record.acpxRecordId
+        }
+        guard !stopping else { throw DaemonError.stopping }
+        let held = try await SessionEngine.createSessionHoldingAgent(
+            agentCommand: command, agentArgv: argv, cwd: cwd,
             name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
             authPolicy: config.authPolicy, mcpServers: configServers,
-            sessionMcpServers: mcpServers, inheritStderr: inheritAgentStderr)
-        return record.acpxRecordId
+            sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
+            capabilities: .acpx(fs: fs), recordsCapabilities: false, inheritStderr: inheritAgentStderr)
+        let recordId = held.record.acpxRecordId
+        let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
+        _ = try await hold(held.agent, on: held.session, sessionSpecs: sessionSpecs, for: recordId, via: nil)
+        return recordId
     }
 
     /// Replace a session's own MCP servers and persist them (see `newSession`'s
@@ -351,6 +379,22 @@ actor ACPXDaemonBackend: ACPXBackend {
             return LiveSessionStatus(live: owned)
         }
         return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
+    }
+
+    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:)``
+    /// as the tool calls it.
+    func runPrompt(
+        sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
+        permissionMode: String?, nonInteractivePermissions: String?, mode: PromptTurnMode,
+        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, sessionOptions: PromptSessionOptions?,
+        limits: PromptLimits?
+    ) async throws -> String {
+        try await runPrompt(
+            sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
+            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
+            streamWire: mode.streamWire, permissionPolicy: permissionPolicy,
+            terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
+            direct: mode.direct, fs: mode.fs)
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the

@@ -22,6 +22,14 @@ extension SessionAcpxState.PersistedCapabilities {
 }
 
 extension ClientCapabilities {
+    /// acpx's client with its `fs` option: `false` (`--no-fs`) withholds both filesystem
+    /// methods; anything else leaves acpx's own.
+    public static func acpx(fs: Bool?) -> ClientCapabilities {
+        var capabilities = ClientCapabilities.acpx
+        if fs == false { capabilities.fs = FileSystemCapability(readTextFile: false, writeTextFile: false) }
+        return capabilities
+    }
+
     /// The persisted form, or `nil` when nothing acpx advertises was withheld — an
     /// unrestricted session writes no `client_capabilities` at all, keeping the record
     /// as npm acpx shapes it.

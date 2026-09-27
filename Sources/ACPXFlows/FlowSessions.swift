@@ -37,6 +37,36 @@ public protocol FlowSessionRunner: Sendable {
     /// What the turn does is told to the turn's hooks as it happens, whether it succeeds
     /// or throws.
     func runIsolated(_ turn: FlowTurn) async throws -> String
+
+    /// acpx's `createSessionWithClient` as a flow's persistent session starts
+    /// (`ensureSessionBinding`): the agent launched in the agent's `cwd`, a new session
+    /// named `name`, and its record written — the agent kept for the session's first turn,
+    /// until that turn or ``releasePersistent(_:)`` lets it go. The creating attempt's stop
+    /// calls it off (`control`). Returns the record.
+    func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord
+
+    /// acpx's `sendSessionDirect` as a flow's persistent turn runs it (`runPersistentPrompt`):
+    /// the prompt in the session whose record `turn` names — with the agent it was created
+    /// with, while that is kept, else a new one that takes the session back, and nothing
+    /// else (`same-session-only`). The agent is let go when the turn ends, however it ends.
+    func runPersistent(_ turn: FlowPersistentTurn) async throws
+
+    /// Let go of the agent a session was created with, for a session whose first turn never
+    /// came (acpx's `closePendingPersistentSessionClients`).
+    func releasePersistent(_ recordId: String) async throws
+}
+
+/// A turn of a flow's persistent session, and what the runner hears of it: acpx's
+/// `sendSessionDirect` options.
+public struct FlowPersistentTurn: Sendable {
+    /// The session's record id.
+    public let recordId: String
+    public let prompt: [ContentBlock]
+    /// Each ACP message of the turn as it crosses the wire, in order, as JSON reads it —
+    /// taking the session back included (acpx's `onAcpMessage`).
+    public let onMessage: @Sendable (_ outbound: Bool, _ message: WireJSON) -> Void
+    /// The attempt the turn runs for: acpx's `signal`.
+    public let control: FlowTurnControl
 }
 
 /// One ACP turn of a flow node, and what the runner hears of it as it goes — acpx's
@@ -126,6 +156,26 @@ struct FlowSessionBinding: Sendable, Equatable {
             ("cwd", .text(cwd)), ("acpxRecordId", .text(acpxRecordId)), ("acpSessionId", .text(acpSessionId)),
             ("agentSessionId", agentSessionId.map(WireJSON.text))
         ])
+    }
+
+    /// acpx's `createSessionBindingKey`: the agent, where it works, and the handle.
+    static func persistentKey(agent: FlowAgent, handle: String) -> String {
+        WireJSON.array([
+            .text(agent.agentCommand), agent.agentArgv.map { .array($0.map(WireJSON.text)) } ?? .null,
+            .text(agent.cwd), .text(handle)
+        ]).stringified
+    }
+
+    /// The binding `ensureSessionBinding` makes of a persistent session it created, named
+    /// `name`, with the record `record`.
+    static func persistent(
+        key: String, handle: String, name: String, profile: String?, agent: FlowAgent, record: SessionRecord
+    ) -> FlowSessionBinding {
+        FlowSessionBinding(
+            key: key, handle: handle, bundleId: FlowRuntimeSupport.createSessionBundleId(handle: handle, key: key),
+            name: name, profile: profile, agentName: agent.agentName, agentCommand: agent.agentCommand,
+            agentArgv: agent.agentArgv, cwd: agent.cwd, acpxRecordId: record.acpxRecordId,
+            acpSessionId: record.acpSessionId, agentSessionId: record.agentSessionId)
     }
 
     /// acpx's `createIsolatedSessionBinding`: keyed by the attempt, its record the key

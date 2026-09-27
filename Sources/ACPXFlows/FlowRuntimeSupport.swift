@@ -110,6 +110,25 @@ enum FlowRuntimeSupport {
         return "\(safeHandle.isEmpty ? "session" : safeHandle)-\(stableShortHash(key))"
     }
 
+    /// acpx's `createSessionName`: a persistent session named for the flow, the handle,
+    /// where it works, and the run.
+    static func createSessionName(flowName: String, handle: String, cwd: String, runId: String) -> String {
+        "\(flowName)-\(handle)-\(stableShortHash(cwd))-\(String(runId.suffix(8)))"
+    }
+
+    /// acpx's `findConversationDeltaStart`: the most of `after`'s first messages that are
+    /// `before`'s last, as JSON writes them — where a turn's messages start in `after`, the
+    /// conversation having been cut to its latest messages meanwhile or not.
+    static func findConversationDeltaStart(_ before: [WireJSON], _ after: [WireJSON]) -> Int {
+        let beforeText = before.map(\.stringified)
+        let afterText = after.map(\.stringified)
+        for overlap in stride(from: min(before.count, after.count), through: 0, by: -1) {
+            let tail = beforeText.suffix(overlap)
+            if Array(tail) == Array(afterText.prefix(overlap)) { return overlap }
+        }
+        return 0
+    }
+
     /// acpx's `defaultSessionEventLog` for a session record.
     static func defaultSessionEventLog(_ recordId: String) -> WireJSON {
         .object([

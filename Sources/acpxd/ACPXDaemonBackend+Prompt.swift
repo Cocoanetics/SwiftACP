@@ -45,7 +45,8 @@ extension ACPXDaemonBackend {
         blocks: [PromptBlock]? = nil, content rawContent: [JSONValue]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil
+        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
+        fs: Bool? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -112,8 +113,9 @@ extension ACPXDaemonBackend {
         // ends here, nothing sent and nothing kept.
         try Task.checkCancellation()
         // The session is held from here on, as acpx's queue owner holds it: until it has
-        // had no prompt for its TTL once this turn is over.
-        turnStarts(recordId, ttlMs: limits?.ttlMs)
+        // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
+        // acpx's `sendSessionDirect` has none: its agent goes with it.
+        if !direct { turnStarts(recordId, ttlMs: limits?.ttlMs) }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
@@ -148,9 +150,10 @@ extension ACPXDaemonBackend {
         // (`preparePromptConversation`).
         var prompted = record
         prompted.acpx = record.acpx?.cloned()
-        // The turn's journal records are keyed by its id, as acpx's by its queue request's.
+        // The turn's journal records are keyed by its id, as acpx's by its queue request's. A
+        // direct turn is no queue request, and its journal has only its messages.
         let persister = TurnPersister(
-            record: prompted, eventBuffer: eventBuffer, requestId: control.id.uuidString.lowercased())
+            record: prompted, eventBuffer: eventBuffer, requestId: direct ? nil : control.id.uuidString.lowercased())
         // The controls the turn takes change and save the prompt's record.
         ticket.persister = persister
         await persister.recordPrompt(content)
@@ -164,9 +167,10 @@ extension ACPXDaemonBackend {
             sessionOptions: SessionAcpxState.SessionOptions(turnModel: requestedModel, sessionOptions),
             permissions: permissions,
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
-            persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors)
+            persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
+            capabilities: fs.map { .acpx(fs: $0) })
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
-        return try await reportingFailure(of: recordId, errors: errors, saving: persister) {
+        return try await reportingFailure(of: recordId, errors: errors, saving: persister, direct: direct) {
             try await beginTurn(on: persister, recordId: recordId)
             return try await attemptWithRetry(turn, wasHeld: wasHeld)
         }
@@ -196,27 +200,11 @@ extension ACPXDaemonBackend {
         let eventBuffer: WireBuffer
         let streamWire: Bool
         let errors: TurnErrorWatch
-    }
-
-    /// Run `body`; when it fails, save the turn so far and end its journal with the
-    /// failure, then tell the calling client how, the way acpx's queue owner tells its
-    /// CLI — a ``TurnFailedEvent`` — and rethrow. A journal that cannot be ended fails
-    /// the turn in its place, as acpx's does.
-    func reportingFailure<T>(
-        of recordId: String, errors: TurnErrorWatch, saving persister: TurnPersister? = nil,
-        _ body: () async throws -> T
-    ) async throws -> T {
-        do {
-            return try await body()
-        } catch {
-            await persister?.finish()
-            var failure = error
-            if let unwritten = await persister?.endTurn(TurnFailure.journalResult(for: error)) { failure = unwritten }
-            let event = TurnFailure.event(for: failure, shown: errors.match(failure), sessionId: recordId)
-            await Session.current?.sendLogNotification(
-                LogMessage(level: .info, logger: recordId, data: toJSONValue(event)))
-            throw failure
-        }
+        /// A flow's persistent turn, as acpx's `sendSessionDirect` runs it: the session
+        /// taken back as itself or not at all, and its agent let go when the turn ends.
+        let direct: Bool
+        /// What an agent the turn connects is offered; `nil`, what the session was made with.
+        let capabilities: SwiftACP.ClientCapabilities?
     }
 
     private func attemptWithRetry(_ turn: Turn, wasHeld: Bool) async throws -> String {
@@ -289,7 +277,8 @@ extension ACPXDaemonBackend {
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
             settings: CallerSettings(
                 handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
-                timeoutMilliseconds: turn.timeoutMilliseconds),
+                timeoutMilliseconds: turn.timeoutMilliseconds, sameSessionOnly: turn.direct,
+                capabilities: turn.capabilities),
             requestedModel: turn.model, turnOptions: turn.sessionOptions, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),
@@ -351,6 +340,7 @@ extension ACPXDaemonBackend {
             // pauses between them, as acpx's client counts them across its run.
             let countedBefore = await connection.permissionTotals(for: boundSessionId)
             let outcome = try await promptWithRetries(turn, on: entry, relay: relay, wireFeed: wireFeed)
+            if let failure = await permissionFailure(of: turn, on: connection, boundSessionId) { throw failure }
             let response = outcome.response
             // The controls the turn took are done before its last save, what they said part of
             // its exchange (acpx's `seal`, `onPromptFinalizing`) — those waiting for its prompt
@@ -364,6 +354,8 @@ extension ACPXDaemonBackend {
             // Capture the token breakdown the agent reports on the response (Claude
             // Code does; acpx misses this — it only reads usage_update._meta.usage).
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
+            // A direct turn's agent is let go with it, as acpx closes its client.
+            if turn.direct { await letGoOfDirectAgent(recordId, persister: persister) }
             await persister.applyLifecycle(entry.agent.lifecycle)
             // Final checkpoint: stamp timestamps and flush the completed turn —
             // including any messages still buffered for the event log.
@@ -384,9 +376,10 @@ extension ACPXDaemonBackend {
             // The prompt is over, and its end said all it has to.
             throw unwritten
         } catch {
+            let failure = await permissionFailure(of: turn, on: connection, boundSessionId) ?? error
             throw await failedAttempt(
-                error, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
-                wireFeed: wireFeed, recordId: recordId, persister: persister)
+                failure, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
+                wireFeed: wireFeed, recordId: recordId, persister: persister, direct: turn.direct)
         }
     }
 }

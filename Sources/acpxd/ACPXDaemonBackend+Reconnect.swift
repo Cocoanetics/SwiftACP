@@ -94,7 +94,7 @@ extension ACPXDaemonBackend {
         let held = try await heldAgent(
             recordId, sessionSpecs: sessionSpecs, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
         if let entry = held.entry { return (entry, false) }
-        let replacesExitedAgent = held.replacedExited
+        let sameSessionOnly = (control && held.replacedExited) || settings.sameSessionOnly
         let cwd = try resolveCwd(rawCwd)
         // Resolve config for this cwd so the agent gets the same injected `auth`
         // credentials / auth policy (and config-alias resolution) the CLI applies.
@@ -104,7 +104,7 @@ extension ACPXDaemonBackend {
         // the record carries them, so every reconnect advertises what the session was
         // created with rather than the defaults.
         let record = findRecord(recordId)
-        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .acpx
+        let capabilities = settings.capabilities ?? record?.acpx?.clientCapabilities?.advertised ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = turnAcpx ?? record?.acpx
@@ -155,7 +155,7 @@ extension ACPXDaemonBackend {
         do {
             (session, loaded) = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
-                specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent,
+                specs: specs, command: command, sameSessionOnly: sameSessionOnly,
                 sessionOptions: sessionOptions, timeoutMilliseconds: timeout)
             ReconnectReplay.applyLoaded(loaded, to: &state)
             let outcome = try await ReconnectReplay.replay(
@@ -195,7 +195,7 @@ extension ACPXDaemonBackend {
 
     /// Hold the agent connecting has left on `session`, unless the daemon began stopping
     /// meanwhile (``refuseIfStopping(_:of:via:)``).
-    private func hold(
+    func hold(
         _ handle: ACPAgent, on session: ACPSession, sessionSpecs: [MCPServerSpec]?, for recordId: String,
         via onRecordChange: RecordChangeHandler?
     ) async throws -> Live {
@@ -252,10 +252,17 @@ extension ACPXDaemonBackend {
     /// which acpx reads in the process that connects the session; and `timeoutMilliseconds`
     /// bounds each step of connecting — the launch, getting the session back or starting
     /// one, each selection put back — as acpx's `--timeout` does, `nil` being no bound.
+    ///
+    /// `sameSessionOnly`: the session is taken back as itself or not at all — never
+    /// replaced by a new one — as a flow's persistent turn takes it back (acpx's
+    /// `resumePolicy: "same-session-only"`).
     struct CallerSettings: Sendable {
         var handlers: ACPClientHandlers = .standard(permission: .approveAll)
         var terminalOutputCeiling: Int?
         var timeoutMilliseconds: Int?
+        var sameSessionOnly = false
+        /// What the agent is offered, when the caller says (a flow's turn); else the record's.
+        var capabilities: SwiftACP.ClientCapabilities?
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.

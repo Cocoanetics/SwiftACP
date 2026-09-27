@@ -32,6 +32,11 @@ def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
 
 
+# The prompt an `fs-read` or `fs-write` waits to answer, and its session, until the client
+# answers the file request (see `handle_prompt`).
+pending_fs = {}
+
+
 # How `session/load` behaves: gone (default) | ok | internal | unsupported | error, which
 # answers with the error object `MOCK_LOAD_ERROR` holds.
 LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
@@ -135,6 +140,19 @@ def handle_prompt(req_id, params):
     if text.strip() == "auth turn":
         send({"jsonrpc": "2.0", "id": req_id, "error": {
             "code": -32000, "message": "Authentication required", "data": {"details": "login first"}}})
+        return
+
+    # "fs-read PATH" / "fs-write PATH TEXT": the file, through the client's `fs/*` methods.
+    # Once the client answers, the reply is what came of it — the text read, `wrote`, or
+    # `error: ` and the client's error message — and the turn ends.
+    words = text.strip().split(" ", 2)
+    if words[0] in ("fs-read", "fs-write") and len(words) > 1:
+        pending_fs["prompt"] = (req_id, session_id)
+        params = {"sessionId": session_id, "path": words[1]}
+        if words[0] == "fs-write":
+            params["content"] = words[2] if len(words) > 2 else ""
+        method = "fs/read_text_file" if words[0] == "fs-read" else "fs/write_text_file"
+        send({"jsonrpc": "2.0", "id": "mock-fs", "method": method, "params": params})
         return
 
     # "fail turn": a partial reply, then the agent's error response, with details.
@@ -264,6 +282,15 @@ def main():
             # What an agent says once its command is done, after the turn's answer.
             session_update(terminal_session, {
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after the terminal"}})
+            continue
+        if method is None and req_id == "mock-fs" and "prompt" in pending_fs:
+            prompt_id, fs_session = pending_fs.pop("prompt")
+            error = message.get("error")
+            result = message.get("result") or {}
+            reply = "error: " + error.get("message", "") if error else result.get("content", "wrote")
+            session_update(fs_session, {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+            respond(prompt_id, {"stopReason": "end_turn"})
             continue
         if method is None and str(req_id).startswith("mock-"):
             continue
