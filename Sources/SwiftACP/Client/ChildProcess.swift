@@ -158,17 +158,21 @@ package final class ChildProcess: @unchecked Sendable {
     /// ``start(onOutput:onExit:readerStartsLate:)``, telling the pipes apart: `onChunk`
     /// gets each chunk with the pipe it was read from, and `onClose` each pipe that
     /// reached its end — not one ``stopReading()`` closed.
+    ///
+    /// - Parameter beforeReaping: for tests, called once the process has exited and what
+    ///   it left in the pipes has been read; it is reaped once this returns.
     package func start(
         onChunk: @escaping @Sendable (Output, [UInt8]) -> Void,
         onClose: @escaping @Sendable (Output) -> Void = { _ in },
-        onExit: @escaping @Sendable (Int32?) -> Void, readerStartsLate: Bool = false
+        onExit: @escaping @Sendable (Int32?) -> Void, readerStartsLate: Bool = false,
+        beforeReaping: (@Sendable () -> Void)? = nil
     ) {
         let reader = Thread { [self] in readOutput(onChunk, onClose) }
         reader.name = "acp.child.output"
         lock.withLock { pendingReader = reader }
         if !readerStartsLate { lock.withLock { startPendingReader() } }
         let waiter = Thread { [self] in
-            onExit(waitForExit())
+            onExit(waitForExit(beforeReaping: beforeReaping))
             lock.withLock { startPendingReader() }
         }
         waiter.name = "acp.child.exit"
@@ -208,6 +212,38 @@ package final class ChildProcess: @unchecked Sendable {
 
     /// Whether the process has exited and been reaped.
     package var hasBeenReaped: Bool { lock.withLock { reaped } }
+
+    /// Whether the process is exiting or has exited, reaped or not. The kernel marks an
+    /// exit as it begins, before it closes the process's descriptors; its reaping waits
+    /// for what the process left in the pipes to be read, and under load both can come
+    /// well after. Asked under the lock, so the pid is still this process's.
+    var isExiting: Bool {
+        lock.withLock { reaped || Self.isExiting(pid) }
+    }
+
+    /// Whether the process table has `pid` exiting or a zombie: Darwin's `P_WEXIT` (its
+    /// `P_LEXIT`, set as `exit` begins) or `SZOMB`; Linux's `PF_EXITING` (set as `do_exit`
+    /// begins) or `Z`.
+    private static func isExiting(_ pid: pid_t) -> Bool {
+        #if canImport(Darwin)
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var process = kinfo_proc()
+        var length = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&name, u_int(name.count), &process, &length, nil, 0) == 0, length > 0,
+            process.kp_proc.p_pid == pid
+        else { return false }
+        return process.kp_proc.p_stat == SZOMB || (process.kp_proc.p_flag & P_WEXIT) != 0
+        #else
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+            let close = stat.lastIndex(of: ")")
+        else { return false }
+        // After the name: state, parent, group, session, terminal, its group, flags.
+        let fields = stat[stat.index(after: close)...].split(separator: " ")
+        guard fields.count > 6, let flags = UInt32(fields[6]) else { return false }
+        let exiting: UInt32 = 0x4  // PF_EXITING
+        return fields[0] == "Z" || fields[0] == "X" || (flags & exiting) != 0
+        #endif
+    }
 
     // MARK: - Input
 
@@ -356,9 +392,9 @@ package final class ChildProcess: @unchecked Sendable {
     // MARK: - Exit
 
     /// Wait for the exit without reaping (`WNOWAIT`); have the reader take in what the
-    /// process left in the pipes; then reap under the lock: until ``reaped`` is set, the
-    /// pid is still this process's, running or a zombie.
-    private func waitForExit() -> Int32? {
+    /// process left in the pipes; then, once `beforeReaping` has returned, reap under the
+    /// lock: until ``reaped`` is set, the pid is still this process's, running or a zombie.
+    private func waitForExit(beforeReaping: (@Sendable () -> Void)?) -> Int32? {
         var info = siginfo_t()
         while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) != 0 {
             guard errno == EINTR else { break }
@@ -371,6 +407,7 @@ package final class ChildProcess: @unchecked Sendable {
             return true
         }
         if draining { drained.wait() }
+        beforeReaping?()
         return lock.withLock {
             var status: Int32 = 0
             var result: pid_t

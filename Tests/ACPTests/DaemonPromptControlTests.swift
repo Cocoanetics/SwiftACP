@@ -121,12 +121,15 @@ extension DaemonToolsTests {
                     return error.localizedDescription
                 }
             }
-            #expect(await failure() == reported, "between turns")
+            // Taken first, so that a failed expectation shows what was reported.
+            let betweenTurns = await failure()
+            #expect(betweenTurns == reported, "between turns")
             let prompt = Task {
                 try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             }
             try await signalled(ready)
-            #expect(await failure() == reported, "during the prompt")
+            let duringThePrompt = await failure()
+            #expect(duringThePrompt == reported, "during the prompt")
             _ = try? await daemon.cancelSession(sessionId: session.id)
             _ = try? await prompt.value
             await daemon.releaseAll()
