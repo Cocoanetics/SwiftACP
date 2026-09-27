@@ -34,8 +34,9 @@ import Testing
     @Test(.enabled(if: mockPythonAvailable))
     func aKeyTheAgentIsNotGivenLeavesItsCachedToken() async throws {
         let lines = Lines()
-        var agentEnvironment = ProcessInfo.processInfo.environment
-        agentEnvironment["XAI_API_KEY"] = nil
+        let agentEnvironment = ProcessInfo.processInfo.environment.filter { key, _ in
+            key != "XAI_API_KEY" && !key.hasPrefix("ACPX_AUTH_")
+        }
         let agent = try await Self.launch(
             standIn: "grok", environment: ["XAI_API_KEY": "a key"], agentEnvironment: agentEnvironment, lines)
         await agent.close()
@@ -69,7 +70,10 @@ import Testing
 
             """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        var caller = ProcessInfo.processInfo.environment
+        // Only what the case gives: a key this process has would sign the agent in otherwise.
+        var caller = ProcessInfo.processInfo.environment.filter { key, _ in
+            key != "XAI_API_KEY" && !key.hasPrefix("ACPX_AUTH_")
+        }
         caller.merge(environment) { $1 }
         return try await ACPAgent.launch(
             agent: "'\(script.path)' agent stdio", cwd: NSTemporaryDirectory(), permission: .approveAll,
