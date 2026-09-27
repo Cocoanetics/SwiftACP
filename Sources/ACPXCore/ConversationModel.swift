@@ -68,14 +68,14 @@ public enum ConversationModel {
     }
 
     /// Apply one streamed `session/update` to the conversation. Returns whether it was
-    /// applied: a `usage_update` acpx's SDK drops (``SwiftACP/UsageUpdate/reachesACPX``)
-    /// never reaches acpx's handler, so it leaves the record as it was, not even stamped.
+    /// applied: an update acpx's SDK refuses (``SwiftACP/SessionUpdate/reachesACPX``) never
+    /// reaches acpx's handler, so it leaves the record as it was, not even stamped.
     @discardableResult
     public static func recordSessionUpdate(
         into record: inout SessionRecord, notification: SessionNotification,
         timestamp: String = nowISO()
     ) -> Bool {
-        if case .usageUpdate(let usage) = notification.update, !usage.reachesACPX { return false }
+        guard notification.update.reachesACPX else { return false }
         applySessionUpdate(into: &record, update: notification.update)
         record.updatedAt = timestamp
         trimForRuntime(&record)
@@ -185,10 +185,10 @@ public enum ConversationModel {
                 if case .string(let text) = title { record.title = text } else { record.title = nil }
             }
         case "config_option_update":
+            // The options as acpx's SDK hands them on (``ConfigOptionSchema``).
+            guard let options = ConfigOptionSchema.options(of: payload) else { return }
             var acpx = record.acpx ?? SessionAcpxState()
-            var options: [JSONValue] = []
-            if case .array(let reported)? = update["configOptions"] { options = reported }
-            ModelSupport.applyConfigOptionsModelState(.array(options), to: &acpx)
+            ModelSupport.applyConfigOptionsModelState(options, to: &acpx)
             record.acpx = acpx
         default:
             break
@@ -334,11 +334,13 @@ public enum ConversationModel {
         let hasRawOutput: Bool
         let rawOutput: JSONValue?
 
+        // acpx's ACP SDK reads a kind or a status it doesn't know as none, so acpx never
+        // sees one.
         init(_ call: ToolCall) {
             id = call.toolCallId
             title = call.title
-            kind = call.kind
-            status = call.status
+            kind = call.kind.flatMap { $0.reachesACPX ? $0 : nil }
+            status = call.status.flatMap { $0.reachesACPX ? $0 : nil }
             hasRawInput = call.rawInput != nil
             rawInput = call.rawInput
             hasRawOutput = call.rawOutput != nil
@@ -348,8 +350,8 @@ public enum ConversationModel {
         init(_ update: ToolCallUpdate) {
             id = update.toolCallId
             title = update.title
-            kind = update.kind
-            status = update.status
+            kind = update.kind.flatMap { $0.reachesACPX ? $0 : nil }
+            status = update.status.flatMap { $0.reachesACPX ? $0 : nil }
             hasRawInput = update.rawInput != nil
             rawInput = update.rawInput
             hasRawOutput = update.rawOutput != nil

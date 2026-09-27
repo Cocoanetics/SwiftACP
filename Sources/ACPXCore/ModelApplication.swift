@@ -150,16 +150,16 @@ public enum ModelApplication {
         }
 
         /// A message crossing the wire: an agent's `config_option_update` replaces the
-        /// options, as acpx's `onSessionUpdate` does. Handed each message in order before it
-        /// is handled, a selection's reply builds on what the agent announced before it.
+        /// options, as acpx's `onSessionUpdate` does, with the options its ACP SDK hands on
+        /// (``ConfigOptionSchema``). Handed each message in order before it is handled, a
+        /// selection's reply builds on what the agent announced before it.
         public func observe(_ direction: JSONRPCPeer.WireDirection, _ message: JSONRPCMessage) {
             guard direction == .inbound, case .notification(let note) = message, note.method == "session/update",
-                  case .object(let params)? = note.params, case .object(let announced)? = params["update"],
-                  announced["sessionUpdate"] == .string("config_option_update")
+                  case .object(let params)? = note.params, case .string? = params["sessionId"],
+                  let announced = params["update"], announced["sessionUpdate"] == .string("config_option_update"),
+                  let options = ConfigOptionSchema.options(of: announced)
             else { return }
-            var options: [JSONValue] = []
-            if case .array(let reported)? = announced["configOptions"] { options = reported }
-            update { ModelSupport.applyConfigOptionsToState(.array(options), to: &$0) }
+            update { ModelSupport.applyConfigOptionsToState(options, to: &$0) }
         }
     }
 

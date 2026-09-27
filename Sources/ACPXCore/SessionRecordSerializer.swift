@@ -23,7 +23,7 @@ enum SessionRecordSerializer {
             return Data((raw.stringified(indent: 2) + "\n").utf8)
         }
         let rebuilt = record.acpx?.rebuiltOrders ?? [:]
-        let built = withHeldConfigOptions(parsed, from: raw)
+        let built = withHeldCommands(withHeldConfigOptions(parsed, from: raw), from: raw)
             .mapping("messages") { $0.mappingItems(MessageOrder.built) }
             .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: record) }
             .mapping("acpx") { acpx in
@@ -59,6 +59,16 @@ enum SessionRecordSerializer {
             ? .object(members).replacing("config_options", with: held)
             : .object(members + [WireJSON.Member("config_options", held)])
         return parsed.replacing("acpx", with: block)
+    }
+
+    /// `parsed` with the record's `available_commands` when an update left none: acpx writes
+    /// the empty list, though its parser drops one (`parseAvailableCommands`), so a record
+    /// read back has none.
+    static func withHeldCommands(_ parsed: WireJSON, from raw: WireJSON) -> WireJSON {
+        guard raw["acpx"]?["available_commands"] == .array([]), case .object(let members)? = parsed["acpx"],
+              parsed["acpx"]?.hasMember("available_commands") != true
+        else { return parsed }
+        return parsed.replacing("acpx", with: .object(members + [WireJSON.Member("available_commands", .array([]))]))
     }
 
     /// acpx's `serializeSessionRecordForDisk` of the in-memory record `parsed`, with

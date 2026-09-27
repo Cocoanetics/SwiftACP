@@ -282,8 +282,9 @@ extension ClientRequestSchema {
         required("kind", .literals(["allow_once", "allow_always", "reject_once", "reject_always"])), meta
     ])
 
-    /// `zToolCallContent`: content, a diff or a terminal, told apart by `type`.
-    private static let toolCallContent: ClientRequestSchema = .union([
+    /// `zToolCallContent`: content, a diff or a terminal, told apart by `type`. A session
+    /// update's tool call content is read by it too (``ToolCallContent/init(from:)``).
+    static let toolCallContent: ClientRequestSchema = .union([
         .object([required("type", .literals(["content"])), required("content", contentBlock), meta]),
         .object([
             required("type", .literals(["diff"])), required("path", .string), dropped("oldText", .string),
