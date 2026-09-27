@@ -19,6 +19,8 @@ export class FlowRunner {
   }
 }
 
-// For the flow host only: how acpx's loader recognizes and checks a flow.
+// For the flow host only: how acpx's loader recognizes and checks a flow, and how its
+// runner makes a prompt of what an ACP node's `prompt` returns, and text of a prompt.
 export { isDefinedFlow as __isDefinedFlow } from "./src/flows/authoring.js";
 export { validateFlowDefinition as __validateFlowDefinition } from "./src/flows/graph.js";
+export { promptToDisplayText as __promptToDisplayText, textPrompt as __textPrompt } from "./src/prompt-content.js";

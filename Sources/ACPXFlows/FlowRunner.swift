@@ -22,11 +22,26 @@ public actor FlowRunner {
         public var defaultCwd: String
         /// acpx's `--timeout`, for a node that sets none (15 minutes without one).
         public var timeoutMs: Double?
+        /// acpx's `resolveAgent`: the agent an ACP node's `profile` names — the default
+        /// agent for none — as the CLI resolves it.
+        public var resolveAgent: (@Sendable (String?) throws -> FlowAgent)?
+        /// What runs an ACP node's turn with its agent.
+        public var sessions: (any FlowSessionRunner)?
+        /// acpx's own standard error, where a turn's quiet output reports a permission
+        /// notice and the prompt's token usage and cost.
+        public var errorOutput: @Sendable (String) -> Void
 
-        public init(outputRoot: URL = FlowRunner.runsBaseDir(), defaultCwd: String, timeoutMs: Double? = nil) {
+        public init(
+            outputRoot: URL = FlowRunner.runsBaseDir(), defaultCwd: String, timeoutMs: Double? = nil,
+            resolveAgent: (@Sendable (String?) throws -> FlowAgent)? = nil, sessions: (any FlowSessionRunner)? = nil,
+            errorOutput: @escaping @Sendable (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }
+        ) {
             self.outputRoot = outputRoot
             self.defaultCwd = defaultCwd
             self.timeoutMs = timeoutMs
+            self.resolveAgent = resolveAgent
+            self.sessions = sessions
+            self.errorOutput = errorOutput
         }
     }
 
@@ -58,6 +73,8 @@ public actor FlowRunner {
     /// callback of it still running is refused with, as acpx's attempt refuses it.
     var attempts: [String: FlowAttempt] = [:]
     var retiredAttempts: [String: Error?] = [:]
+    /// What each ACP node's attempt has come to (acpx's `context.acpResult`).
+    var acpResults: [String: AcpResult] = [:]
     /// The interrupt's stop of the shell commands, once it has begun.
     private var shellCancellation: Task<Void, Error>?
 
@@ -203,8 +220,11 @@ public actor FlowRunner {
         var output: FlowValue = .undefined
         /// Whether the output is a callback's value, which the host holds as it is.
         var outputFromHost = false
-        var promptText: String?
-        var rawText: String?
+        var promptText: WireJSON?
+        var rawText: WireJSON?
+        /// An ACP node's session binding and agent, as the step shows them.
+        var sessionInfo: WireJSON?
+        var agentInfo: WireJSON?
         var trace: FlowStepTrace?
     }
 
@@ -266,9 +286,16 @@ public actor FlowRunner {
         } catch {
             outcome = Self.outcome(for: error)
             executionError = error
-            executed = Executed(trace: try finalizeStepTrace(
-                nodeId, attemptId, output: .undefined, base: (error as? FlowTracedError)?.trace, runDir: runDir))
+            // An ACP node keeps what its attempt came to, its trace included.
+            if let acpResult = acpResults[attemptId] {
+                executed = acpResult.executed(trace: try finalizeStepTrace(
+                    nodeId, attemptId, output: .undefined, base: acpResult.trace, runDir: runDir))
+            } else {
+                executed = Executed(trace: try finalizeStepTrace(
+                    nodeId, attemptId, output: .undefined, base: (error as? FlowTracedError)?.trace, runDir: runDir))
+            }
         }
+        acpResults[attemptId] = nil
         heartbeat?.cancel()
         heartbeat = nil
         self.attempt = nil
@@ -304,13 +331,13 @@ public actor FlowRunner {
 
     /// acpx's `writeNodeStartedSnapshot`.
     private func writeNodeStartedSnapshot(_ node: FlowNode, attempt: FlowAttempt, runDir: URL) throws {
-        let detail = state["statusDetail"]
+        let detail = state.member("statusDetail")
         try store.writeSnapshot(
             runDir, &state, scope: "node", type: "node_started", nodeId: node.id, attemptId: attempt.attemptId,
             payload: .object([
                 ("nodeType", .text(node.nodeType.rawValue)),
                 ("timeoutMs", .number(node.timeoutMs ?? defaultNodeTimeoutMs)),
-                ("statusDetail", detail.flatMap { $0.isEmpty ? nil : WireJSON.text($0) })
+                ("statusDetail", detail == .text("") ? nil : detail)
             ]))
     }
 
@@ -335,7 +362,7 @@ public actor FlowRunner {
         try store.writeLive(
             runDir, &state, scope: "node", type: "node_heartbeat", nodeId: attempt.nodeId,
             attemptId: attempt.attemptId,
-            payload: .object([("statusDetail", state["statusDetail"].map(WireJSON.text))]))
+            payload: .object([("statusDetail", state.member("statusDetail"))]))
     }
 
     /// acpx's `executeNode`.
@@ -347,7 +374,7 @@ public actor FlowRunner {
             if node.hasRun { return try await executeCallbackNode(node, attempt: attempt) }
             return try await executeShellNode(node, attempt: attempt, runDir: runDir)
         case .acp:
-            throw FlowRunError("ACP nodes are not supported by SwiftACP's acpx yet")
+            return try await executeAcpNode(node, attempt: attempt, runDir: runDir)
         }
     }
 
@@ -378,13 +405,21 @@ public actor FlowRunner {
     /// (`makeFlowNodeContext`): the run's state as it is now.
     func invoke(_ node: FlowNode, _ callback: String, attempt: FlowAttempt, argument: WireJSON? = nil)
         async throws -> FlowValue {
+        FlowValue(reply: try await invokeReply(node, callback, attempt: attempt, argument: argument))
+    }
+
+    /// ``invoke(_:_:attempt:argument:)``'s reply as the host sent it, `extra` sent with it.
+    func invokeReply(
+        _ node: FlowNode, _ callback: String, attempt: FlowAttempt, argument: WireJSON? = nil,
+        extra: [(String, WireJSON?)] = []
+    ) async throws -> WireJSON? {
         var params: [(String, WireJSON?)] = [
             ("nodeId", .text(node.id)), ("fn", .text(callback)), ("attemptId", .text(attempt.attemptId))
         ]
         if let argument { params.append(("arg", argument)) }
+        params += extra
         params.append(("state", state.wire))
-        let reply = try await host.request("node/invoke", .object(params), attempt: attempt.attemptId)
-        return FlowValue(reply: reply)
+        return try await host.request("node/invoke", .object(params), attempt: attempt.attemptId)
     }
 
     /// acpx's `finalizeStepTrace`: the step's output inline when it is short and on one

@@ -3,7 +3,8 @@
 #
 # - flow-runtime.mjs, the module a flow imports as "acpx/flows": acpx's own authoring
 #   helpers (definition, decision, json, schema, authoring, graph) from the acpx release
-#   below, bundled with the zod they validate with;
+#   below, bundled with the zod they validate with, and its prompt helpers
+#   (prompt-content), which the host makes an ACP node's prompt with;
 # - flow-sucrase.mjs, sucrase, which compiles a TypeScript flow as acpx's tsx does;
 # - flow-host.mjs, the host itself, written for SwiftACP.
 #
@@ -26,13 +27,15 @@ OUT="$ROOT/Sources/ACPXFlows/FlowHostScripts.swift"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-git -C "$ACPX_SRC" archive "$ACPX_TAG" src/flows src/types.ts | tar -x -C "$WORK"
+git -C "$ACPX_SRC" archive "$ACPX_TAG" src/flows src/types.ts src/prompt-content.ts | tar -x -C "$WORK"
 cp "$HERE/runtime-entry.ts" "$WORK/runtime-entry.ts"
 ZOD_VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$ACPX_PACKAGE/node_modules/zod/package.json")"
 SUCRASE_VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$SUCRASE_MODULES/sucrase/package.json")"
 
+# Whitespace only: acpx's own names stay, as JavaScript's errors show them ("prompt.map is not
+# a function").
 NODE_PATH="$ACPX_PACKAGE/node_modules" "$ESBUILD" "$WORK/runtime-entry.ts" \
-    --bundle --format=esm --platform=node --target=node22 --minify --legal-comments=none \
+    --bundle --format=esm --platform=node --target=node22 --minify-whitespace --legal-comments=none \
     --outfile="$WORK/flow-runtime.mjs" --log-level=warning
 NODE_PATH="$SUCRASE_MODULES" "$ESBUILD" "$HERE/sucrase-entry.mjs" \
     --bundle --format=esm --platform=node --target=node22 --minify --legal-comments=none \

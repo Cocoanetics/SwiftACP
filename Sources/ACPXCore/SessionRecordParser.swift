@@ -346,7 +346,7 @@ public enum SessionRecordParser {
 
     /// `String.prototype.trim` on the string's UTF-16 code units, so a lone surrogate
     /// survives as it does in JavaScript.
-    static func javaScriptTrimmed(_ units: [UInt16]) -> [UInt16] {
+    public static func javaScriptTrimmed(_ units: [UInt16]) -> [UInt16] {
         guard let first = units.firstIndex(where: { !isJavaScriptWhitespace($0) }),
             let last = units.lastIndex(where: { !isJavaScriptWhitespace($0) })
         else { return [] }

@@ -25,6 +25,7 @@
 - `usage-nosize`: the same, in a `usage_update` without `used` and `size`.
 - `meta-answer`: answers with a `_meta` of `{"z": 1, "a": "\u00e9"}`.
 - `echo-usage`: echoes the prompt back as a `user_message_chunk`, then answers with its usage.
+- `answer-then-update`: answers a prompt at once, then sends an update.
 
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
@@ -137,6 +138,9 @@ def prompt(req_id, session_id):
         return
     if MODE == "slow-prompt":
         time.sleep(int(os.environ.get("RETRY_AGENT_DELAY_MS", "400")) / 1000)
+    if MODE == "answer-then-update":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        return update(session_id, "late ")
     if first or MODE == "fail-always":
         if MODE == "fail-after-update":
             update(session_id, "partial ")

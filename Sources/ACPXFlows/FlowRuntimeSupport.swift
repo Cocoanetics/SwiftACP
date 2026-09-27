@@ -88,4 +88,69 @@ enum FlowRuntimeSupport {
     static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    // MARK: - ACP nodes
+
+    /// acpx's `summarizePrompt`: the node's own detail, else `ACP: ` and the prompt's first
+    /// line with anything in it, trimmed and cut at 120 UTF-16 units.
+    static func summarizePrompt(_ promptText: [UInt16], explicitDetail: String?) -> WireJSON {
+        if let explicitDetail, !explicitDetail.isEmpty { return .text(explicitDetail) }
+        let lines = promptText.split(separator: 0x0A, omittingEmptySubsequences: false)
+        guard let line = lines.lazy.map({ SessionRecordParser.javaScriptTrimmed(Array($0)) }).first(where: {
+            !$0.isEmpty
+        }) else { return .text("Running ACP prompt") }
+        let truncated = line.count > 120 ? Array(line.prefix(117)) + Array("...".utf16) : line
+        return .string(Array("ACP: ".utf16) + truncated)
+    }
+
+    /// acpx's `createSessionBundleId`: the handle as a slug — `session` for none — and a
+    /// short hash of the binding's key.
+    static func createSessionBundleId(handle: String, key: String) -> String {
+        let safeHandle = slugifyAsciiIdPart(handle)
+        return "\(safeHandle.isEmpty ? "session" : safeHandle)-\(stableShortHash(key))"
+    }
+
+    /// acpx's `defaultSessionEventLog` for a session record.
+    static func defaultSessionEventLog(_ recordId: String) -> WireJSON {
+        .object([
+            ("active_path", .text(ACPXPaths.sessionStreamPath(recordId).path)),
+            ("segment_count", .number(Double(DEFAULT_EVENT_MAX_SEGMENTS))),
+            ("max_segment_bytes", .number(Double(DEFAULT_EVENT_SEGMENT_MAX_BYTES))),
+            ("max_segments", .number(Double(DEFAULT_EVENT_MAX_SEGMENTS))), ("last_write_error", .null)
+        ])
+    }
+
+    /// The members of acpx's session `acpx` block `cloneSessionAcpxState` copies, in its order.
+    static let clonedAcpxStateKeys = [
+        "current_mode_id", "desired_mode_id", "desired_config_options", "current_model_id", "available_models",
+        "available_model_names", "model_control", "available_commands", "config_options", "session_options"
+    ]
+
+    /// acpx's `createSyntheticSessionRecord`: a closed record of `binding`'s session, with
+    /// the conversation — and the `acpx` block, when there is one — of `conversation`, an
+    /// in-memory record as acpx holds it (``ACPXCore/SessionRecord/acpxRecord()``).
+    static func createSyntheticSessionRecord(
+        binding: FlowSessionBinding, createdAt: String, updatedAt: String, conversation: WireJSON, withAcpx: Bool,
+        lastSeq: Int
+    ) -> WireJSON {
+        var acpx: WireJSON?
+        if withAcpx {
+            let state = conversation["acpx"]
+            acpx = .object(clonedAcpxStateKeys.map { ($0, state?[$0]) })
+        }
+        return .object([
+            ("schema", .text(SESSION_RECORD_SCHEMA)), ("acpxRecordId", .text(binding.acpxRecordId)),
+            ("acpSessionId", .text(binding.acpSessionId)),
+            ("agentSessionId", binding.agentSessionId.map(WireJSON.text)),
+            ("agentCommand", .text(binding.agentCommand)),
+            ("agentArgv", binding.agentArgv.map { .array($0.map(WireJSON.text)) }), ("cwd", .text(binding.cwd)),
+            ("name", .text(binding.name)), ("createdAt", .text(createdAt)), ("lastUsedAt", .text(updatedAt)),
+            ("lastSeq", .number(Double(lastSeq))), ("eventLog", defaultSessionEventLog(binding.acpxRecordId)),
+            ("closed", .bool(true)), ("closedAt", .text(updatedAt)), ("title", conversation["title"]),
+            ("messages", conversation["messages"]), ("updated_at", conversation["updated_at"]),
+            ("cumulative_token_usage", conversation["cumulative_token_usage"]),
+            ("cumulative_cost", conversation["cumulative_cost"]),
+            ("request_token_usage", conversation["request_token_usage"]), ("acpx", acpx)
+        ])
+    }
 }

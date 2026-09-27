@@ -305,3 +305,14 @@ extension WireJSON {
         return .object(members.map { WireJSON.Member(key: $0.key, value: transform($0.value)) })
     }
 }
+
+extension SessionRecord {
+    /// The record as acpx holds it in memory: what its parser makes of the file SwiftACP
+    /// writes for it (``SessionRecordParser/parse(_:)``) — its own fields camelCase, its
+    /// conversation and `acpx` block as acpx names them. `nil` for a record acpx would not
+    /// take.
+    public func acpxRecord() throws -> WireJSON? {
+        guard let written = WireJSON(parsing: try SessionRecordSerializer.data(for: self)) else { return nil }
+        return SessionRecordParser.parse(written)
+    }
+}

@@ -29,10 +29,10 @@ extension FlowRunner {
             ("attemptId", .text(step.result.attemptId)), ("nodeId", .text(step.nodeId)),
             ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
             ("startedAt", .text(step.result.startedAt)), ("finishedAt", .text(step.result.finishedAt)),
-            ("promptText", step.executed.promptText.map(WireJSON.text) ?? .null),
-            ("rawText", step.executed.rawText.map(WireJSON.text) ?? .null),
+            ("promptText", step.executed.promptText ?? .null), ("rawText", step.executed.rawText ?? .null),
             ("output", step.executed.output.json), ("error", step.result.error.map(WireJSON.text)),
-            ("session", .null), ("agent", .null), ("trace", step.executed.trace?.wire)
+            ("session", step.executed.sessionInfo ?? .null), ("agent", step.executed.agentInfo ?? .null),
+            ("trace", step.executed.trace?.wire)
         ]))
         // acpx's `createNodeOutcomePayload`: the result, then the trace spread in.
         var payload: [(String, WireJSON?)] = [

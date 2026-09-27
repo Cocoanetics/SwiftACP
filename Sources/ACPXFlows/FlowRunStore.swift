@@ -17,7 +17,9 @@ struct FlowRunStore {
 
     let outputRoot: URL
     private var traceSeq = 0
-    private var manifest: JSObject?
+    var manifest: JSObject?
+    /// The bundled sessions' event numbers, which a turn's messages take as they come.
+    let sessionSequences = FlowSessionSequences()
 
     init(outputRoot: URL) {
         self.outputRoot = outputRoot
@@ -145,7 +147,7 @@ struct FlowRunStore {
     // MARK: - The manifest
 
     /// acpx's `getManifest`: the one made at the start, its run fields brought up to date.
-    private mutating func currentManifest(_ state: FlowRunState) -> JSObject {
+    mutating func currentManifest(_ state: FlowRunState) -> JSObject {
         var manifest = self.manifest ?? Self.createRunManifest(state)
         manifest["startedAt"] = state["startedAt"].map(WireJSON.text)
         manifest["finishedAt"] = state["finishedAt"].map(WireJSON.text)
