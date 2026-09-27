@@ -89,6 +89,26 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A direct turn that finds its session's journal corrupt fails before its attempt, and lets
+    /// the agent held for it go, as acpx's direct turn closes the client it was handed however it
+    /// ends (#219 review) — where a queued turn's owner keeps its agent.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectTurnThatFindsItsJournalCorruptLetsItsAgentGo() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            // An anchored segment, then a line that is no journal's.
+            let anchor = SessionJournal.anchor(recordId: id, sequence: 1, messageSequence: 0, requestId: nil)
+            try Data((anchor.stringified + "\nnot json\n").utf8).write(to: ACPXPaths.sessionStreamPath(id))
+            await #expect(throws: SessionJournalError.self) {
+                _ = try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
+            }
+            #expect(await !daemon.sessionStatus(sessionId: id).live)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A stopped turn still going past its grace has its agent put down when the cancel found it
     /// running or went unanswered — the release is the turn's own — and not when the cancel found
     /// it not yet begun, as it then ends as it begins (#219 review).

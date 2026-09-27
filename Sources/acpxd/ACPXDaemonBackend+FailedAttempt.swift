@@ -39,6 +39,20 @@ extension ACPXDaemonBackend {
         return PermissionPromptUnavailableError()
     }
 
+    /// `body`, and for a direct turn it fails, the session's agent let go, as acpx's direct turn
+    /// closes the client it was handed however it ends — one that failed before its attempt too,
+    /// as a journal that cannot be opened ends it (#219 review). Where the turn let it go itself,
+    /// nothing is left to; a queued turn's owner keeps its agent.
+    func lettingDirectAgentGo<T>(_ direct: Bool, _ recordId: String, _ body: () async throws -> T) async throws -> T {
+        guard direct else { return try await body() }
+        do {
+            return try await body()
+        } catch {
+            await Task { await self.evict(recordId) }.value
+            throw error
+        }
+    }
+
     /// Let a direct turn's agent go, as acpx closes its client: once the turn's messages are
     /// written (`savePromptSuccess`, or a failed turn's own flush), which gives the agent a
     /// moment before its stdin ends.

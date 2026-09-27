@@ -165,9 +165,11 @@ extension ACPXDaemonBackend {
             callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose))
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await relayingStderr(turn.stderr, logger: recordId) {
-            try await reportingFailure(of: recordId, errors: errors, saving: persister, direct: direct) {
-                try await beginTurn(on: persister, recordId: recordId)
-                return try await attemptWithRetry(turn, wasHeld: wasHeld)
+            try await lettingDirectAgentGo(direct, recordId) {
+                try await reportingFailure(of: recordId, errors: errors, saving: persister, direct: direct) {
+                    try await beginTurn(on: persister, recordId: recordId)
+                    return try await attemptWithRetry(turn, wasHeld: wasHeld)
+                }
             }
         }
     }
