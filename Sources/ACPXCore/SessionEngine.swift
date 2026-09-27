@@ -48,12 +48,17 @@ public enum SessionEngine {
         onStderr: RawWireTap.StderrObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
+        // The record is written once the agent is gone: one written while it still runs would
+        // show a pid on its way out, and a turn that took it meanwhile would lose what it saved
+        // to the write after the close (#219 review).
         let held = try await createSessionHoldingAgent(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, permission: permission,
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
             mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
-            handlers: handlers, inheritStderr: inheritStderr, onStderr: onStderr, onModelWarning: onModelWarning)
+            writesRecord: false, handlers: handlers, inheritStderr: inheritStderr, onStderr: onStderr,
+            onModelWarning: onModelWarning)
+        beforeClosing?(held.record.acpxRecordId)
         var record = held.record
         let handle = held.agent
         // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
@@ -74,6 +79,10 @@ public enum SessionEngine {
         try SessionStore.writeRecord(record)
         return record
     }
+
+    /// Runs in a test once ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:handlers:inheritStderr:onStderr:onModelWarning:)``
+    /// has made its session, before it closes the agent.
+    @TaskLocal public static var beforeClosing: (@Sendable (_ recordId: String) -> Void)?
 
     /// acpx's `createSessionWithClient`: ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:inheritStderr:onModelWarning:)``
     /// up to the record, which is written with the agent still running

@@ -294,6 +294,27 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A session made to be let go at once has its record written once its agent is gone, and
+    /// not before: nothing reads a record whose pid is on its way out, or saves to one the write
+    /// after the close would go over (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aSessionLetGoAtOnceIsRecordedOnceItsAgentIsGone() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let seen = Lines()
+            let look: @Sendable (String) -> Void = {
+                seen.add(SessionStore.loadRecord($0) == nil ? "absent" : "present")
+            }
+            let made = try await SessionEngine.$beforeClosing.withValue(look) {
+                try await SessionEngine.createSession(
+                    agentCommand: command, cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll,
+                    authCredentials: [:], authPolicy: "skip")
+            }
+            #expect(seen.all == ["absent"])
+            #expect(SessionStore.loadRecord(made.acpxRecordId)?.pid == nil)
+        }
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).
