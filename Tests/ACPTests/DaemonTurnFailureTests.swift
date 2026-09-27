@@ -204,28 +204,55 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A held session the agent dropped is taken back on a fresh launch, and the turn
-    /// succeeds: the dropped session's error is no failure of the turn, so it is not
-    /// shown, and nothing reports one.
+    /// A held session the agent dropped fails the turn on the agent's error, shown as it came,
+    /// as acpx's owner's turn fails: no fresh launch takes it back (#198). The JSON stream has
+    /// the prompt and the error.
     @Test(.enabled(if: mockPythonAvailable))
-    func aDroppedSessionTakenBackShowsNoError() async throws {
+    func aDroppedSessionFailsTheTurnAsAcpxDoes() async throws {
         for streamWire in [false, true] {
             try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, _ in
                 let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
                 let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
                 _ = try await daemon.runPrompt(sessionId: id, text: "first")
                 let client = CallingClient()
-                try await prompt(daemon, id, text: "second", streamWire: streamWire, client: client)
-                #expect(!client.kinds.contains("wire:inbound:error"), "streamWire: \(streamWire)")
-                #expect(client.failure == nil)
-                #expect(client.kinds.contains { $0.hasPrefix("update:") })
-                // The JSON stream has the turn that succeeded, through to its result, and
-                // nothing of the attempt the fresh launch took over.
+                await #expect(throws: (any Error).self) {
+                    try await prompt(daemon, id, text: "second", streamWire: streamWire, client: client)
+                }
+                #expect(client.kinds.contains("wire:inbound:error"), "streamWire: \(streamWire)")
+                #expect(client.failure?.shown == true)
                 if streamWire {
-                    #expect(client.wireKinds.last == "wire:inbound:result")
-                    #expect(client.wireKinds.filter { $0 == "wire:outbound:session/prompt" }.count == 1)
+                    #expect(client.wireKinds == [
+                        "wire:outbound:session/prompt", "wire:inbound:error", "failed:NO_SESSION"
+                    ])
                 }
             }
+        }
+    }
+
+    /// A held session's JSON stream shows the prompt as it goes out, as acpx's does — before
+    /// the agent says anything of it (#198): nothing of the turn waits for a fresh launch
+    /// once its prompt is written.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aHeldSessionsPromptStreamsAsItGoesOut() async throws {
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "first")
+            let client = CallingClient()
+            let shown = HoldGate()
+            client.observe { log in
+                guard let wire = try? log.decoded(WireMessageEvent.self), wire.wireDirection == "outbound",
+                      WireJSON(parsing: Data(wire.wireLine.utf8))?["method"] == .text("session/prompt") else { return }
+                shown.open()
+            }
+            let turn = Task { try await prompt(daemon, id, text: "hold turn", streamWire: true, client: client) }
+            // The agent holds the prompt until it is cancelled; the stream has it meanwhile.
+            await shown.wait()
+            #expect(try await daemon.cancelSession(sessionId: id))
+            try await turn.value
+            #expect(client.wireKinds.first == "wire:outbound:session/prompt")
+            await daemon.releaseAll()
         }
     }
 
@@ -265,11 +292,10 @@ extension DaemonToolsTests {
         }
     }
 
-    /// When the fresh launch that takes a dropped session back cannot even connect,
-    /// the turn fails on that, not on the dropped session's error, which no output
-    /// showed: the report says the output shows nothing, and names no ACP error.
+    /// A dropped session starts no fresh launch: the turn fails on the agent's error, which
+    /// the output showed, as acpx's does (#198). The wrapper would fail a third launch.
     @Test(.enabled(if: mockPythonAvailable))
-    func aFreshLaunchThatCannotConnectFailsOnItsOwnError() async throws {
+    func aDroppedSessionStartsNoFreshLaunch() async throws {
         try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, _ in
             // The third launch exits at once: `newSession`'s, the first turn's, and then
             // the retry's.
@@ -293,9 +319,9 @@ extension DaemonToolsTests {
                 try await prompt(daemon, id, text: "second", client: client)
             }
             let failure = try #require(client.failure)
-            #expect(!failure.shown)
-            #expect(failure.acp == nil)
-            #expect(!failure.message.contains("Resource not found"))
+            #expect(failure.shown)
+            #expect(failure.message.contains("Resource not found"))
+            #expect((try? String(contentsOf: launches, encoding: .utf8))?.trimmingCharacters(in: .newlines) == "2")
         }
     }
 

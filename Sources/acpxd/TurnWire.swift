@@ -41,11 +41,13 @@ final class TurnErrorWatch: @unchecked Sendable {
 /// agent's error responses, which it shows as errors: those wait for ``finish()``, so the
 /// updates before them, which reach the client another way, are out first.
 ///
-/// An attempt a fresh launch may retry is `provisional` until the agent answers it with
-/// anything but an error — an update, a request of its own, a result (``agentAnswered``).
-/// Until then, JSON output holds all of its messages back, and a retried attempt's are
-/// dropped by ``finish(showingHeld:)``: a retried attempt did not happen, as far as the
-/// output goes. Once the agent answers, what was held goes out, and the rest streams.
+/// An attempt a fresh launch may retry is `provisional` until its prompt starts to be
+/// written (``promptWriting()``), or the agent answers it with anything but an error — an
+/// update, a request of its own, a result (``agentAnswered``). Until then, JSON output holds
+/// all of its messages back — the `--model` it asks for first, say — and a retried attempt's
+/// are dropped by ``finish(showingHeld:)``: a retried attempt did not happen, as far as the
+/// output goes. From then on, what was held goes out, and the rest streams, as acpx's does
+/// (#198).
 final class TurnWireFeed: @unchecked Sendable {
     /// A message to send, or a point to tell someone the ones before it have gone out.
     private enum Item {
@@ -60,9 +62,12 @@ final class TurnWireFeed: @unchecked Sendable {
     private let lock = NSLock()
     /// Text output's error responses, until the turn's exchange is over.
     private var held: [WireMessageEvent] = []
-    /// JSON output's messages of a provisional attempt the agent has not answered yet.
+    /// JSON output's messages of a provisional attempt no fresh launch is ruled out for yet.
     private var pending: [WireMessageEvent] = []
     private var answered = false
+    /// Whether the attempt can no longer be retried: its prompt began to be written, or the
+    /// agent answered it.
+    private var released = false
 
     init(streamWire: Bool, provisional: Bool = false, logger: String, to clientSession: Session?) {
         let (items, feed) = AsyncStream<Item>.makeStream()
@@ -94,19 +99,32 @@ final class TurnWireFeed: @unchecked Sendable {
         lock.withLock {
             if direction == .inbound, !isError, !answered {
                 answered = true
-                for earlier in pending { feed.yield(.message(earlier)) }
-                pending = []
+                release()
             }
             if !streamWire, isError {
                 held.append(message)
             } else if !shown {
                 return
-            } else if provisional, !answered {
+            } else if provisional, !released {
                 pending.append(message)
             } else {
                 feed.yield(.message(message))
             }
         }
+    }
+
+    /// The attempt's prompt began to be written: no fresh launch takes the attempt over from
+    /// here on, so what was held goes out, and the rest streams.
+    func promptWriting() {
+        lock.withLock { release() }
+    }
+
+    /// Send what was held for a fresh launch that is ruled out now. Under ``lock``.
+    private func release() {
+        guard !released else { return }
+        released = true
+        for earlier in pending { feed.yield(.message(earlier)) }
+        pending = []
     }
 
     /// Return once what was handed on so far has gone out: the client's `--model` request,
