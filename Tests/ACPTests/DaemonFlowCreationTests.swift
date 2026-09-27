@@ -48,8 +48,9 @@ extension DaemonToolsTests {
     @Test func creationTokensKeptAMinuteAreLetGo() async throws {
         let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
         #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
-        #expect(await daemon.creationCalledOff("made", madeAs: "a") == false)
-        #expect(await daemon.creationCalledOff("later", madeAs: "b", now: Date(timeIntervalSinceNow: 61)) == false)
+        #expect(await daemon.creationCalledOff("made", madeAs: "a", agent: StandInAgent()) == false)
+        let later = Date(timeIntervalSinceNow: 61)
+        #expect(await daemon.creationCalledOff("later", madeAs: "b", agent: StandInAgent(), now: later) == false)
         #expect(await daemon.calledOffCreations.isEmpty)
         #expect(await Array(daemon.madeCreations.keys) == ["later"])
     }
@@ -77,7 +78,8 @@ extension DaemonToolsTests {
             let released = try await daemon.callOffCreation(creationToken: "slow")
             #expect(!released)
             // A creation a minute on prunes what is kept, but not the call-off of one under way.
-            #expect(await daemon.creationCalledOff("other", madeAs: "x", now: Date(timeIntervalSinceNow: 61)) == false)
+            let later = Date(timeIntervalSinceNow: 61)
+            #expect(await daemon.creationCalledOff("other", madeAs: "x", agent: StandInAgent(), now: later) == false)
             goOn.open()
             await #expect(throws: CancellationError.self) { _ = try await creating.value }
             #expect(await daemon.live.isEmpty)
@@ -165,6 +167,32 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A call-off lets go of the agent its creation made, and only that one: a session the
+    /// agent gave the same id since, which took its place, keeps its agent (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCallOffLetsGoOnlyOfTheAgentItsCreationMade() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                creation: SessionCreationMode(holdAgent: true, creationToken: "first"))
+            let replaced = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                creation: SessionCreationMode(holdAgent: true, creationToken: "second"))
+            #expect(replaced == id)
+            let kept = try #require(await daemon.live[id]?.agent)
+            let releasedTheFirst = try await daemon.callOffCreation(creationToken: "first")
+            #expect(!releasedTheFirst)
+            #expect(await daemon.live[id]?.agent === kept)
+            #expect(await !kept.connection.isClosed)
+            #expect(try await daemon.callOffCreation(creationToken: "second"))
+            #expect(await daemon.live.isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).
@@ -232,3 +260,6 @@ private final class HoldGate: @unchecked Sendable {
         waiting.forEach { $0.resume() }
     }
 }
+
+/// Stands in, by its identity, for the agent a creation made.
+private final class StandInAgent: Sendable {}

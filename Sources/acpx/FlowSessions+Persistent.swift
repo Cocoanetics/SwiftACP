@@ -40,12 +40,11 @@ extension FlowAgentSessions {
                 verbose: flags.verbose, creationToken: creationToken)
         } catch {
             await proxy.disconnect()
-            if let reason = control.stopReason {
-                // Its answer never came: what acpxd makes of it is let go, now or as it is made,
-                // as acpx's runner closes a client made after its attempt stopped (#219 review).
-                await DaemonClient.callOffCreation(creationToken)
-                throw reason
-            }
+            // No answer came, or a failure did: whatever acpxd makes of it is let go, now or as it
+            // is made, as acpx's runner closes a client made after its attempt stopped — the
+            // record's id, which the answer would have named, is never learned (#219 review).
+            await DaemonClient.callOffCreation(creationToken)
+            if let reason = control.stopReason { throw reason }
             // acpxd's own error, as acpx's creation throws it: without the MCP client's
             // `Tool call failed: `.
             throw DaemonClient.controlFailure(error)

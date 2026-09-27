@@ -162,6 +162,31 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A creation whose answer the CLI never gets, or gets as a failure, is called off, the
+    /// attempt stopped or not: the record's id, which the answer names, would never be learned
+    /// otherwise (#219 review). Here acpxd cannot start the agent, and keeps the call-off it gets.
+    @Test(.timeLimit(.minutes(1)))
+    func aCreationThatFailsIsCalledOff() async throws {
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
+            let sessions = FlowAgentSessions(
+                flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
+                permission: .approveAll, permissionRules: nil, mcpServers: [])
+            let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+            let agent = FlowAgent(
+                agentName: "gone", agentCommand: "/nonexistent/agent", agentArgv: nil, cwd: NSTemporaryDirectory())
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            await #expect(throws: (any Error).self) {
+                try await DaemonClient.$standIn.withValue(daemon) {
+                    _ = try await sessions.createPersistent(
+                        agent: agent, name: "flow-main", control: FlowTurnControl(attempt: attempt))
+                }
+            }
+            #expect(await backend.calledOffCreations.count == 1)
+        }
+    }
+
     /// A flow run with `--mcp-config` gives its persistent sessions the file's servers, as
     /// acpx's runner gives every client the invocation's (#219 review). acpxd here is one
     /// in process.

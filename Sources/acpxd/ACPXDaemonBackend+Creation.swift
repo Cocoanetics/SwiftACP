@@ -7,6 +7,14 @@ import SwiftACP
 // `ACPXDaemonBackend.swift` and `ACPXDaemonBackend+Cancel.swift` to keep each inside the
 // 500-line limit.
 extension ACPXDaemonBackend {
+    /// A session a creation made, kept by its token for a call-off yet to come: its record, and
+    /// the agent held for it — the one a call-off lets go, and no other.
+    struct MadeCreation: Sendable {
+        let recordId: String
+        let agent: any AnyObject & Sendable
+        let at: Date
+    }
+
     /// The session a flow made, its agent held for its first turn — and let go at once if it
     /// was called off as it was made, its call cancelled or its token called off first, as
     /// acpx's runner closes a client made after its attempt stopped: nobody would ever take
@@ -18,7 +26,7 @@ extension ACPXDaemonBackend {
         try await holdAsNew(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
         // Called off as it was held: from a task of its own, as this one's cancellation would
         // refuse the release.
-        if Task.isCancelled || creationCalledOff(token, madeAs: recordId) {
+        if Task.isCancelled || creationCalledOff(token, madeAs: recordId, agent: held.agent) {
             await Task { _ = try? await self.releaseSession(sessionId: recordId) }.value
             throw CancellationError()
         }
@@ -91,17 +99,32 @@ extension ACPXDaemonBackend {
             calledOffCreations[creationToken] = now
             return false
         }
-        return try await releaseSession(sessionId: made.recordId)
+        return await releaseMade(made)
+    }
+
+    /// Let go of the agent the creation under a token made, when it is still the one held for
+    /// its session and nothing has it: not one that took its place under the same id since,
+    /// nor one a turn or an owner now has, which let it go themselves (#219 review).
+    private func releaseMade(_ made: MadeCreation) async -> Bool {
+        let recordId = made.recordId
+        guard let entry = live[recordId], entry.agent === made.agent, turns[recordId] == nil,
+              owners[recordId] == nil else { return false }
+        live.removeValue(forKey: recordId)
+        await entry.agent.close()
+        return true
     }
 
     /// Whether the creation under `token` was called off before its session was made; if not,
-    /// the session is kept by the token, for a call-off yet to come. Tokens kept a minute go
+    /// the session — by its record and the agent held for it — is kept by the token, for a
+    /// call-off yet to come. Tokens kept a minute go
     /// first, so a long-lived daemon keeps only those of the last minute's creations.
-    func creationCalledOff(_ token: String?, madeAs recordId: String, now: Date = Date()) -> Bool {
+    func creationCalledOff(
+        _ token: String?, madeAs recordId: String, agent: any AnyObject & Sendable, now: Date = Date()
+    ) -> Bool {
         guard let token else { return false }
         pruneCreationTokens(now: now)
         if calledOffCreations.removeValue(forKey: token) != nil { return true }
-        madeCreations[token] = (recordId, now)
+        madeCreations[token] = MadeCreation(recordId: recordId, agent: agent, at: now)
         return false
     }
 

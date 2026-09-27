@@ -58,7 +58,7 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// The creation tokens a call-off named before their session was made, and the session each
     /// made, with when: see ``callOffCreation(creationToken:)``.
     var calledOffCreations: [String: Date] = [:]
-    var madeCreations: [String: (recordId: String, at: Date)] = [:]
+    var madeCreations: [String: MadeCreation] = [:]
     /// The tokens of the creations under way, whose call-offs are kept however long they take.
     var creatingTokens: Set<String> = []
     /// The tokens of the turns waiting to begin, whose call-offs are kept however long they wait.
