@@ -14,6 +14,8 @@ extension FlowAgentSessions {
     /// Runs in a test once a persistent turn's daemon is reached and its stop listened for,
     /// just before the turn is sent.
     @TaskLocal static var beforeSending: (@Sendable () -> Void)?
+    /// Runs in a test once acpxd has made a persistent session, before its record is read.
+    @TaskLocal static var afterCreating: (@Sendable (_ recordId: String) -> Void)?
 
     /// acpx's `createSessionWithClient` with the flow runner's options: acpxd makes the
     /// session and keeps its agent, answering its requests meanwhile as the flow's turns are
@@ -22,7 +24,7 @@ extension FlowAgentSessions {
     func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord {
         try control.check()
         let creationToken = UUID().uuidString.lowercased()
-        let proxy = try await DaemonClient.connect(spawnIfNeeded: true) { proxy in
+        let proxy = try await Self.connect(until: control) { proxy in
             await proxy.setLogNotificationHandler(FlowCreationLog())
         }
         let stopListening = control.onStop { Task { await proxy.disconnect() } }
@@ -50,9 +52,35 @@ extension FlowAgentSessions {
             throw DaemonClient.controlFailure(error)
         }
         await proxy.disconnect()
+        Self.afterCreating?(recordId)
+        guard let record = SessionStore.loadRecord(recordId) else {
+            // A session whose record cannot be read is never the run's: its agent goes (#219 review).
+            await DaemonClient.callOffCreation(creationToken)
+            throw CLIError("Session not found: \(recordId)")
+        }
         creations.keep(creationToken, for: recordId)
-        guard let record = SessionStore.loadRecord(recordId) else { throw CLIError("Session not found: \(recordId)") }
         return record
+    }
+
+    /// Reach acpxd, starting it if need be — however long a cold one takes to come up, the
+    /// attempt's stop cuts the wait short and it ends with why, as acpx's signal aborts its
+    /// client's start (#219 review).
+    static func connect(
+        until control: FlowTurnControl, daemonExecutable: String? = nil,
+        configure: @escaping @Sendable (MCPServerProxy) async -> Void
+    ) async throws -> MCPServerProxy {
+        let reaching = Task {
+            try await DaemonClient.connect(
+                spawnIfNeeded: true, daemonExecutable: daemonExecutable, configure: configure)
+        }
+        let stopListening = control.onStop { reaching.cancel() }
+        defer { stopListening() }
+        do {
+            return try await reaching.value
+        } catch {
+            if let reason = control.stopReason { throw reason }
+            throw error
+        }
     }
 
     /// acpx's `sendSessionDirect` with the flow runner's options: acpxd runs the turn
@@ -79,7 +107,7 @@ extension FlowAgentSessions {
         let content = try turn.prompt.map { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode($0)) }
         let ceiling = try TerminalOutputLimit.ceiling()
         let stopReason = StopReasonBox()
-        let proxy = try await DaemonClient.connect(spawnIfNeeded: true) { proxy in
+        let proxy = try await Self.connect(until: turn.control) { proxy in
             await proxy.setLogNotificationHandler(FlowTurnLog(turn, stopReason: stopReason))
         }
         // The turn's name, which the stop's cancel gives: a stop that comes before acpxd has

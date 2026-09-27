@@ -196,8 +196,9 @@ enum DaemonClient {
         // waits for its queue owner: one that ended unsuccessfully meanwhile failed to
         // start, and waiting on is pointless. One that lost the singleton race exits
         // cleanly, so we still resolve to the one running manager.
+        // Called off, it stops waiting (a flow's stop, #219 review).
         for _ in 0 ..< 60 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try await Task.sleep(nanoseconds: 150_000_000)
             if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
                 return proxy
             }
