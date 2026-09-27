@@ -38,10 +38,13 @@ extension ACPXDaemonBackend {
     ///
     /// An agent a direct control starts starts over the caller's `environment`, as acpx's
     /// direct control starts its client in the CLI's process; an owner's, over the one the
-    /// owner was started with (#222).
+    /// owner was started with (#222). Under `verbose`, what that agent writes to stderr goes to
+    /// the caller, with acpx's own lines — its client's log, whether the saved agent still runs,
+    /// each preference put back — as acpx's direct control writes them in the CLI's process. An
+    /// owner's control shows none: acpx's owner runs it, and its stderr is not the CLI's (#221).
     func withSessionTurn<T: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil,
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
         _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
     ) async throws -> (value: T, resumed: Bool) {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
@@ -67,13 +70,16 @@ extension ACPXDaemonBackend {
         }
         defer { deadline?.settle() }
         let step = direct ? timeout : nil
+        let stderr = direct && verbose ? AgentStderrRelay() : nil
         do {
-            return try await control(
-                current, direct: direct, replacing: replacing, deadline: deadline, step: step,
-                settings: CallerSettings(
-                    handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
-                    environment: direct ? environment : owners[recordId]?.environment),
-                body)
+            return try await relayingStderr(stderr, logger: recordId) {
+                try await control(
+                    current, direct: direct, replacing: replacing, deadline: deadline, step: step,
+                    settings: CallerSettings(
+                        handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
+                        stderr: stderr, environment: direct ? environment : owners[recordId]?.environment),
+                    body)
+            }
         } catch {
             if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }
             throw AgentFailure.shown(error)

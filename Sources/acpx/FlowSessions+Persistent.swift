@@ -26,7 +26,7 @@ extension FlowAgentSessions {
         let creationToken = UUID().uuidString.lowercased()
         let ceiling = try TerminalOutputLimit.ceiling()
         let proxy = try await Self.connect(until: control) { proxy in
-            await proxy.setLogNotificationHandler(FlowCreationLog())
+            await proxy.setLogNotificationHandler(AgentStderrLog())
         }
         let stopListening = control.onStop { Task { await proxy.disconnect() } }
         defer { stopListening() }
@@ -231,9 +231,9 @@ final class FlowTurnLog: MCPServerProxyLogNotificationHandling, @unchecked Senda
     }
 }
 
-/// The making of a flow's persistent session, as acpxd tells of it: under `--verbose`, what
-/// its agent writes to stderr.
-final class FlowCreationLog: MCPServerProxyLogNotificationHandling, Sendable {
+/// A call acpxd runs for this CLI under `--verbose` — the making of a flow's persistent session,
+/// a control — as acpxd tells of it: what its agent writes to stderr, and acpx's own lines.
+final class AgentStderrLog: MCPServerProxyLogNotificationHandling, Sendable {
     func mcpServerProxy(_ proxy: MCPServerProxy, didReceiveLog message: LogMessage) async {
         _ = FlowAgentStderr.write(message)
     }

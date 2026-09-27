@@ -26,15 +26,15 @@ public protocol ACPXBackend: Sendable {
     ) async throws -> Bool
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?, environment: [String: String]?
+        timeoutMs: Int?, environment: [String: String]?, verbose: Bool
     ) async throws -> SessionControlResult
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]?
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]?, verbose: Bool
     ) async throws -> SessionControlResult
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?, environment: [String: String]?
+        timeoutMs: Int?, environment: [String: String]?, verbose: Bool
     ) async throws -> SessionControlResult
     func closeSession(sessionId: String) async throws -> Bool
     func pruneSessions(

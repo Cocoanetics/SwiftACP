@@ -204,16 +204,22 @@ public actor ACPXDaemon {
     ///     no owner holds starts over it, as acpx's direct control starts its client in the
     ///     CLI's process; an owner's agents keep the one the owner started with (#222).
     ///     Omitted, the daemon's own.
+    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
+    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
+    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
+    ///     owner holds (#221).
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setMode(
                 sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment)
+                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
+                environment: environment, verbose: verbose ?? false)
         }
     }
 
@@ -237,19 +243,24 @@ public actor ACPXDaemon {
     ///     no owner holds starts over it, as acpx's direct control starts its client in the
     ///     CLI's process; an owner's agents keep the one the owner started with (#222).
     ///     Omitted, the daemon's own.
+    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
+    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
+    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
+    ///     owner holds (#221).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setConfigOption(
                 sessionId: sessionId, configId: configId, value: value,
                 nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
-                timeoutMs: timeoutMs, environment: environment)
+                timeoutMs: timeoutMs, environment: environment, verbose: verbose ?? false)
         }
     }
 
@@ -273,16 +284,22 @@ public actor ACPXDaemon {
     ///     no owner holds starts over it, as acpx's direct control starts its client in the
     ///     CLI's process; an owner's agents keep the one the owner started with (#222).
     ///     Omitted, the daemon's own.
+    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
+    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
+    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
+    ///     owner holds (#221).
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setModel(
                 sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment)
+                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
+                environment: environment, verbose: verbose ?? false)
         }
     }
 

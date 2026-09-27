@@ -9,7 +9,7 @@ import Testing
 /// the caller of the session's creation and of each turn (#219 review, #221): the agent's own
 /// stderr, and acpx's `[acpx]` lines — its client's log, whether the agent the record saved still
 /// runs, each preference put back, how the agent went, and the prompt's timings — as acpx 0.19.3
-/// writes them for the same mock.
+/// writes them for the same mock. So does a control's caller, where no owner holds the session.
 extension DaemonToolsTests {
     /// As the session is made, and as each turn runs — the one that takes the session back too. A
     /// turn without `--verbose` gets none of it.
@@ -86,6 +86,30 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A control under `--verbose` on a session no owner holds shows what acpx's direct control
+    /// shows in the CLI's process: the agent it starts, its stderr, and acpx's lines. On a session
+    /// an owner holds it shows none, as acpx's owner runs it, whose stderr is not the CLI's.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aVerboseControlShowsWhatAcpxsDirectControlShows() async throws {
+        let command = "/usr/bin/env MOCK_STDERR_AT_START=starting MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        let spawning = "[acpx] spawning agent: " + (try AgentRegistry.commandLineParts(command).joined(separator: " "))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            // Made and its agent closed, as `sessions new` leaves it: its record keeps no pid.
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let direct = CallingClient()
+            _ = try await Self.verboseControl(daemon, id, client: direct)
+            #expect(Self.stderr(of: direct) == "starting\n")
+            #expect(Self.diagnostics(of: direct) == [spawning, "[acpx] initialized protocol version 1"])
+            // A prompt leaves the session held by its owner.
+            _ = try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all")
+            let owned = CallingClient()
+            _ = try await Self.verboseControl(daemon, id, client: owned)
+            #expect(Self.stderr(of: owned).isEmpty && Self.diagnostics(of: owned).isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
     /// acpx's `formatPerfMetric`: the milliseconds to three places at most, as JavaScript writes
     /// the number.
     @Test func aTimingIsWrittenAsAcpxWritesIt() {
@@ -106,6 +130,17 @@ extension DaemonToolsTests {
             try await daemon.newSession(
                 agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
                 sessionOptions: options, creation: SessionCreationMode(holdAgent: true, verbose: true))
+        }
+    }
+
+    /// `set-mode plan` under `--verbose`, told to `client`.
+    private static func verboseControl(
+        _ daemon: ACPXDaemonBackend, _ sessionId: String, client: CallingClient
+    ) async throws -> SessionControlResult {
+        let session = Session(id: UUID())
+        await session.setTransport(client)
+        return try await session.work { _ in
+            try await daemon.setMode(sessionId: sessionId, modeId: "plan", verbose: true)
         }
     }
 

@@ -21,7 +21,7 @@ extension ACPXDaemonBackend {
     /// (``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
     func runControl<Response: Sendable, Value: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil,
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
         _ step: ControlStep<Response, Value>
     ) async throws -> (value: Value, resumed: Bool) {
         _ = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
@@ -37,7 +37,8 @@ extension ACPXDaemonBackend {
         }
         return try await withSessionTurn(
             sessionId, replacing: replacing, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose
         ) { entry, record, timeout in
             let response = try await step.request(entry, record, timeout)
             return step.apply(response, &record)
