@@ -56,9 +56,19 @@ extension ACPXDaemonBackend {
     /// session under the same id, and the record, now the new session's, left as it is.
     /// Returns whether the daemon had anything of the session's: an agent held or still
     /// connecting, a turn, or an owner.
-    func releaseSession(sessionId: String) async throws -> Bool {
+    ///
+    /// Given the `turnToken` its caller gave a turn, only the agent that turn connects or runs
+    /// on is put down, and only while the turn has the session's slot, as acpx's flow runner
+    /// closes the client its stopped turn was handed: a turn that has ended, or not begun,
+    /// leaves the session as it is, for what came since (#219 review).
+    func releaseSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
+        if let turnToken {
+            guard let turn = turns[recordId], turn.token == turnToken, turn.running else { return false }
+            await putDown(recordId)
+            return true
+        }
         try Task.checkCancellation()
         let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
             || owners[recordId] != nil

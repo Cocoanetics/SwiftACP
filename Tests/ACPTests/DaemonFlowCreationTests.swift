@@ -267,6 +267,33 @@ extension DaemonToolsTests {
         }
     }
 
+    /// The release a stopped turn forces past its grace puts down the agent that turn runs on,
+    /// while it runs, and nothing else: named for a turn the session no longer runs, it leaves
+    /// the session as it is, for what came since (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aForcedReleaseReachesOnlyItsOwnTurn() async throws {
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let running = HoldGate()
+            await daemon.setPromptGoingOut { _ in running.open() }
+            let turn = Task {
+                try await daemon.runPrompt(
+                    sessionId: id, text: "hold turn", permissionMode: "approve-all", direct: true, turnToken: "now")
+            }
+            await running.wait()
+            let agent = try #require(await daemon.live[id]?.agent)
+            let releasedAnother = try await daemon.releaseSession(sessionId: id, turnToken: "gone")
+            #expect(!releasedAnother)
+            #expect(await !agent.connection.isClosed)
+            #expect(try await daemon.releaseSession(sessionId: id, turnToken: "now"))
+            await #expect(throws: (any Error).self) { _ = try await turn.value }
+            #expect(await agent.connection.isClosed)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).

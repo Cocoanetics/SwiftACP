@@ -49,7 +49,7 @@ public protocol ACPXBackend: Sendable {
     func cancelSession(sessionId: String, turnToken: String?) async throws -> Bool
     func callOffCreation(creationToken: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
-    func releaseSession(sessionId: String) async throws -> Bool
+    func releaseSession(sessionId: String, turnToken: String?) async throws -> Bool
 }
 
 /// The config a caller read once, which a session's agents are started with in place of the
@@ -143,7 +143,7 @@ extension ACPXBackend {
     }
 
     /// A backend that holds no agents live has none to let go.
-    public func releaseSession(sessionId: String) async throws -> Bool {
+    public func releaseSession(sessionId: String, turnToken: String?) async throws -> Bool {
         false
     }
 

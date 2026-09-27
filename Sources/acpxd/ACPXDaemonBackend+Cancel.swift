@@ -40,6 +40,8 @@ extension ACPXDaemonBackend {
         /// Whether a new session took its session's place before it had the slot: it is refused
         /// then, as the prompts still in line were (``holdAsNew``).
         var refused = false
+        /// Whether it has the session's slot: what it connects or runs on is its own from then on.
+        var running = false
     }
 
     /// Cancel the turn a session runs, as acpx's owner answers `cancelPrompt`.

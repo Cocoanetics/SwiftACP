@@ -239,9 +239,11 @@ final class FlowDaemonTurnStop: @unchecked Sendable {
             let settled = try? await withTimeout(milliseconds: FlowTurnOwner.cancelWaitMilliseconds) {
                 await self.waitForEnd()
             }
-            // Only a turn found running has the session's agent; one not begun ends as it begins,
-            // and the agent held under the id then may be another's (#219 review).
-            if settled == nil, running { _ = await DaemonClient.releaseSession(sessionId: recordId) }
+            // Only this turn's agent is put down, while it runs: one not begun ends as it begins,
+            // and what the session has once it has ended is another's (#219 review).
+            if settled == nil, running {
+                _ = await DaemonClient.releaseSession(sessionId: recordId, turnToken: turnToken)
+            }
         }
         lock.withLock { stopping = task }
     }

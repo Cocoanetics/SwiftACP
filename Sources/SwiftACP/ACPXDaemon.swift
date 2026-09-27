@@ -426,10 +426,14 @@ public actor ACPXDaemon {
     /// holding it and ends its agent, and the record stays as it is — what `sessions new`
     /// asks when the agent gave the new session the id of the one it replaces.
     ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
-    /// - Returns: whether the daemon held an agent for it.
+    /// - Parameters:
+    ///   - sessionId: the acpx record id or the ACP session id.
+    ///   - turnToken: the caller's name for a turn (`runPrompt`'s): only the agent that turn
+    ///     connects or runs on is put down, while the turn has the session — as acpx's flow
+    ///     runner closes the client its stopped turn was handed. Omitted, the session's agent.
+    /// - Returns: whether the daemon held an agent for it — or, given a turn, put one down.
     @MCPTool(idempotentHint: true)
-    func releaseSession(sessionId: String) async throws -> Bool {
-        try await admitted { [backend] in try await backend.releaseSession(sessionId: sessionId) }
+    func releaseSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
+        try await admitted { [backend] in try await backend.releaseSession(sessionId: sessionId, turnToken: turnToken) }
     }
 }

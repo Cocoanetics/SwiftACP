@@ -89,6 +89,7 @@ extension ACPXDaemonBackend {
             try await turnQueue.acquire(recordId, wait: true)
             heldTheSlot = true
         }
+        turns[recordId]?.running = true
         // A free slot is had at once, however the prompt was called off meanwhile: then it
         // ends here, nothing sent and nothing kept.
         try Task.checkCancellation()
