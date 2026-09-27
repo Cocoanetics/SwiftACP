@@ -224,9 +224,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         waiting.forEach { $0.resume() }
     }
 
-    /// Note the processes the agent has started so far — acpx looks once `initialize`
-    /// is over — so they are ended with it even if it is gone by then and they have
-    /// been handed to `init`.
+    /// Note the processes the agent has started so far — acpx looks once `initialize` is over — so
+    /// they are ended with it even if it is gone by then and they have been handed to `init`.
     func captureDescendants() {
         descendantsLock.withLock { _ = descendants.capture(rootIsRunning: !process.hasBeenReaped) }
     }
