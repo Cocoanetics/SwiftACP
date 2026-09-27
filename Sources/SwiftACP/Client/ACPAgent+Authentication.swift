@@ -34,8 +34,11 @@ extension ACPAgent {
                 log.log("authenticated with method \(method.id) (\(source))")
                 return
             }
-            // Grok Build's API key, which acpx takes from `XAI_API_KEY` (`readAgentSpecificEnvCredential`).
-            if grokBuild, GrokBuild.apiKey(for: method.id, in: callerEnvironment) != nil {
+            // Grok Build's API key, which acpx takes from `XAI_API_KEY` (`readAgentSpecificEnvCredential`)
+            // — so long as the agent has it too: the sign-in names only the method, and an agent
+            // given an environment without the key could not sign in with it (#234 review).
+            if grokBuild, GrokBuild.apiKey(for: method.id, in: callerEnvironment) != nil,
+               GrokBuild.apiKey(for: method.id, in: environment) != nil {
                 try await connection.authenticate(methodId: method.id)
                 log.log("authenticated with method \(method.id) (env)")
                 return

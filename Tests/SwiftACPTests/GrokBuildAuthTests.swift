@@ -29,6 +29,19 @@ import Testing
         #expect(lines.all.dropFirst().first == line)
     }
 
+    /// A key the agent is not given is not signed in with: an explicit environment without it
+    /// leaves the agent its cached token (#234 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aKeyTheAgentIsNotGivenLeavesItsCachedToken() async throws {
+        let lines = Lines()
+        var agentEnvironment = ProcessInfo.processInfo.environment
+        agentEnvironment["XAI_API_KEY"] = nil
+        let agent = try await Self.launch(
+            standIn: "grok", environment: ["XAI_API_KEY": "a key"], agentEnvironment: agentEnvironment, lines)
+        await agent.close()
+        #expect(lines.all.dropFirst().first == "authenticated with method cached_token (agent)")
+    }
+
     /// Another agent advertising the same methods gets neither.
     @Test(.enabled(if: mockPythonAvailable))
     func anotherAgentWithTheSameMethodsGetsNeither() async throws {
@@ -38,8 +51,12 @@ import Testing
     }
 
     /// `<name> agent stdio`, a stand-in that runs `exit-agent.py` advertising Grok Build's methods,
-    /// over this process's environment and `environment`, under the `fail` policy.
-    static func launch(standIn name: String, environment: [String: String], _ lines: Lines) async throws -> ACPAgent {
+    /// for a client over this process's environment and `environment` — the agent's own that too,
+    /// unless `agentEnvironment` is given — under the `fail` policy.
+    static func launch(
+        standIn name: String, environment: [String: String], agentEnvironment: [String: String]? = nil,
+        _ lines: Lines
+    ) async throws -> ACPAgent {
         let python = try #require(AgentRegistry.which("python3"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("grok-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -56,7 +73,8 @@ import Testing
         caller.merge(environment) { $1 }
         return try await ACPAgent.launch(
             agent: "'\(script.path)' agent stdio", cwd: NSTemporaryDirectory(), permission: .approveAll,
-            environment: caller, authPolicy: "fail", inheritStderr: false, terminalEnvironment: caller,
+            environment: agentEnvironment ?? caller, authPolicy: "fail", inheritStderr: false,
+            terminalEnvironment: caller,
             onLog: { lines.append($0) })
     }
 }
