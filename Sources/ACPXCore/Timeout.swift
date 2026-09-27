@@ -100,24 +100,51 @@ private func nanoseconds(_ milliseconds: Int) -> UInt64 {
 /// ``withTimeout(milliseconds:_:)`` for an operation that starts what its caller would
 /// have to put down — an agent's launch: at the deadline the operation is cancelled and
 /// waited for, as it puts down what it started on its way out (acpx closes the client it
-/// was starting), and what it came up with just then goes to `discard`.
+/// was starting), and what it came up with just then goes to `discard`. The operation
+/// starts once the deadline is set, a test's ``DeadlineSource`` included, as there.
 public func withTimeout<T: Sendable>(
     milliseconds: Int?, _ operation: @escaping @Sendable () async throws -> T,
     discardingLate discard: @escaping @Sendable (T) async -> Void
 ) async throws -> T {
-    let running = Task { try await operation() }
+    let running = OnceStarted<T>()
     do {
         return try await withTimeout(milliseconds: milliseconds) {
-            try await withTaskCancellationHandler {
-                try await running.value
+            guard let task = running.start(operation) else { throw CancellationError() }
+            return try await withTaskCancellationHandler {
+                try await task.value
             } onCancel: {
-                running.cancel()
+                task.cancel()
             }
         }
     } catch {
-        running.cancel()
-        if let late = try? await running.value { await discard(late) }
+        if let task = running.stop(), let late = try? await task.value { await discard(late) }
         throw error
+    }
+}
+
+/// An operation in a task of its own, started at most once, and not once stopped: what
+/// the caller of a timed-out step can still reach, to put down.
+private final class OnceStarted<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<T, Error>?
+    private var stopped = false
+
+    /// The operation's task, started now unless it was already — or none, once stopped.
+    func start(_ operation: @escaping @Sendable () async throws -> T) -> Task<T, Error>? {
+        lock.withLock {
+            guard !stopped else { return nil }
+            if task == nil { task = Task { try await operation() } }
+            return task
+        }
+    }
+
+    /// No start from now on; the task, cancelled, if it started.
+    func stop() -> Task<T, Error>? {
+        lock.withLock {
+            stopped = true
+            task?.cancel()
+            return task
+        }
     }
 }
 
