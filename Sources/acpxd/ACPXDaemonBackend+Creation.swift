@@ -33,59 +33,58 @@ extension ACPXDaemonBackend {
         return recordId
     }
 
-    /// Hold a new session's agent. One acpxd holds under the same id already — another run's,
-    /// or an agent's stable id — is let go first, as `sessions new` retires a session it
-    /// replaces under the same id (`SessionLifecycle.retire`): with no `session/close`, which
-    /// would reach the new session too, and once whatever turn it runs is over, as that turn is
-    /// nobody's to call off. The session's turn slot is held throughout, so no prompt starts an
-    /// agent in between; and the new record is written once more, over whatever the old one's
-    /// turn saved on its way out; the prompts meant for the old one are refused. A creation
-    /// called off before it would take that place — the
-    /// slot had, or while it waited for it — takes nobody's place: its own agent goes, and the
-    /// session held under the id stays as it is (#219 review).
+    /// Hold a new session's agent, and write its record: holding the session's turn slot, so
+    /// that creations under one id — an agent that gives every session the same id — take it
+    /// in turn, and no prompt starts an agent meanwhile. One acpxd holds under the id already —
+    /// another run's — is let go first, as `sessions new` retires a session it replaces under
+    /// the same id (`SessionLifecycle.retire`): with no `session/close`, which would reach the
+    /// new session too, once whatever turn it runs is over, and with the prompts meant for it
+    /// refused. A creation called off before it has the slot takes nobody's place: its own agent
+    /// goes, and a session held under the id stays as it is, its record too (#219 review).
     private func holdAsNew(
         _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?, token: String?
     ) async throws {
         let recordId = held.record.acpxRecordId
-        let taken = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
-            || owners[recordId] != nil
-        guard taken else {
-            _ = try await hold(held.agent, on: held.session, sessionSpecs: sessionSpecs, for: recordId, via: nil,
-                               stderr: stderr)
-            return
-        }
+        await reconnected?(recordId)
         do {
             try await turnQueue.acquire(recordId, wait: true)
         } catch {
             await held.agent.close()
             throw error
         }
-        guard !isCalledOff(token) else {
-            await turnQueue.release(recordId)
-            await held.agent.close()
-            throw CancellationError()
-        }
-        // The prompts meant for the session it replaces are refused, as `sessions new` refuses
-        // those in line as it lets a session go: those still in line, and one begun as the turn
-        // before it ended, yet to have the slot — none runs on the new agent (#219 review).
-        refusePromptsWaiting(recordId)
-        turns[recordId]?.refused = true
+        let taken = live[recordId] != nil || turns[recordId] != nil || owners[recordId] != nil
         let outcome: Result<Void, Error>
-        do {
-            forgetOwner(recordId)
-            await evict(recordId)
-            try SessionStore.writeRecord(held.record)
-            _ = try await hold(held.agent, on: held.session, sessionSpecs: sessionSpecs, for: recordId, via: nil,
-                               stderr: stderr)
-            outcome = .success(())
-        } catch {
-            outcome = .failure(error)
+        if isCalledOff(token) {
+            // Its record kept when the id is its own, as acpx's creation writes it.
+            if !taken { try? SessionStore.writeRecord(held.record) }
+            outcome = .failure(CancellationError())
+        } else {
+            if taken {
+                // The prompts meant for the session it replaces are refused: those still in
+                // line, and one begun as the turn before it ended, yet to have the slot.
+                refusePromptsWaiting(recordId)
+                turns[recordId]?.refused = true
+                forgetOwner(recordId)
+                await evict(recordId)
+            }
+            outcome = Result { try keep(held, sessionSpecs: sessionSpecs, stderr: stderr) }
         }
         await turnQueue.release(recordId)
         if case .failure(let error) = outcome {
             await held.agent.close()
             throw error
         }
+    }
+
+    /// Keep a new session: its record written, and its agent held for its first turn.
+    private func keep(
+        _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?
+    ) throws {
+        guard !stopping else { throw DaemonError.stopping }
+        let recordId = held.record.acpxRecordId
+        try SessionStore.writeRecord(held.record)
+        live[recordId] = Live(agent: held.agent, session: held.session, sessionSpecs: sessionSpecs, stderr: stderr)
+        held.agent.rawWire.set(nil)
     }
 
     /// Whether the creation under `token` has been called off: its call cancelled, or its token
@@ -113,10 +112,10 @@ extension ACPXDaemonBackend {
     /// nor one a turn or an owner now has, which let it go themselves (#219 review).
     private func releaseMade(_ made: MadeCreation) async -> Bool {
         let recordId = made.recordId
-        guard let entry = live[recordId], entry.agent === made.agent, turns[recordId] == nil,
-              owners[recordId] == nil else { return false }
-        live.removeValue(forKey: recordId)
-        await entry.agent.close()
+        guard live[recordId]?.agent === made.agent, turns[recordId] == nil, owners[recordId] == nil else {
+            return false
+        }
+        await evict(recordId)
         return true
     }
 
@@ -134,13 +133,13 @@ extension ACPXDaemonBackend {
         return false
     }
 
-    /// Let go of the creation tokens kept a minute (#219 review): by then a caller whose wait
-    /// was cut short has called its creation off. A call-off of a creation still under way is
-    /// kept until the creation is over, however long its agent takes.
+    /// Let go of the call-offs kept a minute (#219 review): by then the creation they name has
+    /// come, or never will — unless it is still under way, however long its agent takes. What a
+    /// creation made is kept until its agent is let go (``evict(_:)``), which a call-off or its
+    /// caller's release of it does, or its first turn.
     private func pruneCreationTokens(now: Date) {
         calledOffCreations = calledOffCreations.filter {
             creatingTokens.contains($0.key) || now.timeIntervalSince($0.value) < 60
         }
-        madeCreations = madeCreations.filter { now.timeIntervalSince($0.value.at) < 60 }
     }
 }

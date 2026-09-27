@@ -50,6 +50,7 @@ extension FlowAgentSessions {
             throw DaemonClient.controlFailure(error)
         }
         await proxy.disconnect()
+        creations.keep(creationToken, for: recordId)
         guard let record = SessionStore.loadRecord(recordId) else { throw CLIError("Session not found: \(recordId)") }
         return record
     }
@@ -59,14 +60,18 @@ extension FlowAgentSessions {
     /// stops the turn, its prompt is cancelled and given 2.5 s, then its agent let go
     /// (acpx's `ownDirectClient`). A turn that fails lets the session's agent go too, as
     /// acpx's closes the client it was given however it ends: one that failed before acpxd
-    /// took the kept agent would leave it kept, with no owner to let it go.
+    /// took the kept agent would leave it kept, with no owner to let it go. Only the agent the
+    /// session's creation made is let go, never one that took its place since under the same
+    /// id (#219 review).
     func runPersistent(_ turn: FlowPersistentTurn) async throws {
         do {
             try await runDirect(turn)
         } catch {
-            _ = await DaemonClient.releaseSession(sessionId: turn.recordId)
+            await callOffCreation(of: turn.recordId)
             throw error
         }
+        // Its first turn took the agent the session was made with.
+        _ = creations.take(turn.recordId)
     }
 
     private func runDirect(_ turn: FlowPersistentTurn) async throws {
@@ -111,9 +116,18 @@ extension FlowAgentSessions {
         if let reason = turn.control.stopReason { throw reason }
     }
 
-    /// Let go of a session's kept agent, the record as it is (acpx closes the client).
+    /// Let go of the agent a session was made with, if acpxd still keeps it — never one that
+    /// took its place since under the same id — the record as it is (acpx closes the client).
     func releasePersistent(_ recordId: String) async throws {
-        if case .refused(let error) = await DaemonClient.releaseSession(sessionId: recordId) { throw error }
+        if case .refused(let error) = await callOffCreation(of: recordId) { throw error }
+    }
+
+    /// Call off the creation that made `recordId`'s session, by its token: acpxd lets go of the
+    /// agent it made, if it still keeps it.
+    @discardableResult
+    private func callOffCreation(of recordId: String) async -> DaemonClient.Release {
+        guard let token = creations.take(recordId) else { return .released(false) }
+        return await DaemonClient.callOffCreation(token)
     }
 
     /// The flow's config as acpx's runner gives it every client of the run: its `auth` and MCP
@@ -221,11 +235,13 @@ final class FlowDaemonTurnStop: @unchecked Sendable {
         lock.withLock { didStop = true }
         let (recordId, turnToken) = (self.recordId, self.turnToken)
         let task = Task {
-            _ = try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)
+            let running = (try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)) == true
             let settled = try? await withTimeout(milliseconds: FlowTurnOwner.cancelWaitMilliseconds) {
                 await self.waitForEnd()
             }
-            if settled == nil { _ = await DaemonClient.releaseSession(sessionId: recordId) }
+            // Only a turn found running has the session's agent; one not begun ends as it begins,
+            // and the agent held under the id then may be another's (#219 review).
+            if settled == nil, running { _ = await DaemonClient.releaseSession(sessionId: recordId) }
         }
         lock.withLock { stopping = task }
     }
@@ -250,5 +266,22 @@ final class FlowDaemonTurnStop: @unchecked Sendable {
             }
             if over { continuation.resume() }
         }
+    }
+}
+
+/// The token each persistent session of a flow run was made under, by its record: what lets go
+/// of the agent that creation made — and no other that took its place since under the same id,
+/// as an agent that gives every session the same id makes happen (#219 review).
+final class FlowCreations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokens: [String: String] = [:]
+
+    func keep(_ token: String, for recordId: String) {
+        lock.withLock { tokens[recordId] = token }
+    }
+
+    /// The token `recordId`'s session was made under, forgotten.
+    func take(_ recordId: String) -> String? {
+        lock.withLock { tokens.removeValue(forKey: recordId) }
     }
 }

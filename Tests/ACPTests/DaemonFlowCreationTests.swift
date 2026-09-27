@@ -43,16 +43,17 @@ extension DaemonToolsTests {
         }
     }
 
-    /// What acpxd keeps of each creation's token goes after a minute: each creation prunes what
-    /// is older, so a long-lived daemon doesn't keep one per session it made (#219 review).
-    @Test func creationTokensKeptAMinuteAreLetGo() async throws {
+    /// A call-off whose creation never came goes after a minute: each creation prunes those older,
+    /// so a long-lived daemon doesn't keep them (#219 review). What a creation made stays, however
+    /// long, until its agent is let go.
+    @Test func callOffsKeptAMinuteAreLetGo() async throws {
         let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
         #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
         #expect(await daemon.creationCalledOff("made", madeAs: "a", agent: StandInAgent()) == false)
         let later = Date(timeIntervalSinceNow: 61)
         #expect(await daemon.creationCalledOff("later", madeAs: "b", agent: StandInAgent(), now: later) == false)
         #expect(await daemon.calledOffCreations.isEmpty)
-        #expect(await Array(daemon.madeCreations.keys) == ["later"])
+        #expect(await daemon.madeCreations.keys.sorted() == ["later", "made"])
     }
 
     /// A call-off stays while its creation is under way, however long the agent takes: one that
@@ -120,6 +121,7 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
             let kept = try #require(await daemon.live[id]?.agent)
+            let record = try #require(SessionStore.loadRecord(id))
             let released = try await daemon.callOffCreation(creationToken: "stopped")
             #expect(!released)
             await #expect(throws: CancellationError.self) {
@@ -129,6 +131,9 @@ extension DaemonToolsTests {
             }
             #expect(await daemon.live[id]?.agent === kept)
             #expect(await !kept.connection.isClosed)
+            // Its record too: the called-off creation's never replaced it.
+            #expect(SessionStore.loadRecord(id)?.pid == record.pid)
+            #expect(SessionStore.loadRecord(id)?.createdAt == record.createdAt)
             await daemon.releaseAll()
         }
     }
@@ -183,6 +188,8 @@ extension DaemonToolsTests {
                 creation: SessionCreationMode(holdAgent: true, creationToken: "second"))
             #expect(replaced == id)
             let kept = try #require(await daemon.live[id]?.agent)
+            // The first creation's agent went as the second took its place: nothing of it is kept.
+            #expect(await daemon.madeCreations["first"] == nil)
             let releasedTheFirst = try await daemon.callOffCreation(creationToken: "first")
             #expect(!releasedTheFirst)
             #expect(await daemon.live[id]?.agent === kept)

@@ -96,7 +96,8 @@ extension DaemonToolsTests {
     /// A persistent turn stopped while the CLI reached acpxd — a cold daemon takes a while —
     /// is never sent, as acpx's direct turn checks its signal before it prompts, and the
     /// session's kept agent is let go (#219 review). acpxd here is one in process: the
-    /// session's turn slot is asked for once, by the release — never by the turn.
+    /// session's turn slot is never asked for — the turn is not sent, and the kept agent, idle,
+    /// is let go without it.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aPersistentTurnStoppedAsItReachesTheDaemonIsNotSent() async throws {
         let directory = try Self.scratchDirectory()
@@ -105,15 +106,21 @@ extension DaemonToolsTests {
         let command = "/usr/bin/env MOCK_REQUEST_LOG='\(requests.path)' " + (try #require(mockCommand()))
         try await withIsolatedStore {
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await backend.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
             let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
             let sessions = FlowAgentSessions(
                 flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
                 permission: .approveAll, permissionRules: nil, mcpServers: [])
-            let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+            let (creating, attempt) = (
+                FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil),
+                FlowAttempt(nodeId: "ask", attemptId: "ask-2", startedAt: nowISO(), timeoutMs: nil))
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            let agent = FlowAgent(agentName: "mock", agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory())
+            let id = try await DaemonClient.$standIn.withValue(daemon) {
+                try await sessions.createPersistent(
+                    agent: agent, name: "flow-main", control: FlowTurnControl(attempt: creating)).acpxRecordId
+            }
             let turn = FlowPersistentTurn(
                 recordId: id, prompt: [.text("hi")], onMessage: { _, _ in }, control: FlowTurnControl(attempt: attempt))
-            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
             let slots = Lines()
             await backend.turnQueue.setBeforeAcquire { recordId in slots.add(recordId) }
             let stopAsItIsSent: @Sendable () -> Void = { attempt.cancel(FlowTimeoutError(timeoutMs: 10)) }
@@ -124,7 +131,7 @@ extension DaemonToolsTests {
                     }
                 }
             }
-            #expect(slots.all == [id])
+            #expect(slots.all.isEmpty)
             let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
             #expect(!logged.contains("session/prompt"), "\(logged)")
             #expect(await !backend.sessionStatus(sessionId: id).live)
@@ -184,6 +191,45 @@ extension DaemonToolsTests {
                 }
             }
             #expect(await backend.calledOffCreations.count == 1)
+        }
+    }
+
+    /// A flow lets go only of the agent its own creation made: after another creation took its
+    /// session's place under the same id, neither a first turn that failed nor the run's end
+    /// lets go of the agent that replaced it (#219 review). The mock gives every session one id.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowLetsGoOnlyOfTheAgentItMade() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
+            let sessions = FlowAgentSessions(
+                flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
+                permission: .approveAll, permissionRules: nil, mcpServers: [])
+            let (creating, stopped) = (
+                FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil),
+                FlowAttempt(nodeId: "ask", attemptId: "ask-2", startedAt: nowISO(), timeoutMs: nil))
+            stopped.cancel(FlowTimeoutError(timeoutMs: 10))
+            let agent = FlowAgent(agentName: "mock", agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory())
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            try await DaemonClient.$standIn.withValue(daemon) {
+                let id = try await sessions.createPersistent(
+                    agent: agent, name: "flow-main", control: FlowTurnControl(attempt: creating)).acpxRecordId
+                // Another flow's creation takes the session's place under the same id.
+                let replaced = try await backend.newSession(
+                    agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+                #expect(replaced == id)
+                let kept = try #require(await backend.live[id]?.agent)
+                await #expect(throws: FlowTimeoutError.self) {
+                    try await sessions.runPersistent(FlowPersistentTurn(
+                        recordId: id, prompt: [.text("hi")], onMessage: { _, _ in },
+                        control: FlowTurnControl(attempt: stopped)))
+                }
+                try await sessions.releasePersistent(id)
+                #expect(await backend.live[id]?.agent === kept)
+                #expect(await !kept.connection.isClosed)
+            }
+            await backend.releaseAll()
         }
     }
 

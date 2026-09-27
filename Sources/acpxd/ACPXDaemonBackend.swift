@@ -207,7 +207,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
                 authPolicy: authPolicy, mcpServers: configServers,
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
-                capabilities: .acpx(fs: fs), recordsCapabilities: false, handlers: handlers,
+                capabilities: .acpx(fs: fs), recordsCapabilities: false, writesRecord: false, handlers: handlers,
                 inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
         }
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
@@ -452,6 +452,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// next call relaunches).
     func evict(_ recordId: String) async {
         guard let entry = live.removeValue(forKey: recordId) else { return }
+        // A creation's token keeps its agent no longer: nothing is left for a call-off.
+        madeCreations = madeCreations.filter { $0.value.agent !== entry.agent }
         await entry.agent.close()
     }
 

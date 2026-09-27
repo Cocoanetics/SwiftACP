@@ -18,6 +18,8 @@ struct FlowAgentSessions: FlowSessionRunner {
     /// Called with the agent's connection once the agent is up: lets a test hold what the
     /// connection does.
     var onConnected: (@Sendable (ACPAgentConnection) async -> Void)?
+    /// The token each persistent session of the run was made under (``FlowCreations``).
+    let creations = FlowCreations()
 
     func runIsolated(_ turn: FlowTurn) async throws -> String {
         let owner = FlowTurnOwner()

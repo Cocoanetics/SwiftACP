@@ -80,7 +80,9 @@ public enum SessionEngine {
     /// (`createSessionRecordWithClient`) — and the agent kept, on the session, for the
     /// caller to use and close. With `recordsCapabilities` false, what `capabilities`
     /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
-    /// when given, answer the agent's requests in place of `permission`'s.
+    /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
+    /// false, the record is returned unwritten, for a caller that writes it once it keeps the
+    /// session — acpxd, where the id the agent gives may be another session's.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -97,6 +99,7 @@ public enum SessionEngine {
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
         recordsCapabilities: Bool = true,
+        writesRecord: Bool = true,
         handlers: ACPClientHandlers? = nil,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
@@ -157,7 +160,7 @@ public enum SessionEngine {
             if recordsCapabilities { acpx.clientCapabilities = capabilities.persistedIfRestricted }
             record.acpx = acpx
 
-            try SessionStore.writeRecord(record)
+            if writesRecord { try SessionStore.writeRecord(record) }
             let session = ACPSession(id: created.sessionId, agent: handle, meta: created.meta)
             return HeldSession(record: record, agent: handle, session: session)
         } catch {
