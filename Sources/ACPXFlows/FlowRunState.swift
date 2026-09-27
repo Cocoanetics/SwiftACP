@@ -49,6 +49,9 @@ struct FlowRunState: Sendable {
     /// The run's members, in the order acpx's runner first sets them.
     private(set) var members = JSObject()
     var outputs = JSObject()
+    /// `outputs` as `JSON.stringify` last wrote the flow's own, when not the object above — what
+    /// a `toJSON` of it returned, or nothing — until the runner commits another output (#206).
+    var liveOutputs: FlowValue?
     var results = JSObject()
     var steps: [WireJSON] = []
     var sessionBindings = JSObject()
@@ -92,7 +95,11 @@ struct FlowRunState: Sendable {
     /// The state as `JSON.stringify` writes it (`projections/run.json`).
     var wire: WireJSON {
         var object = members
-        object["outputs"] = outputs.wire
+        switch liveOutputs {
+        case .json(let value)?: object["outputs"] = value
+        case .unrepresentable?: object["outputs"] = nil
+        default: object["outputs"] = outputs.wire
+        }
         object["results"] = results.wire
         object["steps"] = .array(steps)
         object["sessionBindings"] = sessionBindings.wire
@@ -143,14 +150,23 @@ struct FlowRunState: Sendable {
     /// `__proto__` among them — is an ordinary key.
     mutating func setOutput(_ nodeId: String, _ value: FlowValue) {
         outputs[nodeId] = value.json
+        liveOutputs = nil
     }
 
-    /// `outputs` as the flow's code now holds it: `json`'s members, in their order.
-    mutating func replaceOutputs(with json: WireJSON) {
-        guard case .object(let members) = json else { return }
-        var replaced = JSObject()
-        for member in members { replaced[String(decoding: member.key, as: UTF16.self)] = member.value }
-        outputs = replaced
+    /// `outputs` as `JSON.stringify` writes the flow's own now: an object's members, in their
+    /// order — else what its `toJSON` returned, or nothing.
+    mutating func replaceOutputs(with value: FlowValue) {
+        switch value {
+        case .json(.object(let members)):
+            var replaced = JSObject()
+            for member in members { replaced[String(decoding: member.key, as: UTF16.self)] = member.value }
+            outputs = replaced
+            liveOutputs = nil
+        case .json, .unrepresentable:
+            liveOutputs = value
+        default:
+            break
+        }
     }
 }
 

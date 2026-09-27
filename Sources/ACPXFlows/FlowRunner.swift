@@ -107,6 +107,7 @@ public actor FlowRunner {
         if let interruption { throw interruption }
         let runDir = try store.createRunDir(runId)
         self.runDir = runDir
+        let input = try await inputAfterTitle(flow, given: input)
         state = FlowRunState(
             runId: runId, flowName: flow.name, runTitle: runTitle, flowPath: flowPath, input: input, now: nowISO())
         let inputArtifact = try store.writeArtifact(
@@ -195,10 +196,15 @@ public actor FlowRunner {
         do {
             while let nodeId = current {
                 try throwIfRunInterrupted()
-                let step = try await executeFlowStep(
+                var step = try await executeFlowStep(
                     flow, nodeId: nodeId, attemptCounts: &attemptCounts, runDir: runDir)
                 try throwIfRunInterrupted(step.executionError)
-                try await refreshLiveValues()
+                // The step's own value too, as the flow's code holds it now: changed since its
+                // callback returned — on a timer, say — it is recorded and routed on so (#206).
+                let returned = try await refreshLiveValues()
+                if step.executed.outputFromHost, let live = returned[step.result.attemptId] {
+                    step = try recordLive(live, of: step)
+                }
                 if let waiting = try maybeCompleteCheckpointStep(step, runDir: runDir) { return waiting }
                 try recordFlowStepOutcome(step, runDir: runDir)
                 current = try resolveNextNode(flow, step)

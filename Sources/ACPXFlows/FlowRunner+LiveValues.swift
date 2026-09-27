@@ -22,23 +22,26 @@ extension FlowRunner {
     /// A value the state writes that JSON can no longer write — a BigInt added to an output, a
     /// cycle — throws its error, as acpx's `JSON.stringify` of the state throws as it writes:
     /// the snapshot is not written, and the run fails with it.
-    func refreshLiveValues() async throws {
+    ///
+    /// Returns what each attempt's callback returned last, not committed yet: a step's own value
+    /// only when its output is that callback's (``FlowRunner/Executed/outputFromHost``).
+    @discardableResult
+    func refreshLiveValues() async throws -> [String: FlowValue] {
         let host = self.host
         let reply = try? await withTimeout(milliseconds: Self.liveValuesWaitMilliseconds) {
             try await host.request("state/current", .object([WireJSON.Member]()))
         }
-        guard let current = reply ?? nil else { return }
+        guard let current = reply ?? nil else { return [:] }
         switch FlowValue(reply: current["input"]) {
         case .json(let input): state.set("input", input)
         case .unserializable(let message): throw FlowRunError(message)
         default: break
         }
-        switch FlowValue(reply: current["outputs"]) {
-        case .json(let outputs): state.replaceOutputs(with: outputs)
-        case .unserializable(let message): throw FlowRunError(message)
-        default: break
-        }
-        guard case .object(let attempts)? = current["attempts"] else { return }
+        let outputs = FlowValue(reply: current["outputs"])
+        if case .unserializable(let message) = outputs { throw FlowRunError(message) }
+        state.replaceOutputs(with: outputs)
+        let returned = Self.values(current["returned"])
+        guard case .object(let attempts)? = current["attempts"] else { return returned }
         let written = writtenAttempts
         var values: [String: WireJSON] = [:]
         for member in attempts {
@@ -49,10 +52,51 @@ extension FlowRunner {
             default: break
             }
         }
-        guard !values.isEmpty else { return }
         state.steps = state.steps.map { Self.withLiveOutput($0, from: values) }
         for nodeId in state.results.keys {
             state.results[nodeId] = state.results[nodeId].map { Self.withLiveOutput($0, from: values) }
+        }
+        return returned
+    }
+
+    /// A step whose output is its callback's own value, with that value as the flow's code holds
+    /// it now — in the step, and in the node's result the run's state holds. One JSON can no
+    /// longer write fails the run, as acpx's write of the step throws.
+    func recordLive(_ live: FlowValue, of step: Step) throws -> Step {
+        switch live {
+        case .json(let value):
+            let patched = step.withLive(value)
+            if patched.result.outcome == .ok { state.results[patched.nodeId] = patched.result.wire }
+            return patched
+        case .unserializable(let message) where step.result.outcome == .ok:
+            throw FlowRunError(message)
+        default:
+            return step
+        }
+    }
+
+    /// A host reply's values by attempt.
+    private static func values(_ reply: WireJSON?) -> [String: FlowValue] {
+        guard case .object(let members)? = reply else { return [:] }
+        var values: [String: FlowValue] = [:]
+        for member in members { values[String(decoding: member.key, as: UTF16.self)] = FlowValue(reply: member.value) }
+        return values
+    }
+
+    /// The run's input once its title is worked out: a title function is handed the input
+    /// itself, as acpx's is, so a change it makes is the run's — in its state and in the input
+    /// artifact — and one JSON can no longer write fails the run, as acpx's write of it throws
+    /// (#206 review).
+    func inputAfterTitle(_ flow: FlowDescription, given input: WireJSON) async throws -> WireJSON {
+        guard case .function? = flow.title else { return input }
+        let host = self.host
+        let reply = try? await withTimeout(milliseconds: Self.liveValuesWaitMilliseconds) {
+            try await host.request("state/current", .object([WireJSON.Member]()))
+        }
+        switch FlowValue(reply: (reply ?? nil)?["input"]) {
+        case .json(let value): return value
+        case .unserializable(let message): throw FlowRunError(message)
+        default: return input
         }
     }
 
@@ -83,6 +127,20 @@ extension FlowRunner {
             live = live.replacing("trace", with: trace.replacing("outputInline", with: value))
         }
         return live
+    }
+}
+
+extension FlowRunner.Step {
+    /// The step with `value` — its output as the flow's code holds it now — as its output: in
+    /// what it executed, its trace's `outputInline`, and its result, when it has one.
+    func withLive(_ value: WireJSON) -> FlowRunner.Step {
+        guard case .json = executed.output else { return self }
+        var executed = self.executed
+        executed.output = .json(value)
+        if executed.trace?.members["outputInline"] != nil { executed.trace?.members["outputInline"] = value }
+        var result = self.result
+        if case .json = result.output { result.output = .json(value) }
+        return FlowRunner.Step(executed: executed, result: result, node: node, executionError: executionError)
     }
 }
 
