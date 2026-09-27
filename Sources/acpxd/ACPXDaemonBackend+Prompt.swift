@@ -46,7 +46,7 @@ extension ACPXDaemonBackend {
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
-        fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil
+        fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil, configCwd: String? = nil
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
@@ -169,7 +169,8 @@ extension ACPXDaemonBackend {
             permissions: permissions,
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
-            capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy)
+            capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
+            configCwd: configCwd.map(Self.expandingTilde))
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await reportingFailure(of: recordId, errors: errors, saving: persister, direct: direct) {
             try await beginTurn(on: persister, recordId: recordId)
@@ -208,6 +209,9 @@ extension ACPXDaemonBackend {
         let capabilities: SwiftACP.ClientCapabilities?
         /// How an agent the turn connects signs in; `nil`, as configured.
         let authPolicy: String?
+        /// Where the config for an agent the turn connects is read, `~` expanded; `nil`, the
+        /// session's cwd.
+        let configCwd: String?
     }
 
     private func attemptWithRetry(_ turn: Turn, wasHeld: Bool) async throws -> String {
@@ -281,7 +285,7 @@ extension ACPXDaemonBackend {
             settings: CallerSettings(
                 handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
                 timeoutMilliseconds: turn.timeoutMilliseconds, sameSessionOnly: turn.direct,
-                capabilities: turn.capabilities, authPolicy: turn.authPolicy),
+                capabilities: turn.capabilities, authPolicy: turn.authPolicy, configCwd: turn.configCwd),
             requestedModel: turn.model, turnOptions: turn.sessionOptions, turnAcpx: await persister.acpx,
             onRecordChange: { await persister.adopt($0) },
             onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),

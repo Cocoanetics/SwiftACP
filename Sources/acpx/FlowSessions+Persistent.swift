@@ -27,12 +27,13 @@ extension FlowAgentSessions {
         let recordId: String
         do {
             // The flow's own servers, from `--mcp-config`, as acpx's runner gives its client the
-            // invocation's; without, acpxd takes the configured ones (#219 review).
+            // invocation's; without, acpxd takes those of the flow's config, with its `auth`,
+            // wherever the node works (#219 review).
             recordId = try await ACPXDaemon.Client(proxy: proxy).newSession(
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: config.sessionMcpServers,
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                permissionPolicy: permissionRules, authPolicy: flags.authPolicy)
+                permissionPolicy: permissionRules, authPolicy: flags.authPolicy, configCwd: config.cwd)
         } catch {
             await proxy.disconnect()
             if let reason = control.stopReason { throw reason }
@@ -87,8 +88,9 @@ extension FlowAgentSessions {
             _ = try await DaemonClient.runPrompt(
                 on: proxy, stopReason: stopReason, sessionId: turn.recordId, content: content, wait: true,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                permissionPolicy: permissionRules, terminalOutputCeiling: ceiling,
-                streamWire: true, direct: true, fs: flags.fs, authPolicy: flags.authPolicy, turnToken: turnToken)
+                permissionPolicy: permissionRules, terminalOutputCeiling: ceiling, mode: PromptTurnMode(
+                    streamWire: true, direct: true, fs: flags.fs, authPolicy: flags.authPolicy, turnToken: turnToken,
+                    configCwd: config.cwd))
         } catch {
             await stop.turnEnded()
             await proxy.disconnect()

@@ -211,6 +211,51 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A flow's persistent session is made, and taken back by a later turn, with the flow's
+    /// config — its `auth` and its MCP servers — as acpx's runner gives every client of the
+    /// flow the invocation's (`config.auth`, `config.mcpServers`), wherever the node works:
+    /// not the config of a node's cwd that has one of its own (#219 review). Under the flow's
+    /// `fail`, the agent's sign-in is found only in the flow's config.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowsConfigReachesItsPersistentSession() async throws {
+        let flowDirectory = try Self.scratchDirectory()
+        let nodeDirectory = try Self.scratchDirectory()
+        defer { for directory in [flowDirectory, nodeDirectory] { try? FileManager.default.removeItem(at: directory) } }
+        try #"{"authPolicy":"fail","auth":{"token":"secret"},"mcpServers":[{"name":"flow-tools","command":"true"}]}"#
+            .write(to: flowDirectory.appendingPathComponent(".acpxrc.json"), atomically: true, encoding: .utf8)
+        try #"{"mcpServers":[{"name":"node-tools","command":"true"}]}"#
+            .write(to: nodeDirectory.appendingPathComponent(".acpxrc.json"), atomically: true, encoding: .utf8)
+        let requests = flowDirectory.appendingPathComponent("requests.log")
+        let command = "/usr/bin/env MOCK_AUTH_METHODS=token MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(requests.path)' "
+            + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let config = try ConfigLoader.load(cwd: flowDirectory.path)
+            let sessions = FlowAgentSessions(
+                flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
+                permission: .approveAll, permissionRules: nil, mcpServers: try config.mcpServerSpecs())
+            let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+            let agent = FlowAgent(agentName: "mock", agentCommand: command, agentArgv: nil, cwd: nodeDirectory.path)
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            try await DaemonClient.$standIn.withValue(daemon) {
+                let record = try await sessions.createPersistent(
+                    agent: agent, name: "flow-main", control: FlowTurnControl(attempt: attempt))
+                // The first turn takes the kept agent; the second takes the session back.
+                for _ in 0..<2 {
+                    try await sessions.runPersistent(FlowPersistentTurn(
+                        recordId: record.acpxRecordId, prompt: [.text("hi")], onMessage: { _, _ in },
+                        control: FlowTurnControl(attempt: attempt)))
+                }
+            }
+            let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
+            let opened = logged.split(separator: "\n")
+                .filter { $0.contains("session/new") || $0.contains("session/load") }
+            #expect(opened.count == 2, "\(logged)")
+            #expect(opened.allSatisfy { $0.contains("flow-tools") && !$0.contains("node-tools") }, "\(logged)")
+            await backend.releaseAll()
+        }
+    }
+
     /// The options' model is kept with a session made for a flow's first turn, with the
     /// rest of them, as acpx's `createSessionWithClient` records its options. The session's
     /// current model stays the agent's, as acpx 0.19.3's `sessions new --model` leaves it on

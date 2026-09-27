@@ -428,6 +428,9 @@ def main():
             respond(req_id, {})
         elif method == "session/set_model":
             respond(req_id, {})
+        elif method == "authenticate":
+            # The client signing in with one of MOCK_AUTH_METHODS: accepted.
+            respond(req_id, {})
         elif method == "session/cancel":
             if held_prompt is not None:
                 respond(held_prompt, {"stopReason": "cancelled"})

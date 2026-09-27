@@ -102,6 +102,10 @@ public struct ResolvedAcpxConfig: Sendable {
     public var mcpServers: [McpServerConfig]
     public var globalPath: String
     public var projectPath: String
+    /// The directory the config was loaded for, whose project file it read: acpxd loads a
+    /// flow's persistent sessions' config from it (`configCwd`), as acpx's runner gives every
+    /// client of the flow the invocation's `auth` and MCP servers.
+    public var cwd: String
     /// The `--mcp-config` file whose `mcpServers` replaced the config-file ones
     /// (absolute), or `nil` when none was given.
     public var mcpConfigPath: String?
@@ -235,6 +239,7 @@ public enum ConfigLoader {
             mcpServers: mcpServers,
             globalPath: globalPath.path,
             projectPath: projectPath.path,
+            cwd: cwd,
             mcpConfigPath: explicitMcp?.path,
             hasGlobalConfig: global != nil,
             hasProjectConfig: project != nil)

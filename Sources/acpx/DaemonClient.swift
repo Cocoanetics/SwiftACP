@@ -266,16 +266,17 @@ enum DaemonClient {
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
-            sessionOptions: sessionOptions, limits: limits, streamWire: renderer.streamsWireJSON)
+            sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(streamWire: renderer.streamsWireJSON))
     }
 
-    /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
+    /// The turn itself, on a connected proxy whose log notifications feed `stopReason`, run
+    /// as `mode` says (``PromptTurnMode``).
     static func runPrompt(
         on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, content: [JSONValue],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, model: String? = nil,
-        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, streamWire: Bool = false,
-        direct: Bool = false, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil
+        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
+        mode: PromptTurnMode = PromptTurnMode()
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
@@ -291,10 +292,9 @@ enum DaemonClient {
         do {
             _ = try await proxy.callToolResult("runPrompt", arguments: try promptArguments(
                 sessionId: sessionId, content: content, wait: wait, permissionMode: permissionMode,
-                nonInteractivePermissions: nonInteractivePermissions, streamWire: streamWire,
-                permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model,
-                sessionOptions: sessionOptions, limits: limits, direct: direct, fs: fs, authPolicy: authPolicy,
-                turnToken: turnToken))
+                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model, sessionOptions: sessionOptions,
+                limits: limits, mode: mode))
         } catch {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
