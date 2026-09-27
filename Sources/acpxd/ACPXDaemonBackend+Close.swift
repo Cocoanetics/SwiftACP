@@ -30,7 +30,7 @@ extension ACPXDaemonBackend {
         // Called off before it began, it does nothing at all: not even the prompt running is cancelled.
         try Task.checkCancellation()
         return try await whileShuttingDown(recordId) {
-            _ = try? await cancelSession(sessionId: recordId)
+            await cancelEveryTurn(recordId)
             try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
             defer { Task { await turnQueue.release(recordId) } }
             await askToClose(recordId)
@@ -65,20 +65,41 @@ extension ACPXDaemonBackend {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
         if let turnToken {
-            guard let turn = turns[recordId], turn.token == turnToken, turn.running else { return false }
+            guard let turn = directTurn(recordId, token: turnToken), turn.running else { return false }
             await putDown(recordId)
             return true
         }
         try Task.checkCancellation()
-        let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
-            || owners[recordId] != nil
+        let held = live[recordId] != nil || connecting[recordId] != nil || hasTurn(recordId) || owners[recordId] != nil
         return try await whileShuttingDown(recordId) {
-            _ = try? await cancelSession(sessionId: recordId)
+            await cancelEveryTurn(recordId)
             try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
             defer { Task { await turnQueue.release(recordId) } }
             forgetOwner(recordId)
             await evict(recordId)
             return held
+        }
+    }
+
+    /// Let every held agent go the way acpx's queue owner does when it stops
+    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
+    /// into its record, best effort — no pid, and the connection it was closed on unless
+    /// it had ended before.
+    func releaseAll() async {
+        // Before anything is let go: a turn whose agent this closes must not start another.
+        stopping = true
+        // The prompts still in line are refused, as each owner acpx stops refuses its own.
+        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
+        for recordId in owners.keys { forgetOwner(recordId) }
+        while let recordId = live.keys.first {
+            guard let entry = live.removeValue(forKey: recordId) else { continue }
+            await entry.agent.close()
+            // A turn the close ends saves its record first.
+            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
+            defer { Task { await turnQueue.release(recordId) } }
+            guard var record = findRecord(recordId) else { continue }
+            record.applyLifecycle(entry.agent.lifecycle)
+            try? SessionStore.writeRecord(record)
         }
     }
 
