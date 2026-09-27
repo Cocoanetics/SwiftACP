@@ -43,6 +43,22 @@ struct ConversationModelUpdateTests {
             """)
     }
 
+    /// No commands are recorded as none, though acpx's parser drops an empty list: for an
+    /// empty list, one none of whose commands acpx keeps, and one that is no list, which
+    /// acpx's ACP SDK reads as empty. An update without the list the SDK refuses.
+    @Test func noCommandsAreRecordedAsNone() throws {
+        for commands in ["[]", #"["bare",{"name":"nodesc"}]"#, #""x""#, "null"] {
+            var record = Self.record()
+            try Self.apply(
+                #"{"sessionUpdate":"available_commands_update","availableCommands":\#(commands)}"#, to: &record)
+            #expect(try Self.written(record)["acpx"]?["available_commands"]?.stringified == "[]", "\(commands)")
+        }
+        #expect(throws: DecodingError.self) {
+            let update = #"{"sessionUpdate":"available_commands_update"}"#
+            _ = try JSONDecoder().decode(SessionUpdate.self, from: Data(update.utf8))
+        }
+    }
+
     /// A title the agent gives is the conversation's; one that is no string clears it,
     /// as does `null`; an update without one leaves it.
     @Test func theTitleIsTheOneTheAgentGives() throws {
@@ -77,6 +93,72 @@ struct ConversationModelUpdateTests {
         #expect(acpx.modelControl == "config_option")
         guard case .array(let options)? = acpx.configOptions else { throw POSIXError(.EINVAL) }
         #expect(options.count == 1)
+    }
+
+    /// Reported options are recorded as acpx's ACP SDK reads them (`zSessionConfigOption`,
+    /// #175): an option that doesn't fit is left out, and the others lose the members the
+    /// schema doesn't know. Grouped options keep the options that fit, where one that
+    /// doesn't fit fails a flat list, and with it the option.
+    @Test func reportedConfigOptionsAreRecordedAsTheSDKReadsThem() throws {
+        var record = Self.record()
+        try Self.apply(#"""
+            {"sessionUpdate":"config_option_update","configOptions":[
+            {"id":"model","name":"Model","type":"select","currentValue":"a","extra":1,"description":null,
+            "category":"model","_meta":"x","options":[{"value":"a","name":"A","junk":true,"description":5}]},
+            {"id":"broken"},
+            {"id":"flag","name":"Flag","type":"boolean","currentValue":true,"description":"On?","_meta":{"k":1}},
+            {"id":"flag2","name":"Flag 2","type":"boolean","currentValue":"yes"},
+            {"id":"grouped","name":"Grouped","type":"select","currentValue":"x","options":[
+            {"group":"g","name":"G","options":[{"value":"x","name":"X"},{"value":1}]},
+            {"group":"h","name":"H","options":"none"}]},
+            {"id":"flat","name":"Flat","type":"select","currentValue":"x",
+            "options":[{"value":"x","name":"X"},{"value":1}]}]}
+            """#, to: &record)
+        let expected = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+            [{"id":"model","name":"Model","type":"select","currentValue":"a","description":null,"category":"model",
+            "options":[{"value":"a","name":"A"}]},
+            {"id":"flag","name":"Flag","type":"boolean","currentValue":true,"description":"On?","_meta":{"k":1}},
+            {"id":"grouped","name":"Grouped","type":"select","currentValue":"x","options":[
+            {"group":"g","name":"G","options":[{"value":"x","name":"X"}]},{"group":"h","name":"H","options":[]}]}]
+            """#.utf8))
+        #expect(record.acpx?.configOptions == expected)
+        #expect(record.acpx?.currentModelId == "a")
+    }
+
+    /// An update without options acpx's ACP SDK refuses, so the record stays as it was,
+    /// not even stamped. Options that are no list are none.
+    @Test func aConfigOptionUpdateWithoutOptionsLeavesTheRecord() throws {
+        var record = Self.record()
+        record.updatedAt = "2020-01-01T00:00:00.000Z"
+        let update = try JSONDecoder().decode(
+            SessionUpdate.self, from: Data(#"{"sessionUpdate":"config_option_update"}"#.utf8))
+        #expect(!ConversationModel.recordSessionUpdate(
+            into: &record, notification: SessionNotification(sessionId: "u-1", update: update)))
+        if let acpx = record.acpx { Issue.record("\(acpx)") }
+        #expect(record.updatedAt == "2020-01-01T00:00:00.000Z")
+        try Self.apply(#"{"sessionUpdate":"config_option_update","configOptions":{"id":"x"}}"#, to: &record)
+        #expect(record.acpx?.configOptions == .array([]))
+    }
+
+    /// Exec's control state takes reported options as the record does: an update without
+    /// options changes nothing, and an option that doesn't fit is left out.
+    @Test func theControlStateTakesReportedOptionsAsTheSDKReadsThem() throws {
+        let control = ModelApplication.ControlState()
+        func observe(_ update: String) throws {
+            let message = try JSONDecoder().decode(JSONRPCMessage.self, from: Data(
+                #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":\#(update)}}"#.utf8))
+            control.observe(.inbound, message)
+        }
+        try observe(#"""
+            {"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","type":"select",
+            "currentValue":"a","options":[{"value":"a","name":"A"}]},{"id":"broken"}]}
+            """#)
+        #expect(control.state.currentModelId == "a")
+        guard case .array(let options)? = control.state.configOptions else { throw POSIXError(.EINVAL) }
+        #expect(options.count == 1)
+        try observe(#"{"sessionUpdate":"config_option_update"}"#)
+        guard case .array(let kept)? = control.state.configOptions else { throw POSIXError(.EINVAL) }
+        #expect(kept.count == 1)
     }
 
     /// A user's chunk is recorded as the same block of a prompt would be: a link as a

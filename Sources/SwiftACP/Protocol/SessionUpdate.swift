@@ -68,10 +68,13 @@ public enum SessionUpdate: Codable, Sendable {
         case "tool_call_update":
             self = .toolCallUpdate(try ToolCallUpdate(from: decoder))
         case "plan":
-            self = .plan(try container.decode([PlanEntry].self, forKey: .entries))
+            // As the ACP SDK reads them (`zPlan`, `zAvailableCommandsUpdate`): refused
+            // without the list, empty when it is no list, and without the entries that
+            // don't fit.
+            self = .plan(try container.requiredLenientList(PlanEntry.self, forKey: .entries))
         case "available_commands_update":
             self = .availableCommandsUpdate(
-                try container.decode([AvailableCommand].self, forKey: .availableCommands))
+                try container.requiredLenientList(AvailableCommand.self, forKey: .availableCommands))
         case "current_mode_update":
             self = .currentModeUpdate(modeId: try container.decode(String.self, forKey: .currentModeId))
         case "usage_update":
@@ -190,6 +193,26 @@ public struct ToolCall: Codable, Sendable {
         self.rawInput = rawInput
         self.rawOutput = rawOutput
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+    }
+
+    /// Read as the ACP SDK reads a `tool_call` (`zToolCall`): the id and title are
+    /// required, the rest is read leniently. A `kind` or `status` that doesn't fit is left
+    /// out, and so are the `content` and `locations` entries that don't; either list is
+    /// empty when it is no list.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        toolCallId = try container.decode(String.self, forKey: .toolCallId)
+        title = try container.decode(String.self, forKey: .title)
+        kind = container.lenient(ToolKind.self, forKey: .kind)
+        status = container.lenient(ToolCallStatus.self, forKey: .status)
+        content = container.lenientList(ToolCallContent.self, forKey: .content, fallback: [])
+        locations = container.lenientList(ToolCallLocation.self, forKey: .locations, fallback: [])
+        rawInput = try container.decodeIfPresent(JSONValue.self, forKey: .rawInput)
+        rawOutput = try container.decodeIfPresent(JSONValue.self, forKey: .rawOutput)
+    }
 }
 
 /// An incremental update to a previously announced tool call. All fields except
@@ -228,14 +251,17 @@ public struct ToolCallUpdate: Codable, Sendable {
         case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
     }
 
+    /// Read as the ACP SDK reads a `tool_call_update` (`zToolCallUpdate`): only the id is
+    /// required. A member that doesn't fit is left out, as if not sent, and so are the
+    /// `content` and `locations` entries that don't fit.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         toolCallId = try container.decode(String.self, forKey: .toolCallId)
-        title = try container.decodeIfPresent(String.self, forKey: .title)
-        kind = try container.decodeIfPresent(ToolKind.self, forKey: .kind)
-        status = try container.decodeIfPresent(ToolCallStatus.self, forKey: .status)
-        content = try container.decodeIfPresent([ToolCallContent].self, forKey: .content)
-        locations = try container.decodeIfPresent([ToolCallLocation].self, forKey: .locations)
+        title = container.lenient(String.self, forKey: .title)
+        kind = container.lenient(ToolKind.self, forKey: .kind)
+        status = container.lenient(ToolCallStatus.self, forKey: .status)
+        content = container.lenientList(ToolCallContent.self, forKey: .content, fallback: nil)
+        locations = container.lenientList(ToolCallLocation.self, forKey: .locations, fallback: nil)
         rawInput = try container.decodeIfPresent(JSONValue.self, forKey: .rawInput)
         rawOutput = try container.decodeIfPresent(JSONValue.self, forKey: .rawOutput)
         var nulled: Set<String> = []
@@ -282,6 +308,20 @@ public struct ToolCallLocation: Codable, Sendable, Hashable {
     public init(path: String, line: Int? = nil) {
         self.path = path
         self.line = line
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path, line
+    }
+
+    /// Read as the ACP SDK reads one (`zToolCallLocation`): a `line` that is no line
+    /// number, a whole number from 0 to 2³² − 1, is left out.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.decode(String.self, forKey: .path)
+        line = container.lenient(Int.self, forKey: .line).flatMap {
+            $0 >= 0 && Int64($0) <= Int64(UInt32.max) ? $0 : nil
+        }
     }
 }
 

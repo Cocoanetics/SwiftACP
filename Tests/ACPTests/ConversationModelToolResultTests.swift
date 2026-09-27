@@ -22,6 +22,16 @@ struct ConversationModelToolResultTests {
             into: &record, notification: SessionNotification(sessionId: "tr-1", update: update))
     }
 
+    private func toolUse(_ record: SessionRecord, _ id: String) -> SessionToolUse? {
+        for message in record.messages.reversed() {
+            guard case .agent(let agent) = message else { continue }
+            for content in agent.content {
+                if case .toolUse(let tool) = content, tool.id == id { return tool }
+            }
+        }
+        return nil
+    }
+
     private func result(_ record: SessionRecord, _ id: String) -> SessionToolResult? {
         for message in record.messages.reversed() {
             if case .agent(let agent) = message, let result = agent.toolResults[id] {
@@ -96,5 +106,34 @@ struct ConversationModelToolResultTests {
         #expect(final?.content == .object(["Text": .string("the file body")]))
         #expect(final?.output == .string("the file body"))
         #expect(final?.isError == false)
+    }
+
+    /// A status or a kind acpx's ACP SDK doesn't know, it reads as none (#175): `cancelled`
+    /// leaves the input incomplete, and a kind it doesn't know names no tool.
+    @Test func aStatusOrKindTheSDKDoesntKnowIsNone() {
+        var record = seededRecord()
+        apply(.toolCall(ToolCall(toolCallId: "call-5", title: " ", kind: "weird", status: "cancelled")), to: &record)
+        #expect(toolUse(record, "call-5")?.name == "tool_call")
+        #expect(toolUse(record, "call-5")?.isInputComplete == false)
+        apply(
+            .toolCallUpdate(ToolCallUpdate(toolCallId: "call-5", kind: "switch_mode", status: "cancelled")),
+            to: &record)
+        #expect(toolUse(record, "call-5")?.name == "switch_mode")
+        #expect(toolUse(record, "call-5")?.isInputComplete == false)
+        apply(.toolCallUpdate(ToolCallUpdate(toolCallId: "call-5", status: .completed)), to: &record)
+        #expect(toolUse(record, "call-5")?.isInputComplete == true)
+    }
+
+    /// A tool call whose members don't all fit is recorded, as acpx's ACP SDK reads it
+    /// leniently: its `kind` and its lists that are no lists cost it nothing.
+    @Test func aToolCallWithMembersThatDontFitIsRecorded() throws {
+        var record = seededRecord()
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data(#"""
+            {"sessionUpdate":"tool_call","toolCallId":"call-6","title":"Read file","kind":5,"status":"in_progress",
+            "content":"x","locations":"x"}
+            """#.utf8))
+        apply(update, to: &record)
+        #expect(toolUse(record, "call-6")?.name == "Read file")
+        #expect(toolUse(record, "call-6")?.isInputComplete == false)
     }
 }
