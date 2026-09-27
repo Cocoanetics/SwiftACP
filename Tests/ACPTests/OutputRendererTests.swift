@@ -78,6 +78,32 @@ struct OutputRendererTests {
         #expect(err.isEmpty)
     }
 
+    /// Only chunks of text are shown, as acpx's text and quiet formatters show them: an
+    /// embedded resource's text, which the session's record keeps, is no output's.
+    @Test func onlyChunksOfTextAreShown() {
+        let resource = ContentBlock.resource(EmbeddedResource(
+            resource: ResourceContents(uri: "file:///notes.txt", text: "RESOURCE TEXT ")))
+        let chunks: (OutputRenderer) -> Void = { renderer in
+            renderer.render(.agentThoughtChunk(resource))
+            renderer.render(.agentThoughtChunk(.text("thinking")))
+            renderer.render(.agentMessageChunk(resource))
+            renderer.render(.agentMessageChunk(.text("plain text")))
+            renderer.finish(stopReason: .endTurn)
+        }
+        let (quiet, _) = Self.capture(.quiet, chunks)
+        #expect(quiet == "plain text\n")
+        let (text, _) = Self.capture(.text, chunks)
+        #expect(!text.contains("RESOURCE TEXT"))
+        #expect(text.contains("thinking") && text.contains("plain text"))
+        // An answer of no text at all is an empty line in quiet mode, as acpx's quiet
+        // formatter writes it at the prompt's answer (`flushBufferedOutput(true)`).
+        let (resourceOnly, _) = Self.capture(.quiet) { renderer in
+            renderer.render(.agentMessageChunk(resource))
+            renderer.finish(stopReason: .endTurn)
+        }
+        #expect(resourceOnly == "\n")
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",
