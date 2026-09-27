@@ -51,13 +51,29 @@ public protocol ACPXBackend: Sendable {
     func releaseSession(sessionId: String) async throws -> Bool
 }
 
+/// The config a caller read once, which a session's agents are started with in place of the
+/// one where the session works: a flow's, as acpx's runner gives every client of its run the
+/// invocation's `config.auth` and `config.mcpServers`, read as the run starts — whatever `cwd`
+/// a node sets, and however the files change meanwhile.
+public struct CallerConfig: Codable, Sendable, Equatable {
+    /// The credentials, by auth method (`auth`).
+    public var auth: [String: String]
+    /// The MCP servers, sent to a session that has none of its own.
+    public var mcpServers: [McpServerConfig]
+
+    public init(auth: [String: String], mcpServers: [McpServerConfig]) {
+        self.auth = auth
+        self.mcpServers = mcpServers
+    }
+}
+
 /// How a session is made, beside where and with what (``ACPXDaemon``'s `newSession`):
 /// whether its agent is kept for its first turn (`holdAgent`), what that agent is offered
 /// (`fs`, acpx's `--no-fs`), how its requests are answered until then — as a turn's are
 /// (`permissionMode`, `nonInteractivePermissions`, `permissionPolicy`) — how it signs in
-/// (`authPolicy`, acpx's `--auth-policy`; `nil`, as configured), where its config is read
-/// (`configCwd`; `nil`, where the session works), and whether what the agent writes to
-/// stderr is streamed to the caller (`verbose`, acpx's `--verbose`).
+/// (`authPolicy`, acpx's `--auth-policy`; `nil`, as configured), the config it is started with
+/// (`callerConfig`; `nil`, the one where the session works), and whether what the agent writes
+/// to stderr is streamed to the caller (`verbose`, acpx's `--verbose`).
 public struct SessionCreationMode: Sendable {
     public var holdAgent: Bool
     public var fs: Bool?
@@ -65,13 +81,13 @@ public struct SessionCreationMode: Sendable {
     public var nonInteractivePermissions: String?
     public var permissionPolicy: PermissionRules?
     public var authPolicy: String?
-    public var configCwd: String?
+    public var callerConfig: CallerConfig?
     public var verbose: Bool
 
     public init(
         holdAgent: Bool = false, fs: Bool? = nil, permissionMode: String? = nil,
         nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil,
-        configCwd: String? = nil, verbose: Bool = false
+        callerConfig: CallerConfig? = nil, verbose: Bool = false
     ) {
         self.holdAgent = holdAgent
         self.fs = fs
@@ -79,7 +95,7 @@ public struct SessionCreationMode: Sendable {
         self.nonInteractivePermissions = nonInteractivePermissions
         self.permissionPolicy = permissionPolicy
         self.authPolicy = authPolicy
-        self.configCwd = configCwd
+        self.callerConfig = callerConfig
         self.verbose = verbose
     }
 }
@@ -90,8 +106,8 @@ public struct SessionCreationMode: Sendable {
 /// connects is offered the filesystem methods (`fs`, acpx's `--no-fs`; `nil`, as the
 /// session was created), how that agent signs in (`authPolicy`, acpx's `--auth-policy`;
 /// `nil`, as configured), the caller's name for the turn, which a cancel can give before it
-/// begins (`turnToken`), where the config for that agent is read (`configCwd`; `nil`, where
-/// the session works), and whether what the agent writes to stderr is streamed to the
+/// begins (`turnToken`), the config that agent is started with (`callerConfig`; `nil`, the one
+/// where the session works), and whether what the agent writes to stderr is streamed to the
 /// caller (`verbose`, acpx's `--verbose`).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
@@ -99,19 +115,19 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var fs: Bool?
     public var authPolicy: String?
     public var turnToken: String?
-    public var configCwd: String?
+    public var callerConfig: CallerConfig?
     public var verbose: Bool
 
     public init(
         streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, authPolicy: String? = nil,
-        turnToken: String? = nil, configCwd: String? = nil, verbose: Bool = false
+        turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false
     ) {
         self.streamWire = streamWire
         self.direct = direct
         self.fs = fs
         self.authPolicy = authPolicy
         self.turnToken = turnToken
-        self.configCwd = configCwd
+        self.callerConfig = callerConfig
         self.verbose = verbose
     }
 }

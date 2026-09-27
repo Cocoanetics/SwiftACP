@@ -84,10 +84,10 @@ public actor ACPXDaemon {
     ///   - permissionPolicy: per-tool rules before `permissionMode`, as `runPrompt`'s.
     ///   - authPolicy: acpx's `--auth-policy` for the creating agent — `fail` refuses one that
     ///     advertises sign-in methods none of the credentials match. Omitted, as configured.
-    ///   - configCwd: the directory whose config gives the creating agent its credentials
-    ///     (`auth`) and, without `mcpServers`, its MCP servers — a flow's, as acpx's runner
-    ///     gives every client of the flow the invocation's config, wherever the node works.
-    ///     Omitted, the config of `cwd`.
+    ///   - callerConfig: the config the creating agent is started with — its credentials and,
+    ///     without `mcpServers`, its MCP servers — in place of the config of `cwd`: a flow's,
+    ///     read once as its run began, as acpx's runner gives every client of the run the
+    ///     invocation's (``CallerConfig``). Omitted, the config of `cwd`.
     ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
     ///     caller as ``AgentStderrEvent`` log notifications while the session is made, as
     ///     acpx's client shows it in the flow's process. A held agent's waits for its first
@@ -99,7 +99,7 @@ public actor ACPXDaemon {
         mcpServers: [McpServerConfig]? = nil, agentArgv: [String]? = nil,
         sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, configCwd: String? = nil,
+        permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, callerConfig: CallerConfig? = nil,
         verbose: Bool? = nil
     ) async throws -> String {
         try await backend.newSession(
@@ -107,7 +107,7 @@ public actor ACPXDaemon {
             sessionOptions: sessionOptions, creation: SessionCreationMode(
                 holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
                 nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
-                authPolicy: authPolicy, configCwd: configCwd, verbose: verbose ?? false))
+                authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false))
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
@@ -346,7 +346,7 @@ public actor ACPXDaemon {
     ///     runner gives it every client it makes. Omitted, as configured.
     ///   - turnToken: the caller's name for the turn, which `cancelSession` can give: a
     ///     cancel that named it before it began ends it as it begins, nothing sent.
-    ///   - configCwd: the directory whose config gives an agent the turn connects its
+    ///   - callerConfig: the config an agent the turn connects is started with — its
     ///     credentials and, for a session without its own, its MCP servers — a flow's, as
     ///     `newSession`'s. Omitted, the config of the session's cwd.
     ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
@@ -362,7 +362,7 @@ public actor ACPXDaemon {
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
         direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
-        configCwd: String? = nil, verbose: Bool? = nil
+        callerConfig: CallerConfig? = nil, verbose: Bool? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -371,7 +371,7 @@ public actor ACPXDaemon {
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 mode: PromptTurnMode(
                     streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
-                    turnToken: turnToken, configCwd: configCwd, verbose: verbose ?? false),
+                    turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }

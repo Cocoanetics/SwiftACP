@@ -66,6 +66,20 @@ extension McpServerConfig {
 }
 
 extension ResolvedAcpxConfig {
+    /// A caller's config (``CallerConfig``) as a session's agents are started with it: its
+    /// credentials and servers, and acpx's defaults for the rest — no agents of its own, so a
+    /// command is launched as it is. The caller gives what else it has with its call
+    /// (`authPolicy`, `agentArgv`).
+    public init(caller: CallerConfig) {
+        self.init(
+            defaultAgent: AgentRegistry.defaultAgent, defaultPermissions: DEFAULT_PERMISSION_MODE,
+            nonInteractivePermissions: DEFAULT_NON_INTERACTIVE_PERMISSION_POLICY, authPolicy: DEFAULT_AUTH_POLICY,
+            ttlMs: DEFAULT_TTL_MS, timeoutMs: nil, queueMaxDepth: DEFAULT_QUEUE_MAX_DEPTH,
+            format: DEFAULT_OUTPUT_FORMAT, agents: [:], agentOrder: [], auth: caller.auth, disableExec: false,
+            mcpServers: caller.mcpServers,
+            globalPath: "", projectPath: "", mcpConfigPath: nil, hasGlobalConfig: false, hasProjectConfig: false)
+    }
+
     /// MCP servers normalized for `session/new`, `session/load`, and `session/resume`.
     public func mcpServerSpecs() throws -> [MCPServerSpec] {
         try mcpServers.map { try $0.protocolSpec() }
@@ -102,10 +116,6 @@ public struct ResolvedAcpxConfig: Sendable {
     public var mcpServers: [McpServerConfig]
     public var globalPath: String
     public var projectPath: String
-    /// The directory the config was loaded for, whose project file it read: acpxd loads a
-    /// flow's persistent sessions' config from it (`configCwd`), as acpx's runner gives every
-    /// client of the flow the invocation's `auth` and MCP servers.
-    public var cwd: String
     /// The `--mcp-config` file whose `mcpServers` replaced the config-file ones
     /// (absolute), or `nil` when none was given.
     public var mcpConfigPath: String?
@@ -239,7 +249,6 @@ public enum ConfigLoader {
             mcpServers: mcpServers,
             globalPath: globalPath.path,
             projectPath: projectPath.path,
-            cwd: cwd,
             mcpConfigPath: explicitMcp?.path,
             hasGlobalConfig: global != nil,
             hasProjectConfig: project != nil)

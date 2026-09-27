@@ -96,9 +96,9 @@ extension ACPXDaemonBackend {
         if let entry = held.entry { return (entry, false) }
         let sameSessionOnly = (control && held.replacedExited) || settings.sameSessionOnly
         let cwd = try resolveCwd(rawCwd)
-        // Resolve config for this cwd — or the caller's, a flow's — so the agent gets the same
+        // Resolve config for this cwd — or take the caller's, a flow's — so the agent gets the same
         // injected `auth` credentials / auth policy (and config-alias resolution) the CLI applies.
-        let config = try ConfigLoader.load(cwd: settings.configCwd ?? cwd, ownMcpServers: sessionSpecs != nil)
+        let config = try Self.config(settings.callerConfig, cwd: cwd, ownMcpServers: sessionSpecs != nil)
         let specs = try sessionSpecs ?? config.mcpServerSpecs()
         // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
         // the record carries them, so every reconnect advertises what the session was
@@ -265,9 +265,9 @@ extension ACPXDaemonBackend {
         var capabilities: SwiftACP.ClientCapabilities?
         /// How the agent signs in, when the caller says (a flow's turn); else as configured.
         var authPolicy: String?
-        /// Where the config the agent gets its credentials and servers from is read, `~`
-        /// expanded, when the caller says (a flow's turn); else the session's cwd.
-        var configCwd: String?
+        /// The config the agent is started with, when the caller has its own (a flow's turn);
+        /// else the session's cwd's.
+        var callerConfig: CallerConfig?
         /// Where what the agent writes to stderr goes, when the caller asks (a verbose flow's
         /// turn); else nowhere.
         var stderr: AgentStderrRelay?
@@ -372,9 +372,10 @@ extension ACPXDaemonBackend {
     /// Expand and validate a caller-supplied working directory. MCP clients have no
     /// shell, so expand `~` ourselves (the CLI relies on the shell) and require the
     /// directory to exist — otherwise the agent fails with a cryptic internal error.
-    /// The directory a caller's config is read from (`configCwd`), `~` expanded, as a cwd is.
-    static func expandingTilde(_ path: String) -> String {
-        (path as NSString).expandingTildeInPath
+    /// The config an agent is started with: the caller's, read once (``CallerConfig``), else
+    /// the one where the session works.
+    static func config(_ caller: CallerConfig?, cwd: String, ownMcpServers: Bool) throws -> ResolvedAcpxConfig {
+        try caller.map(ResolvedAcpxConfig.init(caller:)) ?? ConfigLoader.load(cwd: cwd, ownMcpServers: ownMcpServers)
     }
 
     func resolveCwd(_ rawCwd: String) throws -> String {

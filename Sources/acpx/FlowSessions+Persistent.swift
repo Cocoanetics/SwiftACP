@@ -29,13 +29,13 @@ extension FlowAgentSessions {
         let recordId: String
         do {
             // The flow's own servers, from `--mcp-config`, as acpx's runner gives its client the
-            // invocation's; without, acpxd takes those of the flow's config, with its `auth`,
+            // invocation's; without, those of the flow's config, read once, with its `auth`,
             // wherever the node works (#219 review).
             recordId = try await ACPXDaemon.Client(proxy: proxy).newSession(
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: config.sessionMcpServers,
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                permissionPolicy: permissionRules, authPolicy: flags.authPolicy, configCwd: config.cwd,
+                permissionPolicy: permissionRules, authPolicy: flags.authPolicy, callerConfig: callerConfig,
                 verbose: flags.verbose)
         } catch {
             await proxy.disconnect()
@@ -93,7 +93,7 @@ extension FlowAgentSessions {
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, terminalOutputCeiling: ceiling, mode: PromptTurnMode(
                     streamWire: true, direct: true, fs: flags.fs, authPolicy: flags.authPolicy, turnToken: turnToken,
-                    configCwd: config.cwd, verbose: flags.verbose))
+                    callerConfig: callerConfig, verbose: flags.verbose))
         } catch {
             await stop.turnEnded()
             await proxy.disconnect()
@@ -110,6 +110,10 @@ extension FlowAgentSessions {
     func releasePersistent(_ recordId: String) async throws {
         if case .refused(let error) = await DaemonClient.releaseSession(sessionId: recordId) { throw error }
     }
+
+    /// The flow's config as acpx's runner gives it every client of the run: its `auth` and MCP
+    /// servers, read once, as the run began.
+    var callerConfig: CallerConfig { CallerConfig(auth: config.auth, mcpServers: config.mcpServers) }
 
     /// acpx's flow runner's `sessionOptions`: the model, allowed tools and turns.
     var flowSessionOptions: PromptSessionOptions? {

@@ -213,9 +213,10 @@ extension DaemonToolsTests {
 
     /// A flow's persistent session is made, and taken back by a later turn, with the flow's
     /// config — its `auth` and its MCP servers — as acpx's runner gives every client of the
-    /// flow the invocation's (`config.auth`, `config.mcpServers`), wherever the node works:
-    /// not the config of a node's cwd that has one of its own (#219 review). Under the flow's
-    /// `fail`, the agent's sign-in is found only in the flow's config.
+    /// flow the invocation's (`config.auth`, `config.mcpServers`), read once as the run began:
+    /// not the config of a node's cwd that has one of its own, nor the flow's own file as it
+    /// changes meanwhile (#219 review). Under the flow's `fail`, the agent's sign-in is found
+    /// only in the flow's config as the run began.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aFlowsConfigReachesItsPersistentSession() async throws {
         let flowDirectory = try Self.scratchDirectory()
@@ -240,6 +241,9 @@ extension DaemonToolsTests {
             try await DaemonClient.$standIn.withValue(daemon) {
                 let record = try await sessions.createPersistent(
                     agent: agent, name: "flow-main", control: FlowTurnControl(attempt: attempt))
+                // A node changes the flow's config: nothing of it reaches the run's sessions.
+                try #"{"mcpServers":[{"name":"changed-tools","command":"true"}]}"#
+                    .write(to: flowDirectory.appendingPathComponent(".acpxrc.json"), atomically: true, encoding: .utf8)
                 // The first turn takes the kept agent; the second takes the session back.
                 for _ in 0..<2 {
                     try await sessions.runPersistent(FlowPersistentTurn(
@@ -251,7 +255,10 @@ extension DaemonToolsTests {
             let opened = logged.split(separator: "\n")
                 .filter { $0.contains("session/new") || $0.contains("session/load") }
             #expect(opened.count == 2, "\(logged)")
-            #expect(opened.allSatisfy { $0.contains("flow-tools") && !$0.contains("node-tools") }, "\(logged)")
+            let flowsOwn = { (line: Substring) in
+                line.contains("flow-tools") && !line.contains("node-tools") && !line.contains("changed-tools")
+            }
+            #expect(opened.allSatisfy(flowsOwn), "\(logged)")
             await backend.releaseAll()
         }
     }
@@ -293,14 +300,14 @@ extension DaemonToolsTests {
             sessionId: "s", content: [], wait: true, permissionMode: "approve-all", nonInteractivePermissions: "deny",
             permissionPolicy: nil, terminalOutputCeiling: 0, model: nil, sessionOptions: nil, limits: nil,
             mode: PromptTurnMode(
-                streamWire: true, direct: true, fs: false, authPolicy: "fail", turnToken: "t", configCwd: "/flow",
-                verbose: true))
+                streamWire: true, direct: true, fs: false, authPolicy: "fail", turnToken: "t",
+                callerConfig: CallerConfig(auth: ["token": "secret"], mcpServers: []), verbose: true))
         #expect(arguments["streamWire"] == .bool(true))
         #expect(arguments["direct"] == .bool(true))
         #expect(arguments["fs"] == .bool(false))
         #expect(arguments["authPolicy"] == .string("fail"))
         #expect(arguments["turnToken"] == .string("t"))
-        #expect(arguments["configCwd"] == .string("/flow"))
+        #expect(try arguments["callerConfig"]?.decoded(CallerConfig.self).auth == ["token": "secret"])
         #expect(arguments["verbose"] == .bool(true))
     }
 
