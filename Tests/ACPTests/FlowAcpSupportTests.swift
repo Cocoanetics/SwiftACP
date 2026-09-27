@@ -126,7 +126,8 @@ struct FlowAcpSupportTests {
         defer { try? FileManager.default.removeItem(at: root) }
         var store = FlowRunStore(outputRoot: root)
         let runDir = try store.createRunDir("run-1")
-        let state = FlowRunState(runId: "run-1", flowName: "f", runTitle: nil, flowPath: nil, input: .null, now: "t")
+        let state = FlowRunState(
+            runId: "run-1", flowName: "f", runTitle: nil, flowPath: nil, input: .json(.null), now: "t")
         try store.initializeRunBundle(runDir, snapshot: .object([WireJSON.Member]()), state: state, inputArtifact: nil)
         var binding = FlowSessionBinding.isolated(
             flowName: "f", runId: "run-1", attemptId: "a#1", profile: nil,
