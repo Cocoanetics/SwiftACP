@@ -94,7 +94,7 @@ extension ACPXDaemonBackend {
         // then fails the controls still waiting.
         let begun: BegunPrompt
         do {
-            begun = try await beginPrompt(recordId, wait: wait)
+            begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
         } catch let refused as QueueOwnerShuttingDown {
             // Told to the client as acpx's owner tells it, the turn's error.
             return try await reportingFailure(of: recordId, errors: TurnErrorWatch()) { throw refused }

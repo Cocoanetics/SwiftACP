@@ -1,0 +1,176 @@
+@testable import ACPXCore
+@testable import acpxd
+import Foundation
+import SwiftACP
+import Testing
+
+/// A flow's session as acpxd makes it (#202, step 3b, #219 review): called off as it is made
+/// — its caller's wait cut short, however the call-off and the creation cross, and however
+/// long either waits — and made under an id acpxd holds already.
+extension DaemonToolsTests {
+    /// A session called off as acpxd makes it is let go, as acpx's runner closes a client made
+    /// after its attempt stopped: whether its token was called off before it was made, the
+    /// call-off came once it was made, or its call was cancelled as its agent was held — a
+    /// caller whose wait was cut short never learns the session to let it go (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aSessionCalledOffAsItIsMadeIsLetGo() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect(try await daemon.callOffCreation(creationToken: "before") == false)
+            await #expect(throws: CancellationError.self) {
+                _ = try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true, creationToken: "before"))
+            }
+            #expect(await daemon.live.isEmpty)
+            let made = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                creation: SessionCreationMode(holdAgent: true, creationToken: "after"))
+            #expect(try await daemon.callOffCreation(creationToken: "after"))
+            #expect(await !daemon.sessionStatus(sessionId: made).live)
+            // The call cancelled as its agent is held, from within its own task.
+            await daemon.setReconnected { _ in withUnsafeCurrentTask { $0?.cancel() } }
+            let creating = Task {
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true))
+            }
+            await #expect(throws: CancellationError.self) { _ = try await creating.value }
+            #expect(await daemon.live.isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// What acpxd keeps of each creation's token goes after a minute: each creation prunes what
+    /// is older, so a long-lived daemon doesn't keep one per session it made (#219 review).
+    @Test func creationTokensKeptAMinuteAreLetGo() async throws {
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+        #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
+        #expect(await daemon.creationCalledOff("made", madeAs: "a") == false)
+        #expect(await daemon.creationCalledOff("later", madeAs: "b", now: Date(timeIntervalSinceNow: 61)) == false)
+        #expect(await daemon.calledOffCreations.isEmpty)
+        #expect(await Array(daemon.madeCreations.keys) == ["later"])
+    }
+
+    /// A call-off stays while its creation is under way, however long the agent takes: one that
+    /// finishes past the minute the other tokens are kept still finds it, and its session is let
+    /// go (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCallOffOutlastsASlowCreation() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (reached, goOn) = (HoldGate(), HoldGate())
+            // The session made, the creation waits as its agent is held.
+            await daemon.setReconnected { _ in
+                reached.open()
+                await goOn.wait()
+            }
+            let creating = Task {
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "slow"))
+            }
+            await reached.wait()
+            let released = try await daemon.callOffCreation(creationToken: "slow")
+            #expect(!released)
+            // A creation a minute on prunes what is kept, but not the call-off of one under way.
+            #expect(await daemon.creationCalledOff("other", madeAs: "x", now: Date(timeIntervalSinceNow: 61)) == false)
+            goOn.open()
+            await #expect(throws: CancellationError.self) { _ = try await creating.value }
+            #expect(await daemon.live.isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A session the agent gives an id acpxd holds already takes that one's place, as `sessions
+    /// new` retires one it replaces under the same id: the agent held before is let go, not left
+    /// running unheld, and the record is the new session's (#219 review). The mock answers every
+    /// launch with the same session id.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aSessionUnderAHeldIdTakesItsPlace() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let cwd = NSTemporaryDirectory()
+            let first = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
+            let before = try #require(await daemon.live[first]?.agent)
+            let second = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
+            #expect(second == first)
+            let after = try #require(await daemon.live[second]?.agent)
+            #expect(after !== before)
+            #expect(await before.connection.isClosed)
+            #expect(SessionStore.loadRecord(second)?.pid == after.lifecycle?.pid.map { Int($0) })
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A call-off stays while its turn waits to begin behind another, however long: begun past
+    /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
+    /// review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCallOffOutlastsATurnWaitingToBegin() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requests = directory.appendingPathComponent("requests.log")
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(requests.path)' "
+            + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            let (firstGoesOut, secondWaits) = (HoldGate(), HoldGate())
+            await daemon.setPromptGoingOut { _ in firstGoesOut.open() }
+            await daemon.setPromptWaits { _ in secondWaits.open() }
+            let first = Task {
+                try await daemon.runPrompt(
+                    sessionId: id, text: "hold turn", permissionMode: "approve-all", direct: true)
+            }
+            await firstGoesOut.wait()
+            let second = Task {
+                try await daemon.runPrompt(
+                    sessionId: id, text: "second", permissionMode: "approve-all", direct: true, turnToken: "queued")
+            }
+            await secondWaits.wait()
+            let cancelledTheFirst = try await daemon.cancelSession(sessionId: id, turnToken: "queued")
+            #expect(!cancelledTheFirst)
+            // A call-off a minute on prunes what is kept: not the call-off of a turn still waiting.
+            await daemon.callOff("other", now: Date(timeIntervalSinceNow: 61))
+            // The first turn ends cancelled; the second begins, and ends at once.
+            #expect(try await daemon.cancelSession(sessionId: id))
+            _ = try? await first.value
+            #expect(try await second.value.isEmpty)
+            let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
+            #expect(!logged.contains("\"second\""), "\(logged)")
+            await daemon.releaseAll()
+        }
+    }
+}
+
+/// A signal a test waits for once, however it and its opening cross.
+private final class HoldGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let resume = lock.withLock {
+                if isOpen { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if resume { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let waiting = lock.withLock {
+            isOpen = true
+            defer { waiters = [] }
+            return waiters
+        }
+        waiting.forEach { $0.resume() }
+    }
+}

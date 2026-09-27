@@ -64,46 +64,13 @@ extension ACPXDaemonBackend {
         return true
     }
 
-    /// Call off the session a `newSession` makes under `creationToken`: one made is let go, and
-    /// one not made yet is let go as it is made (``creationCalledOff(_:madeAs:)``). On the actor
-    /// with no suspension until then, so either the call-off finds the session or the creation
-    /// finds the call-off.
-    func callOffCreation(creationToken: String) async throws -> Bool {
-        let now = Date()
-        pruneCreationTokens(now: now)
-        guard let made = madeCreations.removeValue(forKey: creationToken) else {
-            calledOffCreations[creationToken] = now
-            return false
-        }
-        return try await releaseSession(sessionId: made.recordId)
-    }
-
-    /// Whether the creation under `token` was called off before its session was made; if not,
-    /// the session is kept by the token, for a call-off yet to come. Tokens kept a minute go
-    /// first, so a long-lived daemon keeps only those of the last minute's creations.
-    func creationCalledOff(_ token: String?, madeAs recordId: String, now: Date = Date()) -> Bool {
-        guard let token else { return false }
-        pruneCreationTokens(now: now)
-        if calledOffCreations.removeValue(forKey: token) != nil { return true }
-        madeCreations[token] = (recordId, now)
-        return false
-    }
-
-    /// Let go of the creation tokens kept a minute (#219 review): by then a caller whose wait
-    /// was cut short has called its creation off. A call-off of a creation still under way is
-    /// kept until the creation is over, however long its agent takes.
-    private func pruneCreationTokens(now: Date) {
-        calledOffCreations = calledOffCreations.filter {
-            creatingTokens.contains($0.key) || now.timeIntervalSince($0.value) < 60
-        }
-        madeCreations = madeCreations.filter { now.timeIntervalSince($0.value.at) < 60 }
-    }
-
     /// Keep `token` as a turn's a cancel named before it began; tokens kept a minute
-    /// without their turn coming are let go.
-    private func callOff(_ token: String) {
-        let now = Date()
-        calledOffTurns = calledOffTurns.filter { now.timeIntervalSince($0.value) < 60 }
+    /// without their turn coming are let go — unless their turn waits to begin behind
+    /// another, however long that takes (#219 review).
+    func callOff(_ token: String, now: Date = Date()) {
+        calledOffTurns = calledOffTurns.filter {
+            waitingTurnTokens.contains($0.key) || now.timeIntervalSince($0.value) < 60
+        }
         calledOffTurns[token] = now
     }
 

@@ -26,8 +26,9 @@ extension ACPXDaemonBackend {
     /// When `wait` is false, a session running anything refuses it with
     /// ``DaemonError/sessionBusy``, and it takes the slot as it begins. A daemon that is
     /// stopping takes none, nor does a session being closed or let go, as acpx's owner takes
-    /// no task once it shuts down (`enqueue`).
-    func beginPrompt(_ recordId: String, wait: Bool) async throws -> BegunPrompt {
+    /// no task once it shuts down (`enqueue`). A call-off of the caller's `turnToken` is kept
+    /// while the prompt waits in line, however long.
+    func beginPrompt(_ recordId: String, wait: Bool, turnToken: String? = nil) async throws -> BegunPrompt {
         guard !stopping, shuttingDown[recordId] == nil else { throw QueueOwnerShuttingDown(inLine: false) }
         guard wait else {
             guard promptLines[recordId] == nil else { throw DaemonError.sessionBusy(recordId) }
@@ -49,6 +50,9 @@ extension ACPXDaemonBackend {
         }
         let token = nextPromptToken
         nextPromptToken += 1
+        // Waiting in line, the turn's call-off is kept however long it waits (#219 review).
+        if let turnToken { waitingTurnTokens.insert(turnToken) }
+        defer { if let turnToken { waitingTurnTokens.remove(turnToken) } }
         let begun = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 promptLines[recordId]?.waiting.append((token, continuation))

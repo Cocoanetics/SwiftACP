@@ -292,83 +292,6 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A session called off as acpxd makes it is let go, as acpx's runner closes a client made
-    /// after its attempt stopped: whether its token was called off before it was made, the
-    /// call-off came once it was made, or its call was cancelled as its agent was held — a
-    /// caller whose wait was cut short never learns the session to let it go (#219 review).
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aSessionCalledOffAsItIsMadeIsLetGo() async throws {
-        let command = try #require(mockCommand())
-        let cwd = NSTemporaryDirectory()
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            #expect(try await daemon.callOffCreation(creationToken: "before") == false)
-            await #expect(throws: CancellationError.self) {
-                _ = try await daemon.newSession(
-                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
-                    creation: SessionCreationMode(holdAgent: true, creationToken: "before"))
-            }
-            #expect(await daemon.live.isEmpty)
-            let made = try await daemon.newSession(
-                agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
-                creation: SessionCreationMode(holdAgent: true, creationToken: "after"))
-            #expect(try await daemon.callOffCreation(creationToken: "after"))
-            #expect(await !daemon.sessionStatus(sessionId: made).live)
-            // The call cancelled as its agent is held, from within its own task.
-            await daemon.setReconnected { _ in withUnsafeCurrentTask { $0?.cancel() } }
-            let creating = Task {
-                try await daemon.newSession(
-                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
-                    creation: SessionCreationMode(holdAgent: true))
-            }
-            await #expect(throws: CancellationError.self) { _ = try await creating.value }
-            #expect(await daemon.live.isEmpty)
-            await daemon.releaseAll()
-        }
-    }
-
-    /// What acpxd keeps of each creation's token goes after a minute: each creation prunes what
-    /// is older, so a long-lived daemon doesn't keep one per session it made (#219 review).
-    @Test func creationTokensKeptAMinuteAreLetGo() async throws {
-        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-        #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
-        #expect(await daemon.creationCalledOff("made", madeAs: "a") == false)
-        #expect(await daemon.creationCalledOff("later", madeAs: "b", now: Date(timeIntervalSinceNow: 61)) == false)
-        #expect(await daemon.calledOffCreations.isEmpty)
-        #expect(await Array(daemon.madeCreations.keys) == ["later"])
-    }
-
-    /// A call-off stays while its creation is under way, however long the agent takes: one that
-    /// finishes past the minute the other tokens are kept still finds it, and its session is let
-    /// go (#219 review).
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aCallOffOutlastsASlowCreation() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let (reached, goOn) = (HoldGate(), HoldGate())
-            // The session made, the creation waits as its agent is held.
-            await daemon.setReconnected { _ in
-                reached.open()
-                await goOn.wait()
-            }
-            let creating = Task {
-                try await daemon.newSession(
-                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
-                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "slow"))
-            }
-            await reached.wait()
-            let released = try await daemon.callOffCreation(creationToken: "slow")
-            #expect(!released)
-            // A creation a minute on prunes what is kept, but not the call-off of one under way.
-            #expect(await daemon.creationCalledOff("other", madeAs: "x", now: Date(timeIntervalSinceNow: 61)) == false)
-            goOn.open()
-            await #expect(throws: CancellationError.self) { _ = try await creating.value }
-            #expect(await daemon.live.isEmpty)
-            await daemon.releaseAll()
-        }
-    }
-
     /// A flow's persistent turn sends acpxd each of its options: the CLI calls `runPrompt`
     /// untyped (``DaemonClient/promptArguments(sessionId:content:wait:permissionMode:nonInteractivePermissions:permissionPolicy:terminalOutputCeiling:model:sessionOptions:limits:mode:)``),
     /// and `verbose` was once left out of the call.
@@ -437,32 +360,5 @@ extension DaemonToolsTests {
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)", fs: false) == refused)
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)") == "the text")
         }
-    }
-}
-
-/// A signal a test waits for once, however it and its opening cross.
-private final class HoldGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var isOpen = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            let resume = lock.withLock {
-                if isOpen { return true }
-                waiters.append(continuation)
-                return false
-            }
-            if resume { continuation.resume() }
-        }
-    }
-
-    func open() {
-        let waiting = lock.withLock {
-            isOpen = true
-            defer { waiters = [] }
-            return waiters
-        }
-        waiting.forEach { $0.resume() }
     }
 }

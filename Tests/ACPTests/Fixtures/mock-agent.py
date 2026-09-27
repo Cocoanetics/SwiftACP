@@ -101,6 +101,11 @@ def log_request(message):
             output.write(json.dumps(message) + "\n")
 
 
+def prompt_text(params):
+    """The text of a prompt's text blocks."""
+    return "".join(block.get("text", "") for block in params.get("prompt", []) if block.get("type") == "text")
+
+
 def handle_prompt(req_id, params):
     session_id = params.get("sessionId", "mock-session")
     # Pull the user's text out of the prompt content blocks, and summarize any
@@ -390,7 +395,8 @@ def main():
             if EXIT_ON_PROMPT and prompts_answered + 1 >= EXIT_ON_PROMPT:
                 os._exit(0)
             prompts_answered += 1
-            if HOLD_UNTIL_CANCEL:
+            # MOCK_HOLD_UNTIL_CANCEL, or a prompt that is `hold turn`: held until cancelled.
+            if HOLD_UNTIL_CANCEL or prompt_text(message.get("params", {})).strip() == "hold turn":
                 held_prompt = req_id
                 continue
             if REACT_AFTER_GATE:
