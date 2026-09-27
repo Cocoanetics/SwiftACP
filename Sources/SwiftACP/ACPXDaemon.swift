@@ -88,6 +88,10 @@ public actor ACPXDaemon {
     ///     (`auth`) and, without `mcpServers`, its MCP servers — a flow's, as acpx's runner
     ///     gives every client of the flow the invocation's config, wherever the node works.
     ///     Omitted, the config of `cwd`.
+    ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
+    ///     caller as ``AgentStderrEvent`` log notifications while the session is made, as
+    ///     acpx's client shows it in the flow's process. A held agent's waits for its first
+    ///     turn (`runPrompt`'s `verbose`). Omitted, it is not.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
@@ -95,14 +99,15 @@ public actor ACPXDaemon {
         mcpServers: [McpServerConfig]? = nil, agentArgv: [String]? = nil,
         sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, configCwd: String? = nil
+        permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, configCwd: String? = nil,
+        verbose: Bool? = nil
     ) async throws -> String {
         try await backend.newSession(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
             sessionOptions: sessionOptions, creation: SessionCreationMode(
                 holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
                 nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
-                authPolicy: authPolicy, configCwd: configCwd))
+                authPolicy: authPolicy, configCwd: configCwd, verbose: verbose ?? false))
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
@@ -344,6 +349,9 @@ public actor ACPXDaemon {
     ///   - configCwd: the directory whose config gives an agent the turn connects its
     ///     credentials and, for a session without its own, its MCP servers — a flow's, as
     ///     `newSession`'s. Omitted, the config of the session's cwd.
+    ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
+    ///     caller as ``AgentStderrEvent`` log notifications while the turn runs — first what
+    ///     a held agent wrote since its session was made. Omitted, it is not.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -354,7 +362,7 @@ public actor ACPXDaemon {
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
         direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
-        configCwd: String? = nil
+        configCwd: String? = nil, verbose: Bool? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -363,7 +371,7 @@ public actor ACPXDaemon {
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 mode: PromptTurnMode(
                     streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
-                    turnToken: turnToken, configCwd: configCwd),
+                    turnToken: turnToken, configCwd: configCwd, verbose: verbose ?? false),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }

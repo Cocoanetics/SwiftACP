@@ -28,6 +28,7 @@ extension DaemonClient {
         if let authPolicy = mode.authPolicy { arguments["authPolicy"] = .string(authPolicy) }
         if let turnToken = mode.turnToken { arguments["turnToken"] = .string(turnToken) }
         if let configCwd = mode.configCwd { arguments["configCwd"] = .string(configCwd) }
+        if mode.verbose { arguments["verbose"] = .bool(true) }
         return arguments
     }
 }

@@ -16,14 +16,14 @@ extension DaemonToolsTests {
     /// reply.
     private func directTurn(
         _ daemon: ACPXDaemonBackend, _ sessionId: String, _ text: String, permissionMode: String = "approve-all",
-        fs: Bool? = nil, client: CallingClient = CallingClient()
+        fs: Bool? = nil, client: CallingClient = CallingClient(), verbose: Bool = false
     ) async throws -> String {
         let session = Session(id: UUID())
         await session.setTransport(client)
         return try await session.work { _ in
             try await daemon.runPrompt(
                 sessionId: sessionId, text: text, permissionMode: permissionMode, nonInteractivePermissions: "fail",
-                direct: true, fs: fs)
+                direct: true, fs: fs, verbose: verbose)
         }
     }
 
@@ -254,6 +254,60 @@ extension DaemonToolsTests {
             #expect(opened.allSatisfy { $0.contains("flow-tools") && !$0.contains("node-tools") }, "\(logged)")
             await backend.releaseAll()
         }
+    }
+
+    /// Under `--verbose`, what a flow's agent writes to stderr reaches the caller: as the
+    /// session is made, and as each turn runs — the one that takes the session back too — as
+    /// acpx's client shows it in the flow's process (#219 review). A turn without it gets none.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aVerboseFlowSessionsAgentStderrReachesTheCaller() async throws {
+        let command = "/usr/bin/env MOCK_STDERR_AT_START=starting MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let creation = CallingClient()
+            let session = Session(id: UUID())
+            await session.setTransport(creation)
+            let id = try await session.work { _ in
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, verbose: true))
+            }
+            #expect(Self.stderr(of: creation) == "starting\n")
+            // The first turn takes the kept agent; the second starts one to take the session back.
+            let (first, second, quiet) = (CallingClient(), CallingClient(), CallingClient())
+            _ = try await directTurn(daemon, id, "stderr one", client: first, verbose: true)
+            _ = try await directTurn(daemon, id, "stderr two", client: second, verbose: true)
+            _ = try await directTurn(daemon, id, "stderr three", client: quiet)
+            #expect(Self.stderr(of: first) == "one\n")
+            #expect(Self.stderr(of: second) == "starting\ntwo\n")
+            #expect(Self.stderr(of: quiet).isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A flow's persistent turn sends acpxd each of its options: the CLI calls `runPrompt`
+    /// untyped (``DaemonClient/promptArguments(sessionId:content:wait:permissionMode:nonInteractivePermissions:permissionPolicy:terminalOutputCeiling:model:sessionOptions:limits:mode:)``),
+    /// and `verbose` was once left out of the call.
+    @Test func aDirectTurnsOptionsGoWithItsCall() throws {
+        let arguments = try DaemonClient.promptArguments(
+            sessionId: "s", content: [], wait: true, permissionMode: "approve-all", nonInteractivePermissions: "deny",
+            permissionPolicy: nil, terminalOutputCeiling: 0, model: nil, sessionOptions: nil, limits: nil,
+            mode: PromptTurnMode(
+                streamWire: true, direct: true, fs: false, authPolicy: "fail", turnToken: "t", configCwd: "/flow",
+                verbose: true))
+        #expect(arguments["streamWire"] == .bool(true))
+        #expect(arguments["direct"] == .bool(true))
+        #expect(arguments["fs"] == .bool(false))
+        #expect(arguments["authPolicy"] == .string("fail"))
+        #expect(arguments["turnToken"] == .string("t"))
+        #expect(arguments["configCwd"] == .string("/flow"))
+        #expect(arguments["verbose"] == .bool(true))
+    }
+
+    /// What `client` was sent of the agent's stderr (``AgentStderrEvent``).
+    private static func stderr(of client: CallingClient) -> String {
+        let chunks = client.logs.compactMap { try? $0.decoded(AgentStderrEvent.self) }.compactMap(\.bytes)
+        return String(decoding: chunks.reduce(Data(), +), as: UTF8.self)
     }
 
     /// The options' model is kept with a session made for a flow's first turn, with the

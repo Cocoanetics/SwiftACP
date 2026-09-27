@@ -165,6 +165,11 @@ def handle_prompt(req_id, params):
             "code": -32603, "message": "Internal error", "data": {"details": "model overloaded"}}})
         return
 
+    # "stderr TEXT": the text on stderr, then the reply as usual.
+    if text.startswith("stderr "):
+        sys.stderr.write(text[len("stderr "):] + "\n")
+        sys.stderr.flush()
+
     # A short plan.
     session_update(session_id, {
         "sessionUpdate": "plan",
@@ -237,6 +242,10 @@ def main():
     if argv_log:
         with open(argv_log, "a", encoding="utf-8") as output:
             output.write(json.dumps(sys.argv[1:]) + "\n")
+    # MOCK_STDERR_AT_START: a line on stderr as the agent starts, before it is asked anything.
+    if os.environ.get("MOCK_STDERR_AT_START"):
+        sys.stderr.write(os.environ["MOCK_STDERR_AT_START"] + "\n")
+        sys.stderr.flush()
     prompts_answered = 0
     held_prompt = None
     terminal_prompt, terminal_session = None, None

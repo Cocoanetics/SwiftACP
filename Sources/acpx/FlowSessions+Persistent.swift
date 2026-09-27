@@ -21,7 +21,9 @@ extension FlowAgentSessions {
     /// nobody waits for.
     func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord {
         try control.check()
-        let proxy = try await DaemonClient.connect(spawnIfNeeded: true)
+        let proxy = try await DaemonClient.connect(spawnIfNeeded: true) { proxy in
+            await proxy.setLogNotificationHandler(FlowCreationLog())
+        }
         let stopListening = control.onStop { Task { await proxy.disconnect() } }
         defer { stopListening() }
         let recordId: String
@@ -33,7 +35,8 @@ extension FlowAgentSessions {
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: config.sessionMcpServers,
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                permissionPolicy: permissionRules, authPolicy: flags.authPolicy, configCwd: config.cwd)
+                permissionPolicy: permissionRules, authPolicy: flags.authPolicy, configCwd: config.cwd,
+                verbose: flags.verbose)
         } catch {
             await proxy.disconnect()
             if let reason = control.stopReason { throw reason }
@@ -90,7 +93,7 @@ extension FlowAgentSessions {
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, terminalOutputCeiling: ceiling, mode: PromptTurnMode(
                     streamWire: true, direct: true, fs: flags.fs, authPolicy: flags.authPolicy, turnToken: turnToken,
-                    configCwd: config.cwd))
+                    configCwd: config.cwd, verbose: flags.verbose))
         } catch {
             await stop.turnEnded()
             await proxy.disconnect()
@@ -155,6 +158,7 @@ final class FlowTurnLog: MCPServerProxyLogNotificationHandling, @unchecked Senda
     }
 
     func mcpServerProxy(_ proxy: MCPServerProxy, didReceiveLog message: LogMessage) async {
+        if FlowAgentStderr.write(message) { return }
         if let wire = try? message.data.decoded(WireMessageEvent.self) {
             guard let body = WireJSON(parsing: Data(wire.wireLine.utf8)) else { return }
             turn.onMessage(wire.wireDirection == "outbound", body)
@@ -163,6 +167,26 @@ final class FlowTurnLog: MCPServerProxyLogNotificationHandling, @unchecked Senda
         } else if let ended = try? message.data.decoded(TurnEndedEvent.self) {
             await stopReason.set(ended)
         }
+    }
+}
+
+/// The making of a flow's persistent session, as acpxd tells of it: under `--verbose`, what
+/// its agent writes to stderr.
+final class FlowCreationLog: MCPServerProxyLogNotificationHandling, Sendable {
+    func mcpServerProxy(_ proxy: MCPServerProxy, didReceiveLog message: LogMessage) async {
+        _ = FlowAgentStderr.write(message)
+    }
+}
+
+/// What a flow's agent writes to stderr, as acpxd streams it under `--verbose`
+/// (``AgentStderrEvent``): onto the CLI's stderr, where acpx's client, which runs in the
+/// flow's process, shows it.
+enum FlowAgentStderr {
+    /// Whether `message` is a chunk of the agent's stderr, which is then written out.
+    static func write(_ message: LogMessage) -> Bool {
+        guard let event = try? message.data.decoded(AgentStderrEvent.self) else { return false }
+        if let bytes = event.bytes { FileHandle.standardError.write(bytes) }
+        return true
     }
 }
 

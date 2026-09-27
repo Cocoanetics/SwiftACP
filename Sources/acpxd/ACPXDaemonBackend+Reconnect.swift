@@ -140,7 +140,7 @@ extension ACPXDaemonBackend {
                             authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
                         authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
-                        onRawWire: connectTap)
+                        onRawWire: connectTap, onStderr: settings.stderr?.observer)
                 }, discardingLate: { await $0.close() })
             }
         } catch {
@@ -197,11 +197,11 @@ extension ACPXDaemonBackend {
     /// meanwhile (``refuseIfStopping(_:of:via:)``).
     func hold(
         _ handle: ACPAgent, on session: ACPSession, sessionSpecs: [MCPServerSpec]?, for recordId: String,
-        via onRecordChange: RecordChangeHandler?
+        via onRecordChange: RecordChangeHandler?, stderr: AgentStderrRelay? = nil
     ) async throws -> Live {
         await reconnected?(recordId)
         try await refuseIfStopping(handle, of: recordId, via: onRecordChange)
-        let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
+        let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs, stderr: stderr)
         live[recordId] = entry
         handle.rawWire.set(nil)
         return entry
@@ -268,6 +268,9 @@ extension ACPXDaemonBackend {
         /// Where the config the agent gets its credentials and servers from is read, `~`
         /// expanded, when the caller says (a flow's turn); else the session's cwd.
         var configCwd: String?
+        /// Where what the agent writes to stderr goes, when the caller asks (a verbose flow's
+        /// turn); else nowhere.
+        var stderr: AgentStderrRelay?
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.

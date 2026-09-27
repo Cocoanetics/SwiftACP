@@ -26,6 +26,8 @@ public enum SessionEngine {
     ///     for the request that takes a session back.
     ///   - resumeSessionId: an ACP session to take back in place of a new one — acpx's
     ///     `--resume-session`. The record is written under its id.
+    ///   - onStderr: shown what the agent writes to stderr, from its start
+    ///     (``RawWireTap/onStderr(_:)``).
     public static func createSession(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -43,6 +45,7 @@ public enum SessionEngine {
         capabilities: ClientCapabilities = .acpx,
         handlers: ACPClientHandlers? = nil,
         inheritStderr: Bool = false,
+        onStderr: RawWireTap.StderrObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
         let held = try await createSessionHoldingAgent(
@@ -50,7 +53,7 @@ public enum SessionEngine {
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
             mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
-            handlers: handlers, inheritStderr: inheritStderr, onModelWarning: onModelWarning)
+            handlers: handlers, inheritStderr: inheritStderr, onStderr: onStderr, onModelWarning: onModelWarning)
         var record = held.record
         let handle = held.agent
         // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
@@ -96,6 +99,7 @@ public enum SessionEngine {
         recordsCapabilities: Bool = true,
         handlers: ACPClientHandlers? = nil,
         inheritStderr: Bool = false,
+        onStderr: RawWireTap.StderrObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> HeldSession {
         // Validate the session's own servers before paying for a spawn.
@@ -106,7 +110,7 @@ public enum SessionEngine {
             handlers: handlers ?? .standard(permission: permission, rules: permissionRules), capabilities: capabilities,
             environment: AgentEnvironment.forAgent(authCredentials: authCredentials, sessionEnv: sessionOptions?.env),
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr)
+            inheritStderr: inheritStderr, onStderr: onStderr)
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,
