@@ -59,6 +59,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// made, with when: see ``callOffCreation(creationToken:)``.
     var calledOffCreations: [String: Date] = [:]
     var madeCreations: [String: (recordId: String, at: Date)] = [:]
+    /// The tokens of the creations under way, whose call-offs are kept however long they take.
+    var creatingTokens: Set<String> = []
     /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
     var tickets: [String: PromptControlTicket] = [:]
     /// Each session's prompts in line to begin, by record, while one has begun: see ``PromptLine``.
@@ -192,6 +194,11 @@ actor ACPXDaemonBackend: ACPXBackend {
             return record.acpxRecordId
         }
         guard !stopping else { throw DaemonError.stopping }
+        // Under way, a call-off of this creation is kept until it is over, however long the
+        // agent takes to open the session (#219 review).
+        let token = creation.creationToken
+        if let token { creatingTokens.insert(token) }
+        defer { if let token { creatingTokens.remove(token) } }
         let held = try await relayingStderr(stderr, logger: "newSession") {
             try await SessionEngine.createSessionHoldingAgent(
                 agentCommand: command, agentArgv: argv, cwd: cwd,
@@ -209,7 +216,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         // let go at once, as acpx's runner closes a client made after its attempt stopped:
         // nobody would ever take it, or let it go (#219 review). From a task of its own, as
         // this one's cancellation would refuse it.
-        if Task.isCancelled || creationCalledOff(creation.creationToken, madeAs: recordId) {
+        if Task.isCancelled || creationCalledOff(token, madeAs: recordId) {
             await Task { _ = try? await self.releaseSession(sessionId: recordId) }.value
             throw CancellationError()
         }

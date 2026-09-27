@@ -90,9 +90,12 @@ extension ACPXDaemonBackend {
     }
 
     /// Let go of the creation tokens kept a minute (#219 review): by then a caller whose wait
-    /// was cut short has called its creation off, and a creation called off has come or never will.
+    /// was cut short has called its creation off. A call-off of a creation still under way is
+    /// kept until the creation is over, however long its agent takes.
     private func pruneCreationTokens(now: Date) {
-        calledOffCreations = calledOffCreations.filter { now.timeIntervalSince($0.value) < 60 }
+        calledOffCreations = calledOffCreations.filter {
+            creatingTokens.contains($0.key) || now.timeIntervalSince($0.value) < 60
+        }
         madeCreations = madeCreations.filter { now.timeIntervalSince($0.value.at) < 60 }
     }
 

@@ -338,6 +338,37 @@ extension DaemonToolsTests {
         #expect(await Array(daemon.madeCreations.keys) == ["later"])
     }
 
+    /// A call-off stays while its creation is under way, however long the agent takes: one that
+    /// finishes past the minute the other tokens are kept still finds it, and its session is let
+    /// go (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCallOffOutlastsASlowCreation() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (reached, goOn) = (HoldGate(), HoldGate())
+            // The session made, the creation waits as its agent is held.
+            await daemon.setReconnected { _ in
+                reached.open()
+                await goOn.wait()
+            }
+            let creating = Task {
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "slow"))
+            }
+            await reached.wait()
+            let released = try await daemon.callOffCreation(creationToken: "slow")
+            #expect(!released)
+            // A creation a minute on prunes what is kept, but not the call-off of one under way.
+            #expect(await daemon.creationCalledOff("other", madeAs: "x", now: Date(timeIntervalSinceNow: 61)) == false)
+            goOn.open()
+            await #expect(throws: CancellationError.self) { _ = try await creating.value }
+            #expect(await daemon.live.isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A flow's persistent turn sends acpxd each of its options: the CLI calls `runPrompt`
     /// untyped (``DaemonClient/promptArguments(sessionId:content:wait:permissionMode:nonInteractivePermissions:permissionPolicy:terminalOutputCeiling:model:sessionOptions:limits:mode:)``),
     /// and `verbose` was once left out of the call.
@@ -406,5 +437,32 @@ extension DaemonToolsTests {
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)", fs: false) == refused)
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)") == "the text")
         }
+    }
+}
+
+/// A signal a test waits for once, however it and its opening cross.
+private final class HoldGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let resume = lock.withLock {
+                if isOpen { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if resume { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let waiting = lock.withLock {
+            isOpen = true
+            defer { waiters = [] }
+            return waiters
+        }
+        waiting.forEach { $0.resume() }
     }
 }
