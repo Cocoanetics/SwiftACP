@@ -292,6 +292,41 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A session called off as acpxd makes it is let go, as acpx's runner closes a client made
+    /// after its attempt stopped: whether its token was called off before it was made, the
+    /// call-off came once it was made, or its call was cancelled as its agent was held — a
+    /// caller whose wait was cut short never learns the session to let it go (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aSessionCalledOffAsItIsMadeIsLetGo() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect(try await daemon.callOffCreation(creationToken: "before") == false)
+            await #expect(throws: CancellationError.self) {
+                _ = try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true, creationToken: "before"))
+            }
+            #expect(await daemon.live.isEmpty)
+            let made = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                creation: SessionCreationMode(holdAgent: true, creationToken: "after"))
+            #expect(try await daemon.callOffCreation(creationToken: "after"))
+            #expect(await !daemon.sessionStatus(sessionId: made).live)
+            // The call cancelled as its agent is held, from within its own task.
+            await daemon.setReconnected { _ in withUnsafeCurrentTask { $0?.cancel() } }
+            let creating = Task {
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
+                    creation: SessionCreationMode(holdAgent: true))
+            }
+            await #expect(throws: CancellationError.self) { _ = try await creating.value }
+            #expect(await daemon.live.isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A flow's persistent turn sends acpxd each of its options: the CLI calls `runPrompt`
     /// untyped (``DaemonClient/promptArguments(sessionId:content:wait:permissionMode:nonInteractivePermissions:permissionPolicy:terminalOutputCeiling:model:sessionOptions:limits:mode:)``),
     /// and `verbose` was once left out of the call.

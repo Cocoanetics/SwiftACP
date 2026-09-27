@@ -55,6 +55,10 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// The tokens of turns a cancel named before they began, and when: each ends as it
     /// begins (``claimTurnToken(_:for:)``).
     var calledOffTurns: [String: Date] = [:]
+    /// The creation tokens a call-off named before their session was made, and the session each
+    /// made, with when: see ``callOffCreation(creationToken:)``.
+    var calledOffCreations: [String: Date] = [:]
+    var madeCreations: [String: (recordId: String, at: Date)] = [:]
     /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
     var tickets: [String: PromptControlTicket] = [:]
     /// Each session's prompts in line to begin, by record, while one has begun: see ``PromptLine``.
@@ -201,6 +205,14 @@ actor ACPXDaemonBackend: ACPXBackend {
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         _ = try await hold(
             held.agent, on: held.session, sessionSpecs: sessionSpecs, for: recordId, via: nil, stderr: stderr)
+        // Called off as it was made — its call cancelled, or its token called off first — it is
+        // let go at once, as acpx's runner closes a client made after its attempt stopped:
+        // nobody would ever take it, or let it go (#219 review). From a task of its own, as
+        // this one's cancellation would refuse it.
+        if Task.isCancelled || creationCalledOff(creation.creationToken, madeAs: recordId) {
+            await Task { _ = try? await self.releaseSession(sessionId: recordId) }.value
+            throw CancellationError()
+        }
         return recordId
     }
 

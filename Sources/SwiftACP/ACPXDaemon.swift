@@ -92,6 +92,8 @@ public actor ACPXDaemon {
     ///     caller as ``AgentStderrEvent`` log notifications while the session is made, as
     ///     acpx's client shows it in the flow's process. A held agent's waits for its first
     ///     turn (`runPrompt`'s `verbose`). Omitted, it is not.
+    ///   - creationToken: the caller's name for this creation, which `callOffCreation` can give
+    ///     should its wait for the answer be cut short.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
@@ -100,14 +102,25 @@ public actor ACPXDaemon {
         sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, callerConfig: CallerConfig? = nil,
-        verbose: Bool? = nil
+        verbose: Bool? = nil, creationToken: String? = nil
     ) async throws -> String {
         try await backend.newSession(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
             sessionOptions: sessionOptions, creation: SessionCreationMode(
                 holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
                 nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
-                authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false))
+                authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false,
+                creationToken: creationToken))
+    }
+
+    /// Call off the session `newSession` makes under `creationToken`, for a caller whose wait
+    /// for its answer was cut short: one made is let go, and one not made yet is let go as it
+    /// is made — as acpx's flow runner closes a client made after its attempt stopped.
+    ///
+    /// - Returns: whether a session made under the token was let go.
+    @MCPTool
+    func callOffCreation(creationToken: String) async throws -> Bool {
+        try await backend.callOffCreation(creationToken: creationToken)
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and

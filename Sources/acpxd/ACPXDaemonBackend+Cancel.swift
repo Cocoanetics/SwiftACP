@@ -64,6 +64,30 @@ extension ACPXDaemonBackend {
         return true
     }
 
+    /// Call off the session a `newSession` makes under `creationToken`: one made is let go, and
+    /// one not made yet is let go as it is made (``creationCalledOff(_:madeAs:)``). On the actor
+    /// with no suspension until then, so either the call-off finds the session or the creation
+    /// finds the call-off.
+    func callOffCreation(creationToken: String) async throws -> Bool {
+        let now = Date()
+        calledOffCreations = calledOffCreations.filter { now.timeIntervalSince($0.value) < 60 }
+        madeCreations = madeCreations.filter { now.timeIntervalSince($0.value.at) < 60 }
+        guard let made = madeCreations.removeValue(forKey: creationToken) else {
+            calledOffCreations[creationToken] = now
+            return false
+        }
+        return try await releaseSession(sessionId: made.recordId)
+    }
+
+    /// Whether the creation under `token` was called off before its session was made; if not,
+    /// the session is kept by the token, for a call-off yet to come.
+    func creationCalledOff(_ token: String?, madeAs recordId: String) -> Bool {
+        guard let token else { return false }
+        if calledOffCreations.removeValue(forKey: token) != nil { return true }
+        madeCreations[token] = (recordId, Date())
+        return false
+    }
+
     /// Keep `token` as a turn's a cancel named before it began; tokens kept a minute
     /// without their turn coming are let go.
     private func callOff(_ token: String) {

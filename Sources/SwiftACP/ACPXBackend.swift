@@ -47,6 +47,7 @@ public protocol ACPXBackend: Sendable {
         limits: PromptLimits?
     ) async throws -> String
     func cancelSession(sessionId: String, turnToken: String?) async throws -> Bool
+    func callOffCreation(creationToken: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
     func releaseSession(sessionId: String) async throws -> Bool
 }
@@ -72,8 +73,9 @@ public struct CallerConfig: Codable, Sendable, Equatable {
 /// (`fs`, acpx's `--no-fs`), how its requests are answered until then — as a turn's are
 /// (`permissionMode`, `nonInteractivePermissions`, `permissionPolicy`) — how it signs in
 /// (`authPolicy`, acpx's `--auth-policy`; `nil`, as configured), the config it is started with
-/// (`callerConfig`; `nil`, the one where the session works), and whether what the agent writes
-/// to stderr is streamed to the caller (`verbose`, acpx's `--verbose`).
+/// (`callerConfig`; `nil`, the one where the session works), whether what the agent writes
+/// to stderr is streamed to the caller (`verbose`, acpx's `--verbose`), and the caller's name for
+/// the creation, which ``ACPXBackend/callOffCreation(creationToken:)`` can give (`creationToken`).
 public struct SessionCreationMode: Sendable {
     public var holdAgent: Bool
     public var fs: Bool?
@@ -83,11 +85,12 @@ public struct SessionCreationMode: Sendable {
     public var authPolicy: String?
     public var callerConfig: CallerConfig?
     public var verbose: Bool
+    public var creationToken: String?
 
     public init(
         holdAgent: Bool = false, fs: Bool? = nil, permissionMode: String? = nil,
         nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil,
-        callerConfig: CallerConfig? = nil, verbose: Bool = false
+        callerConfig: CallerConfig? = nil, verbose: Bool = false, creationToken: String? = nil
     ) {
         self.holdAgent = holdAgent
         self.fs = fs
@@ -97,6 +100,7 @@ public struct SessionCreationMode: Sendable {
         self.authPolicy = authPolicy
         self.callerConfig = callerConfig
         self.verbose = verbose
+        self.creationToken = creationToken
     }
 }
 
@@ -140,6 +144,11 @@ extension ACPXBackend {
 
     /// A backend that holds no agents live has none to let go.
     public func releaseSession(sessionId: String) async throws -> Bool {
+        false
+    }
+
+    /// A backend that holds no agents live keeps none it made.
+    public func callOffCreation(creationToken: String) async throws -> Bool {
         false
     }
 }

@@ -29,6 +29,13 @@ extension DaemonClient {
         }
     }
 
+    /// Call off, on a *running* daemon, the session it makes under `creationToken`
+    /// (``ACPXDaemon/callOffCreation(creationToken:)``): best effort, as a daemon that is gone
+    /// holds nothing. Never spawns a daemon.
+    static func callOffCreation(_ creationToken: String) async {
+        _ = try? await withClient(spawnIfNeeded: false) { try await $0.callOffCreation(creationToken: creationToken) }
+    }
+
     /// Whether a *running* daemon lacks ``ACPXDaemon/releaseSession(sessionId:)``: an acpxd
     /// from before it (#162), which lets a session's agent go only by closing the session.
     /// With none running, nothing holds a session, and nothing is lacking.
