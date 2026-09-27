@@ -15,6 +15,9 @@ struct FlowAgentSessions: FlowSessionRunner {
     let permission: PermissionPolicy
     let permissionRules: PermissionRules?
     let mcpServers: [MCPServerSpec]
+    /// Called with the agent's connection once the agent is up: lets a test hold what the
+    /// connection does.
+    var onConnected: (@Sendable (ACPAgentConnection) async -> Void)?
 
     func runIsolated(_ turn: FlowTurn) async throws -> String {
         let owner = FlowTurnOwner()
@@ -61,6 +64,7 @@ struct FlowAgentSessions: FlowSessionRunner {
                     turn.onMessage(direction == .outbound, message)
                 })
         }
+        await onConnected?(handle.connection)
         await events.follow(handle.connection)
         try turn.control.check()
         let invocation = AgentInvocation(
@@ -193,7 +197,7 @@ final class FlowTurnOwner: @unchecked Sendable {
                     await connection.waitForPromptToSettle(sessionId: prompted)
                 }
             }
-            await running.close()
+            await Self.close(running, afterUpdatesOf: prompted)
         }
         lock.withLock { self.stopping = task }
     }
@@ -201,9 +205,19 @@ final class FlowTurnOwner: @unchecked Sendable {
     /// acpx's `closeOwnedClient`, which the turn ends with: the agent closed, once a stop
     /// under way has closed it.
     func close() async {
-        let (agent, stopping) = lock.withLock { (self.agent, self.stopping) }
+        let (agent, sessionId, stopping) = lock.withLock { (self.agent, self.sessionId, self.stopping) }
         await stopping?.value
-        await agent?.close()
+        guard let agent else { return }
+        await Self.close(agent, afterUpdatesOf: sessionId)
+    }
+
+    /// Close `agent` once every update of `sessionId` its connection has read is handled.
+    /// Closing ends the connection's subscriptions there and then, so an update read but
+    /// still on its way to them would be lost to the turn's record, though the turn's
+    /// `events.ndjson` has it. acpx's client takes in all it has read before it closes.
+    private static func close(_ agent: ACPAgent, afterUpdatesOf sessionId: SessionId?) async {
+        if let sessionId { await agent.connection.waitForSessionUpdatesHandled(sessionId: sessionId) }
+        await agent.close()
     }
 }
 
