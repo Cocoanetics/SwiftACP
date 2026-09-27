@@ -112,9 +112,11 @@ extension ACPXDaemonBackend {
         // just persisted new history, and the persister must build on that, not on a
         // stale pre-wait snapshot (whose final flush would otherwise clobber it). By the
         // record id: that turn may also have moved the record to a new ACP session, and
-        // the caller's id may be the one it replaced.
-        guard let record = findRecord(recordId) else {
-            throw DaemonError.sessionNotFound(sessionId)
+        // the caller's id may be the one it replaced. A direct turn that finds it gone lets
+        // its agent go, as acpx's closes the client it was handed however it ends (#219 review).
+        let record = try await lettingDirectAgentGo(direct, recordId) {
+            guard let record = findRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
+            return record
         }
         // Cancelled while it waited, it ends now, as acpx's prompt ends cancelled once it
         // holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.

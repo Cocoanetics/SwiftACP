@@ -89,6 +89,28 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A direct turn that finds its session's record gone once it has the session's slot fails,
+    /// and lets the agent held for it go, as acpx's direct turn closes the client it was handed
+    /// however it ends — a caller of the direct tool has nothing else to let it go (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectTurnWhoseRecordGoesAsItBeginsLetsItsAgentGo() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            #expect(await !daemon.live.isEmpty)
+            // The record goes as the turn takes the slot.
+            await daemon.turnQueue.setBeforeAcquire { _ in
+                try? FileManager.default.removeItem(at: ACPXPaths.sessionRecordPath(id))
+            }
+            await #expect(throws: DaemonError.self) {
+                _ = try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
+            }
+            #expect(await daemon.live.isEmpty)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A direct turn that finds its session's journal corrupt fails before its attempt, and lets
     /// the agent held for it go, as acpx's direct turn closes the client it was handed however it
     /// ends (#219 review) — where a queued turn's owner keeps its agent.
