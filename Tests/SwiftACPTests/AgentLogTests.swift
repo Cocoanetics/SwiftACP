@@ -48,6 +48,21 @@ import Testing
         #expect(Array(lines.all.dropFirst()) == [line, "initialized protocol version 1"])
     }
 
+    /// A credential an explicit environment gives the agent is the environment's, though the config
+    /// has another for the method: launching puts none of the config's there (#233 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func anExplicitEnvironmentsCredentialIsTheEnvironments() async throws {
+        let lines = Lines()
+        var environment = ProcessInfo.processInfo.environment
+        environment["ACPX_AUTH_PROBE_LOGIN"] = "from-the-environment"
+        let agent = try await ACPAgent.launch(
+            agent: AgentEndTests.command("EXIT_AGENT_AUTH=1"), cwd: NSTemporaryDirectory(), permission: .approveAll,
+            environment: environment, authCredentials: ["probe-login": "from-the-config"], inheritStderr: false,
+            onLog: { lines.append($0) })
+        await agent.close()
+        #expect(lines.all.dropFirst().first == "authenticated with method probe-login (env)")
+    }
+
     /// An agent that outlasts `SIGTERM` is noted as it is killed, as acpx's
     /// `cleanupAgentProcess` logs it.
     @Test(.enabled(if: mockPythonAvailable))

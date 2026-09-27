@@ -27,10 +27,10 @@ extension ACPAgent {
                 configCredential?.trimmingCharacters(in: .whitespaces).isEmpty == false
             if hasEnv || hasConfig {
                 try await connection.authenticate(methodId: method.id)
-                // Named as acpx's `selectAuthMethod` finds it: in the client's own environment
-                // first, then in the config — which the agent's environment carries too.
-                let fromCaller = AgentEnvironment.readEnvCredential(methodId: method.id, in: callerEnvironment) != nil
-                log.log("authenticated with method \(method.id) (\(fromCaller || !hasConfig ? "env" : "config"))")
+                let source = fromConfig(
+                    method.id, configCredential: hasConfig ? configCredential : nil, environment: environment,
+                    callerEnvironment: callerEnvironment) ? "config" : "env"
+                log.log("authenticated with method \(method.id) (\(source))")
                 return
             }
         }
@@ -40,6 +40,21 @@ extension ACPAgent {
         }
         log.log("agent advertised auth methods [\(advertised)] but no matching credentials found"
             + " — skipping (agent may handle auth internally)")
+    }
+
+    /// Whether the credential `methodId` signs in with is the configured one, as acpx's
+    /// `selectAuthMethod` names it: only when the client's own environment has none — acpx looks
+    /// there first — and the agent's environment holds the configured credential, which launching
+    /// puts there, or none. One the agent's environment holds of its own — given it explicitly —
+    /// is the environment's (#233 review).
+    private static func fromConfig(
+        _ methodId: String, configCredential: String?, environment: [String: String],
+        callerEnvironment: [String: String]
+    ) -> Bool {
+        guard let configCredential,
+              AgentEnvironment.readEnvCredential(methodId: methodId, in: callerEnvironment) == nil else { return false }
+        let agents = AgentEnvironment.readEnvCredential(methodId: methodId, in: environment)
+        return agents == nil || agents == configCredential
     }
 }
 #endif
