@@ -40,27 +40,43 @@ extension DaemonToolsTests {
     }
 
     private func runTurn(
-        on proxy: MCPServerProxy, _ stopReason: StopReasonBox, sessionId: String
+        on proxy: MCPServerProxy, _ stopReason: StopReasonBox, sessionId: String, prompt: String = multiLinePrompt
     ) async throws -> DaemonTurn {
         try await DaemonClient.runPrompt(
             on: proxy, stopReason: stopReason, sessionId: sessionId,
-            content: [.object(["type": .string("text"), "text": .string(Self.multiLinePrompt)])], wait: true,
+            content: [.object(["type": .string("text"), "text": .string(prompt)])], wait: true,
             permissionMode: "approve-all", nonInteractivePermissions: "deny")
     }
 
-    /// The turn succeeds although the tool's plain-text result cannot be decoded (see
-    /// the known issue below): the CLI ignores that text, and the daemon ran the turn
-    /// to the end — its reply is in the session's history.
+    /// The replies the session's history has.
+    private func replies(_ sessionId: String) throws -> String {
+        let record = try #require(SessionStore.loadRecord(sessionId))
+        return record.messages.flatMap { message -> [String] in
+            guard case .agent(let agent) = message else { return [] }
+            return agent.content.compactMap { if case .text(let text) = $0 { text } else { nil } }
+        }.joined()
+    }
+
+    /// The turn succeeds although SwiftMCP's typed client cannot decode the tool's
+    /// plain-text result (see the known issue below): the CLI calls the tool untyped and
+    /// never reads that text, and the daemon ran the turn to the end — its reply is in
+    /// the session's history.
     @Test(.enabled(if: mockPythonAvailable))
     func aReplyWithNewlinesAndQuotesDoesNotFailTheTurn() async throws {
         try await withLoopbackDaemon { proxy, sessionId, stopReason in
             _ = try await runTurn(on: proxy, stopReason, sessionId: sessionId)
-            let record = try #require(SessionStore.loadRecord(sessionId))
-            let replies = record.messages.flatMap { message -> [String] in
-                guard case .agent(let agent) = message else { return [] }
-                return agent.content.compactMap { if case .text(let text) = $0 { text } else { nil } }
-            }
-            #expect(replies.joined().contains(Self.multiLinePrompt))
+            #expect(try replies(sessionId).contains(Self.multiLinePrompt))
+        }
+    }
+
+    /// A reply that is one JSON object with a single scalar member, which SwiftMCP's typed
+    /// client would crash on: it hands that member to `JSONSerialization` as a top level,
+    /// an exception nothing catches.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aReplyThatIsOneJSONMemberDoesNotCrashTheCLI() async throws {
+        try await withLoopbackDaemon { proxy, sessionId, stopReason in
+            _ = try await runTurn(on: proxy, stopReason, sessionId: sessionId, prompt: #"verbatim:{"a":1}"#)
+            #expect(try replies(sessionId) == #"{"a":1}"#)
         }
     }
 

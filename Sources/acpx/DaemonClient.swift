@@ -281,18 +281,18 @@ enum DaemonClient {
         // The permission mode travels with every turn, as acpx sends it with every
         // prompt: the daemon applies it to this turn only. So does the cap on terminal
         // output — `0` for none, so the daemon's own never stands in for it.
+        //
+        // The tool is called untyped, so that text is never read: SwiftMCP's typed client
+        // can fail to read it — a reply with a newline or a quote, nearly every reply — and
+        // can crash on it: a reply that is one JSON object with a single scalar member
+        // (`{"a":1}`) takes it to `JSONSerialization` with a top level no JSON writer takes,
+        // an exception nothing catches. A failed call still arrives as `MCPServerProxyError`.
         do {
-            _ = try await ACPXDaemon.Client(proxy: proxy).runPrompt(
-                sessionId: sessionId, text: "", content: content, wait: wait,
-                permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-                streamWire: streamWire, permissionPolicy: permissionPolicy,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model, sessionOptions: sessionOptions,
-                limits: limits)
-        } catch is DecodingError {
-            // The turn succeeded; only its ignored text did not decode. SwiftMCP's typed
-            // client turns a plain-text result into a JSON string by wrapping it in
-            // quotes unescaped, so a reply holding a newline or a quote — nearly every
-            // reply — fails there. A failed call arrives as `MCPServerProxyError`, not this.
+            _ = try await proxy.callToolResult("runPrompt", arguments: try promptArguments(
+                sessionId: sessionId, content: content, wait: wait, permissionMode: permissionMode,
+                nonInteractivePermissions: nonInteractivePermissions, streamWire: streamWire,
+                permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model,
+                sessionOptions: sessionOptions, limits: limits))
         } catch {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
