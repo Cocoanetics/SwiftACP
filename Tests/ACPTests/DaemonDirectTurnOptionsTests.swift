@@ -189,6 +189,28 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A flow's `--auth-policy` reaches its persistent session — the agent that makes it and
+    /// the one a later turn takes it back with — as acpx's runner gives every client the
+    /// flow's (#219 review): under `fail`, an agent that advertises a sign-in none of the
+    /// credentials match is refused, where the configured `skip` lets it go on.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowsAuthPolicyReachesItsPersistentSession() async throws {
+        let command = "/usr/bin/env MOCK_AUTH_METHODS=token MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            await #expect(throws: AuthPolicyError.self) {
+                _ = try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, authPolicy: "fail"))
+            }
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await #expect(throws: AuthPolicyError.self) {
+                _ = try await daemon.runPrompt(
+                    sessionId: id, text: "hi", permissionMode: "approve-all", direct: true, authPolicy: "fail")
+            }
+        }
+    }
+
     /// The options' model is kept with a session made for a flow's first turn, with the
     /// rest of them, as acpx's `createSessionWithClient` records its options. The session's
     /// current model stays the agent's, as acpx 0.19.3's `sessions new --model` leaves it on

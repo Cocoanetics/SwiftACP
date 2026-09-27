@@ -32,7 +32,7 @@ extension FlowAgentSessions {
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: config.sessionMcpServers,
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
-                permissionPolicy: permissionRules)
+                permissionPolicy: permissionRules, authPolicy: flags.authPolicy)
         } catch {
             await proxy.disconnect()
             if let reason = control.stopReason { throw reason }
@@ -88,7 +88,7 @@ extension FlowAgentSessions {
                 on: proxy, stopReason: stopReason, sessionId: turn.recordId, content: content, wait: true,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, terminalOutputCeiling: ceiling,
-                streamWire: true, direct: true, fs: flags.fs, turnToken: turnToken)
+                streamWire: true, direct: true, fs: flags.fs, authPolicy: flags.authPolicy, turnToken: turnToken)
         } catch {
             await stop.turnEnded()
             await proxy.disconnect()

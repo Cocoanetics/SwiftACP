@@ -82,6 +82,8 @@ public actor ACPXDaemon {
     ///     own mode, as acpx's runner makes its client with it. Omitted, `approve-all`.
     ///   - nonInteractivePermissions: `deny` or `fail`, as `runPrompt`'s. Omitted, `deny`.
     ///   - permissionPolicy: per-tool rules before `permissionMode`, as `runPrompt`'s.
+    ///   - authPolicy: acpx's `--auth-policy` for the creating agent — `fail` refuses one that
+    ///     advertises sign-in methods none of the credentials match. Omitted, as configured.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
@@ -89,13 +91,14 @@ public actor ACPXDaemon {
         mcpServers: [McpServerConfig]? = nil, agentArgv: [String]? = nil,
         sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
-        permissionPolicy: PermissionRules? = nil
+        permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil
     ) async throws -> String {
         try await backend.newSession(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
             sessionOptions: sessionOptions, creation: SessionCreationMode(
                 holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
-                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy))
+                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
+                authPolicy: authPolicy))
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
@@ -330,6 +333,8 @@ public actor ACPXDaemon {
     ///   - fs: acpx's `--no-fs` for an agent the turn connects, as acpx's flow runner gives it
     ///     every client it makes: `false` withholds the filesystem methods. Omitted, the
     ///     agent is offered what the session was created with.
+    ///   - authPolicy: acpx's `--auth-policy` for an agent the turn connects, as acpx's flow
+    ///     runner gives it every client it makes. Omitted, as configured.
     ///   - turnToken: the caller's name for the turn, which `cancelSession` can give: a
     ///     cancel that named it before it began ends it as it begins, nothing sent.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
@@ -341,7 +346,7 @@ public actor ACPXDaemon {
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
-        direct: Bool? = nil, fs: Bool? = nil, turnToken: String? = nil
+        direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -349,7 +354,8 @@ public actor ACPXDaemon {
                 sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 mode: PromptTurnMode(
-                    streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, turnToken: turnToken),
+                    streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
+                    turnToken: turnToken),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }

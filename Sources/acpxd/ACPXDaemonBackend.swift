@@ -156,6 +156,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         let cwd = holdAgent ? ACPXPaths.resolve(rawCwd, base: FileManager.default.currentDirectoryPath)
             : try resolveCwd(rawCwd)
         let config = try ConfigLoader.load(cwd: cwd, ownMcpServers: mcpServers != nil)
+        // The caller's `--auth-policy`, as acpx's runner makes its client with the flow's.
+        let authPolicy = creation.authPolicy ?? config.authPolicy
         // Only normalize the config-file servers when they're the ones being sent:
         // a caller supplying its own set must not be refused over an unrelated bad
         // entry in the cwd's config.
@@ -168,7 +170,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             let record = try await SessionEngine.createSession(
                 agentCommand: command, agentArgv: argv, cwd: cwd,
                 name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-                authPolicy: config.authPolicy, mcpServers: configServers,
+                authPolicy: authPolicy, mcpServers: configServers,
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
                 capabilities: .acpx(fs: fs), handlers: handlers, inheritStderr: inheritAgentStderr)
             return record.acpxRecordId
@@ -177,7 +179,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         let held = try await SessionEngine.createSessionHoldingAgent(
             agentCommand: command, agentArgv: argv, cwd: cwd,
             name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-            authPolicy: config.authPolicy, mcpServers: configServers,
+            authPolicy: authPolicy, mcpServers: configServers,
             sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
             capabilities: .acpx(fs: fs), recordsCapabilities: false, handlers: handlers,
             inheritStderr: inheritAgentStderr)
@@ -404,7 +406,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
 
-    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:turnToken:)``
+    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:authPolicy:turnToken:)``
     /// as the tool calls it.
     func runPrompt(
         sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
@@ -417,7 +419,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: mode.streamWire, permissionPolicy: permissionPolicy,
             terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
-            direct: mode.direct, fs: mode.fs, turnToken: mode.turnToken)
+            direct: mode.direct, fs: mode.fs, authPolicy: mode.authPolicy, turnToken: mode.turnToken)
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the

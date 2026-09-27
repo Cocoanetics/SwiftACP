@@ -53,24 +53,27 @@ public protocol ACPXBackend: Sendable {
 
 /// How a session is made, beside where and with what (``ACPXDaemon``'s `newSession`):
 /// whether its agent is kept for its first turn (`holdAgent`), what that agent is offered
-/// (`fs`, acpx's `--no-fs`), and how its requests are answered until then — as a turn's are
-/// (`permissionMode`, `nonInteractivePermissions`, `permissionPolicy`).
+/// (`fs`, acpx's `--no-fs`), how its requests are answered until then — as a turn's are
+/// (`permissionMode`, `nonInteractivePermissions`, `permissionPolicy`) — and how it signs in
+/// (`authPolicy`, acpx's `--auth-policy`; `nil`, as configured).
 public struct SessionCreationMode: Sendable {
     public var holdAgent: Bool
     public var fs: Bool?
     public var permissionMode: String?
     public var nonInteractivePermissions: String?
     public var permissionPolicy: PermissionRules?
+    public var authPolicy: String?
 
     public init(
         holdAgent: Bool = false, fs: Bool? = nil, permissionMode: String? = nil,
-        nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil
+        nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil
     ) {
         self.holdAgent = holdAgent
         self.fs = fs
         self.permissionMode = permissionMode
         self.nonInteractivePermissions = nonInteractivePermissions
         self.permissionPolicy = permissionPolicy
+        self.authPolicy = authPolicy
     }
 }
 
@@ -78,18 +81,24 @@ public struct SessionCreationMode: Sendable {
 /// (``ACPXDaemon``'s `runPrompt` `streamWire`), whether it runs as acpx's
 /// `sendSessionDirect` runs a flow's persistent turn (`direct`), whether an agent it
 /// connects is offered the filesystem methods (`fs`, acpx's `--no-fs`; `nil`, as the
-/// session was created), and the caller's name for it, which a cancel can give before the
-/// turn begins (`turnToken`).
+/// session was created), how that agent signs in (`authPolicy`, acpx's `--auth-policy`;
+/// `nil`, as configured), and the caller's name for the turn, which a cancel can give
+/// before it begins (`turnToken`).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool
     public var fs: Bool?
+    public var authPolicy: String?
     public var turnToken: String?
 
-    public init(streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, turnToken: String? = nil) {
+    public init(
+        streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, authPolicy: String? = nil,
+        turnToken: String? = nil
+    ) {
         self.streamWire = streamWire
         self.direct = direct
         self.fs = fs
+        self.authPolicy = authPolicy
         self.turnToken = turnToken
     }
 }

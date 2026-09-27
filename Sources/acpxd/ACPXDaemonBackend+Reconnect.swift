@@ -138,7 +138,7 @@ extension ACPXDaemonBackend {
                         agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
                         capabilities: capabilities, environment: AgentEnvironment.forAgent(
                             authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
-                        authCredentials: config.auth, authPolicy: config.authPolicy,
+                        authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
                         onRawWire: connectTap)
                 }, discardingLate: { await $0.close() })
@@ -263,6 +263,8 @@ extension ACPXDaemonBackend {
         var sameSessionOnly = false
         /// What the agent is offered, when the caller says (a flow's turn); else the record's.
         var capabilities: SwiftACP.ClientCapabilities?
+        /// How the agent signs in, when the caller says (a flow's turn); else as configured.
+        var authPolicy: String?
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
