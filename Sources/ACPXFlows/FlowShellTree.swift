@@ -14,6 +14,10 @@ enum FlowShellTree {
     /// acpx's `KILL_GRACE_MS`: how long each signal is given, and the pipes after them.
     static let killGrace: Duration = .seconds(1)
 
+    /// Called once the table is read and before the group is signalled: lets a test change
+    /// the tree in between.
+    @TaskLocal static var beforeSignalling: (@Sendable () -> Void)?
+
     /// acpx's `stopShellProcess`: the tree stopped with `signal`, then SIGKILL; then the
     /// pipes closed. A failure to stop is reported once the pipes have closed.
     static func stop(_ root: pid_t, signal: Int32, closed: FlowShellEvent) async throws {
@@ -101,7 +105,8 @@ enum FlowShellTree {
     private static func signalOwned(_ owned: inout Owned, _ signal: Int32) throws {
         let table = try snapshot()
         owned.remember(table)
-        try signalGroup(owned.root, signal, table: table)
+        beforeSignalling?()
+        try signalGroup(owned.root, signal)
         for (pid, birth) in owned.births where table[pid]?.birth == birth && table[pid]?.groupPid != owned.root {
             try signalProcess(pid, signal)
         }
@@ -124,7 +129,7 @@ enum FlowShellTree {
     private static func forceKnownProcesses(_ owned: Owned) throws {
         let table = ProcessTable.snapshot() ?? [:]
         var errors: [Error] = []
-        do { try signalGroup(owned.root, SIGKILL, table: table) } catch { errors.append(error) }
+        do { try signalGroup(owned.root, SIGKILL) } catch { errors.append(error) }
         for (pid, birth) in owned.births where table[pid]?.birth == birth {
             do { try signalProcess(pid, SIGKILL) } catch { errors.append(error) }
         }
@@ -132,12 +137,14 @@ enum FlowShellTree {
     }
 
     /// acpx's `signalGroup`: gone is done; not allowed is done too when none of the group
-    /// is alive.
-    private static func signalGroup(_ root: pid_t, _ signal: Int32, table: [pid_t: ProcessTableEntry]) throws {
+    /// is alive — as the table has it once the signal was refused, as acpx reads `ps` again
+    /// then. A member that exited since the table was last read is a zombie, which a group's
+    /// signal is refused for.
+    private static func signalGroup(_ root: pid_t, _ signal: Int32) throws {
         guard kill(-root, signal) != 0 else { return }
         let failure = errno
         if failure == ESRCH { return }
-        if failure == EPERM, !table.values.contains(where: { $0.groupPid == root }) { return }
+        if failure == EPERM, try !snapshot().values.contains(where: { $0.groupPid == root }) { return }
         throw FlowShellKillError(code: failure)
     }
 
