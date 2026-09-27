@@ -170,15 +170,22 @@ def handle_prompt(req_id, params):
         "status": "completed",
     })
 
-    # Stream the reply word by word as agent_message_chunk.
-    reply = "Hello from the mock agent! You said: " + text.strip()
-    if attachments:
-        reply += " with " + " ".join(attachments)
-    for word in reply.split(" "):
+    # Stream the reply word by word as agent_message_chunk — or, for a prompt that starts
+    # with `verbatim:`, the rest of it as the whole reply, in one chunk.
+    if text.startswith("verbatim:"):
         session_update(session_id, {
             "sessionUpdate": "agent_message_chunk",
-            "content": {"type": "text", "text": word + " "},
+            "content": {"type": "text", "text": text[len("verbatim:"):]},
         })
+    else:
+        reply = "Hello from the mock agent! You said: " + text.strip()
+        if attachments:
+            reply += " with " + " ".join(attachments)
+        for word in reply.split(" "):
+            session_update(session_id, {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": word + " "},
+            })
 
     # Report cost on a usage_update (where Claude Code carries cost), with the
     # bare {used, size} context metric and no _meta.usage — exactly as real agents do.
