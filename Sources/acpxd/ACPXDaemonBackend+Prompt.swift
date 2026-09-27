@@ -130,6 +130,8 @@ extension ACPXDaemonBackend {
         // Cancelled while it waited, it ends now, as acpx's prompt ends cancelled once it
         // holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.
         if turns[recordId]?.cancelAsked == true {
+            // A direct turn's agent goes with it, as acpx closes the client it was handed however it ends.
+            if direct { await evict(recordId) }
             await Self.announceTheEnd(
                 of: PromptResponse(stopReason: .cancelled), permissions: PermissionStats(),
                 result: PromptResultCapture(), as: record.acpSessionId, to: Session.current)

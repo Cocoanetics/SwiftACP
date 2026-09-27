@@ -134,14 +134,15 @@ extension DaemonToolsTests {
 
     /// A cancel that names a direct turn before acpxd has begun it calls the turn off: it
     /// ends as it begins, its prompt never sent, however the cancel and the turn crossed —
-    /// as acpx's flow runner closes the client a stopped direct turn would prompt on (#219
-    /// review). A turn with another name runs.
+    /// and its agent let go, as acpx's flow runner closes the client a stopped direct turn
+    /// would prompt on (#219 review). A turn with another name runs.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aDirectTurnCalledOffBeforeItBeganIsNeverSent() async throws {
         let directory = try Self.scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let requests = directory.appendingPathComponent("requests.log")
-        let command = "/usr/bin/env MOCK_REQUEST_LOG='\(requests.path)' " + (try #require(mockCommand()))
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(requests.path)' "
+            + (try #require(mockCommand()))
         let logged = { (try? String(contentsOf: requests, encoding: .utf8)) ?? "" }
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
@@ -151,10 +152,13 @@ extension DaemonToolsTests {
                 sessionId: id, text: "hi", permissionMode: "approve-all", direct: true, turnToken: "stopped")
             #expect(calledOff.isEmpty)
             #expect(!logged().contains("session/prompt"), "\(logged())")
+            // Its agent went with it, as acpx closes the client it was handed (#219 review): the
+            // next turn takes the session back.
+            #expect(await !daemon.sessionStatus(sessionId: id).live)
             let answered = try await daemon.runPrompt(
                 sessionId: id, text: "hi", permissionMode: "approve-all", direct: true, turnToken: "next")
             #expect(answered.contains("You said: hi"), "\(answered)")
-            #expect(logged().contains("session/prompt"))
+            #expect(logged().contains("session/load") && logged().contains("session/prompt"), "\(logged())")
         }
     }
 
