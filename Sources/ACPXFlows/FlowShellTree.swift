@@ -199,6 +199,18 @@ final class FlowShellEvent: @unchecked Sendable {
 
     var hasHappened: Bool { lock.withLock { happened } }
 
+    /// Once it has happened.
+    func wait() async {
+        _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let already: Bool = lock.withLock {
+                if happened { return true }
+                waiters[UUID()] = continuation
+                return false
+            }
+            if already { continuation.resume(returning: true) }
+        }
+    }
+
     /// Whether it happens within `timeout`.
     func wait(for timeout: Duration) async -> Bool {
         let id = UUID()

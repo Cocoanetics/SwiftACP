@@ -59,6 +59,22 @@ struct FlowShellProcessTests {
         #expect(ContinuousClock.now - started >= .milliseconds(70))
     }
 
+    /// A deadline that passes while the cooperative pool has no thread free for the
+    /// command's stop still times the command out, as acpx's timer does on its event loop.
+    /// On CI's busy runner the deadline once ran only after the command had exited, and a
+    /// command 10 s past its 50 ms deadline read as finished.
+    @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
+    func aDeadlinePassingWhileThePoolIsBusyStillTimesTheCommandOut() async throws {
+        let started = ContinuousClock.now
+        await FlowShellTermination.$poolIsBusy.withValue(true) {
+            await #expect(throws: FlowTimeoutError(timeoutMs: 50)) {
+                _ = try await self.runAction(self.nodeSpec("setTimeout(() => {}, 1000)", [("timeoutMs", .number(50))]))
+            }
+        }
+        // Its stop waited for the result: the command ran until it exited on its own.
+        #expect(ContinuousClock.now - started >= .milliseconds(1000))
+    }
+
     /// acpx: "runShellAction rejects commands terminated by signal".
     @Test func aCommandEndedBySignalFails() async throws {
         let error = await #expect(throws: FlowShellError.self) {
@@ -97,6 +113,27 @@ struct FlowShellProcessTests {
         attempt.cancel(FlowShellError("stop"))
         await #expect(throws: FlowTimeoutError(timeoutMs: 0)) { _ = try await pending.value }
         #expect(!isAlive(pid))
+    }
+
+    /// An attempt cancelled while the pool has no thread free marks its command stopped at
+    /// once, as acpx's abort listener does: a command that then exits on its own, before
+    /// its stop can run, still reads as having timed out.
+    @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
+    func anAttemptCancelledWhileThePoolIsBusyStillTimesTheCommandOut() async throws {
+        let fifo = try FIFOReader.make()
+        let attempt = FlowAttempt(nodeId: "shell", attemptId: "shell#1", startedAt: "", timeoutMs: nil)
+        let script = "process.on('SIGUSR2', () => process.exit(0));"
+            + "require('node:fs').writeFileSync(\(fifo.jsPath), String(process.pid)); setInterval(() => {}, 1000)"
+        try await FlowShellTermination.$poolIsBusy.withValue(true) {
+            let pending = Task {
+                try await self.runAction(self.nodeSpec(script), control: FlowShellControl(attempt: attempt))
+            }
+            let pid = try #require(pid_t(await fifo.next()))
+            attempt.cancel(FlowShellError("stop"))
+            // The command ends on its own, its stop still waiting for the pool.
+            kill(pid, SIGUSR2)
+            await #expect(throws: FlowTimeoutError(timeoutMs: 0)) { _ = try await pending.value }
+        }
     }
 
     /// acpx: "shell abort stops descendants after wrapper exit": a descendant that ignores
