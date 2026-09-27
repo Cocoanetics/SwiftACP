@@ -107,6 +107,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: run once a prompt's turn has sealed its controls, before the turn is over.
     var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a close or a let-go has sent the cancel of a prompt that was out,
+    /// before it sends the next.
+    var cancelSent: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: told the record id whenever a prompt waits to begin behind another.
     var promptWaits: (@Sendable (_ recordId: String) -> Void)?
     /// For tests: run once a flow's new session is held, before its call-off is looked for.

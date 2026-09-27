@@ -131,6 +131,34 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A close marks every turn of its session cancelled before it sends the first cancel: a
+    /// flow's turn waiting for the session behind another ends then, nothing sent — it does not
+    /// take the session and send its prompt while the cancel of the turn ahead goes out
+    /// (#229 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCloseCancelsATurnWaitingBehindAnotherBeforeItsPromptGoesOut() async throws {
+        try await withIsolatedStore {
+            let (daemon, id) = try await Self.sessionForAFlow()
+            let flow = try await Self.holdADirectTurn(daemon, id)
+            let waiting = HoldGate()
+            await daemon.turnQueue.setOnQueued { _ in waiting.open() }
+            let second = Task {
+                try await daemon.runPrompt(
+                    sessionId: id, text: "second", permissionMode: "approve-all", direct: true, turnToken: "second")
+            }
+            await waiting.wait()
+            await daemon.turnQueue.setOnQueued(nil)
+            // The close waits, once the flow's turn is cancelled, until the second turn is over:
+            // left uncancelled, it would take the session meanwhile and send its prompt.
+            await daemon.setCancelSent { _ in _ = try? await second.value }
+            #expect(try await daemon.closeSession(sessionId: id))
+            #expect(try await second.value == "")
+            #expect(!Self.prompts(of: id).contains("second"))
+            _ = try? await flow.value
+            await daemon.releaseAll()
+        }
+    }
+
     /// A daemon, and a session made for a flow, its agent held for its first turn.
     private static func sessionForAFlow() async throws -> (ACPXDaemonBackend, String) {
         let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
@@ -178,5 +206,11 @@ extension DaemonToolsTests {
                 return nil
             }.joined()
         }
+    }
+}
+
+extension ACPXDaemonBackend {
+    func setCancelSent(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
+        cancelSent = hook
     }
 }

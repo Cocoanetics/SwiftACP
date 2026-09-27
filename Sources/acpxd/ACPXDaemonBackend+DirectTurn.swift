@@ -129,13 +129,21 @@ extension ACPXDaemonBackend {
     /// out, the agent is asked to cancel it; before, it never goes out, and a wait for the
     /// session or before a retry ends at once.
     func cancel(_ turn: TurnControl, of recordId: String) async throws {
-        changeTurn(recordId, turn.id) { $0.cancelAsked = true }
-        if let prompt = turn.prompt {
-            try await prompt.connection.cancel(sessionId: prompt.sessionId)
-        } else {
-            changeTurn(recordId, turn.id) { $0.cancelPending = true }
-            turn.pause?.cancel()
-            turn.slotWait?.cancel()
-        }
+        guard let prompt = markCancelled(turn.id, of: recordId) else { return }
+        try await prompt.connection.cancel(sessionId: prompt.sessionId)
+    }
+
+    /// Mark turn `id` cancelled as it stands now — not as a caller found it, which a suspension
+    /// since can have left behind: before its prompt goes out, it never does, and a wait for the
+    /// session or before a retry ends at once. Returns where its prompt went, once it went, for
+    /// the agent to be asked to cancel it; `nil` otherwise, and for a turn that is over.
+    func markCancelled(_ id: UUID, of recordId: String) -> (connection: ACPAgentConnection, sessionId: SessionId)? {
+        guard let turn = turnControl(recordId, id) else { return nil }
+        changeTurn(recordId, id) { $0.cancelAsked = true }
+        if let prompt = turn.prompt { return prompt }
+        changeTurn(recordId, id) { $0.cancelPending = true }
+        turn.pause?.cancel()
+        turn.slotWait?.cancel()
+        return nil
     }
 }

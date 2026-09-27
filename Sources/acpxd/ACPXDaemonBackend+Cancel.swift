@@ -78,10 +78,15 @@ extension ACPXDaemonBackend {
     }
 
     /// Cancel what runs on `recordId`'s session, its owner's turn and a direct one alike: a
-    /// close or a let-go ends the session under both.
+    /// close or a let-go ends the session under both. Every turn is marked cancelled before the
+    /// first cancel goes out: sending one suspends, and a turn waiting for the session could take
+    /// it meanwhile and send its prompt, which a cancel working from what it found before would
+    /// then leave running (#229 review).
     func cancelEveryTurn(_ recordId: String) async {
-        for turn in everyTurn(recordId) {
-            try? await cancel(turn, of: recordId)
+        let prompts = everyTurn(recordId).compactMap { markCancelled($0.id, of: recordId) }
+        for prompt in prompts {
+            try? await prompt.connection.cancel(sessionId: prompt.sessionId)
+            await cancelSent?(recordId)
         }
     }
 
