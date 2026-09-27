@@ -21,7 +21,7 @@
   values that are no object, a batch, a stray object, and text that is no JSON.
 - `EXIT_AGENT_LINE_BYTES=N` answers `initialize` with a line of N bytes, LF excluded.
 - `EXIT_AGENT_INIT_ERROR=1` answers `initialize` with an error, and runs on.
-- `EXIT_AGENT_AUTH=1` advertises a sign-in method on `initialize`.
+- `EXIT_AGENT_AUTH=1` advertises a sign-in method on `initialize`, and accepts it.
 - `EXIT_AGENT_STUBBORN=1` ignores `SIGTERM` and keeps running once its stdin ends.
 - `EXIT_AGENT_LINGER=1` keeps running once its stdin ends, until a signal ends it.
 - `EXIT_AGENT_CHILD=<path>` starts `sleep 300` at `initialize` — or at the method
@@ -158,6 +158,8 @@ def main():
             send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         elif method == "session/cancel":
             pass
+        elif method == "authenticate" and os.environ.get("EXIT_AGENT_AUTH") == "1":
+            send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         elif req_id is not None:
             send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}})
     if STUBBORN or LINGER:

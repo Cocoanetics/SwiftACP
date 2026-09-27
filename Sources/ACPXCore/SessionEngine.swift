@@ -28,6 +28,8 @@ public enum SessionEngine {
     ///     `--resume-session`. The record is written under its id.
     ///   - onStderr: shown what the agent writes to stderr, from its start
     ///     (``RawWireTap/onStderr(_:)``).
+    ///   - onLog: told what the client notes of the agent, from its spawn — acpx's
+    ///     `AcpClient.log` (``RawWireTap/onLog(_:)``).
     public static func createSession(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -48,6 +50,7 @@ public enum SessionEngine {
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
         // The record is written once the agent is gone: one written while it still runs would
@@ -60,7 +63,7 @@ public enum SessionEngine {
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
             writesRecord: false, handlers: handlers, baseEnvironment: baseEnvironment,
             terminalOutputCeiling: terminalOutputCeiling, inheritStderr: inheritStderr, onStderr: onStderr,
-            onModelWarning: onModelWarning)
+            onLog: onLog, onModelWarning: onModelWarning)
         beforeClosing?(held.record.acpxRecordId)
         var record = held.record
         let handle = held.agent
@@ -120,6 +123,7 @@ public enum SessionEngine {
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> HeldSession {
         // Validate the session's own servers before paying for a spawn.
@@ -133,7 +137,7 @@ public enum SessionEngine {
                 over: baseEnvironment ?? ProcessInfo.processInfo.environment),
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling,
-            terminalEnvironment: baseEnvironment, onStderr: onStderr)
+            terminalEnvironment: baseEnvironment, onStderr: onStderr, onLog: onLog)
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,

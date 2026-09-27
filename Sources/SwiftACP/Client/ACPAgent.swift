@@ -122,7 +122,8 @@ public final class ACPAgent: Sendable {
         terminalEnvironment: [String: String]? = nil,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil,
-        onStderr: RawWireTap.StderrObserver? = nil
+        onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil
     ) async throws -> ACPAgent {
         // Build the agent's environment exactly like acpx: inherit the parent
         // environment, promote `ACPX_AUTH_*`, and inject configured `auth`
@@ -140,16 +141,19 @@ public final class ACPAgent: Sendable {
             for: name, argv: argv, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
         let agentCommand = failureName(agent: name, argv: argv, overrides: overrides)
+        // Tapped from the start, so an observer given here sees the handshake too — and
+        // whatever the agent writes to stderr as it starts, and what the client notes of it,
+        // the command it spawns first: acpx's `logAgentLaunch`, before the spawn can fail.
+        let rawWire = RawWireTap(onRawWire)
+        rawWire.onStderr(onStderr)
+        rawWire.onLog(onLog)
+        rawWire.log("spawning agent: \(spec.executable) \(spec.arguments.joined(separator: " "))")
         // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
         // here so the failure names the command instead of surfacing as an opaque
         // subprocess error once the handshake times out.
         if let failure = AgentLaunchPreflight.failure(for: spec, agentCommand: agentCommand) {
             throw failure
         }
-        // Tapped from the start, so an observer given here sees the handshake too — and
-        // whatever the agent writes to stderr as it starts.
-        let rawWire = RawWireTap(onRawWire)
-        rawWire.onStderr(onStderr)
         let transport = try startTransport(
             spec, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes, tap: rawWire)
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
@@ -162,15 +166,17 @@ public final class ACPAgent: Sendable {
                 capabilities: capabilities, clientInfo: clientInfo)
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
-                authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment)
+                authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment,
+                callerEnvironment: terminalEnvironment ?? ProcessInfo.processInfo.environment, log: rawWire)
             #if os(macOS) || os(Linux)
             // acpx's `captureAgentDescendants`: once `initialize` is over, and again each
             // time a session is open, however it was opened — adapters start their
             // workers then (codex-acp its `codex`).
             let processes = transport as? AgentProcessTransport
-            processes?.captureDescendants()
-            await connection.setSessionOpenedObserver { processes?.captureDescendants() }
+            processes?.captureDescendants(noting: true)
+            await connection.setSessionOpenedObserver { processes?.captureDescendants(noting: true) }
             #endif
+            rawWire.log("initialized protocol version \(info.protocolVersion)")
             return ACPAgent(
                 name: name, cwd: cwd, connection: connection,
                 transport: transport, rawWire: rawWire, initializeResult: info, terminals: terminals)
@@ -292,7 +298,8 @@ public final class ACPAgent: Sendable {
         terminalEnvironment: [String: String]? = nil,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil,
-        onStderr: RawWireTap.StderrObserver? = nil
+        onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil
     ) async throws -> ACPAgent {
         try await launch(
             agent: name, argv: argv, cwd: cwd,
@@ -303,7 +310,7 @@ public final class ACPAgent: Sendable {
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
             terminalEnvironment: terminalEnvironment, onClientRequest: onClientRequest, onRawWire: onRawWire,
-            onStderr: onStderr)
+            onStderr: onStderr, onLog: onLog)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.
@@ -311,33 +318,13 @@ public final class ACPAgent: Sendable {
         try await connection.authenticate(methodId: methodId)
     }
 
-    /// After `initialize`, if the agent advertised auth methods, select a
-    /// credential (this process's `ACPX_AUTH_*` env first, then configured
-    /// `auth`) and call ACP `authenticate`. When none match: throw under the
-    /// `fail` policy, else proceed (the agent may authenticate itself). Faithful
-    /// to acpx's `authenticateIfRequired`/`selectAuthMethod`.
-    private static func authenticateIfRequired(
-        connection: ACPAgentConnection,
-        methods: [AuthMethod],
-        authCredentials: [String: String],
-        authPolicy: String,
-        environment: [String: String]
-    ) async throws {
-        guard !methods.isEmpty else { return }
-        for method in methods {
-            // The environment the agent runs with: the starting process's, or the caller's own.
-            let hasEnv = AgentEnvironment.readEnvCredential(methodId: method.id, in: environment) != nil
-            let configCredential = AgentEnvironment.resolveConfiguredAuthCredential(
-                methodId: method.id, authCredentials: authCredentials)
-            let hasConfig =
-                configCredential?.trimmingCharacters(in: .whitespaces).isEmpty == false
-            if hasEnv || hasConfig {
-                try await connection.authenticate(methodId: method.id)
-                return
-            }
-        }
-        if authPolicy == "fail" {
-            throw AuthPolicyError(methodIds: methods.map(\.id))
+    /// Ask the agent to cancel `sessionId`'s prompt, as acpx's `cancelActivePrompt` does: a
+    /// cancel that cannot be sent is noted (``RawWireTap/log(_:)``), not thrown.
+    public func sendCancel(_ sessionId: SessionId) async {
+        do {
+            try await connection.cancel(sessionId: sessionId)
+        } catch {
+            rawWire.log("failed to send session/cancel: \(error.localizedDescription)")
         }
     }
 

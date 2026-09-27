@@ -47,7 +47,7 @@ enum ExecCommand {
                                     permission: permission, nonInteractivePermissions: flags.nonInteractivePolicy,
                                     permissionRules: permissionRules, capabilities: flags.clientCapabilities,
                                     authCredentials: auth, authPolicy: flags.authPolicy, inheritStderr: flags.verbose,
-                                    onClientRequest: onClientRequest, onRawWire: onRawWire)
+                                    onClientRequest: onClientRequest, onRawWire: onRawWire, onLog: flags.clientLog)
                             }
                         }
                     } catch {
