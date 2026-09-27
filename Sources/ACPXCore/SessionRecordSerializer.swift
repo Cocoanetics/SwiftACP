@@ -137,6 +137,9 @@ enum SessionRecordSerializer {
             let storedValues = Dictionary(storedMembers.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
             let changed = members.map { member in
                 let kept = storedValues[member.key].map { storedValue in
+                    // acpx's parser builds the event log anew, in its own order, whenever it
+                    // reads a record: a member set since is in its place, not after the rest.
+                    if topLevel, member.key == eventLogKey { return member.value }
                     if inMessages, agentPayloads.contains(member.key) {
                         return sameValue(member.value, storedValue) ? storedValue : member.value
                     }
@@ -163,6 +166,8 @@ enum SessionRecordSerializer {
             return value
         }
     }
+
+    private static let eventLogKey = Array("event_log".utf16)
 
     /// The members of a message that hold what the agent sent: a tool use's input and a
     /// tool result's output.

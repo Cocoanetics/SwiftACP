@@ -284,6 +284,31 @@ struct SessionRecordSerializerTests {
         try Data(raw.utf8).write(to: ACPXPaths.sessionRecordPath("r"))
     }
 
+    /// The event log is written in the order acpx's parser gives it, as acpx writes every
+    /// record it read: a write stamp set since goes before the error, though the record was
+    /// read without one — a new session's, before its first turn.
+    @Test func theEventLogIsWrittenInTheParsersOrder() async throws {
+        try await withIsolatedStore {
+            let raw = #"{"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","#
+                + #""cwd":"/w","created_at":"t","last_used_at":"t","last_seq":0,"event_log":{"active_path":"/p","#
+                + #""segment_count":1,"max_segment_bytes":1,"max_segments":1,"last_write_error":null},"#
+                + #""closed":false,"messages":[],"updated_at":"t","cumulative_token_usage":{},"#
+                + #""request_token_usage":{}}"#
+            let path = ACPXPaths.sessionRecordPath("r")
+            try FileManager.default.createDirectory(
+                at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(raw.utf8).write(to: path)
+            var record = try #require(SessionStore.loadRecord("r"))
+            record.eventLog.lastWriteAt = "2026-09-27T00:00:00.000Z"
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: Data(contentsOf: ACPXPaths.sessionRecordPath("r"))))
+            guard case .object(let members)? = written["event_log"] else { throw POSIXError(.EINVAL) }
+            #expect(members.map { String(decoding: $0.key, as: UTF16.self) } == [
+                "active_path", "segment_count", "max_segment_bytes", "max_segments", "last_write_at", "last_write_error"
+            ])
+        }
+    }
+
     /// SwiftACP's own `acpx` fields, which acpx does not read, follow acpx's.
     @Test func swiftACPsOwnFieldsFollowAcpxs() throws {
         let raw = try #require(WireJSON(parsing: Data(#"""
