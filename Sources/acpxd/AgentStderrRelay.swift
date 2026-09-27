@@ -10,6 +10,9 @@ import SwiftMCP
 final class AgentStderrRelay: @unchecked Sendable {
     /// The most bytes that wait for a call.
     static let waitingLimit = 1 << 20
+    /// The most chunks that wait for a slow caller while it is attached, the oldest dropped
+    /// first: a chunk is at most 64 KiB, as the agent's stderr is read (#219 review).
+    static let attachedChunkLimit = 256
 
     private let lock = NSLock()
     private var waiting: [Data] = []
@@ -39,7 +42,7 @@ final class AgentStderrRelay: @unchecked Sendable {
 
     /// Send what the agent writes to `clientSession` from now on, what waited first.
     func attach(to clientSession: Session?, logger: String) {
-        let (chunks, feed) = AsyncStream<Data>.makeStream()
+        let (chunks, feed) = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(Self.attachedChunkLimit))
         let forwarder = Task {
             for await chunk in chunks {
                 await clientSession?.sendLogNotification(
@@ -47,7 +50,8 @@ final class AgentStderrRelay: @unchecked Sendable {
             }
         }
         lock.withLock {
-            for chunk in waiting { feed.yield(chunk) }
+            // What waited goes out as one chunk, which the bound above never drops unseen.
+            if !waiting.isEmpty { feed.yield(waiting.reduce(Data(), +)) }
             (waiting, waitingBytes) = ([], 0)
             self.feed?.finish()
             (self.feed, self.forwarder) = (feed, forwarder)

@@ -1,7 +1,9 @@
 @testable import ACPXCore
 @testable import acpxd
 import Foundation
+import Logging
 import SwiftACP
+import SwiftMCP
 import Testing
 
 /// A flow's session as acpxd makes it (#202, step 3b, #219 review): called off as it is made
@@ -344,6 +346,43 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A creation called off under the id of a dormant session — one on record that nothing
+    /// holds — leaves that session's record as it is: only a new id gets the called-off
+    /// creation's record, as acpx's creation writes it (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCalledOffCreationLeavesADormantRecord() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: cwd, name: "dormant")
+            #expect(await daemon.live.isEmpty)
+            let released = try await daemon.callOffCreation(creationToken: "stopped")
+            #expect(!released)
+            await #expect(throws: CancellationError.self) {
+                _ = try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: cwd, name: "stopped", mcpServers: nil,
+                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "stopped"))
+            }
+            #expect(SessionStore.loadRecord(id)?.name == "dormant")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// What a noisy agent writes to stderr waits for a slow caller within a bound, the oldest
+    /// let go first — not all of it, however much the agent writes (#219 review).
+    @Test func agentStderrWaitsForASlowCallerWithinABound() async throws {
+        let client = SlowClient()
+        let session = Session(id: UUID())
+        await session.setTransport(client)
+        let relay = AgentStderrRelay()
+        relay.attach(to: session, logger: "stderr")
+        for _ in 0 ..< 2000 { relay.observer(Data("line\n".utf8)) }
+        client.letThrough()
+        await relay.detach()
+        #expect(client.sent <= AgentStderrRelay.attachedChunkLimit + 1)
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).
@@ -433,4 +472,27 @@ extension ACPXDaemonBackend {
     func setCreationKept(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
         creationKept = hook
     }
+}
+
+/// A caller that takes nothing in until it is let through, then counts what it is sent.
+private final class SlowClient: Transport, @unchecked Sendable {
+    let logger = Logger(label: "acpx.tests.slow-client")
+    private let gate = HoldGate()
+    private let lock = NSLock()
+    private var count = 0
+
+    func start() async throws {}
+    func run() async throws {}
+    func stop() async throws {}
+
+    func send(_ data: Data) async throws {
+        await gate.wait()
+        lock.withLock { count += 1 }
+    }
+
+    func letThrough() {
+        gate.open()
+    }
+
+    var sent: Int { lock.withLock { count } }
 }

@@ -58,8 +58,9 @@ extension ACPXDaemonBackend {
         let taken = live[recordId] != nil || turns[recordId] != nil || owners[recordId] != nil
         let outcome: Result<Void, Error>
         if isCalledOff(token) {
-            // Its record kept when the id is its own, as acpx's creation writes it.
-            if !taken { try? SessionStore.writeRecord(held.record) }
+            // Its record kept when the id is new, as acpx's creation writes it — never over the
+            // record of a session on it already, held or not (#219 review).
+            if !taken, SessionStore.loadRecord(recordId) == nil { try? SessionStore.writeRecord(held.record) }
             outcome = .failure(CancellationError())
         } else {
             if taken {
