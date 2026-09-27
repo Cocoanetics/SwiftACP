@@ -327,6 +327,17 @@ extension DaemonToolsTests {
         }
     }
 
+    /// What acpxd keeps of each creation's token goes after a minute: each creation prunes what
+    /// is older, so a long-lived daemon doesn't keep one per session it made (#219 review).
+    @Test func creationTokensKeptAMinuteAreLetGo() async throws {
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+        #expect(try await daemon.callOffCreation(creationToken: "called-off") == false)
+        #expect(await daemon.creationCalledOff("made", madeAs: "a") == false)
+        #expect(await daemon.creationCalledOff("later", madeAs: "b", now: Date(timeIntervalSinceNow: 61)) == false)
+        #expect(await daemon.calledOffCreations.isEmpty)
+        #expect(await Array(daemon.madeCreations.keys) == ["later"])
+    }
+
     /// A flow's persistent turn sends acpxd each of its options: the CLI calls `runPrompt`
     /// untyped (``DaemonClient/promptArguments(sessionId:content:wait:permissionMode:nonInteractivePermissions:permissionPolicy:terminalOutputCeiling:model:sessionOptions:limits:mode:)``),
     /// and `verbose` was once left out of the call.

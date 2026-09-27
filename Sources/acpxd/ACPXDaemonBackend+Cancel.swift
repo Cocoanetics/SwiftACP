@@ -70,8 +70,7 @@ extension ACPXDaemonBackend {
     /// finds the call-off.
     func callOffCreation(creationToken: String) async throws -> Bool {
         let now = Date()
-        calledOffCreations = calledOffCreations.filter { now.timeIntervalSince($0.value) < 60 }
-        madeCreations = madeCreations.filter { now.timeIntervalSince($0.value.at) < 60 }
+        pruneCreationTokens(now: now)
         guard let made = madeCreations.removeValue(forKey: creationToken) else {
             calledOffCreations[creationToken] = now
             return false
@@ -80,12 +79,21 @@ extension ACPXDaemonBackend {
     }
 
     /// Whether the creation under `token` was called off before its session was made; if not,
-    /// the session is kept by the token, for a call-off yet to come.
-    func creationCalledOff(_ token: String?, madeAs recordId: String) -> Bool {
+    /// the session is kept by the token, for a call-off yet to come. Tokens kept a minute go
+    /// first, so a long-lived daemon keeps only those of the last minute's creations.
+    func creationCalledOff(_ token: String?, madeAs recordId: String, now: Date = Date()) -> Bool {
         guard let token else { return false }
+        pruneCreationTokens(now: now)
         if calledOffCreations.removeValue(forKey: token) != nil { return true }
-        madeCreations[token] = (recordId, Date())
+        madeCreations[token] = (recordId, now)
         return false
+    }
+
+    /// Let go of the creation tokens kept a minute (#219 review): by then a caller whose wait
+    /// was cut short has called its creation off, and a creation called off has come or never will.
+    private func pruneCreationTokens(now: Date) {
+        calledOffCreations = calledOffCreations.filter { now.timeIntervalSince($0.value) < 60 }
+        madeCreations = madeCreations.filter { now.timeIntervalSince($0.value.at) < 60 }
     }
 
     /// Keep `token` as a turn's a cancel named before it began; tokens kept a minute
