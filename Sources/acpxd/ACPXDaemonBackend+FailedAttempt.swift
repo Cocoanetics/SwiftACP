@@ -78,28 +78,26 @@ extension ACPXDaemonBackend {
     ///   then on, to run on its agent: none runs on the agent given up meanwhile, as the
     ///   prompt they run beside is the retry's (Codex review on #174);
     /// - how the agent ended goes into the record the failure saves
-    ///   (``wrapUp(failedAttemptOn:error:retried:recordId:persister:direct:)``).
+    ///   (``wrapUp(failedAttemptOn:error:retried:of:)``).
     func failedAttempt(
-        _ error: Error, on entry: Live, wrote: WriteMark, retriesOnAFreshLaunch: Bool, relay: TurnRelay,
-        wireFeed: TurnWireFeed, recordId: String, turn id: UUID, persister: TurnPersister, direct: Bool = false
+        _ error: Error, of turn: Turn, on entry: Live, wrote: WriteMark, retriesOnAFreshLaunch: Bool,
+        relay: TurnRelay, wireFeed: TurnWireFeed
     ) async -> Error {
-        takePromptNote(of: recordId, from: wrote)
+        takePromptNote(of: turn, from: wrote)
         let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
             ? AgentExitedBeforeTheTurn(underlying: error) : error
         let retrying = retriesOnAFreshLaunch && isFixedByAFreshLaunch(failure)
-            && turnControl(recordId, id)?.retried != true
+            && turnControl(turn.recordId, turn.id)?.retried != true
         // Before anything else waits: a control arriving meanwhile waits for the retry.
-        let handedOn = retrying && !wireFeed.agentAnswered && handControlsOn(from: recordId)
+        let handedOn = retrying && !wireFeed.agentAnswered && handControlsOn(from: turn)
         await relay.end()
         _ = await relay.text()
         let retried = retrying && !wireFeed.agentAnswered
-        if handedOn, !retried { tickets[recordId]?.publish() }
+        if handedOn, !retried { turn.ticket?.publish() }
         // How the agent ended, if it did, goes into the record the failure saves — once
         // it has: an agent whose connection is gone can still be running (its stdout
         // closed, say), and is ended before its pid would be kept.
-        await wrapUp(
-            failedAttemptOn: entry, error: error, retried: retried, recordId: recordId, persister: persister,
-            direct: direct)
+        await wrapUp(failedAttemptOn: entry, error: error, retried: retried, of: turn)
         await wireFeed.finish(showingHeld: !retried)
         return retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
     }
@@ -109,18 +107,15 @@ extension ACPXDaemonBackend {
     /// the controls the turn took done if the turn ends here, and how the agent ended in the
     /// record the failure saves.
     /// A direct turn's agent is let go however the attempt failed, as acpx closes its client.
-    func wrapUp(
-        failedAttemptOn entry: Live, error: Error, retried: Bool, recordId: String, persister: TurnPersister,
-        direct: Bool = false
-    ) async {
-        if direct {
-            await letGoOfDirectAgent(recordId, persister: persister)
+    func wrapUp(failedAttemptOn entry: Live, error: Error, retried: Bool, of turn: Turn) async {
+        if turn.direct {
+            await letGoOfDirectAgent(turn.recordId, persister: turn.persister)
             await entry.agent.close()
         } else if ACPAgentConnection.endedTheConnection(error) {
             await entry.agent.close()
         }
-        if !retried { await sealControls(of: recordId) }
-        await persister.applyLifecycle(entry.agent.lifecycle)
+        if !retried { await sealControls(of: turn) }
+        await turn.persister.applyLifecycle(entry.agent.lifecycle)
     }
 }
 

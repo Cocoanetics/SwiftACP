@@ -166,7 +166,7 @@ extension ACPXDaemonBackend {
             permissions: permissions,
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
-            capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
+            ticket: started.ticket, capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
             callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose),
             environment: direct ? environment : owners[recordId]?.environment)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
@@ -207,6 +207,9 @@ extension ACPXDaemonBackend {
         /// A flow's persistent turn, as acpx's `sendSessionDirect` runs it: the session
         /// taken back as itself or not at all, and its agent let go when the turn ends.
         let direct: Bool
+        /// The controls the turn takes as it runs: a queued turn's ticket. A direct turn has
+        /// none, and leaves the ticket of a prompt queued behind it alone (#229 review).
+        let ticket: PromptControlTicket?
         /// What an agent the turn connects is offered; `nil`, what the session was made with.
         let capabilities: SwiftACP.ClientCapabilities?
         /// How an agent the turn connects signs in; `nil`, as configured.
@@ -357,8 +360,8 @@ extension ACPXDaemonBackend {
             // The controls the turn took are done before its last save, what they said part of
             // its exchange (acpx's `seal`, `onPromptFinalizing`) — those waiting for its prompt
             // too, however late the note that it went out comes.
-            takePromptNote(of: recordId, from: wrote)
-            await sealControls(of: recordId)
+            takePromptNote(of: turn, from: wrote)
+            await sealControls(of: turn)
             await relay.end()
             let fullText = await relay.text()
             // The exchange ends with the prompt's response; the turn's end follows it.
@@ -390,8 +393,8 @@ extension ACPXDaemonBackend {
         } catch {
             let failure = await permissionFailure(of: turn, on: connection, boundSessionId) ?? error
             throw await failedAttempt(
-                failure, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
-                wireFeed: wireFeed, recordId: recordId, turn: turn.id, persister: persister, direct: turn.direct)
+                failure, of: turn, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch,
+                relay: relay, wireFeed: wireFeed)
         }
     }
 }

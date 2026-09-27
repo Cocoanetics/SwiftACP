@@ -91,8 +91,11 @@ extension ACPXDaemonBackend {
     /// controls from now on wait for the retry's prompt to go out, and run on its agent,
     /// none on the one given up. Returns whether the prompt had gone out, for the turn to
     /// hand them back should it not be retried after all.
-    func handControlsOn(from recordId: String) -> Bool {
-        tickets[recordId]?.unpublish() ?? false
+    ///
+    /// A turn's controls are its own ticket's, never the session's: a direct turn has none,
+    /// and a prompt queued behind it has begun with a ticket of its own (#229 review).
+    func handControlsOn(from turn: Turn) -> Bool {
+        turn.ticket?.unpublish() ?? false
     }
 
     /// Take the note that an attempt's prompt went out, should it not have come by the time
@@ -104,16 +107,17 @@ extension ACPXDaemonBackend {
     /// prompt that was answered would fail as though it had never gone out, and one taken
     /// as the turn moves to a fresh launch would be published while the retry connects,
     /// for no agent to run on.
-    func takePromptNote(of recordId: String, from wrote: WriteMark) {
-        if wrote.takeNote() { tickets[recordId]?.publish() }
+    func takePromptNote(of turn: Turn, from wrote: WriteMark) {
+        if wrote.takeNote() { turn.ticket?.publish() }
     }
 
     /// The prompt's turn is over, as acpx's `seal` says (`onPromptFinalizing`): a control
     /// from now on waits for the session's next turn, and those taken are done before the
-    /// turn's last save.
-    func sealControls(of recordId: String) async {
-        await tickets[recordId]?.seal()?.value
-        await controlsSealed?(recordId)
+    /// turn's last save. A direct turn took none.
+    func sealControls(of turn: Turn) async {
+        guard let ticket = turn.ticket else { return }
+        await ticket.seal()?.value
+        await controlsSealed?(turn.recordId)
     }
 }
 

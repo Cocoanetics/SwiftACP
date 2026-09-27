@@ -81,6 +81,30 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A control sent while a prompt queued behind a flow's turn waits for the session is that
+    /// prompt's, as acpx's owner takes it on the prompt's ticket: the flow's turn, ending, leaves
+    /// it be, and it runs on the prompt's agent once the prompt goes out (#229 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aControlForAPromptQueuedBehindAFlowsTurnIsThatPromptsOwn() async throws {
+        try await withIsolatedStore {
+            let (daemon, id) = try await Self.sessionForAFlow()
+            let flow = try await Self.holdADirectTurn(daemon, id)
+            let queued = await Self.queue(daemon, id, "queued behind")
+            let taken = HoldGate()
+            await daemon.setControlTakenHook { _ in taken.open() }
+            let control = Task { try await daemon.setMode(sessionId: id, modeId: "plan") }
+            await taken.wait()
+            await daemon.setControlTakenHook(nil)
+            #expect(try await daemon.cancelSession(sessionId: id, turnToken: "flow"))
+            _ = try await flow.value
+            #expect(try await control.value.resumed == false)
+            _ = try await queued.value
+            #expect(Self.prompts(of: id).contains("queued behind"))
+            #expect(SessionStore.loadRecord(id)?.acpx?.desiredModeId == "plan")
+            await daemon.releaseAll()
+        }
+    }
+
     /// A flow's direct turn waiting for the session behind another is begun already: a stop that
     /// names it ends it at once, nothing sent, and leaves the turn ahead of it running — each of
     /// the session's direct turns its own.
