@@ -159,6 +159,28 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A flow's direct turn that may not wait is refused at once while something holds the
+    /// session, as a queued prompt that may not wait is: nothing sent, and the turn holding the
+    /// session goes on (#229 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectTurnThatMayNotWaitIsRefusedWhileTheSessionIsHeld() async throws {
+        try await withIsolatedStore {
+            let (daemon, id) = try await Self.sessionForAFlow()
+            let flow = try await Self.holdADirectTurn(daemon, id)
+            let refused = await #expect(throws: DaemonError.self) {
+                _ = try await daemon.runPrompt(
+                    sessionId: id, text: "busy", wait: false, permissionMode: "approve-all", direct: true,
+                    turnToken: "busy")
+            }
+            if case .sessionBusy? = refused {} else { Issue.record("refused with \(String(describing: refused))") }
+            #expect(!Self.prompts(of: id).contains("busy"))
+            #expect(await daemon.directTurns[id]?.count == 1)
+            #expect(try await daemon.cancelSession(sessionId: id, turnToken: "flow"))
+            _ = try await flow.value
+            await daemon.releaseAll()
+        }
+    }
+
     /// A daemon, and a session made for a flow, its agent held for its first turn.
     private static func sessionForAFlow() async throws -> (ACPXDaemonBackend, String) {
         let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))

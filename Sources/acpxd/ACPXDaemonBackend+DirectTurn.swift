@@ -95,13 +95,22 @@ extension ACPXDaemonBackend {
         var ticket: PromptControlTicket? { begun?.ticket }
     }
 
-    /// Begin a turn for `recordId`: a queued one in its owner's line (``beginPrompt(_:wait:turnToken:)``),
-    /// which takes the slot as it begins when it may not wait; a direct one apart from it.
+    /// Begin a turn for `recordId`: a queued one in its owner's line (``beginPrompt(_:wait:turnToken:)``);
+    /// a direct one apart from it. Either takes the slot as it begins when it may not wait, and
+    /// is refused at once with ``DaemonError/sessionBusy`` when something holds it (#229 review).
     func startTurn(
         _ recordId: String, direct: Bool, wait: Bool, turnToken: String?
     ) async throws -> (turn: StartedTurn, holdsTheSlot: Bool) {
         if direct {
-            return (StartedTurn(control: try beginDirectTurn(recordId, turnToken: turnToken), begun: nil), false)
+            let control = try beginDirectTurn(recordId, turnToken: turnToken)
+            guard !wait else { return (StartedTurn(control: control, begun: nil), false) }
+            do {
+                try await turnQueue.acquire(recordId, wait: false)
+            } catch {
+                directTurnEnded(recordId, control, heldTheSlot: false)
+                throw error
+            }
+            return (StartedTurn(control: control, begun: nil), true)
         }
         let begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
         return (StartedTurn(control: begun.control, begun: begun), !wait)
