@@ -77,6 +77,9 @@ extension FlowRunner {
         _ binding: FlowSessionBinding, prepared: PreparedAcpPrompt, attempt: FlowAttempt, runDir: URL
     ) async throws -> TracedPromptResult {
         guard let sessions = options.sessions else { throw FlowRunError("No way to run ACP node \(attempt.nodeId)") }
+        // A prompt that cannot be sent fails before the kept agent is the turn's, as acpx's
+        // fails as it is prepared: the run's end lets the agent go (#219 review).
+        let blocks = try Self.contentBlocks(prepared.prompt)
         let capture = FlowQuietCapture(errorOutput: options.errorOutput)
         let before = try Self.resolveSessionRecord(binding.acpxRecordId)
         try attempt.assertActive()
@@ -87,7 +90,7 @@ extension FlowRunner {
         let outcome: Result<Void, Error>
         do {
             let turn = FlowPersistentTurn(
-                recordId: binding.acpxRecordId, prompt: try Self.contentBlocks(prepared.prompt),
+                recordId: binding.acpxRecordId, prompt: blocks,
                 onMessage: { outbound, message in
                     capture.take(message)
                     events.take(outbound: outbound, message)

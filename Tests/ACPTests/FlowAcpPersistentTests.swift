@@ -83,6 +83,18 @@ struct FlowAcpPersistentTests {
         #expect(sessions.released == ["rec-1"])
     }
 
+    /// A prompt that cannot be sent fails its node before the kept agent is the turn's, as
+    /// acpx's fails as it is prepared: the session is let go when the run ends (#219 review).
+    @Test func anUnsendablePromptLeavesTheSessionForTheRunsEnd() async throws {
+        let sessions = ScriptedSessions()
+        let run = try await runFlow(sessions, body: """
+            export default defineFlow({ name: "keep", startAt: "a", nodes: {
+              a: acp({ prompt: () => [{ type: "video", uri: "x" }] }) }, edges: [] });
+            """)
+        #expect(run.err == #"SwiftACP cannot send prompt[0] to the agent: {"type":"video","uri":"x"}"#)
+        #expect(sessions.released == ["rec-1"])
+    }
+
     /// A turn that fails is published as it went — its messages and its record — before
     /// the step fails with it.
     @Test func aFailedPersistentTurnIsPublished() async throws {
