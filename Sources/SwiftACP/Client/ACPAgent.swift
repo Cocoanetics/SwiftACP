@@ -167,7 +167,8 @@ public final class ACPAgent: Sendable {
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
                 authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment,
-                callerEnvironment: terminalEnvironment ?? ProcessInfo.processInfo.environment, log: rawWire)
+                callerEnvironment: terminalEnvironment ?? ProcessInfo.processInfo.environment, log: rawWire,
+                grokBuild: GrokBuild.isAcpCommand(spec.executable, spec.arguments))
             #if os(macOS) || os(Linux)
             // acpx's `captureAgentDescendants`: once `initialize` is over, and again each
             // time a session is open, however it was opened — adapters start their
