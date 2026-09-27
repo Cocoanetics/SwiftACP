@@ -75,6 +75,22 @@ struct FlowShellProcessTests {
         #expect(ContinuousClock.now - started >= .milliseconds(1000))
     }
 
+    /// A command's deadline that its attempt gave it — the rest of a shell node's time — is
+    /// no earlier than the attempt's own, whose timer acpx sets first and fires first: the
+    /// step fails with the node's timeout. With the attempt's timer late on a busy pool, the
+    /// command's deadline times the attempt out before it does the command.
+    @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
+    func anAttemptsDeadlineComesBeforeItsCommandsHoweverLateItsTimer() async throws {
+        let attempt = FlowAttempt.$timerIsLate.withValue(true) {
+            FlowAttempt(nodeId: "shell", attemptId: "shell#1", startedAt: "", timeoutMs: 50)
+        }
+        await #expect(throws: FlowTimeoutError(timeoutMs: 50)) {
+            _ = try await self.runAction(
+                self.nodeSpec("setTimeout(() => {}, 10_000)", [("timeoutMs", .number(100))]),
+                control: FlowShellControl(attempt: attempt))
+        }
+    }
+
     /// acpx: "runShellAction rejects commands terminated by signal".
     @Test func aCommandEndedBySignalFails() async throws {
         let error = await #expect(throws: FlowShellError.self) {

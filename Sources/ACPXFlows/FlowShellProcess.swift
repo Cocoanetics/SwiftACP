@@ -298,6 +298,9 @@ final class FlowShellTermination: @unchecked Sendable {
     private let child: ChildProcess
     private let closed: FlowShellEvent
     private let onCleanupFailure: @Sendable (Error) -> Void
+    /// The attempt the command runs for: its own deadline, when it has passed as well, comes
+    /// first — acpx's timer for it, set first for no later a time, fires first.
+    private let attempt: FlowAttempt?
     /// Fired by ``dispose()``, what a stop waits for while ``poolIsBusy``.
     private let busyPool: FlowShellEvent?
     private let lock = NSLock()
@@ -318,6 +321,7 @@ final class FlowShellTermination: @unchecked Sendable {
         self.child = child
         self.closed = closed
         self.onCleanupFailure = onCleanupFailure
+        attempt = control.attempt
         busyPool = Self.poolIsBusy ? FlowShellEvent() : nil
         if let attempt = control.attempt {
             let listening = attempt.addAbortListener { [self] _ in begin(attempt.terminationSignal) }
@@ -362,8 +366,11 @@ final class FlowShellTermination: @unchecked Sendable {
         _ = lock.withLock { stopTask(signal) }
     }
 
-    /// acpx's deadline: unless it was cleared, the command timed out, and is stopped.
+    /// acpx's deadline: unless it was cleared, the command timed out, and is stopped. An
+    /// attempt past its own deadline — its timer on the cooperative pool, late on a busy
+    /// machine — times out first, and its stop clears this deadline.
     private func deadlinePassed() {
+        attempt?.checkDeadline()
         lock.withLock {
             guard deadline != nil else { return }
             timedOutFlag = true
