@@ -18,10 +18,11 @@ extension ACPXDaemonBackend {
     /// Run a control as acpx's queue owner runs one (`QueueOwnerControlAdmission.run`): on
     /// the prompt's agent while the session runs a prompt
     /// (``control(duringPromptOf:_:timeout:_:)``), and between turns otherwise
-    /// (``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    /// (``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
     func runControl<Response: Sendable, Value: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, _ step: ControlStep<Response, Value>
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil,
+        _ step: ControlStep<Response, Value>
     ) async throws -> (value: Value, resumed: Bool) {
         _ = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
@@ -36,7 +37,8 @@ extension ACPXDaemonBackend {
         }
         return try await withSessionTurn(
             sessionId, replacing: replacing, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment
+        ) { entry, record, timeout in
             let response = try await step.request(entry, record, timeout)
             return step.apply(response, &record)
         }

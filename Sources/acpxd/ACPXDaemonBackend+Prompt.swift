@@ -106,7 +106,7 @@ extension ACPXDaemonBackend {
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
-        if !direct { turnStarts(recordId, ttlMs: limits?.ttlMs) }
+        if !direct { turnStarts(recordId, ttlMs: limits?.ttlMs, environment: environment) }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
@@ -164,7 +164,8 @@ extension ACPXDaemonBackend {
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
             capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
-            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose), environment: environment)
+            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose),
+            environment: direct ? environment : owners[recordId]?.environment)
         // acpx keeps the prompt of a turn that fails, and what the agent said of it.
         return try await relayingStderr(turn.stderr, logger: recordId) {
             try await lettingDirectAgentGo(direct, recordId) {

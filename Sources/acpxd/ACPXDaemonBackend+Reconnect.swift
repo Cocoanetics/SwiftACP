@@ -273,8 +273,8 @@ extension ACPXDaemonBackend {
         /// Where what the agent writes to stderr goes, when the caller asks (a verbose flow's
         /// turn); else nowhere.
         var stderr: AgentStderrRelay?
-        /// The environment the agent starts over, when the caller brings its own (a flow's
-        /// turn); else the daemon's.
+        /// The environment the agent starts over, when the caller brings its own — for a
+        /// session its owner holds, the one the owner was started with (#222); else the daemon's.
         var environment: [String: String]?
 
         /// The environment the agent starts with: the caller's, else the daemon's, with the

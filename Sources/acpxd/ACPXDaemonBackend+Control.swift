@@ -35,9 +35,13 @@ extension ACPXDaemonBackend {
     /// (``ControlDeadline``): when it passes, what the control connects or runs on is put
     /// down, as acpx's owner closes its client (`runIdleControlWithRecord`), and the
     /// control fails as `TIMEOUT` — its owner still holding the session.
+    ///
+    /// An agent a direct control starts starts over the caller's `environment`, as acpx's
+    /// direct control starts its client in the CLI's process; an owner's, over the one the
+    /// owner was started with (#222).
     func withSessionTurn<T: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?,
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil,
         _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
     ) async throws -> (value: T, resumed: Bool) {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
@@ -67,7 +71,8 @@ extension ACPXDaemonBackend {
             return try await control(
                 current, direct: direct, replacing: replacing, deadline: deadline, step: step,
                 settings: CallerSettings(
-                    handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step),
+                    handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
+                    environment: direct ? environment : owners[recordId]?.environment),
                 body)
         } catch {
             if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }

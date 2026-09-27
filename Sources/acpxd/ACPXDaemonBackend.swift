@@ -304,10 +304,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil
     ) async throws -> SessionControlResult {
         let step = ControlStep<Void, Void>(
             request: { entry, _, timeout in
@@ -327,7 +328,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             })
         let (_, resumed) = try await runControl(
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment, step)
         return SessionControlResult(resumed: resumed)
     }
 
@@ -345,13 +346,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -375,7 +377,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             })
         let (options, resumed) = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment, step)
         return SessionControlResult(resumed: resumed, rawConfigOptions: options)
     }
 
@@ -392,10 +394,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -415,7 +418,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             })
         let (_, resumed) = try await runControl(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment, step)
         return SessionControlResult(resumed: resumed)
     }
 

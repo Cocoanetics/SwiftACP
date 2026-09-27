@@ -252,6 +252,9 @@ enum DaemonClient {
     /// The tool result is the agent's aggregate response text, which the CLI
     /// ignores (it streams the same output live via `renderer`). The stop reason
     /// arrives as a terminal ``TurnEndedEvent`` log notification, captured here.
+    ///
+    /// The turn carries this CLI's environment: a session no owner holds gets one started
+    /// over it, as acpx's CLI spawns a session's queue owner with its own (#222).
     static func runPrompt(
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
@@ -267,7 +270,8 @@ enum DaemonClient {
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
-            sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(streamWire: renderer.streamsWireJSON))
+            sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(
+                streamWire: renderer.streamsWireJSON, environment: ProcessInfo.processInfo.environment))
     }
 
     /// The turn itself, on a connected proxy whose log notifications feed `stopReason`, run
@@ -333,7 +337,8 @@ enum DaemonClient {
     /// the agent asks meanwhile is answered as acpx's direct controls answer it —
     /// reads approved, the rest by `nonInteractivePermissions` — and the daemon caps
     /// terminal output by `terminalOutputCeiling`, as it does a turn's: `0` for none,
-    /// so its own never stands in.
+    /// so its own never stands in. An agent the daemon starts for it starts over this CLI's
+    /// environment, as acpx's direct control starts its client in the CLI's process (#222).
     static func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
         timeoutMs: Int?
@@ -342,7 +347,8 @@ enum DaemonClient {
             try await withClient {
                 try await $0.setMode(
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs)
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
+                    environment: ProcessInfo.processInfo.environment)
             }
         }
     }
@@ -371,7 +377,8 @@ enum DaemonClient {
             try await withClient {
                 try await $0.setModel(
                     sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs)
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
+                    environment: ProcessInfo.processInfo.environment)
             }
         }
     }
@@ -389,7 +396,8 @@ enum DaemonClient {
                 try await $0.setConfigOption(
                     sessionId: sessionId, configId: configId, value: value,
                     nonInteractivePermissions: nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs)
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
+                    environment: ProcessInfo.processInfo.environment)
             }
         }
     }
