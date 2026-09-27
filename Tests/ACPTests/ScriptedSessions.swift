@@ -18,6 +18,7 @@ final class ScriptedSessions: FlowSessionRunner, @unchecked Sendable {
     private let lock = NSLock()
     private var madeSessions: [Made] = []
     private var releasedIds: [String] = []
+    private var cleanupSteps: [String] = []
     private var turnCount = 0
     /// Whether a session made is written to the store; without it, its first turn finds no
     /// record.
@@ -26,9 +27,13 @@ final class ScriptedSessions: FlowSessionRunner, @unchecked Sendable {
     var failingTurn: Int?
     /// Time the making attempt out, as its timer would at `timeoutMs`, once the session is made.
     var timeOutWhenMade: Double?
+    /// What trying the failed releases again at the run's end fails with.
+    var failingRetry: Error?
 
     var made: [Made] { lock.withLock { madeSessions } }
     var released: [String] { lock.withLock { releasedIds } }
+    /// Each release in order — `retry` where the failed ones were tried again.
+    var cleanup: [String] { lock.withLock { cleanupSteps } }
 
     func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord {
         let recordId = lock.withLock {
@@ -73,7 +78,15 @@ final class ScriptedSessions: FlowSessionRunner, @unchecked Sendable {
     }
 
     func releasePersistent(_ recordId: String) async throws {
-        lock.withLock { releasedIds.append(recordId) }
+        lock.withLock {
+            releasedIds.append(recordId)
+            cleanupSteps.append(recordId)
+        }
+    }
+
+    func retryFailedReleases() async throws {
+        lock.withLock { cleanupSteps.append("retry") }
+        if let failingRetry { throw failingRetry }
     }
 
     func runIsolated(_ turn: FlowTurn) async throws -> String {

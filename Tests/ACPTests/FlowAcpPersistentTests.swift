@@ -73,6 +73,24 @@ struct FlowAcpPersistentTests {
         #expect(sessions.released == ["rec-1"])
     }
 
+    /// As the run ends, the releases that failed earlier in it are tried once more, though no
+    /// session is left kept for a first turn (#219 review).
+    @Test func theRunsEndRetriesTheReleasesThatFailed() async throws {
+        let sessions = ScriptedSessions()
+        let run = try await runFlow(sessions)
+        #expect(run.err.isEmpty, "\(run.err)")
+        #expect(sessions.cleanup == ["retry"])
+    }
+
+    /// A release that fails again as the run ends fails the run, as a failure to let go of a
+    /// session kept for a first turn does then (#219 review).
+    @Test func aReleaseThatFailsAgainAsTheRunEndsFailsIt() async throws {
+        let sessions = ScriptedSessions()
+        sessions.failingRetry = FlowRunError("still kept")
+        let run = try await runFlow(sessions)
+        #expect(run.err == "still kept")
+    }
+
     /// A session made by an attempt that stopped as it was made is let go at once, and the
     /// step times out.
     @Test func aSessionMadeAsItsAttemptStoppedIsLetGo() async throws {

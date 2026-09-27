@@ -183,6 +183,70 @@ extension DaemonToolsTests {
         #expect(creations.take("session") == nil)
     }
 
+    /// As the run ends, the creations whose call-off the daemon refused are called off once
+    /// more — they alone: one kept for its first turn is the runner's to let go — and each
+    /// refused again is kept for yet another try, until one is settled. One called off by its
+    /// token alone, its record never known, is too (#219 review).
+    @Test func refusedCallOffsAreTriedAgain() async {
+        struct Refused: Error {}
+        let creations = FlowCreations()
+        creations.keep("failed-token", for: "failed")
+        creations.keep("kept-token", for: "kept")
+        _ = await creations.callOff("failed") { _ in .refused(Refused()) }
+        await creations.callOff(token: "unknown-token") { _ in .refused(Refused()) }
+        let tried = Lines()
+        let refusedAgain = await creations.callOffRefused { token in
+            tried.add(token)
+            return .refused(Refused())
+        }
+        #expect(refusedAgain is Refused)
+        let settled = await creations.callOffRefused { token in
+            tried.add(token)
+            return .released(true)
+        }
+        #expect(settled == nil)
+        _ = await creations.callOffRefused { token in
+            tried.add(token)
+            return .released(true)
+        }
+        #expect(tried.all == ["failed-token", "unknown-token", "failed-token", "unknown-token"])
+        #expect(creations.take("failed") == nil)
+        #expect(creations.take("kept") == "kept-token")
+    }
+
+    /// A flow stopped just as acpxd has made its session — the call answered, the record read —
+    /// lets the session's agent go all the same: the runner registers the release as the
+    /// creation ends, and a stopped attempt runs it at once, as acpx's `registerCancellation`
+    /// does, with the creation's token kept by then (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aSessionMadeAsItsFlowStopsIsLetGo() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
+            let sessions = FlowAgentSessions(
+                flags: try Flags.resolveGlobalFlags(ScannedArgs(), config: config), config: config,
+                permission: .approveAll, permissionRules: nil, mcpServers: [])
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            // The node's time is up as soon as its session is made.
+            let deadlines = FlowDeadlines()
+            let timeUp: @Sendable (String) -> Void = { _ in deadlines.fire() }
+            let run = try await DaemonClient.$standIn.withValue(daemon) {
+                try await FlowAttempt.$deadlines.withValue(deadlines) {
+                    try await FlowAgentSessions.$afterCreating.withValue(timeUp) {
+                        try await FlowRunnerHarness.run("""
+                            export default defineFlow({ name: "keep", startAt: "a", nodes: {
+                              a: acp({ timeoutMs: 60000, prompt: () => "one" }) }, edges: [] });
+                            """, sessions: sessions, agentCommand: command)
+                    }
+                }
+            }
+            #expect(run.err == "Timed out after 60000ms")
+            #expect(await backend.live.isEmpty)
+            await backend.releaseAll()
+        }
+    }
+
     /// A stopped turn still going past its grace has its agent put down when the cancel found it
     /// running or went unanswered — the release is the turn's own — and not when the cancel found
     /// it not yet begun, as it then ends as it begins (#219 review).

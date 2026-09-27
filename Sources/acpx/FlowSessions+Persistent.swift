@@ -47,7 +47,7 @@ extension FlowAgentSessions {
             // No answer came, or a failure did: whatever acpxd makes of it is let go, now or as it
             // is made, as acpx's runner closes a client made after its attempt stopped — the
             // record's id, which the answer would have named, is never learned (#219 review).
-            await DaemonClient.callOffCreation(creationToken)
+            await creations.callOff(token: creationToken, through: DaemonClient.callOffCreation)
             if let reason = control.stopReason { throw reason }
             // acpxd's own error, as acpx's creation throws it: without the MCP client's
             // `Tool call failed: `.
@@ -57,7 +57,7 @@ extension FlowAgentSessions {
         Self.afterCreating?(recordId)
         guard let record = SessionStore.loadRecord(recordId) else {
             // A session whose record cannot be read is never the run's: its agent goes (#219 review).
-            await DaemonClient.callOffCreation(creationToken)
+            await creations.callOff(token: creationToken, through: DaemonClient.callOffCreation)
             throw CLIError("Session not found: \(recordId)")
         }
         creations.keep(creationToken, for: recordId)
@@ -92,7 +92,8 @@ extension FlowAgentSessions {
     /// acpx's closes the client it was given however it ends: one that failed before acpxd
     /// took the kept agent would leave it kept, with no owner to let it go. Only the agent the
     /// session's creation made is let go, never one that took its place since under the same
-    /// id (#219 review).
+    /// id — and should acpxd refuse, the run's end tries again (``retryFailedReleases()``,
+    /// #219 review).
     func runPersistent(_ turn: FlowPersistentTurn) async throws {
         do {
             try await runDirect(turn)
@@ -151,6 +152,13 @@ extension FlowAgentSessions {
     /// took its place since under the same id — the record as it is (acpx closes the client).
     func releasePersistent(_ recordId: String) async throws {
         if case .refused(let error) = await callOffCreation(of: recordId) { throw error }
+    }
+
+    /// Call off once more each creation of the run whose call-off acpxd refused — as its call
+    /// failed, say, or its first turn did, or its attempt stopped — the agent it made let go if
+    /// acpxd still keeps it (#219 review).
+    func retryFailedReleases() async throws {
+        if let failure = await creations.callOffRefused(through: DaemonClient.callOffCreation) { throw failure }
     }
 
     /// Call off the creation that made `recordId`'s session, by its token: acpxd lets go of the
@@ -315,6 +323,8 @@ final class FlowDaemonTurnStop: @unchecked Sendable {
 final class FlowCreations: @unchecked Sendable {
     private let lock = NSLock()
     private var tokens: [String: String] = [:]
+    /// The creations whose call-off the daemon refused, by token, kept for another try.
+    private var refused: Set<String> = []
 
     func keep(_ token: String, for recordId: String) {
         lock.withLock { tokens[recordId] = token }
@@ -322,19 +332,48 @@ final class FlowCreations: @unchecked Sendable {
 
     /// The token `recordId`'s session was made under, forgotten.
     func take(_ recordId: String) -> String? {
-        lock.withLock { tokens.removeValue(forKey: recordId) }
+        lock.withLock {
+            guard let token = tokens.removeValue(forKey: recordId) else { return nil }
+            refused.remove(token)
+            return token
+        }
     }
 
-    /// Call `recordId`'s creation off through `callOff`, by its token: kept should the daemon
-    /// refuse — a connection dropped, say — so another cleanup can try again, and forgotten once
-    /// the call-off is settled, the agent let go or no daemon holding it (#219 review).
+    /// Call `recordId`'s creation off through `callOff`, by its token (``callOff(token:through:)``).
     func callOff(
         _ recordId: String, through callOff: (String) async -> DaemonClient.Release
     ) async -> DaemonClient.Release {
         guard let token = lock.withLock({ tokens[recordId] }) else { return .released(false) }
+        return await self.callOff(token: token, through: callOff)
+    }
+
+    /// Call off the creation made under `token` through `callOff`: kept should the daemon
+    /// refuse — a connection dropped, say — so the run's end can try again
+    /// (``callOffRefused(through:)``), and forgotten once the call-off is settled, the agent
+    /// let go or no daemon holding it (#219 review).
+    @discardableResult
+    func callOff(token: String, through callOff: (String) async -> DaemonClient.Release) async -> DaemonClient.Release {
         let outcome = await callOff(token)
-        if case .refused = outcome { return outcome }
-        lock.withLock { if tokens[recordId] == token { tokens[recordId] = nil } }
+        lock.withLock {
+            if case .refused = outcome {
+                refused.insert(token)
+            } else {
+                refused.remove(token)
+                tokens = tokens.filter { $0.value != token }
+            }
+        }
         return outcome
+    }
+
+    /// Call off once more, through `callOff`, each creation whose call-off the daemon refused
+    /// — each one tried; the first refusal returned, if another comes (#219 review).
+    func callOffRefused(through callOff: (String) async -> DaemonClient.Release) async -> (any Error)? {
+        var failure: (any Error)?
+        for token in lock.withLock({ refused.sorted() }) {
+            if case .refused(let error) = await self.callOff(token: token, through: callOff), failure == nil {
+                failure = error
+            }
+        }
+        return failure
     }
 }

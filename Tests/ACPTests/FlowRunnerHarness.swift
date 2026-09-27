@@ -29,14 +29,15 @@ enum FlowRunnerHarness {
     /// `prelude` — with `input`, beside `files`. With `tracking`, the host is asked what it
     /// holds for attempts once the run is over: not of a host whose callback holds its
     /// event loop, which cannot answer. `probe` is handed the runner once the run is over.
-    /// `sessions` runs its ACP nodes' turns, with the agent named `mock` in the flow's
-    /// directory for every profile; `errorOutput` is where they report on stderr.
+    /// `sessions` runs its ACP nodes' turns, with the agent named `mock` — launched with
+    /// `agentCommand` — in the flow's directory for every profile; `errorOutput` is where they
+    /// report on stderr.
     /// `runnerReady` is handed the runner before the run starts.
     static func run(
         _ body: String, extension ext: String = "mjs", files: [String: String] = [:],
         input: WireJSON = .object([WireJSON.Member]()), tracking: Bool = false, prelude: Bool = true,
         probe: (@Sendable (FlowRunner) async -> String)? = nil, sessions: (any FlowSessionRunner)? = nil,
-        errorOutput: @escaping @Sendable (String) -> Void = { _ in },
+        agentCommand: String = "mock-agent", errorOutput: @escaping @Sendable (String) -> Void = { _ in },
         runnerReady: (@Sendable (FlowRunner) -> Void)? = nil
     ) async throws -> Run {
         let node = try #require(AgentRegistry.which("node"))
@@ -59,7 +60,7 @@ enum FlowRunnerHarness {
         let cwd = dir.path
         let runner = FlowRunner(host: host, options: FlowRunner.Options(
             outputRoot: runs, defaultCwd: cwd,
-            resolveAgent: { _ in FlowAgent(agentName: "mock", agentCommand: "mock-agent", agentArgv: nil, cwd: cwd) },
+            resolveAgent: { _ in FlowAgent(agentName: "mock", agentCommand: agentCommand, agentArgv: nil, cwd: cwd) },
             sessions: sessions, errorOutput: errorOutput))
         runnerReady?(runner)
         do {

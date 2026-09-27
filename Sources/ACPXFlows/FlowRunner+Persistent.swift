@@ -84,7 +84,8 @@ extension FlowRunner {
         let before = try Self.resolveSessionRecord(binding.acpxRecordId)
         try attempt.assertActive()
         let events = FlowPromptEventCapture(log: store.sessionEventLog(runDir, binding))
-        // The kept agent is the turn's now: nothing else lets it go.
+        // The kept agent is the turn's now: nothing else lets it go, unless the turn fails to
+        // (``FlowSessionRunner/retryFailedReleases()``).
         persistentSessions.pending.removeAll { $0.key == binding.key }
         persistentSessions.releases.removeValue(forKey: binding.key)?()
         let outcome: Result<Void, Error>
@@ -154,12 +155,20 @@ extension FlowRunner {
     }
 
     /// acpx's `closePendingPersistentSessionClients`: every session still kept for a first
-    /// turn let go — each one tried, the first failure thrown.
+    /// turn let go — each one tried, the first failure thrown. Before them, each agent that
+    /// an earlier attempt to let go of failed to reach, tried once more
+    /// (``FlowSessionRunner/retryFailedReleases()``): acpx's own close is local, so it cannot
+    /// leave one kept that way (#219 review).
     private func closePendingPersistentSessions() async throws {
         let pending = persistentSessions.pending
         persistentSessions.pending = []
-        guard !pending.isEmpty, let sessions = options.sessions else { return }
+        guard let sessions = options.sessions else { return }
         var failure: Error?
+        do {
+            try await sessions.retryFailedReleases()
+        } catch {
+            failure = error
+        }
         for (key, recordId) in pending {
             persistentSessions.releases.removeValue(forKey: key)?()
             do {

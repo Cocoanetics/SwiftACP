@@ -54,6 +54,17 @@ public protocol FlowSessionRunner: Sendable {
     /// Let go of the agent a session was created with, for a session whose first turn never
     /// came (acpx's `closePendingPersistentSessionClients`).
     func releasePersistent(_ recordId: String) async throws
+
+    /// As the run ends: let go of each agent that an earlier attempt to let go of this run's
+    /// sessions failed to reach — a first turn that failed, then failed to let go of its
+    /// agent as well — so none is left kept, as acpx's run leaves none of its clients open
+    /// (#219 review).
+    func retryFailedReleases() async throws
+}
+
+extension FlowSessionRunner {
+    /// Sessions whose agents are always let go need nothing retried.
+    public func retryFailedReleases() async throws {}
 }
 
 /// A turn of a flow's persistent session, and what the runner hears of it: acpx's
