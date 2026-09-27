@@ -94,12 +94,22 @@ extension ACPXDaemonBackend {
         _ = await relay.text()
         let retried = retrying && !wireFeed.agentAnswered
         if handedOn, !retried { turn.ticket?.publish() }
+        if !retried, let relay = turn.stderr { noteDisconnect(of: entry, to: relay) }
         // How the agent ended, if it did, goes into the record the failure saves — once
         // it has: an agent whose connection is gone can still be running (its stdout
         // closed, say), and is ended before its pid would be kept.
         await wrapUp(failedAttemptOn: entry, error: error, retried: retried, of: turn)
         await wireFeed.finish(showingHeld: !retried)
         return retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
+    }
+
+    /// acpx's `emitPromptDisconnectNotice`, for a caller under `--verbose`: an agent that went
+    /// while its prompt was out, which failed the turn — before the agent is let go.
+    func noteDisconnect(of entry: Live, to relay: AgentStderrRelay) {
+        guard let exit = entry.agent.lifecycle?.lastExit, exit.unexpectedDuringPrompt else { return }
+        let code = exit.exitCode.map { String($0) } ?? "null"
+        relay.log(
+            "agent disconnected during prompt (\(exit.reason.rawValue), exit=\(code), signal=\(exit.signal ?? "none"))")
     }
 
     /// What a failed attempt leaves: its agent ended if its connection is gone — it can be

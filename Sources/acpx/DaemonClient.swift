@@ -315,24 +315,6 @@ enum DaemonClient {
             usage: await stopReason.usage, cost: await stopReason.cost, unanswered: await stopReason.unanswered)
     }
 
-    /// A control the daemon ran for this CLI failed, for the reason in `message`.
-    struct DaemonControlFailure: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
-    }
-
-    /// acpxd went away with a request it had: acpx's `QueueConnectionError` for a queue
-    /// owner that disconnects once it has acknowledged one, whose outcome is unknown.
-    struct OwnerDisconnected: LocalizedError, OutputErrorMeta {
-        /// What the request still waited for: `prompt completion`, or `responding`.
-        let waitingFor: String
-        var errorDescription: String? { "Queue owner disconnected before \(waitingFor); outcome unknown" }
-        var outputCode: String? { "RUNTIME" }
-        var detailCode: String? { "QUEUE_DISCONNECTED_BEFORE_COMPLETION" }
-        var origin: String? { "queue" }
-        var retryable: Bool? { false }
-    }
-
     /// Set a session's mode on the live agent via the daemon (which persists it). What
     /// the agent asks meanwhile is answered as acpx's direct controls answer it —
     /// reads approved, the rest by `nonInteractivePermissions` — and the daemon caps
@@ -341,14 +323,14 @@ enum DaemonClient {
     /// environment, as acpx's direct control starts its client in the CLI's process (#222).
     static func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
-        timeoutMs: Int?
+        timeoutMs: Int?, verbose: Bool = false
     ) async throws -> SessionControlResult {
         try await timingOut(after: timeoutMs) {
-            try await withClient {
+            try await withClient(logs: verbose ? AgentStderrLog() : nil) {
                 try await $0.setMode(
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                    environment: ProcessInfo.processInfo.environment)
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose)
             }
         }
     }
@@ -371,14 +353,14 @@ enum DaemonClient {
     /// answering and capping as ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:)``.
     static func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
-        timeoutMs: Int?
+        timeoutMs: Int?, verbose: Bool = false
     ) async throws -> SessionControlResult {
         try await timingOut(after: timeoutMs) {
-            try await withClient {
+            try await withClient(logs: verbose ? AgentStderrLog() : nil) {
                 try await $0.setModel(
                     sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                    environment: ProcessInfo.processInfo.environment)
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose)
             }
         }
     }
@@ -389,15 +371,15 @@ enum DaemonClient {
     /// ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:)``.
     static func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String,
-        terminalOutputCeiling: Int?, timeoutMs: Int?
+        terminalOutputCeiling: Int?, timeoutMs: Int?, verbose: Bool = false
     ) async throws -> SessionControlResult {
         try await timingOut(after: timeoutMs) {
-            try await withClient {
+            try await withClient(logs: verbose ? AgentStderrLog() : nil) {
                 try await $0.setConfigOption(
                     sessionId: sessionId, configId: configId, value: value,
                     nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                    environment: ProcessInfo.processInfo.environment)
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose)
             }
         }
     }
@@ -446,10 +428,12 @@ enum DaemonClient {
     /// Connect to the daemon (spawning if needed) and run `body` with the generated,
     /// typed ``ACPXDaemon/Client`` proxy, disconnecting afterward.
     static func withClient<T>(
-        spawnIfNeeded: Bool = true, _ body: (ACPXDaemon.Client) async throws -> T
+        spawnIfNeeded: Bool = true, logs: MCPServerProxyLogNotificationHandling? = nil,
+        _ body: (ACPXDaemon.Client) async throws -> T
     ) async throws -> T {
         let proxy = try await connect(spawnIfNeeded: spawnIfNeeded)
         defer { Task { await proxy.disconnect() } }
+        if let logs { await proxy.setLogNotificationHandler(logs) }
         do {
             return try await body(ACPXDaemon.Client(proxy: proxy))
         } catch {

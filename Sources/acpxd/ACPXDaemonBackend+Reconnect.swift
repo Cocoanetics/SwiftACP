@@ -91,6 +91,9 @@ extension ACPXDaemonBackend {
         let timeout = settings.timeoutMilliseconds
         let replacing = replacing ?? (requestedModel == nil ? nil : .configOption("model"))
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
+        // For a caller under `--verbose`, whether the agent the record saved still runs, as acpx
+        // notes it first thing as it connects a session — one held here too.
+        if let relay = settings.stderr, let saved = findRecord(recordId) { relay.noteReconnect(of: saved) }
         let held = try await heldAgent(
             recordId, sessionSpecs: sessionSpecs, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
         if let entry = held.entry { return (entry, false) }
@@ -136,7 +139,7 @@ extension ACPXDaemonBackend {
                         authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
                         terminalEnvironment: settings.environment, onRawWire: connectTap,
-                        onStderr: settings.stderr?.observer)
+                        onStderr: settings.stderr?.observer, onLog: settings.stderr?.logObserver)
                 }, discardingLate: { await $0.close() })
             }
         } catch {
@@ -156,7 +159,8 @@ extension ACPXDaemonBackend {
             ReconnectReplay.applyLoaded(loaded, to: &state)
             let outcome = try await ReconnectReplay.replay(
                 desired, replacing: replacing, original: original, loaded: loaded, state: &state,
-                connection: handle.connection, agentCommand: command, timeoutMilliseconds: timeout)
+                connection: handle.connection, agentCommand: command, timeoutMilliseconds: timeout,
+                previousSessionId: record?.acpSessionId, onLog: settings.stderr?.logObserver)
             ReconnectReplay.applyReconnectedModelState(
                 outcome.models, configOptionsPresent: outcome.configOptionsPresent,
                 legacyModelMetadataPresent: loaded.legacyModelMetadataPresent,
