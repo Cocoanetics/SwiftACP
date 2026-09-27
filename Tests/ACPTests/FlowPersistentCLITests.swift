@@ -278,6 +278,45 @@ extension DaemonToolsTests {
         #expect(!FlowDaemonTurnStop.forcesRelease(cancelled: false))
     }
 
+    /// A stopped turn's release that puts down the agent the turn is still connecting puts that
+    /// one down alone: the turn ends as it goes, and a session made under the same id, in line
+    /// behind the turn, is held by the time the put-down is done — and stays (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aTurnsReleaseLeavesTheSessionMadeAsItPutsTheTurnDown() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = directory.appendingPathComponent("load-gate")
+        #expect(mkfifo(gate.path, 0o600) == 0)
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_LOAD_GATE='\(gate.path)' " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            // No agent is kept for the session: its turn connects one, held as it loads the session.
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let turn = Task {
+                try await daemon.runPrompt(
+                    sessionId: id, text: "hi", permissionMode: "approve-all", direct: true, turnToken: "turn")
+            }
+            let loading = await Self.openForWriting(gate)
+            defer { close(loading) }
+            // The agent gives a session made meanwhile the same id, and it waits for the slot.
+            let kept = HoldGate()
+            await daemon.setCreationKept { _ in kept.open() }
+            let making = Task {
+                try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            }
+            let heldOnceKept: @Sendable (String) async -> Void = { _ in await kept.wait() }
+            let released = try await ACPXDaemonBackend.$afterAbandoning.withValue(heldOnceKept) {
+                try await daemon.releaseSession(sessionId: id, turnToken: "turn")
+            }
+            #expect(released)
+            #expect(try await making.value == id)
+            await #expect(throws: (any Error).self) { _ = try await turn.value }
+            let held = try #require(await daemon.live[id]?.agent)
+            #expect(await !held.connection.isClosed)
+            await daemon.releaseAll()
+        }
+    }
+
     /// Wait until something writes to the FIFO at `path` — read on a thread of its own, not one
     /// of Swift's, as opening it waits for its writer.
     private static func waitForWrite(to path: URL) async {

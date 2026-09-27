@@ -425,7 +425,7 @@ extension DaemonToolsTests {
 }
 
 /// A signal a test waits for once, however it and its opening cross.
-private final class HoldGate: @unchecked Sendable {
+final class HoldGate: @unchecked Sendable {
     private let lock = NSLock()
     private var isOpen = false
     private var waiters: [CheckedContinuation<Void, Never>] = []

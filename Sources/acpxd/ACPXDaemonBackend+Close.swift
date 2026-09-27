@@ -131,9 +131,34 @@ extension ACPXDaemonBackend {
         }
     }
 
+    /// For tests: run once a put-down has abandoned the agent it found connecting, before it
+    /// lets go of the one it found held.
+    @TaskLocal static var afterAbandoning: (@Sendable (_ recordId: String) async -> Void)?
+
+    /// What holds a session at a given moment: its agent held, and one still connecting.
+    struct Holding: Sendable {
+        let agent: ACPAgent?
+        let connecting: ConnectingAgent?
+    }
+
+    /// What holds `recordId` as this is called.
+    func holding(_ recordId: String) -> Holding {
+        Holding(agent: live[recordId]?.agent, connecting: connecting[recordId])
+    }
+
     /// What holds `recordId`, put down under it: its agent held, or one still connecting.
     func putDown(_ recordId: String) async {
-        await connecting[recordId]?.abandon()
+        await putDown(recordId, holding(recordId))
+    }
+
+    /// What held `recordId` at a given moment, put down under it — the agent then held, or the
+    /// one then connecting — and nothing else, though putting it down suspends: the turn on it
+    /// can end meanwhile, and a session made since under the same id can be held by then
+    /// (#219 review).
+    func putDown(_ recordId: String, _ holding: Holding) async {
+        let launched = await holding.connecting?.abandon()
+        await Self.afterAbandoning?(recordId)
+        guard let agent = live[recordId]?.agent, agent === holding.agent || agent === launched else { return }
         await evict(recordId)
     }
 }
