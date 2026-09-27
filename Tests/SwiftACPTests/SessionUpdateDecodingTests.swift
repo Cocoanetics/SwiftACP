@@ -19,22 +19,35 @@ struct SessionUpdateDecodingTests {
 
     /// A `kind` or `status` that doesn't fit is left out, and so are the `content` and
     /// `locations` entries that don't: a location's line that is no line number goes, and
-    /// the location stays.
+    /// the location stays. An entry that fits loses only its optional members that don't,
+    /// such as a diff's `oldText` or a block's `annotations`.
     @Test func aToolCallsMembersThatDontFitAreLeftOut() throws {
         let call = try toolCall(#"""
             {"sessionUpdate":"tool_call","toolCallId":"t1","title":"Run","kind":5,"status":{"x":1},
             "content":[{"type":"content","content":{"type":"text","text":"ok"}},
             {"type":"content","content":{"type":"text"}},{"type":"diff","path":"/a","newText":"n"},
-            {"type":"diff","path":"/b"},{"type":"terminal"},7,{"type":"bogus"}],
+            {"type":"diff","path":"/b"},{"type":"diff","path":"/c","oldText":5,"newText":"m"},
+            {"type":"content","content":{"type":"text","text":"noted","annotations":"x"}},
+            {"type":"terminal"},7,{"type":5},{"type":"bogus"}],
             "locations":[{"path":"/a","line":3},{"path":"/b","line":-1},{"path":"/c","line":"x"},{"line":1},"x"]}
             """#)
         #expect(call.kind == nil)
         #expect(call.status == nil)
         let content = try #require(call.content)
-        #expect(content.count == 3)
+        #expect(content.count == 5)
         if case .content(let block) = content[0] { #expect(block.text == "ok") } else { Issue.record("\(content[0])") }
         if case .diff(let diff) = content[1] { #expect(diff.path == "/a") } else { Issue.record("\(content[1])") }
-        if case .other = content[2] {} else { Issue.record("\(content[2])") }
+        if case .diff(let diff) = content[2] {
+            #expect(diff == ToolCallContent.Diff(path: "/c", newText: "m"))
+        } else {
+            Issue.record("\(content[2])")
+        }
+        if case .content(let block) = content[3] {
+            #expect(block.text == "noted")
+        } else {
+            Issue.record("\(content[3])")
+        }
+        if case .other = content[4] {} else { Issue.record("\(content[4])") }
         #expect(call.locations == [
             ToolCallLocation(path: "/a", line: 3), ToolCallLocation(path: "/b"), ToolCallLocation(path: "/c")
         ])

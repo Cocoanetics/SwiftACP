@@ -347,22 +347,51 @@ public enum ToolCallContent: Codable, Sendable {
         case type, content, path, oldText, newText, terminalId
     }
 
+    /// Read as the ACP SDK reads an entry (`zToolCallContent`): content, a diff or a terminal
+    /// must fit its schema, and loses an optional member that doesn't, such as a diff's
+    /// `oldText` or a block's `annotations`. An entry of a type SwiftACP doesn't know is kept
+    /// as sent, where the SDK drops it; one whose `type` is no string fails.
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: Keys.self)
-        let type = try container.decodeIfPresent(String.self, forKey: .type)
-        switch type {
-        case "content":
-            self = .content(try container.decode(ContentBlock.self, forKey: .content))
-        case "diff":
-            self = .diff(
-                Diff(
-                    path: try container.decode(String.self, forKey: .path),
-                    oldText: try container.decodeIfPresent(String.self, forKey: .oldText),
-                    newText: try container.decode(String.self, forKey: .newText)))
-        case "terminal":
-            self = .terminal(terminalId: try container.decode(String.self, forKey: .terminalId))
+        let raw = try JSONValue(from: decoder)
+        guard case .object(let object) = raw else {
+            throw DecodingError.typeMismatch([String: JSONValue].self, DecodingError.Context(
+                codingPath: decoder.codingPath, debugDescription: "A tool call's content entry is an object"))
+        }
+        switch object["type"] {
+        case .string(let type)? where ["content", "diff", "terminal"].contains(type):
+            guard ClientRequestSchema.toolCallContent.fits(raw) else {
+                throw DecodingError.dataCorrupted(DecodingError.Context(
+                    codingPath: decoder.codingPath, debugDescription: "A tool call's \(type) doesn't fit its schema"))
+            }
+            let read = ClientRequestSchema.toolCallContent.lenient(raw)
+            self = Self.known(read) ?? .other(read)
+        case .string?, .none:
+            self = .other(raw)
         default:
-            self = .other(try JSONValue(from: decoder))
+            throw DecodingError.typeMismatch(String.self, DecodingError.Context(
+                codingPath: decoder.codingPath + [Keys.type], debugDescription: "A content entry's type is a string"))
+        }
+    }
+
+    /// An entry that fits its schema, as SwiftACP models it; `nil` where the model can't
+    /// hold what the schema takes.
+    private static func known(_ value: JSONValue) -> ToolCallContent? {
+        guard case .object(let object) = value else { return nil }
+        switch object["type"] {
+        case .string("content")?:
+            return object["content"].flatMap { try? $0.decoded(ContentBlock.self) }.map(ToolCallContent.content)
+        case .string("diff")?:
+            guard case .string(let path)? = object["path"], case .string(let newText)? = object["newText"] else {
+                return nil
+            }
+            var oldText: String?
+            if case .string(let text)? = object["oldText"] { oldText = text }
+            return .diff(Diff(path: path, oldText: oldText, newText: newText))
+        case .string("terminal")?:
+            guard case .string(let terminalId)? = object["terminalId"] else { return nil }
+            return .terminal(terminalId: terminalId)
+        default:
+            return nil
         }
     }
 
