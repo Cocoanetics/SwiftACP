@@ -57,6 +57,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     /// The ids of the `session/prompt` requests not answered yet.
     private var promptsInFlight: Set<JSONRPCID> = []
     private var closing = false
+    /// Set by a close until its agent has had its stdin's grace (``settleHeldEnd(quitOnStdinEnd:)``).
+    private var holdingEnd = false
     private var termination: Task<Void, Never>?
 
     private init(
@@ -151,13 +153,12 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         inbound
     }
 
-    /// Stop the transport: nothing more is sent, and the agent is ended in the
-    /// background (see ``terminate()``, which a caller awaits to know it is over).
-    /// Closing the connection is the first sign of the agent's end acpx sees when it
-    /// closes a client — the process is still running — so it is `connection_close`,
-    /// and never unexpected: acpx's `close()` marks its client closing first.
+    /// Stop the transport: nothing more is sent, and the agent is ended in the background
+    /// (``terminate()`` waits for it). Its end is as acpx's `close()` sees it, which ends the
+    /// agent before it closes the connection (#142): never unexpected, `connection_close` for
+    /// an agent that quits once its stdin ends, how its process ended for one signalled.
     func close() {
-        recordDisconnect(.connectionClose, closing: true)
+        lock.withLock { if termination == nil, lastExit == nil { holdingEnd = true } }
         _ = startTermination()
     }
 
@@ -238,11 +239,10 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         do {
             lines = try reader.push(bytes)
         } catch {
-            // acpx's `onReadError`: the requests waiting fail with the limit's error,
-            // and the connection — then the agent — goes.
+            // acpx's `onReadError`: the connection, then the agent, goes, recorded before what
+            // waits fails with the limit's error — a close that leads to is not the end.
             process.stopReading()
-            events.yield(.end(error))
-            recordDisconnect(.connectionClose)
+            if !recordDisconnect(.connectionClose, failing: error) { events.yield(.end(error)) }
             _ = startTermination()
             return
         }
@@ -323,24 +323,27 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         _ = startTermination()
     }
 
-    /// acpx's `recordAgentExit`: the first account of the agent's end wins, and the
-    /// requests still waiting fail with it. `closing` marks the end as the client's own
-    /// doing — from now on, whatever else is seen of it.
-    private func recordDisconnect(_ reason: AgentDisconnectReason, closing: Bool = false) {
+    /// acpx's `recordAgentExit`: the first account of the agent's end wins, and the requests
+    /// still waiting fail with it, or with `error`. Once the client is closing, the end is its
+    /// own doing. One seen while a close holds it back is left to the close; one without
+    /// `status` has no code or signal, as the connection's has. Returns whether it counted.
+    @discardableResult
+    private func recordDisconnect(_ reason: AgentDisconnectReason, status: Bool = true, failing error: Error? = nil)
+        -> Bool {
         let recorded: AgentExit? = lock.withLock {
-            if closing { self.closing = true }
-            guard lastExit == nil else { return nil }
+            guard lastExit == nil, !holdingEnd else { return nil }
             let exit = AgentExit(
-                exitCode: exitStatus?.exitCode, signal: exitStatus?.signal, exitedAt: Self.now(), reason: reason,
-                unexpectedDuringPrompt: !closing && !promptsInFlight.isEmpty)
+                exitCode: status ? exitStatus?.exitCode : nil, signal: status ? exitStatus?.signal : nil,
+                exitedAt: Self.now(), reason: reason, unexpectedDuringPrompt: !closing && !promptsInFlight.isEmpty)
             lastExit = exit
             return exit
         }
-        guard let recorded else { return }
+        guard let recorded else { return false }
         writer.finish()
-        events.yield(.end(AgentDisconnectedError(
+        events.yield(.end(error ?? AgentDisconnectedError(
             reason: recorded.reason, exitCode: recorded.exitCode, signal: recorded.signal)))
         events.finish()
+        return true
     }
 
     // MARK: - Ending the agent
@@ -370,12 +373,30 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         }
         captureDescendants()
         writer.finish()
-        _ = await waitForExit(timeout: remaining(atMost: quirks.closeAfterStdinEnd))
+        settleHeldEnd(quitOnStdinEnd: await exits(within: remaining(atMost: quirks.closeAfterStdinEnd)))
         if await !signalAgentAndDescendants(SIGTERM, waiting: remaining(atMost: .milliseconds(1500))) {
             _ = await signalAgentAndDescendants(SIGKILL, waiting: remaining(atMost: .milliseconds(1000)))
         }
         descendantsLock.withLock { descendants.retire() }
         process.stopReading()
+        // acpx closes the connection once the agent is ended: its end, unless one was seen.
+        recordDisconnect(.connectionClose)
+    }
+
+    /// The end a close held back: an agent that quit in its stdin's grace is `connection_close`,
+    /// one of the two ends acpx records for it (its exit and its output's end race); one still
+    /// running ends as its process does, as ``exited(_:)`` records it (here, if it just did).
+    private func settleHeldEnd(quitOnStdinEnd quit: Bool) {
+        let (held, exited) = lock.withLock { () -> (Bool, Bool) in
+            defer { holdingEnd = false }
+            return (holdingEnd, exitStatus != nil)
+        }
+        guard held else { return }
+        if quit {
+            recordDisconnect(.connectionClose, status: false)
+        } else if exited {
+            recordDisconnect(.processExit)
+        }
     }
 
     /// acpx's `signalAgentAndDescendants`: the descendants first, then the agent, and

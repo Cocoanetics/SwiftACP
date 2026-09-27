@@ -422,13 +422,12 @@ public final class ACPAgent: Sendable {
         await connection.shutDownTerminals()
         #if os(macOS) || os(Linux)
         if let agent = transport as? AgentProcessTransport {
-            // The transport is closed here and now, so closing the connection is what
-            // the agent's end is put down to — as acpx records it — before the stdin that
-            // closing ends lets the agent exit first: the connection's own close reaches
-            // the transport from a task of its own.
+            // As acpx's `retireNativeResources` closes a client (#142): marked closing, the
+            // agent ended — its end, recorded as acpx records it, failing what still waits
+            // in its words — and only then the connection closed.
             agent.close()
-            await connection.close()
             await agent.terminate()
+            await connection.close()
             return
         }
         #endif

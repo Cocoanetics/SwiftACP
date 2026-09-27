@@ -73,7 +73,8 @@ import Glibc
 
     /// Closing an agent mid-turn ends it as the client's doing, not unexpectedly: acpx's
     /// `close()` marks its client closing before anything of the end is recorded (#113
-    /// review).
+    /// review). Its end is one acpx records for it: the agent quits once its stdin ends, unless
+    /// a loaded machine holds it past the grace (#142).
     @Test(.enabled(if: mockPythonAvailable))
     func closingAnAgentMidTurnIsNoUnexpectedEnd() async throws {
         let (streamed, streaming) = AsyncStream<Void>.makeStream()
@@ -87,7 +88,7 @@ import Glibc
         await agent.close()
         _ = await turn.result
         let exit = try #require(agent.lifecycle?.lastExit)
-        #expect(exit.reason == .connectionClose)
+        #expect([.connectionClose, .processExit].contains(exit.reason))
         #expect(!exit.unexpectedDuringPrompt)
     }
 
@@ -258,7 +259,8 @@ import Glibc
     }
 
     /// acpx's `cleanupAgentProcess`: an agent that ignores its stdin's end and `SIGTERM`
-    /// is killed, and closing it is what its end is put down to.
+    /// is killed, and ends as the kill ended it — acpx 0.19.3's `sessions new` records such
+    /// an agent so, as it ends the agent before it closes the connection (#142).
     @Test(.enabled(if: mockPythonAvailable))
     func closingEndsAnAgentThatIgnoresItsStdinAndSIGTERM() async throws {
         let agent = try await Self.launch("EXIT_AGENT_STUBBORN=1")
@@ -267,8 +269,40 @@ import Glibc
         #expect(!Self.isRunning(pid))
         let lifecycle = try #require(agent.lifecycle)
         #expect(!lifecycle.running)
-        #expect(lifecycle.lastExit?.reason == .connectionClose)
+        #expect(lifecycle.lastExit?.reason == .processExit)
+        #expect(lifecycle.lastExit?.signal == "SIGKILL")
         #expect(lifecycle.lastExit?.exitCode == nil)
+    }
+
+    /// An agent that quits once its stdin ends is `connection_close`, with no code or signal,
+    /// as acpx records one that quits within its stdin's grace (#142) — here qodercli's
+    /// 750 ms, which a loaded machine does not outlast.
+    @Test(.enabled(if: mockPythonAvailable))
+    func closingAnAgentThatQuitsInTheGraceIsTheConnectionsEnd() async throws {
+        let launch = try AgentRegistry.launch(
+            for: Self.command(""), cwd: NSTemporaryDirectory(), environment: nil, inheritStderr: false)
+        let transport = try AgentProcessTransport.start(
+            launch, agentCommand: "qodercli", maxMessageBytes: nil, tap: RawWireTap())
+        transport.close()
+        await transport.terminate()
+        let exit = try #require(transport.lifecycle.lastExit)
+        #expect(exit.reason == .connectionClose)
+        #expect(exit.exitCode == nil && exit.signal == nil)
+        #expect(!exit.unexpectedDuringPrompt)
+    }
+
+    /// An agent that runs on once its stdin ends is ended by `SIGTERM`, and that is its end,
+    /// as acpx records a busy agent it closes (#142) — the client's own doing, never
+    /// unexpected.
+    @Test(.enabled(if: mockPythonAvailable))
+    func closingAnAgentThatRunsOnRecordsTheSignalThatEndedIt() async throws {
+        let agent = try await Self.launch("EXIT_AGENT_LINGER=1")
+        await agent.close()
+        let exit = try #require(agent.lifecycle?.lastExit)
+        #expect(exit.reason == .processExit)
+        #expect(exit.signal == "SIGTERM")
+        #expect(exit.exitCode == nil)
+        #expect(!exit.unexpectedDuringPrompt)
     }
 
     /// What the agent started goes with it, although it outlives the agent and is
