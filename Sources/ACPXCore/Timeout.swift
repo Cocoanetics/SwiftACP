@@ -29,6 +29,11 @@ public func withTimeout<T: Sendable>(
 ) async throws -> T {
     guard let milliseconds, milliseconds > 0 else { return try await operation() }
     let race = DeadlineRace<T>()
+    let pass: @Sendable () -> Void = { race.settle(.failure(TimeoutError(milliseconds: milliseconds))) }
+    // A test's source can pass the deadline too (``DeadlineSource``). It waits there from
+    // before the operation starts, so nothing the operation brings about fires it first.
+    let source = DeadlineSource.current
+    let waiting = source?.add(pass)
     // Unstructured, so that the deadline need not wait for it (see above).
     let work = Task {
         do {
@@ -39,16 +44,50 @@ public func withTimeout<T: Sendable>(
     }
     let deadline = Task {
         try await Task.sleep(nanoseconds: nanoseconds(milliseconds))
-        race.settle(.failure(TimeoutError(milliseconds: milliseconds)))
+        pass()
     }
     defer {
         deadline.cancel()
         work.cancel()
+        if let source, let waiting { source.remove(waiting) }
     }
     return try await withTaskCancellationHandler {
         try await race.outcome()
     } onCancel: {
         race.settle(.failure(CancellationError()))
+    }
+}
+
+/// Stands in for the passing of time in a test: ``fire()`` passes each deadline of
+/// ``withTimeout(milliseconds:_:)`` waiting then, as if its time were up. Those set later
+/// keep their own time. A test can so end a step at an event of its choosing — the agent
+/// getting its prompt — however long the steps before it took on a busy machine.
+final class DeadlineSource: @unchecked Sendable {
+    /// The source a run under test has its deadlines passed from, as well as by their time.
+    @TaskLocal static var current: DeadlineSource?
+
+    private let lock = NSLock()
+    private var waiting: [Int: @Sendable () -> Void] = [:]
+    private var nextId = 0
+
+    func fire() {
+        let due: [@Sendable () -> Void] = lock.withLock {
+            defer { waiting = [:] }
+            return Array(waiting.values)
+        }
+        for pass in due { pass() }
+    }
+
+    fileprivate func add(_ pass: @escaping @Sendable () -> Void) -> Int {
+        lock.withLock {
+            defer { nextId += 1 }
+            waiting[nextId] = pass
+            return nextId
+        }
+    }
+
+    fileprivate func remove(_ id: Int) {
+        _ = lock.withLock { waiting.removeValue(forKey: id) }
     }
 }
 
