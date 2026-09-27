@@ -333,7 +333,7 @@ final class RunInterrupt: @unchecked Sendable {
         }
         let connection = agent.connection
         if let sessionId, await connection.hasPromptInFlight(sessionId: sessionId) {
-            try? await connection.cancel(sessionId: sessionId)
+            await agent.sendCancel(sessionId)
             let answered = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) {
                 await connection.waitForPromptToSettle(sessionId: sessionId)
             }
