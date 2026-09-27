@@ -1,6 +1,7 @@
 @testable import ACPXCore
 import Foundation
 import SwiftACP
+import Testing
 
 /// Whether `python3` is available for the bundled `mock-agent.py` fixture. Gates
 /// the tests that spawn the mock agent.
@@ -61,6 +62,56 @@ func onThreadOfItsOwn<T: Sendable>(_ body: @escaping @Sendable () -> T) async ->
     let store = ACPXPaths.taskBaseDir
     return await withCheckedContinuation { continuation in
         Thread { continuation.resume(returning: ACPXPaths.$taskBaseDir.withValue(store) { body() }) }.start()
+    }
+}
+
+/// One agent suite at a time among those whose tests start agents in stores of their own,
+/// beside `DaemonToolsTests`, which runs in its own serialized lane. All of them at once
+/// start agents faster than CI's three cores serve them, and tests elsewhere in the run
+/// then miss the windows they time (#223's first CI run). A suite takes the lane before
+/// its first test starts: swift-testing times each test inside its suite's scope, so the
+/// wait counts against no test's time limit. Give it with `.serialized`, so that the
+/// suite runs one test at a time.
+struct AgentLane: SuiteTrait, TestScoping {
+    func provideScope(
+        for test: Test, testCase: Test.Case?, performing function: @Sendable () async throws -> Void
+    ) async throws {
+        await AgentLaneQueue.shared.enter()
+        do {
+            try await function()
+        } catch {
+            await AgentLaneQueue.shared.leave()
+            throw error
+        }
+        await AgentLaneQueue.shared.leave()
+    }
+}
+
+extension Trait where Self == AgentLane {
+    /// One agent suite at a time (``AgentLane``).
+    static var agentLane: Self { AgentLane() }
+}
+
+/// The suites waiting for ``AgentLane``, first come first served.
+private actor AgentLaneQueue {
+    static let shared = AgentLaneQueue()
+    private var taken = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        guard taken else {
+            taken = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func leave() {
+        if waiting.isEmpty {
+            taken = false
+        } else {
+            waiting.removeFirst().resume()
+        }
     }
 }
 

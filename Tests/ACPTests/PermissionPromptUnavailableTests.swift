@@ -8,7 +8,7 @@ import Testing
 /// acpx fails it, unless the stream already shows the client's refusal saying the same
 /// (#93). A refused write shows it, since the refusal is an error on the wire. A tool
 /// permission answered `cancelled` does not. Lines are acpx 0.19.1's.
-@Suite struct PermissionPromptUnavailableTests {
+@Suite(.serialized, .agentLane) struct PermissionPromptUnavailableTests {
     static let message = "Permission prompt unavailable in non-interactive mode"
 
     /// The daemon's turn: text output shows it as the queue owner's error.

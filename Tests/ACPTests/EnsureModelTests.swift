@@ -9,7 +9,7 @@ import Testing
 /// `sessions ensure --model` puts the model on the session it keeps, as acpx's
 /// `ensureSessionWithOwnership` does (`setSessionModel`), and fails when the session cannot
 /// take it. Each output is what acpx printed for the same steps on `model-agent.py`.
-@Suite(.serialized) struct EnsureModelTests {
+@Suite(.serialized, .agentLane) struct EnsureModelTests {
     struct Run {
         var code: Int32
         var out: String

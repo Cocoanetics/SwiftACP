@@ -9,7 +9,7 @@ import Testing
 /// Quiet output reports a turn's token usage and cost on stderr after the reply, as
 /// acpx 0.19.1's quiet formatter does (`flushMetadata`, #104). Every expected line is
 /// what acpx printed, or its `formatMetadataNumber` returned, for the same input.
-struct QuietMetadataTests {
+@Suite(.serialized, .agentLane) struct QuietMetadataTests {
     private func json(_ text: String) throws -> WireJSON {
         try #require(WireJSON(parsing: text))
     }

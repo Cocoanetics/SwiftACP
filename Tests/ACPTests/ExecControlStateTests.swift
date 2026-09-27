@@ -8,7 +8,7 @@ import Testing
 /// acpx's `controlState` in `runOnce`, which takes in each `config_option_update` the
 /// agent sends as it arrives (acpx 0.19.1 and 0.19.3 alike), and keeps what an
 /// acknowledged selection left (0.19.3, #778).
-struct ExecControlStateTests {
+@Suite(.serialized, .agentLane) struct ExecControlStateTests {
     struct Run {
         var code: Int32
         var err: String

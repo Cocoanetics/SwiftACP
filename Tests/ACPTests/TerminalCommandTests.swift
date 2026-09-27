@@ -13,7 +13,7 @@ import Glibc
 /// `exec` against an agent that runs `echo hello terminal` through the client's
 /// terminal (#82): advertised and served as acpx 0.19.1 serves it, refused under
 /// `--deny-all` with exit 5, and withheld by `--no-terminal`.
-struct TerminalCommandTests {
+@Suite(.serialized, .agentLane) struct TerminalCommandTests {
     struct Ran {
         var code: Int32
         var out: String

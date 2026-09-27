@@ -8,7 +8,7 @@ import Testing
 /// `--permission-policy` / `--policy` as acpx reads and shows it (#97): inline JSON or a
 /// file, refused with acpx's words as a usage error, and an escalation printed as a
 /// `[permission]` notice with its details. Lines are acpx 0.19.1's.
-@Suite struct PermissionPolicyTests {
+@Suite(.serialized, .agentLane) struct PermissionPolicyTests {
     private enum Loaded: Equatable {
         case success(PermissionRules?)
         case failure(String)

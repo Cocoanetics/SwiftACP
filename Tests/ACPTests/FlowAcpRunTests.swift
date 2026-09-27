@@ -11,7 +11,7 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
 /// ACP nodes in `flow run` as acpx 0.19.3 runs them (#202, step 3), through the CLI with a
 /// real agent — the fixture agent `mock-agent.py`, a flow's `mock` profile — each in a
 /// store of its own. `FlowAcpRunnerTests` has what the runner alone decides.
-@Suite(.serialized) struct FlowAcpRunTests {
+@Suite(.serialized, .agentLane) struct FlowAcpRunTests {
     static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .appendingPathComponent("Fixtures")
 

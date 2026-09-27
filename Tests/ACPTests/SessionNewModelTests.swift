@@ -9,7 +9,7 @@ import Testing
 /// `createFreshSessionState` does, and records what came of it
 /// (`applyInitialModelSelection`) — including each model's name (#92). The requests
 /// and records expected here are acpx 0.19.1's against the same advertisements.
-@Suite(.serialized) struct SessionNewModelTests {
+@Suite(.serialized, .agentLane) struct SessionNewModelTests {
     private struct Created {
         var record: SessionRecord?
         var requests: [String]

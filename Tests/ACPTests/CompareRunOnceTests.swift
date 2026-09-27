@@ -8,7 +8,7 @@ import Testing
 /// under `--prompt-retries`, with the invocation's session options. Each row keeps what
 /// the agent said, the usage it reported and an error's own message. A signal puts the
 /// agent running down, admits no other, and ends `compare` `INTERRUPTED` (130).
-struct CompareRunOnceTests {
+@Suite(.serialized, .agentLane) struct CompareRunOnceTests {
     struct Compared {
         var code: Int32
         var rows: [[String: Any]]

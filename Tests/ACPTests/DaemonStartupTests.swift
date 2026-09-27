@@ -6,7 +6,7 @@ import Testing
 /// An acpxd that dies while it starts is reported at once, and why, as acpx reports its
 /// queue owner (#111): how it ended, and the end of what it wrote on stderr — not, some
 /// nine seconds later, that it could not be reached.
-struct DaemonStartupTests {
+@Suite(.serialized, .agentLane) struct DaemonStartupTests {
     /// A stand-in for acpxd: a shell script doing `body`.
     private static func daemon(_ body: String) throws -> URL {
         let script = FileManager.default.temporaryDirectory.appendingPathComponent("acpxd-\(UUID().uuidString)")

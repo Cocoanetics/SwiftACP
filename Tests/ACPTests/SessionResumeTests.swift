@@ -12,7 +12,7 @@ import Testing
 /// `session/resume` when the agent advertises it, else `session/load`, refused by an agent
 /// that can do neither. An open record under that id is closed first (acpx 0.19.3, #782).
 /// Each output is what acpx printed for the same steps on `mock-agent.py`.
-@Suite(.serialized) struct SessionResumeTests {
+@Suite(.serialized, .agentLane) struct SessionResumeTests {
     struct Run {
         var code: Int32
         var out: String

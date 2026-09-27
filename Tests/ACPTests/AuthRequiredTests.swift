@@ -8,7 +8,7 @@ import Testing
 /// A failure that needs credentials is reported as acpx 0.19.1 reports it (#132): by its
 /// own message, with the `AUTH_REQUIRED` detail code, and a hint naming the `auth` keys to
 /// add. Expected lines are acpx's for the same agents.
-struct AuthRequiredTests {
+@Suite(.serialized, .agentLane) struct AuthRequiredTests {
     static let policyMessage = "agent advertised auth methods [probe-login] but no matching credentials found"
     static let policyHint =
         "hint: run `acpx config show` to locate the active config, then add `auth.probe-login` and retry."

@@ -13,7 +13,7 @@ let nodeAvailable = AgentRegistry.which("node") != nil
 /// they are acpx's own `flow run` tests (`test/flows.test.ts`,
 /// `test/integration.test.ts`), and `theBundleIsWrittenAsAcpxWritesIt` compares a whole
 /// bundle with one acpx wrote. `FlowRunnerTests` has the cases the runner alone decides.
-@Suite(.serialized) struct FlowRunTests {
+@Suite(.serialized, .agentLane) struct FlowRunTests {
     struct Run {
         var out: String
         var err: String

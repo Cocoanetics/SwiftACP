@@ -11,7 +11,7 @@ import Testing
 /// Each expected output is what acpx printed for the same agent (`Fixtures/retry-agent.py`),
 /// 0.19.3 for an agent gone with the prompt out.
 /// A signal is stood in for by ``Interrupts/Source``, fired as the agent gets its prompt.
-struct ExecInterruptTests {
+@Suite(.serialized, .agentLane) struct ExecInterruptTests {
     struct Run {
         var out: String
         var err: String

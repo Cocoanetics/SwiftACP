@@ -9,7 +9,7 @@ import Testing
 /// exactly that argv, as acpx launches it, and a session records it as `agent_argv`
 /// so every relaunch is the same (#74). A plain command line is split as acpx's
 /// `splitCommandLine` splits it.
-struct AgentArgvTests {
+@Suite(.serialized, .agentLane) struct AgentArgvTests {
     /// Arguments `JSON.stringify` would quote with escapes: re-split from the command
     /// acpx shows for them, they would arrive changed.
     private static let awkward = ["a b", #"say "hi""#, #"back\slash"#, "tab\there"]

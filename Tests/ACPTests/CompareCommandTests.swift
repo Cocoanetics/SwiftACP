@@ -8,7 +8,7 @@ import Testing
 /// requests and the refused ones, `permission_denied` when anything was refused, and an
 /// error row when a question could not be asked — whatever refused it: the mode, a
 /// `--permission-policy` rule, or `--non-interactive-permissions fail`.
-struct CompareCommandTests {
+@Suite(.serialized, .agentLane) struct CompareCommandTests {
     static func compare(_ flags: [String]) async throws -> (code: Int32, row: [String: Any]) {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath)

@@ -8,7 +8,7 @@ import Testing
 /// `exec` bounds each step by `--timeout` and sends a failed prompt again under
 /// `--prompt-retries`, as acpx 0.19.1's `runOnce` does (#106). Each expected output is
 /// what acpx printed for the same agent (`Fixtures/retry-agent.py`).
-struct ExecTimeoutRetryTests {
+@Suite(.serialized, .agentLane) struct ExecTimeoutRetryTests {
     struct Run {
         var out: String
         var err: String

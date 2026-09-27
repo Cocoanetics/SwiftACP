@@ -11,7 +11,7 @@ import Testing
 /// as acpx 0.19.3 does (#778, for our openclaw/acpx#767): a creation that fails leaves the
 /// old session open. A new session under the replaced one's id is spared the close that
 /// would end it (openclaw/acpx#805).
-@Suite(.serialized) struct SessionsNewReplacementTests {
+@Suite(.serialized, .agentLane) struct SessionsNewReplacementTests {
     /// The mock agent behind a wrapper whose command never changes, so every run is the
     /// same scope: a `fail` file makes it refuse `session/new`, a `same-id` file makes it
     /// give every session the same id.

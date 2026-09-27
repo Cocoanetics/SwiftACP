@@ -7,7 +7,7 @@ import Testing
 /// it: its text formatter shows each error it reads on the wire (`onAcpMessage`), and the
 /// top level then says nothing more; quiet output gives the agent's details. Each output is
 /// what acpx printed for the same run on `model-agent.py`.
-struct ExecSetupErrorTests {
+@Suite(.serialized, .agentLane) struct ExecSetupErrorTests {
     struct Run {
         var code: Int32
         var out: String

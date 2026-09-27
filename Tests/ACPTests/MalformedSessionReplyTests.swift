@@ -16,7 +16,7 @@ import Testing
 /// Each test reads the record before the daemon lets the agent go: it records the agent's
 /// exit on the record it reads back, as acpx's owner does at shutdown
 /// (`resolveSessionRecord`), and a record read back has no options that are no list.
-@Suite(.serialized) struct MalformedSessionReplyTests {
+@Suite(.serialized, .agentLane) struct MalformedSessionReplyTests {
     private static let model: JSONValue = .object([
         "id": .string("model"), "type": .string("select"), "category": .string("model"), "name": .string("Model"),
         "currentValue": .string("m1"),
