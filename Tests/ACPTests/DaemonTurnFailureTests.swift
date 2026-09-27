@@ -240,15 +240,16 @@ extension DaemonToolsTests {
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             _ = try await daemon.runPrompt(sessionId: id, text: "first")
             let client = CallingClient()
-            let shown = HoldGate()
+            let (shown, showing) = AsyncStream<Void>.makeStream()
             client.observe { log in
                 guard let wire = try? log.decoded(WireMessageEvent.self), wire.wireDirection == "outbound",
                       WireJSON(parsing: Data(wire.wireLine.utf8))?["method"] == .text("session/prompt") else { return }
-                shown.open()
+                showing.yield()
             }
             let turn = Task { try await prompt(daemon, id, text: "hold turn", streamWire: true, client: client) }
-            // The agent holds the prompt until it is cancelled; the stream has it meanwhile.
-            await shown.wait()
+            // The agent holds the prompt until it is cancelled; the stream has it meanwhile. A wait
+            // bounded as a time limit could not bound one on a gate.
+            try await nextEvent(shown)
             #expect(try await daemon.cancelSession(sessionId: id))
             try await turn.value
             #expect(client.wireKinds.first == "wire:outbound:session/prompt")
