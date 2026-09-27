@@ -46,6 +46,27 @@ struct FlowAttemptFinished: Error, LocalizedError {
     var errorDescription: String? { "Flow attempt has finished accepting work" }
 }
 
+/// Stands in for the passing of time in a test: ``fire()`` passes the deadline of each
+/// attempt made while it was ``FlowAttempt/deadlines``, as if its time were up. A test can so
+/// end a step at an event of its choosing — its command ready — however long the steps
+/// before it took on a busy machine.
+final class FlowDeadlines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var passes: [@Sendable () -> Void] = []
+
+    func fire() {
+        let due = lock.withLock {
+            defer { passes = [] }
+            return passes
+        }
+        for pass in due { pass() }
+    }
+
+    fileprivate func add(_ pass: @escaping @Sendable () -> Void) {
+        lock.withLock { passes.append(pass) }
+    }
+}
+
 /// acpx's `FlowAttempt` (`src/flows/attempt.ts`): one node attempt, which owns admitting
 /// and finishing the runtime work done for it.
 ///
@@ -56,6 +77,8 @@ struct FlowAttemptFinished: Error, LocalizedError {
 ///   failure of that work is the attempt's.
 /// - Cancellations registered with it run when it is cancelled.
 final class FlowAttempt: @unchecked Sendable {
+    /// The source a test passes attempts' deadlines from, as well as by their time.
+    @TaskLocal static var deadlines: FlowDeadlines?
     let nodeId: String
     let attemptId: String
     let startedAt: String
@@ -92,6 +115,9 @@ final class FlowAttempt: @unchecked Sendable {
                 guard !Task.isCancelled else { return }
                 self?.cancel(FlowTimeoutError(timeoutMs: timeoutMs))
             }
+        }
+        if let timeoutMs = self.timeoutMs {
+            Self.deadlines?.add { [weak self] in self?.cancel(FlowTimeoutError(timeoutMs: timeoutMs)) }
         }
     }
 
