@@ -95,6 +95,13 @@ struct OutputRendererTests {
         let (text, _) = Self.capture(.text, chunks)
         #expect(!text.contains("RESOURCE TEXT"))
         #expect(text.contains("thinking") && text.contains("plain text"))
+        // An answer of no text at all is an empty line in quiet mode, as acpx's quiet
+        // formatter writes it at the prompt's answer (`flushBufferedOutput(true)`).
+        let (resourceOnly, _) = Self.capture(.quiet) { renderer in
+            renderer.render(.agentMessageChunk(resource))
+            renderer.finish(stopReason: .endTurn)
+        }
+        #expect(resourceOnly == "\n")
     }
 
     @Test func otherOperationsRenderAsClientLines() {
