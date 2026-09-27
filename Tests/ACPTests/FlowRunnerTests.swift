@@ -43,6 +43,27 @@ struct FlowRunnerTests {
         #expect(member(steps.first, "trace", "outputInline", "items") == items)
     }
 
+    /// `ctx.outputs` is the run's own `outputs`, as acpx hands its callbacks `state.outputs`: a
+    /// member a later node replaces, deletes or adds is so in every projection written after,
+    /// while the replaced node's result and step keep the value its step produced (#206 review).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputReplacedThroughCtxOutputsIsTheRunsOutput() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-replace", startAt: "collect", nodes: {
+              collect: compute({ run: () => ({ items: ["old"] }) }),
+              other: compute({ run: () => "kept" }),
+              change: compute({ run: ({ outputs }) => {
+                outputs.collect = { items: ["new"] }; delete outputs.other; outputs.extra = { added: true };
+                return "changed"; } }) },
+              edges: [{ from: "collect", to: "other" }, { from: "other", to: "change" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "outputs")?.stringified
+            == #"{"collect":{"items":["new"]},"extra":{"added":true},"change":"changed"}"#)
+        #expect(member(run.state, "results", "collect", "output")?.stringified == #"{"items":["old"]}"#)
+        #expect(member(run.state, "results", "other", "output") == .text("kept"))
+    }
+
     /// The run's input stays the object it was given: a node that changes it through
     /// `ctx.input` changes the input every projection written after holds (#206).
     @Test(.enabled(if: nodeAvailable))

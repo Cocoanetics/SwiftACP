@@ -144,6 +144,14 @@ struct FlowRunState: Sendable {
     mutating func setOutput(_ nodeId: String, _ value: FlowValue) {
         outputs[nodeId] = value.json
     }
+
+    /// `outputs` as the flow's code now holds it: `json`'s members, in their order.
+    mutating func replaceOutputs(with json: WireJSON) {
+        guard case .object(let members) = json else { return }
+        var replaced = JSObject()
+        for member in members { replaced[String(decoding: member.key, as: UTF16.self)] = member.value }
+        outputs = replaced
+    }
 }
 
 /// acpx's `FlowNodeOutcome`.

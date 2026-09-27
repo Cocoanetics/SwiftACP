@@ -751,13 +751,15 @@ function setOutput(params) {
 }
 
 // The run's live values as they are now, as acpx's `writeSnapshot` writes them with
-// `JSON.stringify`: the input, and each step's output by its attempt — committed, or returned
-// and not yet (#206).
+// `JSON.stringify`: the input; `outputs` as the flow's code holds it — `ctx.outputs` is acpx's
+// `state.outputs`, so a member a callback replaced, deleted or added is so there — and each
+// step's output by its attempt, committed or returned and not yet, which a node's result and its
+// step hold whatever `outputs` now has (#206).
 function currentState() {
   const attemptValues = {};
   for (const [attemptId, value] of returned) attemptValues[attemptId] = returnedValue(value);
   for (const [attemptId, value] of committed) attemptValues[attemptId] = returnedValue(value);
-  return { input: returnedValue(input), attempts: attemptValues };
+  return { input: returnedValue(input), outputs: returnedValue(outputs), attempts: attemptValues };
 }
 
 // The runner cancelled an attempt: its `signal` aborted with the reason — for one that

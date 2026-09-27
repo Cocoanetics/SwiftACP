@@ -77,7 +77,6 @@ extension FlowRunner {
     /// a callback's value as the host holds it, anything else as JSON.
     func setOutput(_ step: Step) {
         state.setOutput(step.nodeId, step.executed.output)
-        outputAttempts[step.nodeId] = step.result.attemptId
         // The attempt, whose callback's value the host holds — or, for a shell action's
         // result, whose `exec` gave the `args` the result holds.
         var params: [(String, WireJSON?)] = [

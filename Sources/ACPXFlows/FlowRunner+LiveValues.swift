@@ -14,8 +14,10 @@ extension FlowRunner {
     static let liveValuesWaitMilliseconds = 5_000
 
     /// The run's live values, as the host holds them now, into the state a snapshot writes: the
-    /// input, and each step's output — in the step, the node's result and `outputs` — by the
-    /// attempt that produced it. What the host cannot say stays as it was.
+    /// input; `outputs` as the flow's code holds it, since `ctx.outputs` is acpx's `state.outputs`
+    /// — a member a callback replaced, deleted or added is so — and each step's output, in the
+    /// step and the node's result, by the attempt that produced it. What the host cannot say
+    /// stays as it was.
     ///
     /// A value the state writes that JSON can no longer write — a BigInt added to an output, a
     /// cycle — throws its error, as acpx's `JSON.stringify` of the state throws as it writes:
@@ -28,6 +30,11 @@ extension FlowRunner {
         guard let current = reply ?? nil else { return }
         switch FlowValue(reply: current["input"]) {
         case .json(let input): state.set("input", input)
+        case .unserializable(let message): throw FlowRunError(message)
+        default: break
+        }
+        switch FlowValue(reply: current["outputs"]) {
+        case .json(let outputs): state.replaceOutputs(with: outputs)
         case .unserializable(let message): throw FlowRunError(message)
         default: break
         }
@@ -47,9 +54,6 @@ extension FlowRunner {
         for nodeId in state.results.keys {
             state.results[nodeId] = state.results[nodeId].map { Self.withLiveOutput($0, from: values) }
         }
-        for (nodeId, attemptId) in outputAttempts {
-            if let value = values[attemptId] { state.outputs[nodeId] = value }
-        }
     }
 
     /// acpx's `persistRunFailure`, best effort, with the live values: none is written when one
@@ -59,14 +63,13 @@ extension FlowRunner {
         try? persistRunFailure(runDir, error)
     }
 
-    /// The attempts whose outputs the state writes: in a step or a node's result that has one,
-    /// or in `outputs`. A step whose own value JSON could not write has none: it failed.
+    /// The attempts whose outputs the state writes, in a step or a node's result that has one.
+    /// A step whose own value JSON could not write has none: it failed.
     private var writtenAttempts: Set<String> {
         let records = state.steps + state.results.keys.compactMap { state.results[$0] }
-        let recorded = records.compactMap { record in
+        return Set(records.compactMap { record in
             record.hasMember("output") ? record["attemptId"]?.stringValue : nil
-        }
-        return Set(recorded).union(outputAttempts.values)
+        })
     }
 
     /// `record` — a step, or a node's result — with its `output` the live value of its attempt,

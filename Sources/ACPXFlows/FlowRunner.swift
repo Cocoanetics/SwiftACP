@@ -76,8 +76,6 @@ public actor FlowRunner {
     /// What each ACP node's attempt has come to (acpx's `context.acpResult`).
     var acpResults: [String: AcpResult] = [:]
     var persistentSessions = FlowPersistentSessions()
-    /// The attempt each node's output came of, whose live value the host holds (#206).
-    var outputAttempts: [String: String] = [:]
     /// The interrupt's stop of the shell commands, once it has begun.
     private var shellCancellation: Task<Void, Error>?
 
