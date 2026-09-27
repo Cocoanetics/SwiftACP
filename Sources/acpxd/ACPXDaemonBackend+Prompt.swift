@@ -76,7 +76,7 @@ extension ACPXDaemonBackend {
             begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
         } catch let refused as QueueOwnerShuttingDown {
             // Told to the client as acpx's owner tells it, the turn's error.
-            return try await reportingFailure(of: recordId, errors: TurnErrorWatch()) { throw refused }
+            return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
         }
         let (control, ticket) = (begun.control, begun.ticket)
         var heldTheSlot = !wait

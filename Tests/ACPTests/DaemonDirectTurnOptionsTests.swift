@@ -48,6 +48,25 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A direct turn refused as it would begin — the daemon stopping — fails with the refusal's
+    /// own detail and origin, not a queued turn's defaults (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectTurnRefusedAsItBeginsKeepsTheRefusalsOwnCodes() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await daemon.releaseAll()
+            let client = CallingClient()
+            await #expect(throws: QueueOwnerShuttingDown.self) {
+                _ = try await directTurn(daemon, id, "hi", client: client)
+            }
+            let failure = try #require(client.failure)
+            #expect(failure.detailCode == "QUEUE_OWNER_SHUTTING_DOWN")
+            #expect(failure.origin == "queue")
+        }
+    }
+
     /// A direct turn that needed a permission question nobody could be asked fails with
     /// that, as acpx's client fails its prompt — though the agent ended the turn itself.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
