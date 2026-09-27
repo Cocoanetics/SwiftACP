@@ -24,10 +24,13 @@ extension ACPXDaemonBackend {
     ) async throws -> String {
         let recordId = held.record.acpxRecordId
         try await holdAsNew(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
-        // Called off as it was held: from a task of its own, as this one's cancellation would
-        // refuse the release.
+        await creationKept?(recordId)
+        // Called off as it was held: its own agent goes, and none that took its place since under
+        // the same id — from a task of its own, as this one's cancellation would cut the close
+        // short (#219 review).
         if Task.isCancelled || creationCalledOff(token, madeAs: recordId, agent: held.agent) {
-            await Task { _ = try? await self.releaseSession(sessionId: recordId) }.value
+            let agent = held.agent
+            await Task { _ = await self.releaseOwn(recordId, agent: agent) }.value
             throw CancellationError()
         }
         return recordId
@@ -104,15 +107,14 @@ extension ACPXDaemonBackend {
             calledOffCreations[creationToken] = now
             return false
         }
-        return await releaseMade(made)
+        return await releaseOwn(made.recordId, agent: made.agent)
     }
 
-    /// Let go of the agent the creation under a token made, when it is still the one held for
-    /// its session and nothing has it: not one that took its place under the same id since,
-    /// nor one a turn or an owner now has, which let it go themselves (#219 review).
-    private func releaseMade(_ made: MadeCreation) async -> Bool {
-        let recordId = made.recordId
-        guard live[recordId]?.agent === made.agent, turns[recordId] == nil, owners[recordId] == nil else {
+    /// Let go of the agent a creation made, held for `recordId`'s session, when it still is and
+    /// nothing has it: not one that took its place under the same id since, nor one a turn or an
+    /// owner now has, which let it go themselves (#219 review).
+    private func releaseOwn(_ recordId: String, agent: AnyObject) async -> Bool {
+        guard live[recordId]?.agent === agent, turns[recordId] == nil, owners[recordId] == nil else {
             return false
         }
         await evict(recordId)

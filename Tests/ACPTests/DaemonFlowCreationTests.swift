@@ -241,6 +241,32 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A creation cancelled as its session is held lets go of its own agent, and no other: one
+    /// that took its place under the same id meanwhile keeps its agent (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCancelledCreationLetsGoOnlyOfItsOwnAgent() async throws {
+        let command = try #require(mockCommand())
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (firstKept, secondKept, calls) = (HoldGate(), HoldGate(), CallCount())
+            // Held, the first creation is cancelled, and waits until the second has taken its place.
+            await daemon.setCreationKept { _ in
+                guard calls.next() == 1 else { return secondKept.open() }
+                withUnsafeCurrentTask { $0?.cancel() }
+                firstKept.open()
+                await secondKept.wait()
+            }
+            let first = Task { try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true) }
+            await firstKept.wait()
+            let second = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
+            await #expect(throws: CancellationError.self) { _ = try await first.value }
+            let kept = try #require(await daemon.live[second]?.agent)
+            #expect(await !kept.connection.isClosed)
+            await daemon.releaseAll()
+        }
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).
@@ -311,3 +337,23 @@ private final class HoldGate: @unchecked Sendable {
 
 /// Stands in, by its identity, for the agent a creation made.
 private final class StandInAgent: Sendable {}
+
+/// How often a test's hook has run.
+private final class CallCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    /// The call this is: 1 for the first.
+    func next() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
+    }
+}
+
+extension ACPXDaemonBackend {
+    func setCreationKept(_ hook: (@Sendable (_ recordId: String) async -> Void)?) {
+        creationKept = hook
+    }
+}

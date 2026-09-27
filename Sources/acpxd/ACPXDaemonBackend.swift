@@ -105,6 +105,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: told the record id whenever a prompt waits to begin behind another.
     var promptWaits: (@Sendable (_ recordId: String) -> Void)?
+    /// For tests: run once a flow's new session is held, before its call-off is looked for.
+    var creationKept: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: handed each note that a turn's prompt went out, as the writer's thread
     /// tells it, in place of bringing the note to the backend: it comes once the test runs
     /// it, if ever — as late as its task can come under load.
