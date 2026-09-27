@@ -23,6 +23,57 @@ struct FlowRunnerTests {
         path.reduce(value) { $0?[$1] }
     }
 
+    /// A node's output stays the object its callback returned: a later node that changes it
+    /// through `ctx.outputs` changes it in every projection written after — `outputs`, the
+    /// node's result and its step — as acpx's run state holds the object itself (#206).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputChangedAfterItsStepIsWrittenAsItIsNow() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-output", startAt: "collect", nodes: {
+              collect: compute({ run: () => ({ items: [] }) }),
+              add: compute({ run: ({ outputs }) => { outputs.collect.items.push("x"); return "added"; } }) },
+              edges: [{ from: "collect", to: "add" }] });
+            """)
+        #expect(run.code == 0, "\(run.err)")
+        let items = WireJSON.array([.text("x")])
+        #expect(member(run.state, "outputs", "collect", "items") == items)
+        #expect(member(run.state, "results", "collect", "output", "items") == items)
+        guard case .array(let steps)? = run.state?["steps"] else { throw FlowRunError("no steps") }
+        #expect(member(steps.first, "output", "items") == items)
+        #expect(member(steps.first, "trace", "outputInline", "items") == items)
+    }
+
+    /// The run's input stays the object it was given: a node that changes it through
+    /// `ctx.input` changes the input every projection written after holds (#206).
+    @Test(.enabled(if: nodeAvailable))
+    func anInputChangedByANodeIsWrittenAsItIsNow() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-input", startAt: "mark", nodes: {
+              mark: compute({ run: ({ input }) => { input.seen = true; return 1; } }) }, edges: [] });
+            """, input: .object([("given", .text("yes"))]))
+        #expect(run.code == 0, "\(run.err)")
+        #expect(member(run.state, "input") == .object([("given", .text("yes")), ("seen", .bool(true))]))
+    }
+
+    /// A value an output can no longer be written with — a BigInt a later node adds to it —
+    /// fails the next snapshot and the run with it, as acpx's `JSON.stringify` of its state
+    /// throws as it writes: the bundle stays as it last was (#206).
+    @Test(.enabled(if: nodeAvailable))
+    func anOutputJSONCanNoLongerWriteFailsTheRun() async throws {
+        let run = try await runnerRun("""
+            export default defineFlow({ name: "live-bigint", startAt: "collect", nodes: {
+              collect: compute({ run: () => ({ items: [] }) }),
+              add: compute({ run: ({ outputs }) => { outputs.collect.items.push(1n); return "added"; } }),
+              after: compute({ run: () => "after" }) },
+              edges: [{ from: "collect", to: "add" }, { from: "add", to: "after" }] });
+            """)
+        #expect(run.code == 1)
+        #expect(run.err == "Do not know how to serialize a BigInt")
+        #expect(member(run.state, "status") == .text("running"))
+        #expect(run.trace.last?["type"] == .text("node_started"))
+        #expect(run.trace.last?["nodeId"] == .text("add"))
+    }
+
     /// A callback's failure, whatever it throws, and an output `JSON.stringify` cannot
     /// write fail the node and the run, and leave no output (acpx: "records callback and
     /// output serialization failures as failed steps").

@@ -76,6 +76,8 @@ public actor FlowRunner {
     /// What each ACP node's attempt has come to (acpx's `context.acpResult`).
     var acpResults: [String: AcpResult] = [:]
     var persistentSessions = FlowPersistentSessions()
+    /// The attempt each node's output came of, whose live value the host holds (#206).
+    var outputAttempts: [String: String] = [:]
     /// The interrupt's stop of the shell commands, once it has begun.
     private var shellCancellation: Task<Void, Error>?
 
@@ -138,7 +140,7 @@ public actor FlowRunner {
                     failure = FlowShellCleanupError(
                         "Shell cleanup failed during interruption", errors: [runError, error])
                 }
-                try? persistRunFailure(runDir, failure)
+                await persistRunFailureLive(runDir, failure)
                 throw failure
             }
         }
@@ -146,7 +148,7 @@ public actor FlowRunner {
         // A step that failed on its own before the interrupt reached it keeps its error.
         var failure: Error = interruption
         if case .failure(let runError) = outcome { failure = runError }
-        try? persistRunFailure(runDir, failure)
+        await persistRunFailureLive(runDir, failure)
         throw failure
     }
 
@@ -198,14 +200,16 @@ public actor FlowRunner {
                 let step = try await executeFlowStep(
                     flow, nodeId: nodeId, attemptCounts: &attemptCounts, runDir: runDir)
                 try throwIfRunInterrupted(step.executionError)
+                try await refreshLiveValues()
                 if let waiting = try maybeCompleteCheckpointStep(step, runDir: runDir) { return waiting }
                 try recordFlowStepOutcome(step, runDir: runDir)
                 current = try resolveNextNode(flow, step)
                 forgetAttempt(step)
             }
+            try await refreshLiveValues()
             return try completeFlowRun(runDir)
         } catch {
-            if interruption == nil, !(error is FlowHost.Exited) { try? persistRunFailure(runDir, error) }
+            if interruption == nil, !(error is FlowHost.Exited) { await persistRunFailureLive(runDir, error) }
             throw error
         }
     }
@@ -331,7 +335,8 @@ public actor FlowRunner {
     }
 
     /// acpx's `writeNodeStartedSnapshot`.
-    private func writeNodeStartedSnapshot(_ node: FlowNode, attempt: FlowAttempt, runDir: URL) throws {
+    private func writeNodeStartedSnapshot(_ node: FlowNode, attempt: FlowAttempt, runDir: URL) async throws {
+        try await refreshLiveValues()
         let detail = state.member("statusDetail")
         try store.writeSnapshot(
             runDir, &state, scope: "node", type: "node_started", nodeId: node.id, attemptId: attempt.attemptId,
@@ -475,19 +480,4 @@ struct FlowTracedError: Error, LocalizedError {
     let underlying: Error
     let trace: FlowStepTrace?
     var errorDescription: String? { TurnFailureText.message(of: underlying) }
-}
-
-extension FlowValue {
-    /// A callback's value, as the host reports it.
-    init(reply: WireJSON?) {
-        if let message = reply?["unserializable"]?.stringValue {
-            self = .unserializable(message)
-        } else if reply?["jsonUndefined"] == .bool(true) {
-            self = .unrepresentable
-        } else if let value = reply?["value"] {
-            self = .json(value)
-        } else {
-            self = .undefined
-        }
-    }
 }
