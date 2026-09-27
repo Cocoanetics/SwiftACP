@@ -51,34 +51,13 @@ extension ACPXDaemonBackend {
     ) async throws -> String {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
-        // acpx's queue owner refuses a negative retry count, and takes a timeout that is
-        // not positive as none. One longer than a timer takes is refused, as acpx's CLI
-        // refuses it: the owner's timer would fire at once.
-        let retries = limits?.promptRetries ?? 0
-        guard retries >= 0 else { throw DaemonError.invalidPromptRetries(retries) }
-        let timeout = limits?.timeoutMs.flatMap { $0 > 0 ? $0 : nil }
-        if let timeout, timeout > JavaScriptNumber.maxTimerDelayMs { throw DaemonError.invalidTimeout(timeout) }
-        // So is a TTL, as acpx's CLI refuses `--ttl` past it.
-        if let ttl = limits?.ttlMs, ttl > JavaScriptNumber.maxTimerDelayMs { throw DaemonError.invalidTTL(ttl) }
+        let (retries, timeout) = try Self.checkedLimits(limits)
         // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
         // not something to find out after waiting out another turn.
         let permissions = try TurnPermissions(
             mode: permissionMode, nonInteractive: nonInteractivePermissions, rules: permissionPolicy)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
-        // Validate before queueing: a malformed block should fail at once, not after
-        // waiting out someone else's turn. The daemon's transport has a ceiling, so
-        // the request size is capped here (a direct client has nothing in the way).
-        let content: [ContentBlock]
-        if let rawContent {
-            guard blocks == nil else {
-                throw PromptContent.ValidationError(message: "pass the prompt's blocks or its content, not both")
-            }
-            content = try PromptContent.contentBlocks(
-                text: text, content: rawContent, requestLimit: PromptBlock.maxRequestBytes)
-        } else {
-            content = try PromptBlock.contentBlocks(
-                text: text, blocks: blocks, requestLimit: PromptBlock.maxRequestBytes)
-        }
+        let content = try Self.promptContent(text: text, blocks: blocks, content: rawContent)
         guard let initial = findRecord(sessionId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
@@ -113,6 +92,11 @@ extension ACPXDaemonBackend {
         // A free slot is had at once, however the prompt was called off meanwhile: then it
         // ends here, nothing sent and nothing kept.
         try Task.checkCancellation()
+        // Begun for a session another took the place of since, it is refused (#219 review).
+        if turns[recordId]?.refused == true {
+            let refused = QueueOwnerShuttingDown(inLine: true)
+            return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
+        }
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.

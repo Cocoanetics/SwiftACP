@@ -39,7 +39,8 @@ extension ACPXDaemonBackend {
     /// would reach the new session too, and once whatever turn it runs is over, as that turn is
     /// nobody's to call off. The session's turn slot is held throughout, so no prompt starts an
     /// agent in between; and the new record is written once more, over whatever the old one's
-    /// turn saved on its way out. A creation called off before it would take that place — the
+    /// turn saved on its way out; the prompts meant for the old one are refused. A creation
+    /// called off before it would take that place — the
     /// slot had, or while it waited for it — takes nobody's place: its own agent goes, and the
     /// session held under the id stays as it is (#219 review).
     private func holdAsNew(
@@ -64,6 +65,11 @@ extension ACPXDaemonBackend {
             await held.agent.close()
             throw CancellationError()
         }
+        // The prompts meant for the session it replaces are refused, as `sessions new` refuses
+        // those in line as it lets a session go: those still in line, and one begun as the turn
+        // before it ended, yet to have the slot — none runs on the new agent (#219 review).
+        refusePromptsWaiting(recordId)
+        turns[recordId]?.refused = true
         let outcome: Result<Void, Error>
         do {
             forgetOwner(recordId)

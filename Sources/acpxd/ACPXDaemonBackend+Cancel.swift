@@ -37,6 +37,9 @@ extension ACPXDaemonBackend {
         /// Whether a failed attempt at its prompt was sent again: the turn has shown the
         /// failure, so a fresh launch no longer takes it over unseen.
         var retried = false
+        /// Whether a new session took its session's place before it had the slot: it is refused
+        /// then, as the prompts still in line were (``holdAsNew``).
+        var refused = false
     }
 
     /// Cancel the turn a session runs, as acpx's owner answers `cancelPrompt`.

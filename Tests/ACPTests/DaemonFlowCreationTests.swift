@@ -193,6 +193,47 @@ extension DaemonToolsTests {
         }
     }
 
+    /// A session made under an id acpxd holds takes its place once the turn running there is
+    /// over, and the prompts meant for the old session are refused — one begun as that turn
+    /// ended, one still in line — never run on the new session's agent (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func thePromptsOfAReplacedSessionAreRefused() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requests = directory.appendingPathComponent("requests.log")
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(requests.path)' "
+            + (try #require(mockCommand()))
+        let cwd = NSTemporaryDirectory()
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: cwd)
+            let prompt = { (text: String) in
+                Task { try await daemon.runPrompt(sessionId: id, text: text, permissionMode: "approve-all") }
+            }
+            let (running, secondWaits, thirdWaits, creationWaits) = (HoldGate(), HoldGate(), HoldGate(), HoldGate())
+            await daemon.setPromptGoingOut { _ in running.open() }
+            let first = prompt("hold turn")
+            await running.wait()
+            await daemon.setPromptWaits { _ in secondWaits.open() }
+            let second = prompt("second")
+            await secondWaits.wait()
+            await daemon.setPromptWaits { _ in thirdWaits.open() }
+            let third = prompt("third")
+            await thirdWaits.wait()
+            await daemon.turnQueue.setBeforeAcquire { _ in creationWaits.open() }
+            let creating = Task { try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true) }
+            await creationWaits.wait()
+            #expect(try await daemon.cancelSession(sessionId: id))
+            _ = try? await first.value
+            #expect(try await creating.value == id)
+            await #expect(throws: QueueOwnerShuttingDown.self) { _ = try await second.value }
+            await #expect(throws: QueueOwnerShuttingDown.self) { _ = try await third.value }
+            let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
+            #expect(!logged.contains("second") && !logged.contains("third"), "\(logged)")
+            await daemon.releaseAll()
+        }
+    }
+
     /// A call-off stays while its turn waits to begin behind another, however long: begun past
     /// the minute other call-offs are kept, the turn still ends at once, nothing sent (#219
     /// review).
