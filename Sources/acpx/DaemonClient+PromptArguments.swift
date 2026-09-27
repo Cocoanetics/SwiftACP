@@ -9,13 +9,13 @@ extension DaemonClient {
     /// The arguments of ``ACPXDaemon``'s `runPrompt`, as its typed client sends them.
     static func promptArguments(
         sessionId: String, content: [JSONValue], wait: Bool, permissionMode: String, nonInteractivePermissions: String,
-        streamWire: Bool, permissionPolicy: PermissionRules?, terminalOutputCeiling: Int, model: String?,
-        sessionOptions: PromptSessionOptions?, limits: PromptLimits?
+        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int, model: String?,
+        sessionOptions: PromptSessionOptions?, limits: PromptLimits?, mode: PromptTurnMode
     ) throws -> JSONDictionary {
         var arguments: JSONDictionary = [
             "sessionId": .string(sessionId), "text": .string(""), "content": .array(content), "wait": .bool(wait),
             "permissionMode": .string(permissionMode), "nonInteractivePermissions": .string(nonInteractivePermissions),
-            "streamWire": .bool(streamWire), "terminalOutputCeiling": .integer(terminalOutputCeiling)
+            "streamWire": .bool(mode.streamWire), "terminalOutputCeiling": .integer(terminalOutputCeiling)
         ]
         if let permissionPolicy {
             arguments["permissionPolicy"] = try MCPClientArgumentEncoder.encode(permissionPolicy)
@@ -23,6 +23,17 @@ extension DaemonClient {
         if let model { arguments["model"] = .string(model) }
         if let sessionOptions { arguments["sessionOptions"] = try MCPClientArgumentEncoder.encode(sessionOptions) }
         if let limits { arguments["limits"] = try MCPClientArgumentEncoder.encode(limits) }
+        if mode.direct { arguments["direct"] = .bool(true) }
+        if let fs = mode.fs { arguments["fs"] = .bool(fs) }
+        if let authPolicy = mode.authPolicy { arguments["authPolicy"] = .string(authPolicy) }
+        if let turnToken = mode.turnToken { arguments["turnToken"] = .string(turnToken) }
+        if let callerConfig = mode.callerConfig {
+            arguments["callerConfig"] = try MCPClientArgumentEncoder.encode(callerConfig)
+        }
+        if mode.verbose { arguments["verbose"] = .bool(true) }
+        if let environment = mode.environment {
+            arguments["environment"] = .object(environment.mapValues { .string($0) })
+        }
         return arguments
     }
 }

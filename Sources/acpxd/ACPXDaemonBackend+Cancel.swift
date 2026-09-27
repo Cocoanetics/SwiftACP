@@ -18,6 +18,8 @@ extension ACPXDaemonBackend {
     struct TurnControl {
         /// Which turn it is, for a late note of its prompt going out.
         let id = UUID()
+        /// The caller's name for it, which a cancel can give (a flow's direct turn).
+        var token: String?
         /// Where its prompt went, once it began to be written.
         var prompt: (connection: ACPAgentConnection, sessionId: SessionId)?
         /// A cancel asked before its prompt went out (acpx's `pendingCancel`).
@@ -35,6 +37,11 @@ extension ACPXDaemonBackend {
         /// Whether a failed attempt at its prompt was sent again: the turn has shown the
         /// failure, so a fresh launch no longer takes it over unseen.
         var retried = false
+        /// Whether a new session took its session's place before it had the slot: it is refused
+        /// then, as the prompts still in line were (``holdAsNew``).
+        var refused = false
+        /// Whether it has the session's slot: what it connects or runs on is its own from then on.
+        var running = false
     }
 
     /// Cancel the turn a session runs, as acpx's owner answers `cancelPrompt`.
@@ -42,8 +49,16 @@ extension ACPXDaemonBackend {
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: whether the session runs a turn: `false` when it is idle, and then
     ///   nothing is sent.
-    func cancelSession(sessionId: String) async throws -> Bool {
-        guard let record = findRecord(sessionId), let turn = turns[record.acpxRecordId] else { return false }
+    ///
+    /// Given the `turnToken` its caller gave a turn, only that turn is cancelled. One that
+    /// has not begun yet is called off: it ends as it begins, nothing sent — as acpx's flow
+    /// runner closes the client a stopped direct turn would prompt on (#219 review).
+    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
+        guard let record = findRecord(sessionId) else { return false }
+        guard let turn = turns[record.acpxRecordId], turnToken == nil || turn.token == turnToken else {
+            if let turnToken { callOff(turnToken) }
+            return false
+        }
         turns[record.acpxRecordId]?.cancelAsked = true
         if let prompt = turn.prompt {
             try await prompt.connection.cancel(sessionId: prompt.sessionId)
@@ -52,6 +67,25 @@ extension ACPXDaemonBackend {
             turn.pause?.cancel()
         }
         return true
+    }
+
+    /// Keep `token` as a turn's a cancel named before it began; tokens kept a minute
+    /// without their turn coming are let go — unless their turn waits to begin behind
+    /// another, however long that takes (#219 review).
+    func callOff(_ token: String, now: Date = Date()) {
+        calledOffTurns = calledOffTurns.filter {
+            waitingTurnTokens.contains($0.key) || now.timeIntervalSince($0.value) < 60
+        }
+        calledOffTurns[token] = now
+    }
+
+    /// The turn that just began for `recordId` takes its caller's `token` (as it begins, in
+    /// ``beginPrompt(_:wait:turnToken:)``): called off before it began, it ends at once,
+    /// nothing sent, as a turn cancelled while it waited does. On the actor with no
+    /// suspension, so a cancel either finds the turn by its token or leaves the token for it.
+    func claimTurnToken(_ token: String, for recordId: String) {
+        turns[recordId]?.token = token
+        if calledOffTurns.removeValue(forKey: token) != nil { turns[recordId]?.cancelAsked = true }
     }
 
     /// Turn `id`'s prompt was answered: a cancel has nothing to send it from now on, as

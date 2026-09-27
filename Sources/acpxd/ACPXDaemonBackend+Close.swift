@@ -56,9 +56,19 @@ extension ACPXDaemonBackend {
     /// session under the same id, and the record, now the new session's, left as it is.
     /// Returns whether the daemon had anything of the session's: an agent held or still
     /// connecting, a turn, or an owner.
-    func releaseSession(sessionId: String) async throws -> Bool {
+    ///
+    /// Given the `turnToken` its caller gave a turn, only the agent that turn connects or runs
+    /// on is put down, and only while the turn has the session's slot, as acpx's flow runner
+    /// closes the client its stopped turn was handed: a turn that has ended, or not begun,
+    /// leaves the session as it is, for what came since (#219 review).
+    func releaseSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
+        if let turnToken {
+            guard let turn = turns[recordId], turn.token == turnToken, turn.running else { return false }
+            await putDown(recordId)
+            return true
+        }
         try Task.checkCancellation()
         let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
             || owners[recordId] != nil
@@ -121,9 +131,34 @@ extension ACPXDaemonBackend {
         }
     }
 
+    /// For tests: run once a put-down has abandoned the agent it found connecting, before it
+    /// lets go of the one it found held.
+    @TaskLocal static var afterAbandoning: (@Sendable (_ recordId: String) async -> Void)?
+
+    /// What holds a session at a given moment: its agent held, and one still connecting.
+    struct Holding: Sendable {
+        let agent: ACPAgent?
+        let connecting: ConnectingAgent?
+    }
+
+    /// What holds `recordId` as this is called.
+    func holding(_ recordId: String) -> Holding {
+        Holding(agent: live[recordId]?.agent, connecting: connecting[recordId])
+    }
+
     /// What holds `recordId`, put down under it: its agent held, or one still connecting.
     func putDown(_ recordId: String) async {
-        await connecting[recordId]?.abandon()
+        await putDown(recordId, holding(recordId))
+    }
+
+    /// What held `recordId` at a given moment, put down under it — the agent then held, or the
+    /// one then connecting — and nothing else, though putting it down suspends: the turn on it
+    /// can end meanwhile, and a session made since under the same id can be held by then
+    /// (#219 review).
+    func putDown(_ recordId: String, _ holding: Holding) async {
+        let launched = await holding.connecting?.abandon()
+        await Self.afterAbandoning?(recordId)
+        guard let agent = live[recordId]?.agent, agent === holding.agent || agent === launched else { return }
         await evict(recordId)
     }
 }

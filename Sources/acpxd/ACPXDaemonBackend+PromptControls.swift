@@ -76,7 +76,11 @@ extension ACPXDaemonBackend {
         do {
             return try await withTimeout(milliseconds: timeout) { try await operation.value }
         } catch let timedOut as TimeoutError {
-            if sent.happened { Task { await self.putDown(recordId) } }
+            // What it ran on, put down: what holds the session now, not once the task runs.
+            if sent.happened {
+                let holding = holding(recordId)
+                Task { await self.putDown(recordId, holding) }
+            }
             throw timedOut
         }
     }

@@ -26,16 +26,20 @@ public protocol AcpErrorCarrier: Error {
 /// acpx's `normalizeOutputError` as its queue owner applies it to a failed turn
 /// (`sendQueuedTaskError`): origin `runtime` and detail code
 /// `QUEUE_RUNTIME_PROMPT_FAILED` unless the error names its own, and as its `acp` the
-/// ACP error the turn's exchange showed (`AcpErrorTracker.match`).
+/// ACP error the turn's exchange showed (`AcpErrorTracker.match`). A turn run directly,
+/// as acpx's `sendSessionDirect` runs a flow's, fails with its error as it is, the ACP
+/// error attached: its caller normalizes the rest.
 public enum TurnFailure {
-    public static func event(for error: Error, shown: AcpErrorPayload?, sessionId: String) -> TurnFailedEvent {
+    public static func event(
+        for error: Error, shown: AcpErrorPayload?, sessionId: String, direct: Bool = false
+    ) -> TurnFailedEvent {
         let meta = error as? OutputErrorMeta
         let acp = shown ?? payload(of: error)
         var outputCode = meta?.outputCode ?? "RUNTIME"
         if outputCode == "RUNTIME", ReconnectFallback.isResourceNotFound(error) { outputCode = "NO_SESSION" }
-        let detailCode = meta?.detailCode ?? "QUEUE_RUNTIME_PROMPT_FAILED"
+        let detailCode = meta?.detailCode ?? (direct ? nil : "QUEUE_RUNTIME_PROMPT_FAILED")
         return TurnFailedEvent(
-            outputCode: outputCode, detailCode: detailCode, origin: meta?.origin ?? "runtime",
+            outputCode: outputCode, detailCode: detailCode, origin: meta?.origin ?? (direct ? nil : "runtime"),
             message: message(of: error), acp: acp.map(\.jsonValue), shown: shown != nil, sessionId: sessionId,
             retryable: meta?.retryable)
     }
@@ -90,6 +94,14 @@ extension AcpErrorPayload {
 
 extension AgentLaunchError: OutputErrorMeta {
     public var outputCode: String? { nil }
+    public var origin: String? { nil }
+}
+
+/// acpx's `PermissionPromptUnavailableError`, which its normalization reports as
+/// `PERMISSION_PROMPT_UNAVAILABLE` (`resolveOutputErrorCode`), naming no detail or origin.
+extension PermissionPromptUnavailableError: OutputErrorMeta {
+    public var outputCode: String? { "PERMISSION_PROMPT_UNAVAILABLE" }
+    public var detailCode: String? { nil }
     public var origin: String? { nil }
 }
 

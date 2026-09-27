@@ -45,10 +45,12 @@ extension FlowRunner {
     /// acpx's `executeAcpNode`.
     func executeAcpNode(_ node: FlowNode, attempt: FlowAttempt, runDir: URL) async throws -> Executed {
         let prepared = try await prepareAcpPrompt(node, attempt: attempt, runDir: runDir)
-        guard node.isolated else {
-            throw FlowRunError("ACP nodes with a persistent session are not supported by SwiftACP's acpx yet")
+        if node.isolated {
+            return try await executeIsolatedAcpPrompt(node, prepared: prepared, attempt: attempt, runDir: runDir)
         }
-        return try await executeIsolatedAcpPrompt(node, prepared: prepared, attempt: attempt, runDir: runDir)
+        let binding = try await ensureSessionBinding(node, agent: prepared.agent, attempt: attempt, runDir: runDir)
+        return try await executePersistentAcpPrompt(
+            node, prepared: prepared, binding: binding, attempt: attempt, runDir: runDir)
     }
 
     /// acpx's `prepareAcpPrompt`: the agent, where it works, and the prompt — its text the
@@ -141,7 +143,7 @@ extension FlowRunner {
         try store.ensureSessionBundle(runDir, state, binding, record: record)
     }
 
-    private func appendAcpPromptPreparedTrace(
+    func appendAcpPromptPreparedTrace(
         _ binding: FlowSessionBinding, _ promptArtifact: FlowArtifactRef, attempt: FlowAttempt, runDir: URL
     ) throws {
         try store.appendTrace(
@@ -151,7 +153,7 @@ extension FlowRunner {
     }
 
     /// acpx's `finishAcpPrompt`: the answer traced, then parsed.
-    private func finishAcpPrompt(
+    func finishAcpPrompt(
         _ node: FlowNode, prompt: TracedPromptResult, attempt: FlowAttempt, runDir: URL
     ) async throws -> Executed {
         try await attempt.own { try await self.appendAcpResponseParsedTrace(prompt, attempt: attempt, runDir: runDir) }
@@ -248,7 +250,7 @@ extension FlowRunner {
     /// acpx's `publishAcpCapture`: the session's binding and record written, where its
     /// events are in the log, and the answer kept as an artifact — the step's trace growing
     /// as each is done.
-    private func publishAcpCapture(
+    func publishAcpCapture(
         _ sessionInfo: FlowSessionBinding, record: WireJSON, messageCount: Int, messageStart: Int, rawText: [UInt16],
         events: (start: Int, end: Int)?, prepared: PreparedAcpPrompt, attempt: FlowAttempt, runDir: URL
     ) throws -> TracedPromptResult {
@@ -286,7 +288,7 @@ extension FlowRunner {
 
     /// The prompt the host made, as SwiftACP sends one. acpx sends whatever the flow gave;
     /// SwiftACP sends only content blocks it knows.
-    private static func contentBlocks(_ prompt: WireJSON) throws -> [ContentBlock] {
+    static func contentBlocks(_ prompt: WireJSON) throws -> [ContentBlock] {
         if let message = prompt["unserializable"]?.stringValue { throw FlowShellError(message, name: "TypeError") }
         guard case .array(let items)? = prompt["value"] else {
             throw FlowRunError("The prompt is not a list of content blocks")

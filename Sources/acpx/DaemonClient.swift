@@ -196,8 +196,9 @@ enum DaemonClient {
         // waits for its queue owner: one that ended unsuccessfully meanwhile failed to
         // start, and waiting on is pointless. One that lost the singleton race exits
         // cleanly, so we still resolve to the one running manager.
+        // Called off, it stops waiting (a flow's stop, #219 review).
         for _ in 0 ..< 60 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try await Task.sleep(nanoseconds: 150_000_000)
             if let proxy = await tryConnect(liveEndpoint(), configure: configure) {
                 return proxy
             }
@@ -266,15 +267,17 @@ enum DaemonClient {
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
-            sessionOptions: sessionOptions, limits: limits, streamWire: renderer.streamsWireJSON)
+            sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(streamWire: renderer.streamsWireJSON))
     }
 
-    /// The turn itself, on a connected proxy whose log notifications feed `stopReason`.
+    /// The turn itself, on a connected proxy whose log notifications feed `stopReason`, run
+    /// as `mode` says (``PromptTurnMode``).
     static func runPrompt(
         on proxy: MCPServerProxy, stopReason: StopReasonBox, sessionId: String, content: [JSONValue],
         wait: Bool, permissionMode: String, nonInteractivePermissions: String,
         permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil, model: String? = nil,
-        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, streamWire: Bool = false
+        sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
+        mode: PromptTurnMode = PromptTurnMode()
     ) async throws -> DaemonTurn {
         // The daemon reads the agent command + cwd from the session's record. The tool
         // result (the agent's aggregate text) is ignored — the CLI streams it live.
@@ -290,9 +293,9 @@ enum DaemonClient {
         do {
             _ = try await proxy.callToolResult("runPrompt", arguments: try promptArguments(
                 sessionId: sessionId, content: content, wait: wait, permissionMode: permissionMode,
-                nonInteractivePermissions: nonInteractivePermissions, streamWire: streamWire,
-                permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model,
-                sessionOptions: sessionOptions, limits: limits))
+                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
+                terminalOutputCeiling: terminalOutputCeiling ?? 0, model: model, sessionOptions: sessionOptions,
+                limits: limits, mode: mode))
         } catch {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
@@ -421,10 +424,10 @@ enum DaemonClient {
     /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
     /// is reachable (or the session isn't live) there is nothing to cancel. A daemon
     /// that could not send the cancel throws why.
-    static func cancelSession(sessionId: String) async throws -> Bool {
+    static func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
         do {
             return try await withClient(spawnIfNeeded: false) {
-                try await $0.cancelSession(sessionId: sessionId)
+                try await $0.cancelSession(sessionId: sessionId, turnToken: turnToken)
             }
         } catch is DaemonUnavailable {
             // acpx with no queue owner: nothing holds the turn.

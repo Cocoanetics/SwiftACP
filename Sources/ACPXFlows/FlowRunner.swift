@@ -75,6 +75,7 @@ public actor FlowRunner {
     var retiredAttempts: [String: Error?] = [:]
     /// What each ACP node's attempt has come to (acpx's `context.acpResult`).
     var acpResults: [String: AcpResult] = [:]
+    var persistentSessions = FlowPersistentSessions()
     /// The interrupt's stop of the shell commands, once it has begun.
     private var shellCancellation: Task<Void, Error>?
 
@@ -112,7 +113,7 @@ public actor FlowRunner {
             runDir, state, content: .value(.json(input)), mediaType: "application/json", extension: "json",
             emitTrace: false)
         try store.initializeRunBundle(runDir, snapshot: flow.snapshot, state: state, inputArtifact: inputArtifact)
-        return try await runWithOwnership(flow, runDir: runDir)
+        return try await withPendingSessionsReleased { try await runWithOwnership(flow, runDir: runDir) }
     }
 
     /// acpx's `runWithOwnership`: the run, and — when interrupted — the bundle marked

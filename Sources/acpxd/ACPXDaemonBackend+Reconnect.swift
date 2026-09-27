@@ -94,17 +94,17 @@ extension ACPXDaemonBackend {
         let held = try await heldAgent(
             recordId, sessionSpecs: sessionSpecs, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
         if let entry = held.entry { return (entry, false) }
-        let replacesExitedAgent = held.replacedExited
+        let sameSessionOnly = (control && held.replacedExited) || settings.sameSessionOnly
         let cwd = try resolveCwd(rawCwd)
-        // Resolve config for this cwd so the agent gets the same injected `auth`
-        // credentials / auth policy (and config-alias resolution) the CLI applies.
-        let config = try ConfigLoader.load(cwd: cwd, ownMcpServers: sessionSpecs != nil)
+        // Resolve config for this cwd — or take the caller's, a flow's — so the agent gets the same
+        // injected `auth` credentials / auth policy (and config-alias resolution) the CLI applies.
+        let config = try Self.config(settings.callerConfig, cwd: cwd, ownMcpServers: sessionSpecs != nil)
         let specs = try sessionSpecs ?? config.mcpServerSpecs()
         // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
         // the record carries them, so every reconnect advertises what the session was
         // created with rather than the defaults.
         let record = findRecord(recordId)
-        let capabilities = record?.acpx?.clientCapabilities?.advertised ?? .acpx
+        let capabilities = settings.capabilities ?? record?.acpx?.clientCapabilities?.advertised ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = turnAcpx ?? record?.acpx
@@ -136,11 +136,11 @@ extension ACPXDaemonBackend {
                 try await withTimeout(milliseconds: timeout, {
                     try await ACPAgent.launch(
                         agent: command, argv: record?.agentArgv ?? launch.argv, cwd: cwd, handlers: handlers,
-                        capabilities: capabilities, environment: AgentEnvironment.forAgent(
-                            authCredentials: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
-                        authCredentials: config.auth, authPolicy: config.authPolicy,
+                        capabilities: capabilities, environment: settings.agentEnvironment(
+                            auth: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
+                        authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
-                        onRawWire: connectTap)
+                        onRawWire: connectTap, onStderr: settings.stderr?.observer)
                 }, discardingLate: { await $0.close() })
             }
         } catch {
@@ -155,7 +155,7 @@ extension ACPXDaemonBackend {
         do {
             (session, loaded) = try await takeBackOrStartOver(
                 handle, recordId: recordId, sessionId: record?.acpSessionId ?? recordId, cwd: cwd,
-                specs: specs, command: command, sameSessionOnly: control && replacesExitedAgent,
+                specs: specs, command: command, sameSessionOnly: sameSessionOnly,
                 sessionOptions: sessionOptions, timeoutMilliseconds: timeout)
             ReconnectReplay.applyLoaded(loaded, to: &state)
             let outcome = try await ReconnectReplay.replay(
@@ -176,8 +176,7 @@ extension ACPXDaemonBackend {
         }
         // The session the record is on from now on, and the agent's own id for it
         // (acpx's `reconcileAgentSessionId`), with what connecting left in `acpx`.
-        let sessionId = session.id
-        let agentSessionId = AgentSessionId.extract(from: session.meta)
+        let (sessionId, agentSessionId) = (session.id, AgentSessionId.extract(from: session.meta))
         let connected = state
         // acpx writes the agent's lifecycle as soon as its client has started.
         await apply({ [handle] record in
@@ -186,22 +185,23 @@ extension ACPXDaemonBackend {
             record.acpx = connected
             record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
-        let entry = try await hold(handle, on: session, sessionSpecs: sessionSpecs, for: recordId, via: onRecordChange)
-        let fellBack = loaded.createdFreshSession
-        await showConnectOutput(fellBack)
+        let entry = try await hold(
+            handle, on: session, sessionSpecs: sessionSpecs, for: recordId, via: onRecordChange,
+            stderr: settings.stderr)
+        await showConnectOutput(loaded.createdFreshSession)
         // Taken back unless a new session had to replace it.
-        return (entry, !fellBack)
+        return (entry, !loaded.createdFreshSession)
     }
 
     /// Hold the agent connecting has left on `session`, unless the daemon began stopping
     /// meanwhile (``refuseIfStopping(_:of:via:)``).
-    private func hold(
+    func hold(
         _ handle: ACPAgent, on session: ACPSession, sessionSpecs: [MCPServerSpec]?, for recordId: String,
-        via onRecordChange: RecordChangeHandler?
+        via onRecordChange: RecordChangeHandler?, stderr: AgentStderrRelay? = nil
     ) async throws -> Live {
         await reconnected?(recordId)
         try await refuseIfStopping(handle, of: recordId, via: onRecordChange)
-        let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs)
+        let entry = Live(agent: handle, session: session, sessionSpecs: sessionSpecs, stderr: stderr)
         live[recordId] = entry
         handle.rawWire.set(nil)
         return entry
@@ -238,8 +238,10 @@ extension ACPXDaemonBackend {
                 return (existing, replacedExited)
             }
             replacedExited = true
-            // Re-checked after the suspension above: only drop the entry that died.
+            // Re-checked after the suspension above: only drop the entry that died — and what a
+            // creation's token kept of it (#219 review).
             if live[recordId]?.agent === existing.agent { live.removeValue(forKey: recordId) }
+            madeCreations = madeCreations.filter { $0.value.agent !== existing.agent }
             await existing.agent.close()
         }
         return (nil, replacedExited)
@@ -252,10 +254,35 @@ extension ACPXDaemonBackend {
     /// which acpx reads in the process that connects the session; and `timeoutMilliseconds`
     /// bounds each step of connecting — the launch, getting the session back or starting
     /// one, each selection put back — as acpx's `--timeout` does, `nil` being no bound.
+    ///
+    /// `sameSessionOnly`: the session is taken back as itself or not at all — never
+    /// replaced by a new one — as a flow's persistent turn takes it back (acpx's
+    /// `resumePolicy: "same-session-only"`).
     struct CallerSettings: Sendable {
         var handlers: ACPClientHandlers = .standard(permission: .approveAll)
         var terminalOutputCeiling: Int?
         var timeoutMilliseconds: Int?
+        var sameSessionOnly = false
+        /// What the agent is offered, when the caller says (a flow's turn); else the record's.
+        var capabilities: SwiftACP.ClientCapabilities?
+        /// How the agent signs in, when the caller says (a flow's turn); else as configured.
+        var authPolicy: String?
+        /// The config the agent is started with, when the caller has its own (a flow's turn);
+        /// else the session's cwd's.
+        var callerConfig: CallerConfig?
+        /// Where what the agent writes to stderr goes, when the caller asks (a verbose flow's
+        /// turn); else nowhere.
+        var stderr: AgentStderrRelay?
+        /// The environment the agent starts over, when the caller brings its own (a flow's
+        /// turn); else the daemon's.
+        var environment: [String: String]?
+
+        /// The environment the agent starts with: the caller's, else the daemon's, with the
+        /// credentials and the session's own variables laid over it, as acpx builds it.
+        func agentEnvironment(auth: [String: String], sessionEnv: [String: String]?) -> [String: String] {
+            AgentEnvironment.forAgent(
+                authCredentials: auth, sessionEnv: sessionEnv, over: environment ?? ProcessInfo.processInfo.environment)
+        }
     }
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
@@ -357,6 +384,12 @@ extension ACPXDaemonBackend {
     /// Expand and validate a caller-supplied working directory. MCP clients have no
     /// shell, so expand `~` ourselves (the CLI relies on the shell) and require the
     /// directory to exist — otherwise the agent fails with a cryptic internal error.
+    /// The config an agent is started with: the caller's, read once (``CallerConfig``), else
+    /// the one where the session works.
+    static func config(_ caller: CallerConfig?, cwd: String, ownMcpServers: Bool) throws -> ResolvedAcpxConfig {
+        try caller.map(ResolvedAcpxConfig.init(caller:)) ?? ConfigLoader.load(cwd: cwd, ownMcpServers: ownMcpServers)
+    }
+
     func resolveCwd(_ rawCwd: String) throws -> String {
         let cwd = (rawCwd as NSString).expandingTildeInPath
         var isDirectory: ObjCBool = false

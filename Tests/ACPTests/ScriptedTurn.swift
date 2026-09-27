@@ -78,6 +78,16 @@ final class ScriptedTurn: FlowSessionRunner, @unchecked Sendable {
         ]
     }
 
+    func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord {
+        throw FlowRunError("A scripted turn has no persistent sessions")
+    }
+
+    func runPersistent(_ turn: FlowPersistentTurn) async throws {
+        throw FlowRunError("A scripted turn has no persistent sessions")
+    }
+
+    func releasePersistent(_ recordId: String) async throws {}
+
     func runIsolated(_ turn: FlowTurn) async throws -> String {
         lock.withLock {
             seenPrompts.append(turn.prompt)

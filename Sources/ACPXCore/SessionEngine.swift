@@ -26,6 +26,8 @@ public enum SessionEngine {
     ///     for the request that takes a session back.
     ///   - resumeSessionId: an ACP session to take back in place of a new one — acpx's
     ///     `--resume-session`. The record is written under its id.
+    ///   - onStderr: shown what the agent writes to stderr, from its start
+    ///     (``RawWireTap/onStderr(_:)``).
     public static func createSession(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -41,28 +43,107 @@ public enum SessionEngine {
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
+        handlers: ACPClientHandlers? = nil,
+        baseEnvironment: [String: String]? = nil,
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
+        onStderr: RawWireTap.StderrObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
+        // The record is written once the agent is gone: one written while it still runs would
+        // show a pid on its way out, and a turn that took it meanwhile would lose what it saved
+        // to the write after the close (#219 review).
+        let held = try await createSessionHoldingAgent(
+            agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, permission: permission,
+            permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
+            mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
+            resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
+            writesRecord: false, handlers: handlers, baseEnvironment: baseEnvironment,
+            terminalOutputCeiling: terminalOutputCeiling, inheritStderr: inheritStderr, onStderr: onStderr,
+            onModelWarning: onModelWarning)
+        beforeClosing?(held.record.acpxRecordId)
+        var record = held.record
+        let handle = held.agent
+        // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
+        // (a graceful connection close, not a kill), and records how it went — the
+        // connection closing, seen before the process exits.
+        await handle.close()
+        if let lifecycle = handle.lifecycle {
+            record.applyLifecycle(lifecycle)
+        } else {
+            // Where the agent cannot be watched, what closing it records in acpx.
+            record.pid = nil
+            record.agentStartedAt = record.createdAt
+            record.lastAgentExitCode = .null
+            record.lastAgentExitSignal = .null
+            record.lastAgentExitAt = nowISO()
+            record.lastAgentDisconnectReason = AgentDisconnectReason.connectionClose.rawValue
+        }
+        try SessionStore.writeRecord(record)
+        return record
+    }
+
+    /// Runs in a test once ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:handlers:inheritStderr:onStderr:onModelWarning:)``
+    /// has made its session, before it closes the agent.
+    @TaskLocal public static var beforeClosing: (@Sendable (_ recordId: String) -> Void)?
+
+    /// acpx's `createSessionWithClient`: ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:inheritStderr:onModelWarning:)``
+    /// up to the record, which is written with the agent still running
+    /// (`createSessionRecordWithClient`) — and the agent kept, on the session, for the
+    /// caller to use and close. With `recordsCapabilities` false, what `capabilities`
+    /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
+    /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
+    /// false, the record is returned unwritten, for a caller that writes it once it keeps the
+    /// session — acpxd, where the id the agent gives may be another session's. The agent starts
+    /// over `baseEnvironment` when given — its caller's own — else this process's, and caps its
+    /// terminals by `terminalOutputCeiling`.
+    public static func createSessionHoldingAgent(
+        agentCommand: String,
+        agentArgv: [String]? = nil,
+        cwd: String,
+        name: String?,
+        permission: PermissionPolicy,
+        permissionRules: PermissionRules? = nil,
+        authCredentials: [String: String],
+        authPolicy: String,
+        mcpServers: [MCPServerSpec] = [],
+        sessionMcpServers: [McpServerConfig]? = nil,
+        meta: JSONValue? = nil,
+        resumeSessionId: String? = nil,
+        sessionOptions: SessionAcpxState.SessionOptions? = nil,
+        capabilities: ClientCapabilities = .acpx,
+        recordsCapabilities: Bool = true,
+        writesRecord: Bool = true,
+        handlers: ACPClientHandlers? = nil,
+        baseEnvironment: [String: String]? = nil,
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
+        inheritStderr: Bool = false,
+        onStderr: RawWireTap.StderrObserver? = nil,
+        onModelWarning: ((String) -> Void)? = nil
+    ) async throws -> HeldSession {
         // Validate the session's own servers before paying for a spawn.
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
         let handle = try await ACPAgent.launch(
-            agent: agentCommand, argv: agentArgv, cwd: cwd, permission: permission, permissionRules: permissionRules,
-            capabilities: capabilities,
-            environment: AgentEnvironment.forAgent(authCredentials: authCredentials, sessionEnv: sessionOptions?.env),
+            agent: agentCommand, argv: agentArgv, cwd: cwd,
+            handlers: handlers ?? .standard(permission: permission, rules: permissionRules), capabilities: capabilities,
+            environment: AgentEnvironment.forAgent(
+                authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
+                over: baseEnvironment ?? ProcessInfo.processInfo.environment),
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr)
+            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling, onStderr: onStderr)
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,
                 agentCommand: agentCommand, onModelWarning: onModelWarning)
-            let created: Created
-            if let resumeSessionId {
-                created = try await resume(resumeSessionId, on: target)
-            } else {
-                created = try await startSession(on: target)
+            // Called off, the agent is closed: what it was asked fails with its connection.
+            let created: Created = try await withTaskCancellationHandler {
+                if let resumeSessionId { return try await resume(resumeSessionId, on: target) }
+                return try await startSession(on: target)
+            } onCancel: {
+                Task { await handle.close() }
             }
+            try Task.checkCancellation()
             let advertised = created.models
             let application = created.application
             let started = nowISO()
@@ -80,6 +161,8 @@ public enum SessionEngine {
                 }
             }
             record.title = nil
+            // The agent as it runs: its pid and when it started.
+            record.applyLifecycle(handle.lifecycle)
 
             // In acpx's order (`createSessionRecordWithClient`): the session options on a new
             // block, then the options the session reported, then the model it was asked for.
@@ -90,32 +173,25 @@ public enum SessionEngine {
             acpx.mcpServers = sessionMcpServers
             // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
             // spawn: the daemon reconnects later and must advertise the same, or the
-            // restriction would silently lapse on the very turns it exists to cover.
-            acpx.clientCapabilities = capabilities.persistedIfRestricted
+            // restriction would silently lapse on the very turns it exists to cover —
+            // unless whoever runs the session says it with each turn, as a flow does.
+            if recordsCapabilities { acpx.clientCapabilities = capabilities.persistedIfRestricted }
             record.acpx = acpx
 
-            // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
-            // (a graceful connection close, not a kill), and records how it went — the
-            // connection closing, seen before the process exits.
-            await handle.close()
-            if let lifecycle = handle.lifecycle {
-                record.applyLifecycle(lifecycle)
-            } else {
-                // Where the agent cannot be watched, what closing it records in acpx.
-                record.pid = nil
-                record.agentStartedAt = started
-                record.lastAgentExitCode = .null
-                record.lastAgentExitSignal = .null
-                record.lastAgentExitAt = nowISO()
-                record.lastAgentDisconnectReason = AgentDisconnectReason.connectionClose.rawValue
-            }
-
-            try SessionStore.writeRecord(record)
-            return record
+            if writesRecord { try SessionStore.writeRecord(record) }
+            let session = ACPSession(id: created.sessionId, agent: handle, meta: created.meta)
+            return HeldSession(record: record, agent: handle, session: session)
         } catch {
             await handle.close()
             throw error
         }
+    }
+
+    /// A session just created, with the agent that created it still running on it.
+    public struct HeldSession: Sendable {
+        public let record: SessionRecord
+        public let agent: ACPAgent
+        public let session: ACPSession
     }
 
     /// Where a creation gets its session, and the model it asks for.

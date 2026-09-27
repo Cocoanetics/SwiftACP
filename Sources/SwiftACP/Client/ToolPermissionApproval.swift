@@ -4,10 +4,11 @@ import JSONFoundation
 /// A tool-call permission needed an answer that could not be asked for, and the policy
 /// is ``NonInteractivePermissionPolicy/fail`` — acpx's `PermissionPromptUnavailableError`.
 /// The connection answers the request `cancelled`, and the turn fails on it once over.
-public struct PermissionPromptUnavailableError: Error, Sendable, Equatable, CustomStringConvertible {
+public struct PermissionPromptUnavailableError: LocalizedError, Sendable, Equatable, CustomStringConvertible {
     public init() {}
 
     public var description: String { "Permission prompt unavailable in non-interactive mode" }
+    public var errorDescription: String? { description }
 }
 
 /// How a `session/request_permission` is answered under a permission mode — acpx's

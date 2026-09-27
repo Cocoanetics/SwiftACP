@@ -116,7 +116,8 @@ public final class ACPAgent: Sendable {
         overrides: [String: String] = [:],
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
-        onRawWire: RawWireTap.Observer? = nil
+        onRawWire: RawWireTap.Observer? = nil,
+        onStderr: RawWireTap.StderrObserver? = nil
     ) async throws -> ACPAgent {
         // Build the agent's environment exactly like acpx: inherit the parent
         // environment, promote `ACPX_AUTH_*`, and inject configured `auth`
@@ -139,8 +140,10 @@ public final class ACPAgent: Sendable {
         if let failure = AgentLaunchPreflight.failure(for: spec, agentCommand: agentCommand) {
             throw failure
         }
-        // Tapped from the start, so an observer given here sees the handshake too.
+        // Tapped from the start, so an observer given here sees the handshake too — and
+        // whatever the agent writes to stderr as it starts.
         let rawWire = RawWireTap(onRawWire)
+        rawWire.onStderr(onStderr)
         let transport = try startTransport(
             spec, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes, tap: rawWire)
         let connection = ACPAgentConnection(transport: transport, handlers: handlers)
@@ -153,7 +156,7 @@ public final class ACPAgent: Sendable {
                 capabilities: capabilities, clientInfo: clientInfo)
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
-                authCredentials: authCredentials, authPolicy: authPolicy)
+                authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment)
             #if os(macOS) || os(Linux)
             // acpx's `captureAgentDescendants`: once `initialize` is over, and again each
             // time a session is open, however it was opened — adapters start their
@@ -280,7 +283,8 @@ public final class ACPAgent: Sendable {
         overrides: [String: String] = [:],
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
-        onRawWire: RawWireTap.Observer? = nil
+        onRawWire: RawWireTap.Observer? = nil,
+        onStderr: RawWireTap.StderrObserver? = nil
     ) async throws -> ACPAgent {
         try await launch(
             agent: name, argv: argv, cwd: cwd,
@@ -290,7 +294,7 @@ public final class ACPAgent: Sendable {
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
-            onClientRequest: onClientRequest, onRawWire: onRawWire)
+            onClientRequest: onClientRequest, onRawWire: onRawWire, onStderr: onStderr)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.
@@ -307,11 +311,13 @@ public final class ACPAgent: Sendable {
         connection: ACPAgentConnection,
         methods: [AuthMethod],
         authCredentials: [String: String],
-        authPolicy: String
+        authPolicy: String,
+        environment: [String: String]
     ) async throws {
         guard !methods.isEmpty else { return }
         for method in methods {
-            let hasEnv = AgentEnvironment.readEnvCredential(methodId: method.id) != nil
+            // The environment the agent runs with: the starting process's, or the caller's own.
+            let hasEnv = AgentEnvironment.readEnvCredential(methodId: method.id, in: environment) != nil
             let configCredential = AgentEnvironment.resolveConfiguredAuthCredential(
                 methodId: method.id, authCredentials: authCredentials)
             let hasConfig =

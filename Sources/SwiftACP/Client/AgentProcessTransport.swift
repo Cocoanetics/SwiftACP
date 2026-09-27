@@ -22,8 +22,8 @@ import Musl
 ///   or the connection ending another way (`connection_close`). Requests still waiting
 ///   then fail with ``AgentDisconnectedError``, which names it;
 /// - its stderr is kept, the last 8,192 characters of it, for ``AgentStartupError``,
-///   and passed on to this process's stderr when `inheritStderr` says so — acpx shows
-///   it only with `--verbose`;
+///   passed on to this process's stderr when `inheritStderr` says so — acpx shows it
+///   only with `--verbose` — and shown to the tap (``RawWireTap/onStderr(_:)``);
 /// - ``terminate()`` ends it as acpx's `cleanupAgentProcess` does.
 final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable {
     let process: ChildProcess
@@ -224,9 +224,8 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         waiting.forEach { $0.resume() }
     }
 
-    /// Note the processes the agent has started so far — acpx looks once `initialize`
-    /// is over — so they are ended with it even if it is gone by then and they have
-    /// been handed to `init`.
+    /// Note the processes the agent has started so far — acpx looks once `initialize` is over — so
+    /// they are ended with it even if it is gone by then and they have been handed to `init`.
     func captureDescendants() {
         descendantsLock.withLock { _ = descendants.capture(rootIsRunning: !process.hasBeenReaped) }
     }
@@ -277,6 +276,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     private func readStderr(_ bytes: [UInt8]) {
         lock.withLock { stderr.append(bytes) }
         if inheritStderr { FileHandle.standardError.write(Data(bytes)) }
+        tap.stderr(Data(bytes))
     }
 
     /// Stdout reached its end. The process exiting closes it too, and Node reports

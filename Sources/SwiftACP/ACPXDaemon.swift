@@ -65,14 +65,69 @@ public actor ACPXDaemon {
     ///     again on every reconnect (`session/load` / `session/resume`), so they
     ///     survive daemon and adapter restarts. Omitted = use the config-file
     ///     servers; `[]` = none.
+    ///   - agentArgv: the argv to launch the agent as, when the caller has resolved it —
+    ///     recorded as the session's `agent_argv`. Omitted, the daemon splits the command.
+    ///   - sessionOptions: the session's options (model, allowed tools, turns, system
+    ///     prompt), recorded on it and sent as `_meta` with `session/new`; its model is put
+    ///     on the session. Omitted, none.
+    ///   - holdAgent: keep the agent that created the session, as the session's live agent,
+    ///     for its first turn — as acpx's `createSessionWithClient` keeps its client for a
+    ///     flow's first turn. Omitted, the agent is closed once the record is written.
+    ///   - fs: acpx's `--no-fs`: `false` withholds the filesystem methods from the agent that
+    ///     creates the session — and, as `sessions new --no-fs` records it, from every agent
+    ///     that runs it later, unless the agent is held for a flow, whose turns each say it
+    ///     again (`runPrompt`'s `fs`), as acpx's flow runner does. Omitted, they are offered.
+    ///   - permissionMode: how the creating agent's permission requests and file writes are
+    ///     answered, as `runPrompt`'s: `approve-all`, `approve-reads` or `deny-all` — a flow's
+    ///     own mode, as acpx's runner makes its client with it. Omitted, `approve-all`.
+    ///   - nonInteractivePermissions: `deny` or `fail`, as `runPrompt`'s. Omitted, `deny`.
+    ///   - permissionPolicy: per-tool rules before `permissionMode`, as `runPrompt`'s.
+    ///   - authPolicy: acpx's `--auth-policy` for the creating agent — `fail` refuses one that
+    ///     advertises sign-in methods none of the credentials match. Omitted, as configured.
+    ///   - callerConfig: the config the creating agent is started with — its credentials and,
+    ///     without `mcpServers`, its MCP servers — in place of the config of `cwd`: a flow's,
+    ///     read once as its run began, as acpx's runner gives every client of the run the
+    ///     invocation's (``CallerConfig``). Omitted, the config of `cwd`.
+    ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
+    ///     caller as ``AgentStderrEvent`` log notifications while the session is made, as
+    ///     acpx's client shows it in the flow's process. A held agent's waits for its first
+    ///     turn (`runPrompt`'s `verbose`). Omitted, it is not.
+    ///   - creationToken: the caller's name for this creation, which `callOffCreation` can give
+    ///     should its wait for the answer be cut short.
+    ///   - environment: the environment the creating agent starts over, credentials laid over it
+    ///     — the caller's own: a flow's, as acpx starts a flow's agents in the flow's process.
+    ///     Omitted, the daemon's own.
+    ///   - terminalOutputCeiling: the most output, in bytes, any terminal the creating agent opens
+    ///     keeps — the caller's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as `runPrompt`'s: `0` is no cap;
+    ///     omitted, the daemon's own environment decides.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
         agentCommand: String, cwd: String, name: String? = nil,
-        mcpServers: [McpServerConfig]? = nil
+        mcpServers: [McpServerConfig]? = nil, agentArgv: [String]? = nil,
+        sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
+        permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
+        permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, callerConfig: CallerConfig? = nil,
+        verbose: Bool? = nil, creationToken: String? = nil, environment: [String: String]? = nil,
+        terminalOutputCeiling: Int? = nil
     ) async throws -> String {
         try await backend.newSession(
-            agentCommand: agentCommand, cwd: cwd, name: name, mcpServers: mcpServers)
+            agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
+            sessionOptions: sessionOptions, creation: SessionCreationMode(
+                holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
+                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
+                authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false,
+                creationToken: creationToken, environment: environment, terminalOutputCeiling: terminalOutputCeiling))
+    }
+
+    /// Call off the session `newSession` makes under `creationToken`, for a caller whose wait
+    /// for its answer was cut short: one made is let go, and one not made yet is let go as it
+    /// is made — as acpx's flow runner closes a client made after its attempt stopped.
+    ///
+    /// - Returns: whether a session made under the token was let go.
+    @MCPTool
+    func callOffCreation(creationToken: String) async throws -> Bool {
+        try await backend.callOffCreation(creationToken: creationToken)
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
@@ -300,6 +355,25 @@ public actor ACPXDaemon {
     ///     long each of its steps may take, how often a prompt that failed the way a
     ///     passing fault does is sent again, and how long the session is kept once idle.
     ///     See ``PromptLimits``. Omitted, no limit, no retry, and five minutes.
+    ///   - direct: run the turn as acpx's `sendSessionDirect` runs a flow's persistent
+    ///     turn: the session is taken back as itself or not at all, the agent is let go
+    ///     when the turn ends, and the journal has the turn's messages without turn records.
+    ///     Omitted, as a queued prompt.
+    ///   - fs: acpx's `--no-fs` for an agent the turn connects, as acpx's flow runner gives it
+    ///     every client it makes: `false` withholds the filesystem methods. Omitted, the
+    ///     agent is offered what the session was created with.
+    ///   - authPolicy: acpx's `--auth-policy` for an agent the turn connects, as acpx's flow
+    ///     runner gives it every client it makes. Omitted, as configured.
+    ///   - turnToken: the caller's name for the turn, which `cancelSession` can give: a
+    ///     cancel that named it before it began ends it as it begins, nothing sent.
+    ///   - callerConfig: the config an agent the turn connects is started with — its
+    ///     credentials and, for a session without its own, its MCP servers — a flow's, as
+    ///     `newSession`'s. Omitted, the config of the session's cwd.
+    ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
+    ///     caller as ``AgentStderrEvent`` log notifications while the turn runs — first what
+    ///     a held agent wrote since its session was made. Omitted, it is not.
+    ///   - environment: the environment an agent the turn connects starts over — the caller's
+    ///     own, as `newSession`'s. Omitted, the daemon's own.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -308,15 +382,21 @@ public actor ACPXDaemon {
         sessionId: String, text: String, blocks: [PromptBlock]? = nil, content: [JSONValue]? = nil,
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
-        model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil
+        model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
+        direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
+        callerConfig: CallerConfig? = nil, verbose: Bool? = nil, environment: [String: String]? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
             try await backend.runPrompt(
                 sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
-                streamWire: streamWire ?? false, permissionPolicy: permissionPolicy,
-                terminalOutputCeiling: terminalOutputCeiling, sessionOptions: options, limits: limits)
+                mode: PromptTurnMode(
+                    streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
+                    turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false,
+                    environment: environment),
+                permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
+                sessionOptions: options, limits: limits)
         }
     }
 
@@ -341,21 +421,29 @@ public actor ACPXDaemon {
 
     /// Cancel an in-flight prompt for a session.
     ///
-    /// - Parameter sessionId: the ACP session id of the live session.
+    /// - Parameters:
+    ///   - sessionId: the ACP session id of the live session.
+    ///   - turnToken: cancel only the turn `runPrompt` was given this token for — and, when it
+    ///     has not begun yet, end it as it begins, nothing sent, as acpx's flow runner closes
+    ///     the client a stopped direct turn would prompt on. Omitted, whatever turn runs.
     /// - Returns: `false` if the session isn't currently live.
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func cancelSession(sessionId: String) async throws -> Bool {
-        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId) }
+    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
+        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId, turnToken: turnToken) }
     }
 
     /// Let go of a session's live agent without closing the session: the daemon stops
     /// holding it and ends its agent, and the record stays as it is — what `sessions new`
     /// asks when the agent gave the new session the id of the one it replaces.
     ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
-    /// - Returns: whether the daemon held an agent for it.
+    /// - Parameters:
+    ///   - sessionId: the acpx record id or the ACP session id.
+    ///   - turnToken: the caller's name for a turn (`runPrompt`'s): only the agent that turn
+    ///     connects or runs on is put down, while the turn has the session — as acpx's flow
+    ///     runner closes the client its stopped turn was handed. Omitted, the session's agent.
+    /// - Returns: whether the daemon held an agent for it — or, given a turn, put one down.
     @MCPTool(idempotentHint: true)
-    func releaseSession(sessionId: String) async throws -> Bool {
-        try await admitted { [backend] in try await backend.releaseSession(sessionId: sessionId) }
+    func releaseSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
+        try await admitted { [backend] in try await backend.releaseSession(sessionId: sessionId, turnToken: turnToken) }
     }
 }

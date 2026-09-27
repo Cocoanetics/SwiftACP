@@ -10,10 +10,12 @@ import JSONRPCWire
 /// must echo the wire the way acpx does needs these bytes rather than the decoded
 /// value; see ``ACPAgentConnection/setWireObserver(_:)`` for the decoded form. The
 /// observer runs on the transport's reader and writer tasks, possibly concurrently, so
-/// it must be thread-safe and fast. Replace it at any time with ``set(_:)``.
+/// it must be thread-safe and fast. Replace it at any time with ``set(_:)``. What the
+/// agent writes to stderr goes to its own observer (``onStderr(_:)``).
 public final class RawWireTap: @unchecked Sendable {
     public typealias Observer = @Sendable (JSONRPCPeer.WireDirection, Data) -> Void
     public typealias DeliveryObserver = @Sendable (Data, Delivery) -> Void
+    public typealias StderrObserver = @Sendable (Data) -> Void
 
     /// How far an outbound body got on its way to the agent.
     public enum Delivery: Sendable {
@@ -26,6 +28,7 @@ public final class RawWireTap: @unchecked Sendable {
     private let lock = NSLock()
     private var observer: Observer?
     private var deliveryObserver: DeliveryObserver?
+    private var stderrObserver: StderrObserver?
     /// Sessions whose `session/update` notifications are not shown — their
     /// `session/load` is replaying history — with how many loads asked. acpx's
     /// `suppressReplaySessionUpdateMessages`, kept per session.
@@ -46,6 +49,17 @@ public final class RawWireTap: @unchecked Sendable {
     /// transport's writer, so it must be thread-safe and fast.
     public func onDelivery(_ observer: DeliveryObserver?) {
         lock.withLock { deliveryObserver = observer }
+    }
+
+    /// Tell `observer` of each chunk the agent writes to stderr, as it is read — what acpx's
+    /// client shows under `--verbose`. It runs on the thread that reads the agent, so it
+    /// must be thread-safe and fast. Only an agent this process started has a stderr.
+    public func onStderr(_ observer: StderrObserver?) {
+        lock.withLock { stderrObserver = observer }
+    }
+
+    func stderr(_ bytes: Data) {
+        lock.withLock { stderrObserver }?(bytes)
     }
 
     /// Stop showing `sessionId`'s `session/update` notifications until the matching

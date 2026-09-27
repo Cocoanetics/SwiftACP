@@ -16,11 +16,28 @@ extension DaemonClient {
     }
 
     /// Ask a *running* daemon to let go of its live agent for `sessionId` without closing
-    /// the session (``ACPXDaemon/releaseSession(sessionId:)``). Never spawns a daemon.
-    static func releaseSession(sessionId: String) async -> Release {
+    /// the session (``ACPXDaemon/releaseSession(sessionId:turnToken:)``) — given a turn's
+    /// token, of the agent that turn runs on, while it does. Never spawns a daemon.
+    static func releaseSession(sessionId: String, turnToken: String? = nil) async -> Release {
         do {
             return .released(try await withClient(spawnIfNeeded: false) {
-                try await $0.releaseSession(sessionId: sessionId)
+                try await $0.releaseSession(sessionId: sessionId, turnToken: turnToken)
+            })
+        } catch is DaemonUnavailable {
+            return .noDaemon
+        } catch {
+            return .refused(error)
+        }
+    }
+
+    /// Call off, on a *running* daemon, the session it makes under `creationToken`
+    /// (``ACPXDaemon/callOffCreation(creationToken:)``), letting go of the agent that creation
+    /// made. A daemon that is gone holds nothing. Never spawns a daemon.
+    @discardableResult
+    static func callOffCreation(_ creationToken: String) async -> Release {
+        do {
+            return .released(try await withClient(spawnIfNeeded: false) {
+                try await $0.callOffCreation(creationToken: creationToken)
             })
         } catch is DaemonUnavailable {
             return .noDaemon

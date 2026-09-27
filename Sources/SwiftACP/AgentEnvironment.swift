@@ -45,8 +45,9 @@ public enum AgentEnvironment {
     }
 
     /// ``forAgent(authCredentials:sessionEnv:)`` over `base` rather than this process's
-    /// environment.
-    static func forAgent(
+    /// environment: the caller's own, when the agent starts for another process — a flow's,
+    /// whose agents acpx starts in the flow's process.
+    public static func forAgent(
         authCredentials: [String: String], sessionEnv: [String: String]?, over base: [String: String]
     ) -> [String: String] {
         var environment = base
@@ -106,10 +107,12 @@ public enum AgentEnvironment {
     }
 
     /// A credential for `methodId` from this process's `ACPX_AUTH_<token>` env var.
-    public static func readEnvCredential(methodId: String) -> String? {
+    public static func readEnvCredential(
+        methodId: String, in environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
         let token = toEnvToken(methodId)
         guard !token.isEmpty,
-            let value = ProcessInfo.processInfo.environment["\(authEnvPrefix)\(token)"],
+            let value = environment["\(authEnvPrefix)\(token)"],
             !value.trimmingCharacters(in: .whitespaces).isEmpty
         else { return nil }
         return value
