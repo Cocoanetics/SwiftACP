@@ -13,6 +13,9 @@ extension ACPXDaemonBackend {
         var response: PromptResponse
         /// Whether a prompt went out: one cancelled before its first did not.
         var sent: Bool
+        /// How long the attempt that was answered took, in whole milliseconds: acpx's
+        /// `prompt.agent_turn`. `nil` for a turn cancelled between attempts.
+        var agentTurnMilliseconds: Double?
     }
 
     /// Send the turn's prompt, each attempt within its `--timeout` (``sendPrompt(_:on:recordId:within:)``),
@@ -50,10 +53,13 @@ extension ACPXDaemonBackend {
         let cancelled = PromptOutcome(response: PromptResponse(stopReason: .cancelled), sent: true)
         var attempt = 0
         while true {
+            let attemptStartedAt = ContinuousClock.now
             do {
                 let (response, sent) = try await sendPrompt(
                     turn.blocks, on: entry, recordId: recordId, turn: turn.id, within: turn.timeoutMilliseconds)
-                return PromptOutcome(response: response, sent: sent || attempt > 0)
+                return PromptOutcome(
+                    response: response, sent: sent || attempt > 0,
+                    agentTurnMilliseconds: PromptTimings.milliseconds(since: attemptStartedAt, whole: true))
             } catch {
                 // The attempt's prompt is settled: a cancel from now on has none to go to,
                 // and a late note of it going out is too late.

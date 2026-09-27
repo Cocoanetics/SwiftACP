@@ -203,7 +203,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                     authPolicy: authPolicy, mcpServers: configServers,
                     sessionMcpServers: mcpServers, meta: meta, sessionOptions: options, capabilities: .acpx(fs: fs),
                     handlers: handlers, baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
-                    inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                    inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
             }
             return record.acpxRecordId
         }
@@ -221,7 +221,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
                 capabilities: .acpx(fs: fs), recordsCapabilities: false, writesRecord: false, handlers: handlers,
                 baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
-                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
         }
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         return try await keepMadeSession(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
