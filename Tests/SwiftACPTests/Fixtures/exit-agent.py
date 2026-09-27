@@ -23,6 +23,7 @@
 - `EXIT_AGENT_INIT_ERROR=1` answers `initialize` with an error, and runs on.
 - `EXIT_AGENT_AUTH=1` advertises a sign-in method on `initialize`.
 - `EXIT_AGENT_STUBBORN=1` ignores `SIGTERM` and keeps running once its stdin ends.
+- `EXIT_AGENT_LINGER=1` keeps running once its stdin ends, until a signal ends it.
 - `EXIT_AGENT_CHILD=<path>` starts `sleep 300` at `initialize` — or at the method
   `EXIT_AGENT_CHILD_AT` names — ignoring `SIGTERM` like itself, and writes its pid to the
   path.
@@ -39,6 +40,7 @@ CODE = int(os.environ.get("EXIT_AGENT_CODE", "3"))
 SIGNAL = os.environ.get("EXIT_AGENT_SIGNAL", "")
 STDERR = os.environ.get("EXIT_AGENT_STDERR", "")
 STUBBORN = os.environ.get("EXIT_AGENT_STUBBORN") == "1"
+LINGER = os.environ.get("EXIT_AGENT_LINGER") == "1"
 LINE_BYTES = int(os.environ.get("EXIT_AGENT_LINE_BYTES", "0"))
 
 if STUBBORN:
@@ -158,7 +160,7 @@ def main():
             pass
         elif req_id is not None:
             send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}})
-    if STUBBORN:
+    if STUBBORN or LINGER:
         while True:
             time.sleep(1)
 

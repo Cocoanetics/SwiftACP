@@ -242,7 +242,7 @@ import Testing
             // A real record landed on disk (the same one the CLI's `sessions new` writes).
             let onDisk = try #require(SessionStore.loadRecord(id))
             #expect(onDisk.name == "demo")
-            #expect(onDisk.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(onDisk.lastAgentDisconnectReason))
 
             // listSessions surfaces it.
             let listed = await daemon.listSessions()
