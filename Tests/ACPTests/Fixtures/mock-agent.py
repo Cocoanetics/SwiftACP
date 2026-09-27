@@ -70,6 +70,12 @@ HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
 # the client open past its answer, until a test creates the path. (Files, not FIFOs: a
 # test creates one without blocking, so no step of it waits where cancelling cannot reach.)
 HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
+# The terminal's command. It ends once the path exists — or once its directory is gone, or
+# after two minutes: a test that creates the path and at once removes its directory can do
+# both between two looks, and a test that crashes never creates it. The command outlives
+# the test's process, so it would otherwise loop for good, starting 50 `sleep`s a second.
+HOLD_TERMINAL_LOOP = ('i=0; while [ ! -e "$1" ] && [ -d "${1%/*}" ] && [ "$i" -lt 6000 ]; '
+                      'do sleep 0.02; i=$((i + 1)); done')
 
 # A path, with MOCK_HOLD_TERMINAL. Once the prompt is answered, the agent waits for it to
 # exist, then asks a permission question; answered, it creates MOCK_HOLD_TERMINAL itself.
@@ -455,7 +461,7 @@ def main():
                     time.sleep(0.1)
                 send({"jsonrpc": "2.0", "id": "mock-terminal-create", "method": "terminal/create", "params": {
                     "sessionId": terminal_session, "command": "/bin/sh",
-                    "args": ["-c", 'while [ ! -e "$1" ]; do sleep 0.02; done', "hold", HOLD_TERMINAL]}})
+                    "args": ["-c", HOLD_TERMINAL_LOOP, "hold", HOLD_TERMINAL]}})
                 continue
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:
