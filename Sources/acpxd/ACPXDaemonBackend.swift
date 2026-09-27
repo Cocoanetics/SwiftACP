@@ -32,7 +32,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         /// config-file-backed session (`nil`) never conflicts, matching npm, where
         /// only an explicit `--mcp-config` is fingerprinted — see ``ensure``.
         let sessionSpecs: [MCPServerSpec]?
-        /// Where what a held agent of a verbose flow writes to stderr waits for its first turn.
+        /// Where what a held agent writes to stderr waits for the next verbose call.
         var stderr: AgentStderrRelay?
     }
 

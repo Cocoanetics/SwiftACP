@@ -317,6 +317,44 @@ extension DaemonToolsTests {
         }
     }
 
+    /// What a held agent writes to stderr between verbose turns waits for the next one, whichever
+    /// call first asked for it: a turn that finds the agent held with no relay keeps the one it
+    /// makes with the agent, and a turn that connects the agent keeps its relay with the agent
+    /// it holds (#219 review). The agent's stderr is fed as its reader feeds it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func whatAnAgentWritesBetweenVerboseTurnsWaitsForTheNext() async throws {
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            // Made without --verbose, its agent held for the first turn.
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            try await Self.verboseTurn(daemon, id, "hi", client: CallingClient())
+            try #require(await daemon.live[id]?.agent).rawWire.stderr(Data("between\n".utf8))
+            let next = CallingClient()
+            try await Self.verboseTurn(daemon, id, "stderr during", client: next)
+            #expect(Self.stderr(of: next) == "between\nduring\n")
+            // Its agent let go, the next turn connects one.
+            _ = try await daemon.releaseSession(sessionId: id)
+            try await Self.verboseTurn(daemon, id, "hi", client: CallingClient())
+            try #require(await daemon.live[id]?.agent).rawWire.stderr(Data("again\n".utf8))
+            let last = CallingClient()
+            try await Self.verboseTurn(daemon, id, "hi", client: last)
+            #expect(Self.stderr(of: last) == "again\n")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A queued turn of `sessionId` under `--verbose`, told to `client`.
+    private static func verboseTurn(
+        _ daemon: ACPXDaemonBackend, _ sessionId: String, _ text: String, client: CallingClient
+    ) async throws {
+        let session = Session(id: UUID())
+        await session.setTransport(client)
+        _ = try await session.work { _ in
+            try await daemon.runPrompt(sessionId: sessionId, text: text, permissionMode: "approve-all", verbose: true)
+        }
+    }
+
     /// Wait until something writes to the FIFO at `path` — read on a thread of its own, not one
     /// of Swift's, as opening it waits for its writer.
     private static func waitForWrite(to path: URL) async {

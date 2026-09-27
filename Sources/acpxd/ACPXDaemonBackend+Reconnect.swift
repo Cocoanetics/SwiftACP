@@ -176,8 +176,7 @@ extension ACPXDaemonBackend {
         }
         // The session the record is on from now on, and the agent's own id for it
         // (acpx's `reconcileAgentSessionId`), with what connecting left in `acpx`.
-        let sessionId = session.id
-        let agentSessionId = AgentSessionId.extract(from: session.meta)
+        let (sessionId, agentSessionId) = (session.id, AgentSessionId.extract(from: session.meta))
         let connected = state
         // acpx writes the agent's lifecycle as soon as its client has started.
         await apply({ [handle] record in
@@ -186,11 +185,12 @@ extension ACPXDaemonBackend {
             record.acpx = connected
             record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
-        let entry = try await hold(handle, on: session, sessionSpecs: sessionSpecs, for: recordId, via: onRecordChange)
-        let fellBack = loaded.createdFreshSession
-        await showConnectOutput(fellBack)
+        let entry = try await hold(
+            handle, on: session, sessionSpecs: sessionSpecs, for: recordId, via: onRecordChange,
+            stderr: settings.stderr)
+        await showConnectOutput(loaded.createdFreshSession)
         // Taken back unless a new session had to replace it.
-        return (entry, !fellBack)
+        return (entry, !loaded.createdFreshSession)
     }
 
     /// Hold the agent connecting has left on `session`, unless the daemon began stopping

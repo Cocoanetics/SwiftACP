@@ -408,7 +408,7 @@ extension DaemonToolsTests {
     }
 
     /// What `client` was sent of the agent's stderr (``AgentStderrEvent``).
-    private static func stderr(of client: CallingClient) -> String {
+    static func stderr(of client: CallingClient) -> String {
         let chunks = client.logs.compactMap { try? $0.decoded(AgentStderrEvent.self) }.compactMap(\.bytes)
         return String(decoding: chunks.reduce(Data(), +), as: UTF8.self)
     }

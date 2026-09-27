@@ -72,11 +72,14 @@ final class AgentStderrRelay: @unchecked Sendable {
 
 extension ACPXDaemonBackend {
     /// Under `--verbose`, where what the agent writes to stderr goes as a turn runs: the
-    /// relay of a held agent, which has kept what it wrote since its session was made, else
-    /// a new one — which an agent the turn connects is given (``CallerSettings/stderr``).
+    /// relay of a held agent, which has kept what it wrote since its session was made — or
+    /// since a verbose call first asked for it — else a new one, kept with the held agent
+    /// from now on, so what it writes between calls waits for the next. An agent the turn
+    /// connects is given it (``CallerSettings/stderr``), and keeps it once held (#219 review).
     func stderrRelay(for recordId: String, verbose: Bool) -> AgentStderrRelay? {
         guard verbose else { return nil }
         let relay = live[recordId]?.stderr ?? AgentStderrRelay()
+        live[recordId]?.stderr = relay
         live[recordId]?.agent.rawWire.onStderr(relay.observer)
         return relay
     }
