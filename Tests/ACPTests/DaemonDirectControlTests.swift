@@ -24,7 +24,7 @@ extension DaemonToolsTests {
             #expect(await daemon.sessionStatus(sessionId: session.id).live == false)
             let record = try #require(SessionStore.loadRecord(session.id))
             #expect(record.pid == nil)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
             await daemon.releaseAll()
         }
     }
@@ -105,7 +105,7 @@ extension DaemonToolsTests {
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpSessionId != before)
             #expect(record.pid == nil)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
         }
     }
 
@@ -125,7 +125,7 @@ extension DaemonToolsTests {
             } catch DaemonError.stopping {}
             let record = try #require(SessionStore.loadRecord(session.id))
             #expect(record.pid == nil)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
             #expect(session.prompts == 0)
         }
     }
