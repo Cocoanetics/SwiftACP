@@ -76,7 +76,8 @@ public struct CallerConfig: Codable, Sendable, Equatable {
 /// (`callerConfig`; `nil`, the one where the session works), whether what the agent writes
 /// to stderr is streamed to the caller (`verbose`, acpx's `--verbose`), the caller's name for
 /// the creation, which ``ACPXBackend/callOffCreation(creationToken:)`` can give (`creationToken`),
-/// and the environment the agent starts over (`environment`; `nil`, the daemon's own).
+/// the environment the agent starts over (`environment`; `nil`, the daemon's own), and the cap
+/// on its terminals' output (`terminalOutputCeiling`, as `runPrompt`'s; `nil`, the daemon's).
 public struct SessionCreationMode: Sendable {
     public var holdAgent: Bool
     public var fs: Bool?
@@ -88,12 +89,13 @@ public struct SessionCreationMode: Sendable {
     public var verbose: Bool
     public var creationToken: String?
     public var environment: [String: String]?
+    public var terminalOutputCeiling: Int?
 
     public init(
         holdAgent: Bool = false, fs: Bool? = nil, permissionMode: String? = nil,
         nonInteractivePermissions: String? = nil, permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil,
         callerConfig: CallerConfig? = nil, verbose: Bool = false, creationToken: String? = nil,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil, terminalOutputCeiling: Int? = nil
     ) {
         self.holdAgent = holdAgent
         self.fs = fs
@@ -105,6 +107,7 @@ public struct SessionCreationMode: Sendable {
         self.verbose = verbose
         self.creationToken = creationToken
         self.environment = environment
+        self.terminalOutputCeiling = terminalOutputCeiling
     }
 }
 

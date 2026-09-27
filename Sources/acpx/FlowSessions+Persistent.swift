@@ -24,6 +24,7 @@ extension FlowAgentSessions {
     func createPersistent(agent: FlowAgent, name: String, control: FlowTurnControl) async throws -> SessionRecord {
         try control.check()
         let creationToken = UUID().uuidString.lowercased()
+        let ceiling = try TerminalOutputLimit.ceiling()
         let proxy = try await Self.connect(until: control) { proxy in
             await proxy.setLogNotificationHandler(FlowCreationLog())
         }
@@ -39,7 +40,8 @@ extension FlowAgentSessions {
                 agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, authPolicy: flags.authPolicy, callerConfig: callerConfig,
-                verbose: flags.verbose, creationToken: creationToken, environment: ProcessInfo.processInfo.environment)
+                verbose: flags.verbose, creationToken: creationToken, environment: ProcessInfo.processInfo.environment,
+                terminalOutputCeiling: ceiling ?? 0)
         } catch {
             await proxy.disconnect()
             // No answer came, or a failure did: whatever acpxd makes of it is let go, now or as it
@@ -155,8 +157,7 @@ extension FlowAgentSessions {
     /// agent it made, if it still keeps it.
     @discardableResult
     private func callOffCreation(of recordId: String) async -> DaemonClient.Release {
-        guard let token = creations.take(recordId) else { return .released(false) }
-        return await DaemonClient.callOffCreation(token)
+        await creations.callOff(recordId, through: DaemonClient.callOffCreation)
     }
 
     /// The flow's config as acpx's runner gives it every client of the run: its `auth` and MCP
@@ -322,5 +323,18 @@ final class FlowCreations: @unchecked Sendable {
     /// The token `recordId`'s session was made under, forgotten.
     func take(_ recordId: String) -> String? {
         lock.withLock { tokens.removeValue(forKey: recordId) }
+    }
+
+    /// Call `recordId`'s creation off through `callOff`, by its token: kept should the daemon
+    /// refuse — a connection dropped, say — so another cleanup can try again, and forgotten once
+    /// the call-off is settled, the agent let go or no daemon holding it (#219 review).
+    func callOff(
+        _ recordId: String, through callOff: (String) async -> DaemonClient.Release
+    ) async -> DaemonClient.Release {
+        guard let token = lock.withLock({ tokens[recordId] }) else { return .released(false) }
+        let outcome = await callOff(token)
+        if case .refused = outcome { return outcome }
+        lock.withLock { if tokens[recordId] == token { tokens[recordId] = nil } }
+        return outcome
     }
 }

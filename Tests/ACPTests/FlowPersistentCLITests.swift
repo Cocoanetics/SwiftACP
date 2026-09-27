@@ -3,7 +3,7 @@
 @testable import acpx
 @testable import acpxd
 import Foundation
-import SwiftACP
+@testable import SwiftACP
 import SwiftMCP
 import Testing
 
@@ -147,6 +147,40 @@ extension DaemonToolsTests {
                 creation: SessionCreationMode(holdAgent: true, authPolicy: "fail", environment: environment))
             await daemon.releaseAll()
         }
+    }
+
+    /// The agent that makes a flow's persistent session caps its terminals as the flow's CLI does
+    /// — the caller's `ACPX_TERMINAL_MAX_OUTPUT_BYTES` — from its start, so a terminal it opens
+    /// while the session is made has the flow's cap too (#219 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowSessionsCreatingAgentCapsItsTerminalsAsTheFlowDoes() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, terminalOutputCeiling: 4096))
+            let agent = try #require(await daemon.live[id]?.agent)
+            let terminals = try #require(agent.terminals as? TerminalManager)
+            #expect(await terminals.outputCeiling == 4096)
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A creation's call-off the daemon refuses — its connection dropped, say — keeps the token
+    /// for another cleanup to try again; a settled one lets it go (#219 review).
+    @Test func aRefusedCallOffKeepsItsToken() async {
+        struct Refused: Error {}
+        let creations = FlowCreations()
+        creations.keep("token", for: "session")
+        _ = await creations.callOff("session") { _ in .refused(Refused()) }
+        let tried = Lines()
+        _ = await creations.callOff("session") { token in
+            tried.add(token)
+            return .released(true)
+        }
+        #expect(tried.all == ["token"])
+        #expect(creations.take("session") == nil)
     }
 
     /// A stopped turn still going past its grace has its agent put down when the cancel found it

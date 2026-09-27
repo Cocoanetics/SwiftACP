@@ -45,6 +45,7 @@ public enum SessionEngine {
         capabilities: ClientCapabilities = .acpx,
         handlers: ACPClientHandlers? = nil,
         baseEnvironment: [String: String]? = nil,
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
@@ -57,8 +58,9 @@ public enum SessionEngine {
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
             mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
-            writesRecord: false, handlers: handlers, baseEnvironment: baseEnvironment, inheritStderr: inheritStderr,
-            onStderr: onStderr, onModelWarning: onModelWarning)
+            writesRecord: false, handlers: handlers, baseEnvironment: baseEnvironment,
+            terminalOutputCeiling: terminalOutputCeiling, inheritStderr: inheritStderr, onStderr: onStderr,
+            onModelWarning: onModelWarning)
         beforeClosing?(held.record.acpxRecordId)
         var record = held.record
         let handle = held.agent
@@ -93,7 +95,8 @@ public enum SessionEngine {
     /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
     /// false, the record is returned unwritten, for a caller that writes it once it keeps the
     /// session — acpxd, where the id the agent gives may be another session's. The agent starts
-    /// over `baseEnvironment` when given — its caller's own — else this process's.
+    /// over `baseEnvironment` when given — its caller's own — else this process's, and caps its
+    /// terminals by `terminalOutputCeiling`.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -113,6 +116,7 @@ public enum SessionEngine {
         writesRecord: Bool = true,
         handlers: ACPClientHandlers? = nil,
         baseEnvironment: [String: String]? = nil,
+        terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
@@ -127,7 +131,7 @@ public enum SessionEngine {
                 authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
                 over: baseEnvironment ?? ProcessInfo.processInfo.environment),
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, onStderr: onStderr)
+            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling, onStderr: onStderr)
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,

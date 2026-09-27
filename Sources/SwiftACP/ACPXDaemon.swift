@@ -97,6 +97,9 @@ public actor ACPXDaemon {
     ///   - environment: the environment the creating agent starts over, credentials laid over it
     ///     — the caller's own: a flow's, as acpx starts a flow's agents in the flow's process.
     ///     Omitted, the daemon's own.
+    ///   - terminalOutputCeiling: the most output, in bytes, any terminal the creating agent opens
+    ///     keeps — the caller's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as `runPrompt`'s: `0` is no cap;
+    ///     omitted, the daemon's own environment decides.
     /// - Returns: the new session's acpx record id.
     @MCPTool(openWorldHint: true)
     func newSession(
@@ -105,7 +108,8 @@ public actor ACPXDaemon {
         sessionOptions: PromptSessionOptions? = nil, holdAgent: Bool? = nil, fs: Bool? = nil,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         permissionPolicy: PermissionRules? = nil, authPolicy: String? = nil, callerConfig: CallerConfig? = nil,
-        verbose: Bool? = nil, creationToken: String? = nil, environment: [String: String]? = nil
+        verbose: Bool? = nil, creationToken: String? = nil, environment: [String: String]? = nil,
+        terminalOutputCeiling: Int? = nil
     ) async throws -> String {
         try await backend.newSession(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
@@ -113,7 +117,7 @@ public actor ACPXDaemon {
                 holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
                 nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
                 authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false,
-                creationToken: creationToken, environment: environment))
+                creationToken: creationToken, environment: environment, terminalOutputCeiling: terminalOutputCeiling))
     }
 
     /// Call off the session `newSession` makes under `creationToken`, for a caller whose wait

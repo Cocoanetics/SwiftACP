@@ -186,6 +186,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         // is made, as acpx's client shows it in the flow's process; a held agent's then waits
         // for its first turn.
         let stderr = creation.verbose ? AgentStderrRelay() : nil
+        // The creating agent's terminals are capped as the caller's (#219 review).
+        let ceiling = TerminalOutputLimit.Source.given(try Self.terminalOutputCeiling(creation.terminalOutputCeiling))
         guard holdAgent else {
             let record = try await relayingStderr(stderr, logger: "newSession") {
                 try await SessionEngine.createSession(
@@ -193,8 +195,8 @@ actor ACPXDaemonBackend: ACPXBackend {
                     name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
                     authPolicy: authPolicy, mcpServers: configServers,
                     sessionMcpServers: mcpServers, meta: meta, sessionOptions: options, capabilities: .acpx(fs: fs),
-                    handlers: handlers, baseEnvironment: creation.environment, inheritStderr: inheritAgentStderr,
-                    onStderr: stderr?.observer)
+                    handlers: handlers, baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
+                    inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
             }
             return record.acpxRecordId
         }
@@ -211,7 +213,8 @@ actor ACPXDaemonBackend: ACPXBackend {
                 authPolicy: authPolicy, mcpServers: configServers,
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
                 capabilities: .acpx(fs: fs), recordsCapabilities: false, writesRecord: false, handlers: handlers,
-                baseEnvironment: creation.environment, inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
+                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
         }
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         return try await keepMadeSession(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
