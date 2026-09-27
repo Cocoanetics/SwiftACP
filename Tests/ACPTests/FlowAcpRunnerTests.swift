@@ -207,17 +207,49 @@ struct FlowAcpRunnerTests {
 
     /// acpx: "times out async ACP parse callbacks" — a `parse` that never settles times the
     /// step out once the turn's answer is in (its `acp_response_parsed` comes before it).
+    /// The attempt times out once `parse` says it has begun, as its timer would then.
     @Test(.enabled(if: nodeAvailable))
     func aParseThatNeverSettlesTimesOut() async throws {
+        let begun = FileManager.default.temporaryDirectory.appendingPathComponent("parse-\(UUID().uuidString)")
+        let turn = ScriptedTurn(ScriptedTurn.answering("hello"))
+        let watch = try Self.whenWritten(begun) { turn.timeOut(2000) }
+        defer {
+            watch.cancel()
+            try? FileManager.default.removeItem(at: begun)
+        }
         let run = try await FlowRunnerHarness.run("""
+            import fs from "node:fs";
             export default defineFlow({ name: "parse-timeout", startAt: "slow", nodes: {
-              slow: acp({ session: { isolated: true }, timeoutMs: 2000, heartbeatMs: 0, prompt: () => "hello",
-                parse: async () => await new Promise(() => {}) }) }, edges: [] });
-            """, sessions: ScriptedTurn(ScriptedTurn.answering("hello")))
+              slow: acp({ session: { isolated: true }, heartbeatMs: 0, prompt: () => "hello",
+                parse: async () => {
+                  fs.writeFileSync(\(begun.path.debugDescription), "x");
+                  return await new Promise(() => {});
+                } }) }, edges: [] });
+            """, sessions: turn)
         #expect(run.code == 3)
         #expect(member(run.state, "results", "slow", "outcome") == .text("timed_out"))
+        #expect(member(run.state, "results", "slow", "error") == .text("Timed out after 2000ms"))
         #expect(types(run).contains("acp_response_parsed"))
         #expect(member(run.state, "steps")?.arrayItems.first?["rawText"] == .text("hello"))
+    }
+
+    /// `action` once a FIFO at `path` is written to. It is read until cancelled, so a
+    /// writer never waits.
+    static func whenWritten(_ path: URL, _ action: @escaping @Sendable () -> Void) throws -> DispatchSourceRead {
+        guard mkfifo(path.path, 0o600) == 0 else { throw POSIXError(.EIO) }
+        let fd = open(path.path, O_RDWR | O_NONBLOCK)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        let reader = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
+        let fired = Lines()
+        reader.setEventHandler {
+            var byte: UInt8 = 0
+            guard read(fd, &byte, 1) > 0, fired.all.isEmpty else { return }
+            fired.add("fired")
+            action()
+        }
+        reader.setCancelHandler { close(fd) }
+        reader.resume()
+        return reader
     }
 
     // MARK: - The prompt
@@ -341,146 +373,4 @@ struct FlowAcpRunnerTests {
             """, sessions: ScriptedTurn(ScriptedTurn.answering("never")))
         #expect(run.err == "ACP nodes with a persistent session are not supported by SwiftACP's acpx yet")
     }
-}
-
-/// An ACP turn as a test scripts it (``FlowSessionRunner``): the messages it sends and
-/// takes in, the session updates among them, when its session is ready, a wait for the
-/// attempt to stop it — then its session's id, a failure, or the reason it was stopped.
-final class ScriptedTurn: FlowSessionRunner, @unchecked Sendable {
-    enum Step: Sendable {
-        case outbound(String)
-        case inbound(String)
-        /// A `session/update`: on the wire, and to the client.
-        case update(String)
-        case ready(String)
-        case clientOperation
-        /// Interrupt the run, as a Ctrl-C would, without waiting for it to answer.
-        case interrupt
-        /// Time the attempt out, as its timer would at `timeoutMs`.
-        case timeOut(Double)
-        /// Take this long over the next step.
-        case pause(milliseconds: Int)
-        case waitForStop
-
-        var isUpdate: Bool {
-            if case .update = self { return true }
-            return false
-        }
-    }
-
-    enum Ending: Sendable {
-        case session(String)
-        case failure(any Error)
-        case stopReason
-    }
-
-    private let steps: [Step]
-    private let ending: Ending
-    private let lock = NSLock()
-    private var seenPrompts: [[ContentBlock]] = []
-    private var seenCwds: [String] = []
-    private var runner: FlowRunner?
-
-    /// Take the runner that ``Step/interrupt`` interrupts.
-    func interrupts(_ runner: FlowRunner) {
-        lock.withLock { self.runner = runner }
-    }
-
-    init(_ steps: [Step], ending: Ending = .session("s-1")) {
-        self.steps = steps
-        self.ending = ending
-    }
-
-    var prompts: [[ContentBlock]] { lock.withLock { seenPrompts } }
-    var cwds: [String] { lock.withLock { seenCwds } }
-
-    /// A whole turn in session `s-1`, answered with `text`.
-    static func answering(_ text: String) -> [Step] {
-        let chunk = WireJSON.object([
-            ("sessionUpdate", .text("agent_message_chunk")),
-            ("content", .object([("type", .text("text")), ("text", .text(text))]))
-        ]).stringified
-        return [
-            .outbound(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1}}"#),
-            .inbound(#"{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1}}"#),
-            .outbound(#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/","mcpServers":[]}}"#),
-            .inbound(#"{"jsonrpc":"2.0","id":1,"result":{"sessionId":"s-1"}}"#),
-            .ready("s-1"),
-            .outbound(#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s-1"}}"#),
-            .update(#"{"sessionId":"s-1","update":\#(chunk)}"#),
-            .inbound(#"{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}"#)
-        ]
-    }
-
-    func runIsolated(_ turn: FlowTurn) async throws -> String {
-        lock.withLock {
-            seenPrompts.append(turn.prompt)
-            seenCwds.append(turn.agent.cwd)
-        }
-        for step in steps {
-            switch step {
-            case .outbound(let text): turn.onMessage(true, try WireJSON.parse(text))
-            case .inbound(let text): turn.onMessage(false, try WireJSON.parse(text))
-            case .update(let params):
-                turn.onMessage(false, try WireJSON.parse(
-                    #"{"jsonrpc":"2.0","method":"session/update","params":\#(params)}"#))
-                turn.onSessionUpdate(try JSONDecoder().decode(SessionNotification.self, from: Data(params.utf8)))
-            case .ready(let sessionId): turn.onSessionReady(sessionId)
-            case .clientOperation: turn.onClientOperation()
-            case .interrupt:
-                let runner = lock.withLock { self.runner }
-                Task { await runner?.interrupt() }
-            case .timeOut(let timeoutMs): turn.control.attempt.cancel(FlowTimeoutError(timeoutMs: timeoutMs))
-            case .pause(let milliseconds): try? await Task.sleep(for: .milliseconds(milliseconds))
-            case .waitForStop:
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    let once = OnceResume(continuation)
-                    _ = turn.control.onStop { once.resume() }
-                }
-            }
-        }
-        switch ending {
-        case .session(let sessionId): return sessionId
-        case .failure(let error): throw error
-        case .stopReason: throw turn.control.stopReason ?? CancellationError()
-        }
-    }
-}
-
-/// A continuation resumed once, however often it is told to.
-final class OnceResume: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    init(_ continuation: CheckedContinuation<Void, Never>) {
-        self.continuation = continuation
-    }
-
-    func resume() {
-        lock.withLock {
-            defer { continuation = nil }
-            return continuation
-        }?.resume()
-    }
-}
-
-/// Lines written, in order.
-final class Lines: @unchecked Sendable {
-    private let lock = NSLock()
-    private var lines: [String] = []
-
-    var all: [String] { lock.withLock { lines } }
-
-    func add(_ line: String) {
-        lock.withLock { lines.append(line) }
-    }
-}
-
-extension WireJSON {
-    var arrayItems: [WireJSON] {
-        if case .array(let items) = self { return items }
-        return []
-    }
-
-    var arrayCount: Int { arrayItems.count }
 }
