@@ -160,6 +160,15 @@ def handle_prompt(req_id, params):
         send({"jsonrpc": "2.0", "id": "mock-fs", "method": method, "params": params})
         return
 
+    # "terminal-env NAME": the client runs `printf %s "$NAME"` in a terminal the request gives
+    # no `env`, and once it has exited the reply is NAME=<what it printed>: the environment the
+    # client runs the agent's commands in.
+    if words[0] == "terminal-env" and len(words) > 1:
+        pending_fs["terminal"] = {"prompt": req_id, "session": session_id, "name": words[1]}
+        send({"jsonrpc": "2.0", "id": "mock-term-env-create", "method": "terminal/create", "params": {
+            "sessionId": session_id, "command": "/bin/sh", "args": ["-c", 'printf %s "$' + words[1] + '"']}})
+        return
+
     # "fail turn": a partial reply, then the agent's error response, with details.
     if text.strip() == "fail turn":
         session_update(session_id, {
@@ -320,6 +329,26 @@ def main():
             session_update(fs_session, {
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
             respond(prompt_id, {"stopReason": "end_turn"})
+            continue
+        if method is None and req_id in ("mock-term-env-create", "mock-term-env-wait", "mock-term-env-output") \
+                and "terminal" in pending_fs:
+            step = pending_fs["terminal"]
+            if req_id == "mock-term-env-create":
+                step["terminal"] = (message.get("result") or {}).get("terminalId")
+                next_step = ("mock-term-env-wait", "terminal/wait_for_exit")
+            elif req_id == "mock-term-env-wait":
+                next_step = ("mock-term-env-output", "terminal/output")
+            else:
+                output = (message.get("result") or {}).get("output", "")
+                pending_fs.pop("terminal")
+                session_update(step["session"], {"sessionUpdate": "agent_message_chunk", "content": {
+                    "type": "text", "text": "%s=%s" % (step["name"], output)}})
+                send({"jsonrpc": "2.0", "id": "mock-term-env-release", "method": "terminal/release", "params": {
+                    "sessionId": step["session"], "terminalId": step["terminal"]}})
+                respond(step["prompt"], {"stopReason": "end_turn"})
+                continue
+            send({"jsonrpc": "2.0", "id": next_step[0], "method": next_step[1], "params": {
+                "sessionId": step["session"], "terminalId": step["terminal"]}})
             continue
         if method is None and str(req_id).startswith("mock-"):
             continue

@@ -52,6 +52,42 @@ extension DaemonToolsTests {
         }
     }
 
+    /// The commands an agent runs through the client's terminals start over the same caller's
+    /// environment as the agent — for a queued turn, its owner's — as acpx's client spawns them
+    /// in its own process (#222).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anAgentsTerminalsStartOverItsCallersEnvironment() async throws {
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let reply = try await daemon.runPrompt(
+                sessionId: id, text: "terminal-env ACPX_TEST_CALLER", permissionMode: "approve-all",
+                environment: Self.environment("queued"))
+            #expect(reply.contains("ACPX_TEST_CALLER=queued"), "\(reply)")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// The agent that makes a flow's session runs its terminal commands over the flow's
+    /// environment too, from its first turn (#222).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowSessionsCreatingAgentsTerminalsStartOverTheFlowsEnvironment() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let creation = SessionCreationMode(holdAgent: true, environment: Self.environment("flow"))
+            let id = try await daemon.newSession(
+                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                sessionOptions: nil, creation: creation)
+            let reply = try await daemon.runPrompt(
+                sessionId: id, text: "terminal-env ACPX_TEST_CALLER", permissionMode: "approve-all", direct: true,
+                environment: Self.environment("flow"))
+            #expect(reply.contains("ACPX_TEST_CALLER=flow"), "\(reply)")
+            await daemon.releaseAll()
+        }
+    }
+
     /// The mock agent, noting the `ACPX_TEST_CALLER` it starts with — a shell appends
     /// `started with <value>` to `log`, then runs it — and exiting once it has answered a prompt.
     private static func notingAgent(in directory: URL, log: URL) throws -> String {
