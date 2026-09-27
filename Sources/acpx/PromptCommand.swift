@@ -59,7 +59,7 @@ enum PromptCommand {
                     model: flags.model, sessionOptions: flags.promptSessionOptions,
                     limits: PromptLimits(
                         timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs),
-                    renderer: renderer)
+                    renderer: renderer, notingQueuedAs: flags.verbose ? record.acpxRecordId : nil)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {

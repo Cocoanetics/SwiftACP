@@ -17,19 +17,25 @@ public struct SessionControlResult: Codable, Sendable {
     /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` for a
     /// reply that only acknowledges, and ``JSONValue/null`` when it is `null`.
     public var rawConfigOptions: JSONValue?
+    /// Whether the session's owner ran the control, as acpx's queue owner runs one sent while
+    /// it holds the session — which acpx's CLI says under `--verbose` (#232). `false` from a
+    /// daemon that predates it.
+    public var owned: Bool
 
-    public init(resumed: Bool, configOptions: [JSONValue]? = nil) {
+    public init(resumed: Bool, configOptions: [JSONValue]? = nil, owned: Bool = false) {
         self.resumed = resumed
         self.rawConfigOptions = configOptions.map(JSONValue.array)
+        self.owned = owned
     }
 
-    public init(resumed: Bool, rawConfigOptions: JSONValue?) {
+    public init(resumed: Bool, rawConfigOptions: JSONValue?, owned: Bool = false) {
         self.resumed = resumed
         self.rawConfigOptions = rawConfigOptions
+        self.owned = owned
     }
 
     private enum CodingKeys: String, CodingKey {
-        case resumed, configOptions
+        case resumed, configOptions, owned
     }
 
     /// Also reads what a daemon from before this result returned: `true` from
@@ -40,10 +46,12 @@ public struct SessionControlResult: Codable, Sendable {
         if let keyed = try? decoder.container(keyedBy: CodingKeys.self) {
             resumed = try keyed.decode(Bool.self, forKey: .resumed)
             rawConfigOptions = try keyed.raw(forKey: .configOptions)
+            owned = try keyed.decodeIfPresent(Bool.self, forKey: .owned) ?? false
             return
         }
         let legacy = try decoder.singleValueContainer()
         resumed = false
+        owned = false
         if let options = try? legacy.decode([JSONValue].self) {
             rawConfigOptions = .array(options)
         } else {
@@ -57,5 +65,6 @@ public struct SessionControlResult: Codable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(resumed, forKey: .resumed)
         try container.encodeIfPresent(rawConfigOptions, forKey: .configOptions)
+        if owned { try container.encode(owned, forKey: .owned) }
     }
 }

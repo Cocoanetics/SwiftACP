@@ -335,11 +335,11 @@ actor ACPXDaemonBackend: ACPXBackend {
                 acpx.desiredModeId = modeId
                 record.acpx = acpx
             })
-        let (_, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, step)
-        return SessionControlResult(resumed: resumed)
+        return SessionControlResult(resumed: outcome.resumed, owned: outcome.owned)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -387,11 +387,12 @@ actor ACPXDaemonBackend: ACPXBackend {
                 // As the agent reported them: none, for a reply that only acknowledges.
                 return response.rawConfigOptions
             })
-        let (options, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, step)
-        return SessionControlResult(resumed: resumed, rawConfigOptions: options)
+        return SessionControlResult(
+            resumed: outcome.resumed, rawConfigOptions: outcome.value, owned: outcome.owned)
     }
 
     /// Set a session's model on the live agent (reconnecting if needed) through the
@@ -431,11 +432,11 @@ actor ACPXDaemonBackend: ACPXBackend {
                 ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
                 record.acpx = acpx
             })
-        let (_, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, step)
-        return SessionControlResult(resumed: resumed)
+        return SessionControlResult(resumed: outcome.resumed, owned: outcome.owned)
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
@@ -446,14 +447,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// agent has exited, or whose connection has closed, is only kept until the next turn
     /// replaces it.
     func sessionStatus(sessionId: String) async -> LiveSessionStatus {
-        guard let record = findRecord(sessionId) else { return LiveSessionStatus(live: false) }
+        guard let record = findRecord(sessionId) else { return LiveSessionStatus(live: false, owned: false) }
         let owned = owners[record.acpxRecordId] != nil
-        guard let entry = live[record.acpxRecordId] else { return LiveSessionStatus(live: owned) }
+        guard let entry = live[record.acpxRecordId] else { return LiveSessionStatus(live: owned, owned: owned) }
         let lifecycle = entry.agent.lifecycle
         guard lifecycle?.running != false, await !entry.agent.connection.isClosed else {
-            return LiveSessionStatus(live: owned)
+            return LiveSessionStatus(live: owned, owned: owned)
         }
-        return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
+        return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) }, owned: owned)
     }
 
     /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:authPolicy:turnToken:callerConfig:verbose:environment:)``

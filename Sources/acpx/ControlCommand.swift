@@ -20,7 +20,11 @@ enum ControlCommand {
         // cancel the daemon could not send fails, as acpx's owner reports one.
         var cancelled = false
         if let record {
+            // Under `--verbose`, acpx's line once the session's running owner took the cancel.
+            let owned = try flags.verbose
+                && runBlocking { await DaemonClient.sessionOwned(sessionId: record.acpxRecordId) }
             cancelled = try runBlocking { try await DaemonClient.cancelSession(sessionId: record.acpSessionId) }
+            if owned { DaemonClient.noteOwner("requested cancel on active owner pid", recordId: record.acpxRecordId) }
         }
         printCancel(sessionId: record?.acpxRecordId ?? "", cancelled: cancelled, format: flags.format)
         return ExitCodes.success
@@ -66,6 +70,9 @@ enum ControlCommand {
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
+        }
+        if flags.verbose, result.owned {
+            DaemonClient.noteOwner("requested session/set_mode on owner pid", recordId: record.acpxRecordId)
         }
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
@@ -136,6 +143,11 @@ enum ControlCommand {
             }
         }
 
+        if flags.verbose, result.owned {
+            let said = operation == .model
+                ? "requested a model config update on owner pid" : "requested session/set_config_option on owner pid"
+            DaemonClient.noteOwner(said, recordId: record.acpxRecordId)
+        }
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
         switch operation {

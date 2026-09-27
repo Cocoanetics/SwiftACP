@@ -46,7 +46,7 @@ extension ACPXDaemonBackend {
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
         terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
         _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
-    ) async throws -> (value: T, resumed: Bool) {
+    ) async throws -> ControlOutcome<T> {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
@@ -72,7 +72,7 @@ extension ACPXDaemonBackend {
         let step = direct ? timeout : nil
         let stderr = direct && verbose ? AgentStderrRelay() : nil
         do {
-            return try await relayingStderr(stderr, logger: recordId) {
+            let (value, resumed) = try await relayingStderr(stderr, logger: recordId) {
                 try await control(
                     current, direct: direct, replacing: replacing, deadline: deadline, step: step,
                     settings: CallerSettings(
@@ -80,6 +80,7 @@ extension ACPXDaemonBackend {
                         stderr: stderr, environment: direct ? environment : owners[recordId]?.environment),
                     body)
             }
+            return ControlOutcome(value: value, resumed: resumed, owned: !direct)
         } catch {
             if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }
             throw AgentFailure.shown(error)

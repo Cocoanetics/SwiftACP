@@ -8,9 +8,14 @@ public struct LiveSessionStatus: Codable, Sendable, Equatable {
     public var live: Bool
     /// The agent's process id, while it runs.
     public var pid: Int?
+    /// Whether the daemon holds it as acpx's queue owner holds one — a prompt's, until its TTL
+    /// runs out — where acpx's CLI hands requests to the owner (#232). `nil` from a daemon that
+    /// predates it.
+    public var owned: Bool?
 
-    public init(live: Bool, pid: Int? = nil) {
+    public init(live: Bool, pid: Int? = nil, owned: Bool? = nil) {
         self.live = live
         self.pid = pid
+        self.owned = owned
     }
 }

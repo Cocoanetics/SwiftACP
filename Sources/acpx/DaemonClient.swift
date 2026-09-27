@@ -259,13 +259,16 @@ enum DaemonClient {
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
         terminalOutputCeiling: Int? = nil, model: String? = nil, sessionOptions: PromptSessionOptions? = nil,
-        limits: PromptLimits? = nil, renderer: OutputRenderer
+        limits: PromptLimits? = nil, renderer: OutputRenderer, notingQueuedAs recordId: String? = nil
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let proxy = try await connect(spawnIfNeeded: true) { proxy in
             await proxy.setLogNotificationHandler(PromptLogRenderer(renderer, stopReason: stopReason))
         }
         defer { Task { await proxy.disconnect() } }
+        // Under `--verbose`, acpx's line once the prompt goes to the session's owner — acpxd,
+        // started for it or not.
+        if let recordId { noteOwner("queued prompt on active owner pid", recordId: recordId) }
         return try await runPrompt(
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
