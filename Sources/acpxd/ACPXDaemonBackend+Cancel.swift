@@ -74,10 +74,10 @@ extension ACPXDaemonBackend {
         calledOffTurns[token] = now
     }
 
-    /// The turn that just began for `recordId` takes its caller's `token`: called off
-    /// before it began, it ends at once, nothing sent, as a turn cancelled while it waited
-    /// does. On the actor with no suspension, so a cancel either finds the turn by its
-    /// token or leaves the token for it.
+    /// The turn that just began for `recordId` takes its caller's `token` (as it begins, in
+    /// ``beginPrompt(_:wait:turnToken:)``): called off before it began, it ends at once,
+    /// nothing sent, as a turn cancelled while it waited does. On the actor with no
+    /// suspension, so a cancel either finds the turn by its token or leaves the token for it.
     func claimTurnToken(_ token: String, for recordId: String) {
         turns[recordId]?.token = token
         if calledOffTurns.removeValue(forKey: token) != nil { turns[recordId]?.cancelAsked = true }

@@ -99,7 +99,6 @@ extension ACPXDaemonBackend {
             // Told to the client as acpx's owner tells it, the turn's error.
             return try await reportingFailure(of: recordId, errors: TurnErrorWatch()) { throw refused }
         }
-        if let turnToken { claimTurnToken(turnToken, for: recordId) }
         let (control, ticket) = (begun.control, begun.ticket)
         var heldTheSlot = !wait
         defer { promptEnded(recordId, begun, heldTheSlot: heldTheSlot) }
