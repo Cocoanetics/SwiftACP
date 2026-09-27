@@ -109,17 +109,30 @@ struct FlowShellRunnerTests {
             == #"{"routed":true,"outcome":"timed_out"}"#)
     }
 
-    /// acpx: "FlowRunner times out async shell exec callbacks" and "… parse callbacks".
-    @Test(.enabled(if: nodeAvailable), arguments: [
-        "exec: async () => await new Promise(() => {})",
-        #"exec: () => ({ command: process.execPath, args: ["-e", 'process.stdout.write("ok")'] }), "#
-            + "parse: async () => await new Promise(() => {})"
+    /// acpx: "FlowRunner times out async shell exec callbacks" and "… parse callbacks". The
+    /// node's deadline passes once the callback that never settles has begun (`hang`): a
+    /// 200 ms deadline could pass while `parse`'s command was still starting, and a loaded
+    /// machine then failed the step on stopping it.
+    @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)), arguments: [
+        "exec: hang",
+        #"exec: () => ({ command: process.execPath, args: ["-e", 'process.stdout.write("ok")'] }), parse: hang"#
     ])
     func aShellCallbackThatNeverSettlesTimesOut(_ callbacks: String) async throws {
-        let run = try await runnerRun("""
-            export default defineFlow({ name: "shell-callback-timeout", startAt: "slow", nodes: {
-              slow: shell({ timeoutMs: 200, \(callbacks) }) }, edges: [] });
-            """)
+        let scratch = Scratch()
+        let deadlines = FlowDeadlines()
+        let watch = try Self.fire(deadlines, whenWritten: scratch.path("hung"))
+        defer { watch.cancel() }
+        let run = try await FlowAttempt.$deadlines.withValue(deadlines) {
+            try await runnerRun("""
+                import fs from "node:fs";
+                const hang = async () => {
+                  fs.writeFileSync(\(scratch.js("hung")), "hung");
+                  await new Promise(() => {});
+                };
+                export default defineFlow({ name: "shell-callback-timeout", startAt: "slow", nodes: {
+                  slow: shell({ timeoutMs: 60000, \(callbacks) }) }, edges: [] });
+                """)
+        }
         #expect(run.code == 3, "\(run.err)")
         #expect(member(run.state, "results", "slow", "outcome") == .text("timed_out"))
     }
@@ -216,37 +229,45 @@ struct FlowShellRunnerTests {
 
     /// acpx: "outer node timeout joins native cleanup and denies a caught callback's next
     /// command": the node's deadline stops the command — which saw the TERM — and fails
-    /// `runShell` with the timeout, and the callback's next command with it too.
+    /// `runShell` with the timeout, and the callback's next command with it too. The deadline
+    /// passes once the command is ready, its trap set, as in the next test.
     @Test(.enabled(if: nodeAvailable), .timeLimit(.minutes(1)))
     func aNodeDeadlineStopsRunShellAndRefusesTheNext() async throws {
         let scratch = Scratch()
-        let run = try await runnerRun("""
-            import fs from "node:fs";
-            export default defineFlow({ name: "outer-timeout", startAt: "a", nodes: {
-              a: action({ timeoutMs: 2000, run: async ({ runShell, signal }) => {
-                try {
-                  const term = \(scratch.js("term"));
-                  await runShell({ command: "/bin/sh", args: ["-c",
-                    `trap 'printf term > ${JSON.stringify(term)}' TERM; while :; do sleep 0.1; done`] });
-                } catch (error) {
-                  const report = { first: `${error.name}: ${error.message}`, aborted: signal.aborted };
-                  try {
-                    await runShell({ command: "/bin/sh", args: ["-c", "true"] });
-                    report.next = "dispatched";
-                  } catch (next) {
-                    report.next = `${next.name}: ${next.message}`;
-                  }
-                  fs.writeFileSync(\(scratch.js("report")), JSON.stringify(report));
-                  throw error;
-                }
-              } }),
-              after: compute({ run: () => new Promise((resolve) => setTimeout(() => resolve(1), 300)) }) },
-              edges: [{ from: "a", switch: { on: "$result.outcome", cases: { timed_out: "after" } } }] });
-            """)
+        let deadlines = FlowDeadlines()
+        let watch = try Self.fire(deadlines, whenWritten: scratch.path("ready"))
+        defer { watch.cancel() }
+        let run = try await FlowAttempt.$deadlines.withValue(deadlines) {
+            try await runnerRun("""
+                import fs from "node:fs";
+                export default defineFlow({ name: "outer-timeout", startAt: "a", nodes: {
+                  a: action({ timeoutMs: 60000, run: async ({ runShell, signal }) => {
+                    try {
+                      const term = \(scratch.js("term"));
+                      await runShell({ command: "/bin/sh", args: ["-c",
+                        `trap 'printf term > ${JSON.stringify(term)}' TERM; `
+                          + `printf ready > ${JSON.stringify(\(scratch.js("ready")))}; `
+                          + `while :; do sleep 0.1; done`] });
+                    } catch (error) {
+                      const report = { first: `${error.name}: ${error.message}`, aborted: signal.aborted };
+                      try {
+                        await runShell({ command: "/bin/sh", args: ["-c", "true"] });
+                        report.next = "dispatched";
+                      } catch (next) {
+                        report.next = `${next.name}: ${next.message}`;
+                      }
+                      fs.writeFileSync(\(scratch.js("report")), JSON.stringify(report));
+                      throw error;
+                    }
+                  } }),
+                  after: compute({ run: () => new Promise((resolve) => setTimeout(() => resolve(1), 300)) }) },
+                  edges: [{ from: "a", switch: { on: "$result.outcome", cases: { timed_out: "after" } } }] });
+                """)
+        }
         #expect(run.code == 0, "\(run.err)")
         #expect(member(run.state, "results", "a", "outcome") == .text("timed_out"))
-        #expect(scratch.read("report") == #"{"first":"TimeoutError: Timed out after 2000ms","aborted":true,"#
-            + #""next":"TimeoutError: Timed out after 2000ms"}"#)
+        #expect(scratch.read("report") == #"{"first":"TimeoutError: Timed out after 60000ms","aborted":true,"#
+            + #""next":"TimeoutError: Timed out after 60000ms"}"#)
         #expect(scratch.read("term") == "term")
     }
 
