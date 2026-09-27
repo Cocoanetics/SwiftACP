@@ -67,8 +67,10 @@ struct QuietMetadataTests {
         for format in ["quiet", "text", "json"] {
             let (out, err) = await withIsolatedStore {
                 let capture = Console.Capture()
-                _ = Console.$capture.withValue(capture) {
-                    runCommandLine(["--format", format, "--approve-all", "--agent", command, "exec", "hi"])
+                _ = await onThreadOfItsOwn {
+                    Console.$capture.withValue(capture) {
+                        runCommandLine(["--format", format, "--approve-all", "--agent", command, "exec", "hi"])
+                    }
                 }
                 return (capture.out, capture.err)
             }

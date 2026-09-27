@@ -10,7 +10,9 @@ import Testing
 /// wiring the daemon exposes: prompt turns return aggregate text, `newSession`
 /// persists a faithful record, and the read tools surface the store.
 ///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
+/// Serialized, though each test has a store of its own: the suite's tests — nearly two
+/// hundred, in the files that extend it — start agents and hold them to short deadlines,
+/// which all of them started at once overrun on a loaded machine.
 @Suite(.serialized) struct DaemonToolsTests {
     @Test(.enabled(if: mockPythonAvailable))
     func newSessionThenRunPromptReturnsAggregateText() async throws {

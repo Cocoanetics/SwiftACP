@@ -43,15 +43,12 @@ import Testing
         _ agent: String, in directory: URL, daemon: MCPServerConfig? = nil
     ) async -> Run {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(
-                            ["--agent", agent, "--cwd", directory.path, "--format", "quiet", "sessions", "new"])
-                    }
-                })
-            }.start()
+        let code = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--agent", agent, "--cwd", directory.path, "--format", "quiet", "sessions", "new"])
+                }
+            }
         }
         return Run(code: code, id: capture.out.trimmingCharacters(in: .whitespacesAndNewlines), err: capture.err)
     }

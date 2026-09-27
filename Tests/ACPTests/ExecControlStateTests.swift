@@ -28,11 +28,7 @@ struct ExecControlStateTests {
                          "exec"] + execOptions + ["hi"]
         let (code, err): (Int32, String) = await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-                }.start()
-            }
+            let code = await onThreadOfItsOwn { Console.$capture.withValue(capture) { runCommandLine(arguments) } }
             return (code, capture.err)
         }
         let selections = ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n")

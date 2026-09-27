@@ -7,9 +7,7 @@ import Testing
 /// the stored file as acpx's parser makes it. A file that parser rejects is no record
 /// at all (#77). The records and the output expected for them are the parser fixture's,
 /// which acpx 0.19.1 printed.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct StoredRecordTests {
+struct StoredRecordTests {
     private struct Case: Decodable {
         let name: String
         let raw: String

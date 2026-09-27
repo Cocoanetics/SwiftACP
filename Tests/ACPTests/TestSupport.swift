@@ -29,50 +29,39 @@ func mockArgv() -> [String]? {
     return [python, fixture.path]
 }
 
-/// Serializes ``withIsolatedStore`` bodies across the whole process. swift-testing
-/// runs different suites in parallel, but every store / daemon-lock test redirects
-/// the single process-wide ``ACPXPaths/baseDir``; without this gate two suites would
-/// interleave their redirects and point one suite's files at another's temp dir.
-private actor StoreIsolationGate {
-    static let shared = StoreIsolationGate()
-    private var locked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+/// From the first isolated store on, a read of the store outside every test's own finds a
+/// directory that cannot exist rather than the real `~/.acpx`: nothing is there, and
+/// nothing can be written there.
+private let unboundStoreFails: Void = {
+    ACPXPaths.processBaseDir = URL(fileURLWithPath: "/dev/null/no-isolated-store", isDirectory: true)
+}()
 
-    func lock() async {
-        if !locked {
-            locked = true
-            return
-        }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func unlock() {
-        if waiters.isEmpty {
-            locked = false
-        } else {
-            waiters.removeFirst().resume()
-        }
-    }
-}
-
-/// Run `body` with ``ACPXPaths/baseDir`` pointed at a fresh temp directory, so
-/// persistence never touches the real `~/.acpx`. Restores it afterwards, and
-/// serializes against every other `withIsolatedStore` call process-wide.
+/// Run `body` with a fresh temp directory as its task's ``ACPXPaths/baseDir``, so
+/// persistence never touches the real `~/.acpx`, and tests with stores of their own run
+/// side by side. A thread `body` starts is in the store only if given it
+/// (``onThreadOfItsOwn(_:)``).
 func withIsolatedStore<T>(_ body: () async throws -> T) async rethrows -> T {
-    await StoreIsolationGate.shared.lock()
-    defer { Task { await StoreIsolationGate.shared.unlock() } }
-    let original = ACPXPaths.baseDir
+    _ = unboundStoreFails
     let dir = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("acpx-test-\(UUID().uuidString)", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    ACPXPaths.baseDir = dir
-    defer {
-        ACPXPaths.baseDir = original
-        try? FileManager.default.removeItem(at: dir)
-    }
+    defer { try? FileManager.default.removeItem(at: dir) }
     // A turn waits a second past the agent's answer, as acpx's does; the tests have no
     // late updates to wait for, but those that do say so.
-    return try await TurnReplyDrain.$current.withValue(.forTests) { try await body() }
+    return try await ACPXPaths.$taskBaseDir.withValue(dir) {
+        try await TurnReplyDrain.$current.withValue(.forTests) { try await body() }
+    }
+}
+
+/// `body` on a thread of its own, in the calling test's store: a thread starts with none
+/// of its task's locals. The CLI blocks its thread until it is done (`runBlocking`); on
+/// one of the tasks' own threads, enough tests doing that at once would leave none to run
+/// the tasks they wait for.
+func onThreadOfItsOwn<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+    let store = ACPXPaths.taskBaseDir
+    return await withCheckedContinuation { continuation in
+        Thread { continuation.resume(returning: ACPXPaths.$taskBaseDir.withValue(store) { body() }) }.start()
+    }
 }
 
 extension ReplyDrain {

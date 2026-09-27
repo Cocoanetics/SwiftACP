@@ -8,9 +8,7 @@ import Testing
 /// the project/global ones for the invocation, resolves relative to the cwd, and
 /// becomes the session's own server set (`sessionMcpServers`) for records created
 /// under it.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct McpConfigLoaderTests {
+struct McpConfigLoaderTests {
     /// Env and header *values* are wire data: an empty one and one carrying
     /// significant whitespace must both survive verbatim. Only the name is trimmed and
     /// required (acpx 0.19.0; `parseString` vs `parseNonEmptyString`, issue #28).

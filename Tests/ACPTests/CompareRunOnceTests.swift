@@ -44,15 +44,12 @@ struct CompareRunOnceTests {
         let (code, out) = await withIsolatedStore {
             let capture = Console.Capture()
             // `compare` blocks its thread until it is done, as the CLI does: a thread of its own.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    let code = Console.$capture.withValue(capture) {
-                        Interrupts.$source.withValue(source) {
-                            DeadlineSource.$current.withValue(deadlines) { runCommandLine(arguments) }
-                        }
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    Interrupts.$source.withValue(source) {
+                        DeadlineSource.$current.withValue(deadlines) { runCommandLine(arguments) }
                     }
-                    continuation.resume(returning: code)
-                }.start()
+                }
             }
             return (code, capture.out)
         }

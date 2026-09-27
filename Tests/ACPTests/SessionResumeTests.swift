@@ -31,14 +31,12 @@ import Testing
         _ args: [String], agent: String, cwd: URL, daemon: MCPServerConfig? = nil
     ) async -> Run {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
         return Run(code: code, out: capture.out, err: capture.err)
     }

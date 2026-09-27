@@ -124,14 +124,12 @@ extension DaemonToolsTests {
 
     /// `acpx --approve-all --format quiet <args>`, with `daemon` the one running, if any: its exit code.
     private static func acpx(_ args: [String], daemon: MCPServerConfig? = nil) async -> Int32 {
-        await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(Console.Capture()) {
-                        runCommandLine(["--approve-all", "--format", "quiet"] + args)
-                    }
-                })
-            }.start()
+        await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(Console.Capture()) {
+                    runCommandLine(["--approve-all", "--format", "quiet"] + args)
+                }
+            }
         }
     }
 

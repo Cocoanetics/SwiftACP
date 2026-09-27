@@ -41,11 +41,7 @@ struct ExecTimeoutRetryTests {
             let capture = Console.Capture()
             // `exec` blocks its thread until it is done, as the CLI does; a thread of its own
             // keeps that off the tasks' pool, which other tests go on sharing.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-                }.start()
-            }
+            let code = await onThreadOfItsOwn { Console.$capture.withValue(capture) { runCommandLine(arguments) } }
             let prompts = (try? String(contentsOf: attempts, encoding: .utf8))?.split(separator: "\n").count ?? 0
             let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0) }
             return Run(out: capture.out, err: capture.err, code: code, attempts: prompts, pid: pid)

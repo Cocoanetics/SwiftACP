@@ -26,8 +26,8 @@ struct TerminalCommandTests {
         let command = "/usr/bin/env MOCK_TERMINAL='[\"echo\",\"hello\",\"terminal\"]' '\(python)' '\(fixture.path)'"
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code = Console.$capture.withValue(capture) {
-                runCommandLine(flags + ["--agent", command, "exec", "go"])
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) { runCommandLine(flags + ["--agent", command, "exec", "go"]) }
             }
             return Ran(code: code, out: capture.out)
         }

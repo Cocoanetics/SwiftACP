@@ -73,8 +73,7 @@ struct ExecInterruptTests {
     /// An agent gone before any prompt went out is reported, as acpx reports it: the
     /// connection closed, in its SDK's words. Should the prompt beat the agent's exit onto
     /// the wire, the run is the agent's disconnect instead, reported just as once (#778);
-    /// which comes first is up to the two processes, in acpx as here. One run a case: the
-    /// time limit counts the wait for the store, which a second run would queue for again.
+    /// which comes first is up to the two processes, in acpx as here.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["text", "quiet"])
     func anAgentGoneBeforeThePromptIsReported(format: String) async throws {
         let disconnect = "ACP agent disconnected during request (process_exit, exit=3, signal=null)"
@@ -137,13 +136,10 @@ struct ExecInterruptTests {
         return await withIsolatedStore {
             let capture = Console.Capture()
             // `exec` blocks its thread until it is done, as the CLI does: a thread of its own.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    let code = Console.$capture.withValue(capture) {
-                        Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(arguments) }
-                    }
-                    continuation.resume(returning: code)
-                }.start()
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(arguments) }
+                }
             }
             let prompts = (try? String(contentsOf: attempts, encoding: .utf8))?.split(separator: "\n").count ?? 0
             let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0) }

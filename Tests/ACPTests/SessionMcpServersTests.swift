@@ -9,9 +9,7 @@ import Testing
 /// persists the session's own server set, every reconnect replays it in place of the
 /// cwd's config-file servers, and `setSessionMcpServers` follows npm acpx's rule that
 /// a live session cannot switch MCP config.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct SessionMcpServersTests {
+struct SessionMcpServersTests {
     private static let own = McpServerConfig(
         name: "shot", command: "/usr/local/bin/shot-mcp", args: ["--run", "42"],
         env: [.init(name: "RUN_TOKEN", value: "secret")], meta: ["run": .string("42")])

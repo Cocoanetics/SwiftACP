@@ -121,12 +121,8 @@ struct AuthRequiredTests {
         let agent = (environment.isEmpty ? "" : "/usr/bin/env " + environment.joined(separator: " ") + " ") + command
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) {
-                        runCommandLine(["--agent", agent] + arguments)
-                    })
-                }.start()
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) { runCommandLine(["--agent", agent] + arguments) }
             }
             return Ran(out: capture.out, err: capture.err, code: code)
         }

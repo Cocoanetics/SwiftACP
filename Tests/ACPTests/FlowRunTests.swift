@@ -9,7 +9,7 @@ let nodeAvailable = AgentRegistry.which("node") != nil
 
 /// `flow run` as acpx 0.19.3 runs a flow of compute, function action and checkpoint
 /// nodes (#202): the flow's code in the Node host, the walk, the deadlines and the run
-/// bundle in Swift. These go through the CLI, under the process-wide store isolation;
+/// bundle in Swift. These go through the CLI, each in a store of its own;
 /// they are acpx's own `flow run` tests (`test/flows.test.ts`,
 /// `test/integration.test.ts`), and `theBundleIsWrittenAsAcpxWritesIt` compares a whole
 /// bundle with one acpx wrote. `FlowRunnerTests` has the cases the runner alone decides.
@@ -60,13 +60,10 @@ let nodeAvailable = AgentRegistry.which("node") != nil
         return await withIsolatedStore {
             let capture = Console.Capture()
             // `flow run` blocks its thread until it is done, as the CLI does: a thread of its own.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    let code = Console.$capture.withValue(capture) {
-                        Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(args) }
-                    }
-                    continuation.resume(returning: code)
-                }.start()
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(args) }
+                }
             }
             var run = Run(out: capture.out, err: capture.err, code: code)
             let runs = FlowRunner.runsBaseDir()

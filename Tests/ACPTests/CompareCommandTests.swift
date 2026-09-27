@@ -16,8 +16,10 @@ struct CompareCommandTests {
         let agent = "/usr/bin/env MOCK_TOOL_PERMISSION=1 '\(python)' '\(fixture.path)'"
         let (code, out) = await withIsolatedStore {
             let capture = Console.Capture()
-            let code = Console.$capture.withValue(capture) {
-                runCommandLine(["--format", "json"] + flags + ["compare", agent, "go"])
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--format", "json"] + flags + ["compare", agent, "go"])
+                }
             }
             return (code, capture.out)
         }
