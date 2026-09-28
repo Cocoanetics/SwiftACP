@@ -45,7 +45,9 @@ the options not reported.
 
 `RETRY_AGENT_SET_MODE_GATE`, in any mode, answers `session/set_mode` only once the file it
 names exists, having first written a byte to the FIFO `RETRY_AGENT_SET_MODE_SENT` names, if
-one is named.
+one is named. `RETRY_AGENT_SET_MODE_ANSWERED` names a file it then appends `gate open` to, as
+it sees the gate, and `answer sent`, once its answer is written: for a test whose control does
+not end to say which side stalled.
 
 `RETRY_AGENT_MODE_FILE` names a file whose text, read at launch, stands in for the
 mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
@@ -131,6 +133,12 @@ def signal_ready():
     if os.environ.get("RETRY_AGENT_READY"):
         with open(os.environ["RETRY_AGENT_READY"], "w") as ready:
             ready.write("x")
+
+
+def note_answer(step):
+    if os.environ.get("RETRY_AGENT_SET_MODE_ANSWERED"):
+        with open(os.environ["RETRY_AGENT_SET_MODE_ANSWERED"], "a") as notes:
+            notes.write(step + "\n")
 
 
 def prompt(req_id, session_id):
@@ -235,7 +243,9 @@ for line in sys.stdin:
                 sent.write("x")
         while not os.path.exists(os.environ["RETRY_AGENT_SET_MODE_GATE"]):
             time.sleep(0.01)
+        note_answer("gate open")
         send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+        note_answer("answer sent")
     elif method == "session/set_mode" and MODE == "refuse-set-mode":
         send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Invalid params"}})
     elif method == "session/set_mode" and MODE == "slow-set-mode":
