@@ -111,7 +111,7 @@ extension ACPXDaemonBackend {
                 if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
                     fullText += chunk
                 }
-                await persister.apply(note.update)
+                await persister.apply(note.update, raw: note.rawUpdate)
                 let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
                 await clientSession?.sendLogNotification(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
@@ -146,7 +146,7 @@ extension ACPXDaemonBackend {
     /// them for its result (`toPromptResult`) — and the answer's usage and cost.
     static func announceTheEnd(
         of response: PromptResponse, permissions: PermissionStats, result: PromptResultCapture,
-        as sessionId: String, to clientSession: Session?
+        as sessionId: String, to clientSession: Session?, loadError: String? = nil
     ) async {
         // No answer crossed the wire: the turn was cancelled before its prompt went out, or
         // between attempts at it — nothing marks it done.
@@ -156,7 +156,7 @@ extension ACPXDaemonBackend {
                 level: .info, logger: sessionId,
                 data: toJSONValue(TurnEndedEvent(
                     stopReason: response.stopReason.rawValue, permissions: permissions,
-                    usage: result.usage, cost: result.cost, unanswered: unanswered))))
+                    usage: result.usage, cost: result.cost, unanswered: unanswered, loadError: loadError))))
     }
 
     /// Start the turn's journal before connecting, as acpx's prompt does. A journal it

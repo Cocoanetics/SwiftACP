@@ -19,6 +19,8 @@ actor StopReasonBox {
     private(set) var cost: JSONValue?
     /// Whether the turn ended with no answer to its prompt (``TurnEndedEvent/unanswered``).
     private(set) var unanswered = false
+    /// Why the session could not be taken back, when a new one replaced it (``TurnEndedEvent/loadError``).
+    private(set) var loadError: String?
     /// Whether the turn's end came: its outcome, as acpx's CLI has it in the owner's `result`.
     private(set) var ended = false
     func set(_ ended: TurnEndedEvent) {
@@ -28,6 +30,7 @@ actor StopReasonBox {
         usage = ended.usage
         cost = ended.cost
         unanswered = ended.unanswered ?? false
+        loadError = ended.loadError
     }
 
     func fail(_ event: TurnFailedEvent) {
@@ -54,6 +57,8 @@ struct DaemonTurn {
     var unanswered = false
     /// The pid of the acpxd that ran the turn (``DaemonClient/ConnectedDaemon``).
     var ownerPid: Int32?
+    /// Why the session could not be taken back, when a new one replaced it (``TurnEndedEvent/loadError``).
+    var loadError: String?
 }
 
 /// Renders streamed session updates that arrive from the daemon as MCP log
@@ -155,21 +160,22 @@ enum DaemonClient {
     /// ``DaemonUnavailable`` if the daemon can't be reached or started (there is no
     /// fallback — the daemon is the single manager that owns the session).
     ///
-    /// - Parameter wait: when `false` (`--no-wait`), the daemon rejects the turn
-    ///   immediately if another turn is already running for the session, instead of
-    ///   queueing behind it.
+    /// - Parameter wait: when `false` (`--no-wait`), the call returns once the session's
+    ///   line has the prompt, which then runs on in the daemon, its output going to no one.
     ///
     /// The tool result is the agent's aggregate response text, which the CLI
     /// ignores (it streams the same output live via `renderer`). The stop reason
     /// arrives as a terminal ``TurnEndedEvent`` log notification, captured here.
     ///
     /// The turn carries this CLI's environment: a session no owner holds gets one started
-    /// over it, as acpx's CLI spawns a session's queue owner with its own (#222).
+    /// over it, as acpx's CLI spawns a session's queue owner with its own (#222) — and with
+    /// `client`, the `--no-fs`, `--no-terminal` and `--auth-policy` it builds its client with (#246).
     static func runPrompt(
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
         terminalOutputCeiling: Int? = nil, model: String? = nil, sessionOptions: PromptSessionOptions? = nil,
-        limits: PromptLimits? = nil, renderer: OutputRenderer
+        limits: PromptLimits? = nil, client: ClientOptions = ClientOptions(), renderer: OutputRenderer,
+        requestId: String? = nil
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let daemon = try await connectToDaemon(spawnIfNeeded: true) { proxy in
@@ -182,7 +188,9 @@ enum DaemonClient {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
             sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(
-                streamWire: renderer.streamsWireJSON, environment: ProcessInfo.processInfo.environment))
+                streamWire: renderer.streamsWireJSON, fs: client.fs, terminal: client.terminal,
+                authPolicy: client.authPolicy, environment: ProcessInfo.processInfo.environment,
+                requestId: requestId))
         turn.ownerPid = daemon.pid
         return turn
     }
@@ -225,7 +233,8 @@ enum DaemonClient {
         // result resumed this call; default defensively if it somehow wasn't.
         return DaemonTurn(
             stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions,
-            usage: await stopReason.usage, cost: await stopReason.cost, unanswered: await stopReason.unanswered)
+            usage: await stopReason.usage, cost: await stopReason.cost, unanswered: await stopReason.unanswered,
+            loadError: await stopReason.loadError)
     }
 
     /// Set a session's mode on the live agent via the daemon (which persists it). What
@@ -234,16 +243,20 @@ enum DaemonClient {
     /// terminal output by `terminalOutputCeiling`, as it does a turn's: `0` for none,
     /// so its own never stands in. An agent the daemon starts for it starts over this CLI's
     /// environment, as acpx's direct control starts its client in the CLI's process (#222).
+    ///
+    /// `client` is what an agent it starts for a session no owner holds is built with, as acpx
+    /// builds its direct control's client from the control's own flags (#246).
     static func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
-        timeoutMs: Int?, verbose: Bool = false
+        timeoutMs: Int?, verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         try await timingOut(after: timeoutMs) {
             try await withClient(logs: verbose ? AgentStderrLog() : nil) {
                 try await $0.setMode(
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                    environment: ProcessInfo.processInfo.environment, verbose: verbose)
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
+                    terminal: client.terminal, authPolicy: client.authPolicy)
             }
         }
     }
@@ -266,14 +279,15 @@ enum DaemonClient {
     /// answering and capping as ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:)``.
     static func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
-        timeoutMs: Int?, verbose: Bool = false
+        timeoutMs: Int?, verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         try await timingOut(after: timeoutMs) {
             try await withClient(logs: verbose ? AgentStderrLog() : nil) {
                 try await $0.setModel(
                     sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                    environment: ProcessInfo.processInfo.environment, verbose: verbose)
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
+                    terminal: client.terminal, authPolicy: client.authPolicy)
             }
         }
     }
@@ -284,7 +298,7 @@ enum DaemonClient {
     /// ``setMode(sessionId:modeId:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:)``.
     static func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, verbose: Bool = false
+        terminalOutputCeiling: Int?, timeoutMs: Int?, verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         try await timingOut(after: timeoutMs) {
             try await withClient(logs: verbose ? AgentStderrLog() : nil) {
@@ -292,9 +306,17 @@ enum DaemonClient {
                     sessionId: sessionId, configId: configId, value: value,
                     nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                    environment: ProcessInfo.processInfo.environment, verbose: verbose)
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
+                    terminal: client.terminal, authPolicy: client.authPolicy)
             }
         }
+    }
+
+    /// Under `--verbose`, acpx's line for a prompt or a control whose session had to start over:
+    /// it could not be taken back, and a new session replaced it — `loadError` says why.
+    static func noteFallback(_ loadError: String?, verbose: Bool) {
+        guard verbose, let loadError else { return }
+        Console.errLine("[acpx] session reconnect failed, started fresh session: \(loadError)")
     }
 
     /// A control the daemon ran under `timeoutMs`: one it failed as the timeout is the

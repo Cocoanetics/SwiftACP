@@ -369,8 +369,12 @@ def main():
                     # MOCK_LOAD_SESSION picks how `session/load` behaves (see below);
                     # only `unsupported` stops advertising it.
                     "loadSession": LOAD_MODE != "unsupported",
-                    # MOCK_CAN_CLOSE advertises `session/close`, which it answers with `{}`.
-                    **({"sessionCapabilities": {"close": {}}} if os.environ.get("MOCK_CAN_CLOSE") else {}),
+                    # MOCK_CAN_CLOSE advertises `session/close`, which it answers with `{}`;
+                    # MOCK_LIST_REPLY advertises `session/list`, which it answers with that JSON.
+                    **({"sessionCapabilities": {
+                        **({"close": {}} if os.environ.get("MOCK_CAN_CLOSE") else {}),
+                        **({"list": {}} if os.environ.get("MOCK_LIST_REPLY") else {})}}
+                       if os.environ.get("MOCK_CAN_CLOSE") or os.environ.get("MOCK_LIST_REPLY") else {}),
                     "promptCapabilities": {
                         "image": bool(os.environ.get("MOCK_IMAGE_CAPABLE")),
                         "audio": False,
@@ -401,6 +405,10 @@ def main():
             if os.environ.get("MOCK_NEW_META"):
                 result["_meta"] = json.loads(os.environ["MOCK_NEW_META"])
             respond(req_id, result)
+        elif method == "session/list" and os.environ.get("MOCK_LIST_REPLY"):
+            # Written as given, members in their order.
+            sys.stdout.write('{"jsonrpc":"2.0","id":%s,"result":%s}\n' % (json.dumps(req_id), os.environ["MOCK_LIST_REPLY"]))
+            sys.stdout.flush()
         elif method == "session/close" and os.environ.get("MOCK_CAN_CLOSE"):
             respond(req_id, {})
         elif method == "session/load" and LOAD_MODE != "unsupported":

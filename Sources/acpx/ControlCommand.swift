@@ -67,7 +67,7 @@ enum ControlCommand {
                 return try await DaemonClient.setMode(
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: flags.nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
-                        verbose: flags.verbose)
+                    verbose: flags.verbose, client: flags.clientOptions)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
@@ -75,6 +75,7 @@ enum ControlCommand {
         if flags.verbose, let pid = result.ownerPid {
             DaemonClient.noteOwner("requested session/set_mode on owner pid", pid: pid, recordId: record.acpxRecordId)
         }
+        DaemonClient.noteFallback(result.loadError, verbose: flags.verbose)
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
         printSetMode(modeId: modeId, resumed: result.resumed, record: updated, format: flags.format)
@@ -131,13 +132,13 @@ enum ControlCommand {
                         sessionId: sessionId, modelId: value,
                         nonInteractivePermissions: flags.nonInteractivePermissions,
                         terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
-                        verbose: flags.verbose)
+                        verbose: flags.verbose, client: flags.clientOptions)
                 case .configOption(let configId):
                     return try await DaemonClient.setConfigOption(
                         sessionId: sessionId, configId: configId, value: value,
                         nonInteractivePermissions: flags.nonInteractivePermissions,
                         terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
-                        verbose: flags.verbose)
+                        verbose: flags.verbose, client: flags.clientOptions)
                 }
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
@@ -149,6 +150,7 @@ enum ControlCommand {
                 ? "requested a model config update on owner pid" : "requested session/set_config_option on owner pid"
             DaemonClient.noteOwner(said, pid: pid, recordId: record.acpxRecordId)
         }
+        DaemonClient.noteFallback(result.loadError, verbose: flags.verbose)
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
         switch operation {

@@ -16,6 +16,9 @@ enum Commander {
         /// The options as commander emits them, in command-line order: each
         /// `option:<name>` event with its raw value (none for a flag).
         var events: [(name: String, value: String?)] = []
+        /// The words after a `--` given to this command, which are its operands too — `nil`
+        /// without one. acpx's `compare` takes them as its prompt (`scanCompareArgs`).
+        var separated: [String]?
     }
 
     /// What the command line asks for.
@@ -165,6 +168,7 @@ enum Commander {
 
             if arg == "--" {
                 if toUnknown { parsed.unknown.append(arg) }
+                level.separated = Array(args[index...])
                 place(args[index...])
                 break
             }

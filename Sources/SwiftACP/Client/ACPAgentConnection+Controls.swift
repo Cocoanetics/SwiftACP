@@ -38,6 +38,12 @@ extension ACPAgentConnection {
         let _: EmptyResponse = try await send("session/close", request)
     }
 
+    /// `session/list` (unstable): the agent's answer as it is, which ACP leaves loosely shaped
+    /// and acpx prints as it comes.
+    public func listSessions(_ request: ListSessionsRequest) async throws -> JSONValue {
+        try await send("session/list", request)
+    }
+
     /// Send a control whose answer can arrive before the answers to what the agent asked
     /// of the client meanwhile. Those of them a prompt would own are answered before this
     /// returns: afterwards they would be handled under whatever handlers the next caller

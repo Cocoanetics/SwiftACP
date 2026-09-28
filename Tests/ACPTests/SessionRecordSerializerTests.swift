@@ -81,7 +81,7 @@ struct SessionRecordSerializerTests {
                 let text = try String(contentsOf: url, encoding: .utf8)
                 let file = try #require(WireJSON(parsing: Data(text.utf8)))
                 let acpxFields = file["acpx"].map {
-                    file.replacing("acpx", with: $0.removing("mcp_servers").removing("client_capabilities"))
+                    file.replacing("acpx", with: $0.removing("mcp_servers"))
                 } ?? file
                 let expected = testCase.disk?.replacingOccurrences(of: "/ACPX-HOME/.acpx/sessions", with: sessionsDir)
                 #expect(acpxFields.stringified(indent: 2) + "\n" == expected, "\(testCase.name)")
