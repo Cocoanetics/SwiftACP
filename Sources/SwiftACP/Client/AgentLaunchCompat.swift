@@ -26,6 +26,11 @@ enum AgentLaunchCompat {
         token(command) == "qodercli" && arguments.contains("--acp")
     }
 
+    /// acpx's `isClaudeAcpCommand`: Claude's adapter, run directly or through a package runner.
+    static func isClaude(_ command: String, _ arguments: [String]) -> Bool {
+        token(command) == "claude-agent-acp" || arguments.contains { $0.contains("claude-agent-acp") }
+    }
+
     /// acpx's `isDevinAcpCommand`.
     static func isDevin(_ command: String, _ arguments: [String]) -> Bool {
         token(command) == "devin"
@@ -39,11 +44,16 @@ enum AgentLaunchCompat {
     /// An agent's launch as acpx adapts it (`resolveAgentLaunchPlan`, `ensureLaunchSupport`,
     /// `initializeProtocolConnection`): what it says of itself as it initializes, and the check
     /// it passes before it is spawned.
-    struct Plan {
+    struct Plan: Sendable {
         var clientInfo: Implementation
         var capabilities: ClientCapabilities
+        /// How long Gemini's `initialize` may take, in milliseconds; none for any other agent.
+        let initializeLimit: Int?
+        /// How long Claude's adapter may take to answer `session/new`; none for any other agent.
+        let sessionCreateLimit: Int?
         private let copilot: Bool
         private let command: String
+        private let agentEnvironment: [String: String]
         private let probe: Probe
 
         /// `spec`'s arguments adapted — Gemini's ACP flag, Qoder's session limits — and Devin
@@ -65,14 +75,101 @@ enum AgentLaunchCompat {
                 self.capabilities.meta = devinMeta(merging: capabilities.meta)
             }
             copilot = isCopilot(spec.executable, spec.arguments)
+            initializeLimit = isGemini(spec.executable, spec.arguments)
+                ? startupMilliseconds(callerEnvironment["ACPX_GEMINI_ACP_STARTUP_TIMEOUT_MS"], fallback: 15_000) : nil
+            sessionCreateLimit = isClaude(spec.executable, spec.arguments)
+                ? startupMilliseconds(callerEnvironment["ACPX_CLAUDE_ACP_SESSION_CREATE_TIMEOUT_MS"], fallback: 60_000)
+                : nil
             command = spec.executable
+            agentEnvironment = spec.environment ?? ProcessInfo.processInfo.environment
             self.probe = probe
+        }
+
+        /// `operation` — the agent's `initialize` — within Gemini's limit, as acpx's
+        /// `initializeProtocolConnection` caps it; past it, ``StartupTimedOut``.
+        func initializing<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+            guard let initializeLimit else { return try await operation() }
+            return try await within(initializeLimit, operation)
+        }
+
+        /// What a Gemini that did not get through `initialize` in time fails with, once it is
+        /// gone (acpx's `handleInitializeFailure`); `nil` for any other failure.
+        func startupFailure(_ error: Error) async -> Error? {
+            guard initializeLimit != nil, error is StartupTimedOut else { return nil }
+            return GeminiAcpStartupTimeoutError(
+                message: await geminiStartupTimeoutMessage(command, agentEnvironment: agentEnvironment, probe: probe))
         }
 
         /// acpx's `ensureLaunchSupport`: Copilot's CLI must have an ACP mode.
         func ensureSupported() async throws {
             if copilot { try await ensureCopilotSupport(command, probe: probe) }
         }
+    }
+
+    // MARK: Startup limits
+
+    /// A limit acpx's `withTimeout` reached before what it waited for came.
+    struct StartupTimedOut: Error {
+        let milliseconds: Int
+    }
+
+    /// The limit acpx's `resolveGeminiAcpStartupTimeoutMs` and `resolveClaudeAcpSessionCreateTimeoutMs`
+    /// read from `raw`, as `withTimeout` then sets it: `fallback` unless `Number` reads a positive,
+    /// finite number; `Math.round` of it; none when that is 0 (`withTimeout` waits without one);
+    /// 1 ms past Node's timer maximum, as `setTimeout` takes it.
+    static func startupMilliseconds(_ raw: String?, fallback: Int) -> Int? {
+        guard let raw else { return fallback }
+        let parsed = JavaScriptNumber.parse(raw)
+        guard parsed.isFinite, parsed > 0 else { return fallback }
+        let rounded = (parsed + 0.5).rounded(.down)
+        guard rounded > 0 else { return nil }
+        return rounded > Double(JavaScriptNumber.maxTimerDelayMs) ? 1 : Int(rounded)
+    }
+
+    /// `operation`'s result, or ``StartupTimedOut`` once `milliseconds` pass first — acpx's
+    /// `withTimeout`, its timer firing on a queue of its own. Like a promise, the operation goes on;
+    /// what it waits for ends with the agent.
+    static func within<T: Sendable>(
+        _ milliseconds: Int, _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let first = FirstOutcome<T>()
+        let task = Task {
+            do {
+                first.settle(.success(try await operation()))
+            } catch {
+                first.settle(.failure(error))
+            }
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                first.wait(continuation)
+                DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(milliseconds)) {
+                    first.settle(.failure(StartupTimedOut(milliseconds: milliseconds)))
+                }
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    /// acpx's `buildGeminiAcpStartupTimeoutMessage`: what Gemini's version and the agent's
+    /// environment say of why it stalled.
+    static func geminiStartupTimeoutMessage(
+        _ command: String, agentEnvironment: [String: String], probe: Probe
+    ) async -> String {
+        var parts = [
+            "Gemini CLI ACP startup timed out before initialize completed.",
+            "This usually means the local Gemini CLI is waiting on interactive OAuth or has incompatible "
+                + "ACP subprocess behavior."
+        ]
+        if let version = geminiVersion(in: await probe(command, ["--version"], 2_000)) {
+            parts.append("Detected Gemini CLI version: \(version.raw).")
+        }
+        if (agentEnvironment["GEMINI_API_KEY"] ?? "").isEmpty, (agentEnvironment["GOOGLE_API_KEY"] ?? "").isEmpty {
+            parts.append("No GEMINI_API_KEY or GOOGLE_API_KEY was set for non-interactive auth.")
+        }
+        parts.append("Try upgrading Gemini CLI and using API-key-based auth for non-interactive ACP runs.")
+        return parts.joined(separator: " ")
     }
 
     // MARK: Gemini
@@ -228,6 +325,55 @@ public struct SessionLimits: Equatable, Sendable {
     public init(maxTurns: Int? = nil, allowedTools: [String]? = nil) {
         self.maxTurns = maxTurns
         self.allowedTools = allowedTools
+    }
+}
+
+/// The first of an operation's result and its limit, handed to whoever waits for it.
+private final class FirstOutcome<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: Result<T, Error>?
+    private var waiter: CheckedContinuation<T, Error>?
+
+    func settle(_ result: Result<T, Error>) {
+        let waiting: CheckedContinuation<T, Error>? = lock.withLock {
+            guard outcome == nil else { return nil }
+            outcome = result
+            defer { waiter = nil }
+            return waiter
+        }
+        waiting?.resume(with: result)
+    }
+
+    func wait(_ continuation: CheckedContinuation<T, Error>) {
+        let settled: Result<T, Error>? = lock.withLock {
+            if outcome == nil { waiter = continuation }
+            return outcome
+        }
+        if let settled { continuation.resume(with: settled) }
+    }
+}
+
+/// acpx's `GeminiAcpStartupTimeoutError`: Gemini's CLI did not get through `initialize` in time.
+public struct GeminiAcpStartupTimeoutError: Error, LocalizedError, Equatable, Sendable {
+    public let message: String
+
+    public init(message: String) {
+        self.message = message
+    }
+
+    public var errorDescription: String? { message }
+}
+
+/// acpx's `ClaudeAcpSessionCreateTimeoutError`: Claude's adapter did not answer `session/new` in time.
+public struct ClaudeAcpSessionCreateTimeoutError: Error, LocalizedError, Equatable, Sendable {
+    public init() {}
+
+    public var errorDescription: String? {
+        "Claude ACP session creation timed out before session/new completed. "
+            + "This matches the known persistent-session stall seen with some Claude Code and "
+            + "@agentclientprotocol/claude-agent-acp combinations. "
+            + "In harnessed or non-interactive runs, prefer --approve-all with nonInteractivePermissions=deny, "
+            + "upgrade Claude Code and the Claude ACP adapter, or use acpx claude exec as a one-shot fallback."
     }
 }
 
