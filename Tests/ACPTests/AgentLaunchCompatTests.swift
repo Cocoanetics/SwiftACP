@@ -9,7 +9,7 @@ import Testing
 /// name of its command and its arguments (#248): Gemini's ACP flag by its version, Copilot's ACP
 /// mode checked before it starts, Qoder given the session's limits on its command line, and Devin
 /// met as the Windsurf client whose diagnostics it asks for.
-@Suite struct AgentLaunchCompatTests {
+@Suite(.serialized, .agentLane) struct AgentLaunchCompatTests {
     // MARK: The rules
 
     @Test func theAgentIsKnownByItsCommandsBaseNameAndArguments() {
@@ -172,7 +172,7 @@ import Testing
         let copilot = try Self.fakeCLI(
             "copilot", in: directory, help: "Usage: copilot [options]", environment: ["MOCK_ARGV_LOG": argv.path])
         let run = await withIsolatedStore {
-            CLIParityTests.run([
+            await CLIParityTests.run([
                 "--approve-all", "--format", "json", "--cwd", directory.path,
                 "--agent", "'\(copilot)' --acp --stdio", "exec", "hi"
             ])
