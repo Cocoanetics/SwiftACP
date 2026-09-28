@@ -42,10 +42,13 @@ extension ACPXDaemonBackend {
     /// the caller, with acpx's own lines — its client's log, whether the saved agent still runs,
     /// each preference put back — as acpx's direct control writes them in the CLI's process. An
     /// owner's control shows none: acpx's owner runs it, and its stderr is not the CLI's (#221).
+    /// So with what the agent is offered and how it signs in: a direct control's by its `client`,
+    /// as acpx builds its client from the control's `--no-fs`, `--no-terminal` and
+    /// `--auth-policy`; an owner's, as the prompt that started the owner asked (#246).
     func withSessionTurn<T: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
         terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
-        _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
+        client: ClientOptions = ClientOptions(), _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
     ) async throws -> ControlOutcome<T> {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
@@ -71,13 +74,15 @@ extension ACPXDaemonBackend {
         defer { deadline?.settle() }
         let step = direct ? timeout : nil
         let stderr = direct && verbose ? AgentStderrRelay() : nil
+        let connecting = direct ? client : owners[recordId]?.client ?? ClientOptions()
         do {
             let (value, resumed) = try await relayingStderr(stderr, logger: recordId) {
                 try await control(
                     current, direct: direct, replacing: replacing, deadline: deadline, step: step,
                     settings: CallerSettings(
                         handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
-                        stderr: stderr, environment: direct ? environment : owners[recordId]?.environment),
+                        capabilities: .acpx(connecting), authPolicy: connecting.authPolicy, stderr: stderr,
+                        environment: direct ? environment : owners[recordId]?.environment),
                     body)
             }
             return ControlOutcome(value: value, resumed: resumed, owned: !direct)

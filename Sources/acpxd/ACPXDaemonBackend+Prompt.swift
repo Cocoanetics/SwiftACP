@@ -46,8 +46,9 @@ extension ACPXDaemonBackend {
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
-        fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil,
-        verbose: Bool = false, environment: [String: String]? = nil, requestId: String? = nil
+        fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
+        callerConfig: CallerConfig? = nil, verbose: Bool = false, environment: [String: String]? = nil,
+        requestId: String? = nil
     ) async throws -> String {
         // acpx's `--no-wait`: queued as any prompt, the call over once the owner's line has it (#239).
         guard wait || direct else {
@@ -57,8 +58,8 @@ extension ACPXDaemonBackend {
                     permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                     streamWire: streamWire, permissionPolicy: permissionPolicy,
                     terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
-                    fs: fs, authPolicy: authPolicy, turnToken: turnToken, callerConfig: callerConfig,
-                    verbose: verbose, environment: environment, requestId: requestId)
+                    fs: fs, terminal: terminal, authPolicy: authPolicy, turnToken: turnToken,
+                    callerConfig: callerConfig, verbose: verbose, environment: environment, requestId: requestId)
             }
         }
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -117,9 +118,8 @@ extension ACPXDaemonBackend {
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
-        if !direct {
-            turnStarts(recordId, ttlMs: limits?.ttlMs, environment: environment, queueMaxDepth: limits?.queueMaxDepth)
-        }
+        let own = ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy)
+        if !direct { turnStarts(recordId, limits: limits, environment: environment, client: own) }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
@@ -138,9 +138,6 @@ extension ACPXDaemonBackend {
             if direct { await evict(recordId) }
             return await Self.endedCancelled(as: record.acpSessionId)
         }
-        let agentCommand = record.agentCommand
-        let cwd = record.cwd
-        let mcpServers = record.acpx?.mcpServers
         // Whether this turn starts on a connection the daemon already holds — the only
         // case in which a session-gone failure can mean the agent dropped the session
         // from under it (see the retry below).
@@ -167,15 +164,18 @@ extension ACPXDaemonBackend {
         let errors = TurnErrorWatch()
         let trimmedModel = sessionOptions?.model?.javaScriptTrimmed
         let requestedModel = trimmedModel?.isEmpty == false ? trimmedModel : nil
+        // What an agent the turn connects is offered, and how it signs in: a direct turn's own, as
+        // acpx's flow runner gives them every client it makes; a queued one's, the owner's (#246).
+        let client = direct ? own : owners[recordId]?.client ?? own
         let turn = Turn(
-            id: control.id, recordId: recordId, agentCommand: agentCommand, cwd: cwd, mcpServers: mcpServers,
-            blocks: content, model: requestedModel,
+            id: control.id, recordId: recordId, agentCommand: record.agentCommand, cwd: record.cwd,
+            mcpServers: record.acpx?.mcpServers, blocks: content, model: requestedModel,
             sessionOptions: SessionAcpxState.SessionOptions(turnModel: requestedModel, sessionOptions),
-            permissions: permissions,
-            terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
-            persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
-            ticket: started.ticket, capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
-            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose),
+            permissions: permissions, terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout,
+            promptRetries: retries, persister: persister, eventBuffer: eventBuffer, streamWire: streamWire,
+            errors: errors, direct: direct, ticket: started.ticket, capabilities: .acpx(client),
+            authPolicy: client.authPolicy, callerConfig: callerConfig,
+            stderr: stderrRelay(for: recordId, verbose: verbose),
             environment: direct ? environment : owners[recordId]?.environment)
         return try await runAttempts(turn, wasHeld: wasHeld, ownedAt: ownedAt)
     }
@@ -228,8 +228,8 @@ extension ACPXDaemonBackend {
         /// The controls the turn takes as it runs: a queued turn's ticket. A direct turn has
         /// none, and leaves the ticket of a prompt queued behind it alone (#229 review).
         let ticket: PromptControlTicket?
-        /// What an agent the turn connects is offered; `nil`, what the session was made with.
-        let capabilities: SwiftACP.ClientCapabilities?
+        /// What an agent the turn connects is offered.
+        let capabilities: SwiftACP.ClientCapabilities
         /// How an agent the turn connects signs in; `nil`, as configured.
         let authPolicy: String?
         /// The config an agent the turn connects is started with; `nil`, the session's cwd's.

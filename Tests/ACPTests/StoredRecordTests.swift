@@ -70,17 +70,14 @@ import Testing
         }
     }
 
-    /// SwiftACP's own restrictions fail closed when they do not read — the fields
-    /// themselves, or the whole `acpx` block they live in: no client capabilities
-    /// rather than the defaults, and no MCP servers rather than the config file's. The
+    /// SwiftACP's own restriction fails closed when it does not read — the field itself, or
+    /// the whole `acpx` block it lives in: no MCP servers rather than the config file's. The
     /// record itself is still read, as acpx reads it.
     @Test func anUnreadableRestrictionFailsClosed() async throws {
         let unreadable = try Self.fixtureCase("acpx own field unreadable")
         try await withIsolatedStore {
             try Self.store(unreadable.raw, cwd: try Self.workingDirectory())
             let record = try #require(SessionStore.loadRecord("rec-1"))
-            #expect(record.acpx?.clientCapabilities
-                == .init(readTextFile: false, writeTextFile: false, terminal: false))
             #expect(record.acpx?.mcpServers?.isEmpty == true)
         }
         for name in ["acpx not an object", "acpx null"] {
@@ -88,8 +85,6 @@ import Testing
             try await withIsolatedStore {
                 try Self.store(whole.raw, cwd: try Self.workingDirectory())
                 let record = try #require(SessionStore.loadRecord("rec-1"), "\(name)")
-                #expect(record.acpx?.clientCapabilities
-                    == .init(readTextFile: false, writeTextFile: false, terminal: false), "\(name)")
                 #expect(record.acpx?.mcpServers?.isEmpty == true, "\(name)")
             }
         }
@@ -97,7 +92,6 @@ import Testing
         try await withIsolatedStore {
             try Self.store(absent.raw, cwd: try Self.workingDirectory())
             let record = try #require(SessionStore.loadRecord("rec-1"))
-            #expect(record.acpx?.clientCapabilities == nil)
             #expect(record.acpx?.mcpServers == nil)
         }
     }

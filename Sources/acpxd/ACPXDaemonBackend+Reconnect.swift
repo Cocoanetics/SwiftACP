@@ -103,11 +103,10 @@ extension ACPXDaemonBackend {
         // injected `auth` credentials / auth policy (and config-alias resolution) the CLI applies.
         let config = try Self.config(settings.callerConfig, cwd: cwd, ownMcpServers: sessionSpecs != nil)
         let specs = try sessionSpecs ?? config.mcpServerSpecs()
-        // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
-        // the record carries them, so every reconnect advertises what the session was
-        // created with rather than the defaults.
+        // What the caller offers — a turn's owner's, a direct turn's or control's own, as acpx
+        // builds each client from its own flags: the record keeps none of it (#246).
         let record = findRecord(recordId)
-        let capabilities = settings.capabilities ?? record?.acpx?.clientCapabilities?.advertised ?? .acpx
+        let capabilities = settings.capabilities ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = turnAcpx ?? record?.acpx
@@ -263,7 +262,7 @@ extension ACPXDaemonBackend {
         var terminalOutputCeiling: Int?
         var timeoutMilliseconds: Int?
         var sameSessionOnly = false
-        /// What the agent is offered, when the caller says (a flow's turn); else the record's.
+        /// What the agent is offered, when the caller says; else acpx's own.
         var capabilities: SwiftACP.ClientCapabilities?
         /// How the agent signs in, when the caller says (a flow's turn); else as configured.
         var authPolicy: String?

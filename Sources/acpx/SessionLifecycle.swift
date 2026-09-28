@@ -91,7 +91,8 @@ enum SessionLifecycle {
             do {
                 return try await DaemonClient.setModel(
                     sessionId: recordId, modelId: model, nonInteractivePermissions: flags.nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs, verbose: flags.verbose)
+                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs, verbose: flags.verbose,
+                    client: flags.clientOptions)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
