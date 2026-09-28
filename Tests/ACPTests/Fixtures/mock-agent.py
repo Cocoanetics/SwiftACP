@@ -105,6 +105,11 @@ def log_request(message):
     if path and message.get("method", "").startswith("session/"):
         with open(path, "a", encoding="utf-8") as output:
             output.write(json.dumps(message) + "\n")
+    # MOCK_WIRE_LOG: every message the client sends, its requests and its answers alike.
+    wire = os.environ.get("MOCK_WIRE_LOG")
+    if wire:
+        with open(wire, "a", encoding="utf-8") as output:
+            output.write(json.dumps(message) + "\n")
 
 
 def prompt_text(params):
@@ -322,6 +327,9 @@ def main():
             session_update(terminal_session, {
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after the terminal"}})
             continue
+        if method is None and req_id == "mock-diagnostics" and "new" in pending_fs:
+            respond(pending_fs.pop("new"), {"sessionId": SESSION_ID})
+            continue
         if method is None and req_id == "mock-new-ask" and "new" in pending_fs:
             with open(os.environ["MOCK_ASK_AT_NEW"], "w", encoding="utf-8") as output:
                 output.write(json.dumps(message.get("result", message.get("error"))))
@@ -387,6 +395,12 @@ def main():
         elif method == "session/new" and os.environ.get("MOCK_NEW_ERROR"):
             # MOCK_NEW_ERROR: the JSON-RPC error (JSON) to answer `session/new` with.
             send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["MOCK_NEW_ERROR"])})
+        elif method == "session/new" and os.environ.get("MOCK_DIAGNOSTICS") and "new" not in pending_fs:
+            # MOCK_DIAGNOSTICS: Devin's diagnostics request before `session/new` is answered, the
+            # session opened once the client has answered it (MOCK_REQUEST_LOG has the answer).
+            pending_fs["new"] = req_id
+            send({"jsonrpc": "2.0", "id": "mock-diagnostics", "method": "_cognition.ai/request_diagnostics",
+                  "params": {"reason": "probe"}})
         elif method == "session/new" and os.environ.get("MOCK_ASK_AT_NEW") and "new" not in pending_fs:
             # MOCK_ASK_AT_NEW=<path>: a permission question before `session/new` is answered;
             # the client's answer goes to the path, then the session is opened.

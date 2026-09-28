@@ -32,6 +32,9 @@ struct GlobalFlags {
     var approveAll: Bool
     var approveReads: Bool
     var denyAll: Bool
+
+    /// The turns and tools `--max-turns` and `--allowed-tools` limit an agent to, for its launch (#248).
+    var sessionLimits: SessionLimits { SessionLimits(maxTurns: maxTurns, allowedTools: allowedTools) }
 }
 
 /// Resolved agent invocation (name + command + absolute cwd).

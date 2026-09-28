@@ -120,6 +120,7 @@ public final class ACPAgent: Sendable {
         overrides: [String: String] = [:],
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         terminalEnvironment: [String: String]? = nil,
+        limits: SessionLimits? = nil,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil,
         onStderr: RawWireTap.StderrObserver? = nil,
@@ -137,9 +138,14 @@ public final class ACPAgent: Sendable {
             for: capabilities, cwd: cwd, ceiling: terminalOutputCeiling, environment: terminalEnvironment)
         // Read when the client starts, before anything else: a bad value is refused.
         let maxMessageBytes = try AcpMessageLimit.bytes()
-        let spec = try AgentRegistry.launch(
+        var spec = try AgentRegistry.launch(
             for: name, argv: argv, cwd: cwd, environment: effectiveEnvironment,
             inheritStderr: inheritStderr, overrides: overrides)
+        // Adapted to the agent as acpx adapts it (#248): `limits` are the session's, which Qoder
+        // takes on its command line.
+        let plan = await AgentLaunchCompat.Plan(
+            &spec, limits: limits, clientInfo: clientInfo, capabilities: capabilities,
+            callerEnvironment: terminalEnvironment ?? ProcessInfo.processInfo.environment, probe: probe(for: spec))
         let agentCommand = failureName(agent: name, argv: argv, overrides: overrides)
         // Tapped from the start, so an observer given here sees the handshake too — and
         // whatever the agent writes to stderr as it starts, and what the client notes of it,
@@ -148,6 +154,7 @@ public final class ACPAgent: Sendable {
         rawWire.onStderr(onStderr)
         rawWire.onLog(onLog)
         rawWire.log("spawning agent: \(spec.executable) \(spec.arguments.joined(separator: " "))")
+        try await plan.ensureSupported()
         // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
         // here so the failure names the command instead of surfacing as an opaque
         // subprocess error once the handshake times out.
@@ -163,7 +170,7 @@ public final class ACPAgent: Sendable {
         if let onClientRequest { await connection.setClientRequestObserver(onClientRequest) }
         do {
             let info = try await connection.initialize(
-                capabilities: capabilities, clientInfo: clientInfo)
+                capabilities: plan.capabilities, clientInfo: plan.clientInfo)
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
                 authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment,
@@ -277,6 +284,21 @@ public final class ACPAgent: Sendable {
         return AgentRegistry.command(for: name, overrides: overrides) ?? name
     }
 
+    /// How the launch asks a helper command something (``CommandProbe``): in the agent's
+    /// directory and environment. Where agents are not spawned as child processes, it hears nothing.
+    static func probe(for spec: ProcessLaunch) -> AgentLaunchCompat.Probe {
+        #if os(macOS) || os(Linux)
+        let directory = spec.workingDirectory ?? FileManager.default.currentDirectoryPath
+        let environment = spec.environment
+        return { command, arguments, timeout in
+            await CommandProbe.output(
+                of: command, arguments, cwd: directory, environment: environment, timeoutMilliseconds: timeout)
+        }
+        #else
+        return { _, _, _ in nil }
+        #endif
+    }
+
     /// Convenience that builds standard handlers from a permission policy. Writes
     /// the agent asks for are gated by it too — see ``WriteApproval`` — with
     /// `nonInteractivePermissions` deciding what a write needing confirmation does
@@ -297,6 +319,7 @@ public final class ACPAgent: Sendable {
         overrides: [String: String] = [:],
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         terminalEnvironment: [String: String]? = nil,
+        limits: SessionLimits? = nil,
         onClientRequest: (@Sendable (String) -> Void)? = nil,
         onRawWire: RawWireTap.Observer? = nil,
         onStderr: RawWireTap.StderrObserver? = nil,
@@ -310,8 +333,8 @@ public final class ACPAgent: Sendable {
             clientInfo: clientInfo, capabilities: capabilities, environment: environment,
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
-            terminalEnvironment: terminalEnvironment, onClientRequest: onClientRequest, onRawWire: onRawWire,
-            onStderr: onStderr, onLog: onLog)
+            terminalEnvironment: terminalEnvironment, limits: limits, onClientRequest: onClientRequest,
+            onRawWire: onRawWire, onStderr: onStderr, onLog: onLog)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.

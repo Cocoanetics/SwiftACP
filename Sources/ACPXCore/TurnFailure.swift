@@ -135,6 +135,15 @@ extension AcpMessageLimitError: OutputErrorMeta {
     public var retryable: Bool? { false }
 }
 
+/// acpx's `CopilotAcpUnsupportedError`: the installed `copilot` has no ACP mode, which no retry
+/// will change (#248).
+extension CopilotAcpUnsupportedError: OutputErrorMeta {
+    public var outputCode: String? { "RUNTIME" }
+    public var detailCode: String? { "COPILOT_ACP_UNSUPPORTED" }
+    public var origin: String? { "acp" }
+    public var retryable: Bool? { false }
+}
+
 /// acpx's `UnsupportedPromptContentError`: a usage error, which exits 2.
 extension UnsupportedPromptContentError: OutputErrorMeta {
     public var outputCode: String? { "USAGE" }

@@ -56,7 +56,7 @@ extension CompareCommand {
                         agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd, permission: job.permission,
                         nonInteractivePermissions: flags.nonInteractivePolicy, permissionRules: job.permissionRules,
                         capabilities: flags.clientCapabilities, authCredentials: job.config.auth,
-                        authPolicy: flags.authPolicy, inheritStderr: flags.verbose,
+                        authPolicy: flags.authPolicy, inheritStderr: flags.verbose, limits: flags.sessionLimits,
                         onRawWire: { capture.answer.observe($0, $1) }, onLog: flags.clientLog)
                 }
             }

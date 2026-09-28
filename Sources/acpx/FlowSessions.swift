@@ -59,7 +59,7 @@ struct FlowAgentSessions: FlowSessionRunner {
                 agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd, permission: permission,
                 nonInteractivePermissions: flags.nonInteractivePolicy, permissionRules: rules,
                 capabilities: capabilities, authCredentials: config.auth, authPolicy: flags.authPolicy,
-                inheritStderr: flags.verbose,
+                inheritStderr: flags.verbose, limits: flags.sessionLimits,
                 onRawWire: { direction, body in
                     guard let message = WireJSON(parsing: body) else { return }
                     errors.observe(message, inbound: direction == .inbound)

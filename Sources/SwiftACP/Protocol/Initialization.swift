@@ -24,10 +24,19 @@ public struct Implementation: Codable, Hashable, Sendable {
 public struct ClientCapabilities: Codable, Hashable, Sendable {
     public var fs: FileSystemCapability
     public var terminal: Bool
+    /// `_meta`: what else the client says of itself — for Devin, that it answers its
+    /// diagnostics request, as acpx says it (#248).
+    public var meta: JSONValue?
 
-    public init(fs: FileSystemCapability = .init(), terminal: Bool = false) {
+    public init(fs: FileSystemCapability = .init(), terminal: Bool = false, meta: JSONValue? = nil) {
         self.fs = fs
         self.terminal = terminal
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fs, terminal
+        case meta = "_meta"
     }
 }
 
