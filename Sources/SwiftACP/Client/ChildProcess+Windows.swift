@@ -241,13 +241,19 @@ package final class ChildProcess: @unchecked Sendable {
         }
     }
 
-    /// End each process of its job but the process itself.
+    /// End each process of its job but the process itself. Each is held by a handle while it is
+    /// checked to be in the job still: an id another process took over since the list was read is
+    /// never ended, and a held one cannot be taken over (#278 review).
     func terminateDescendants() {
+        guard let job else { return }
         let own = DWORD(bitPattern: pid)
+        let access = DWORD(PROCESS_TERMINATE) | DWORD(PROCESS_QUERY_LIMITED_INFORMATION)
         for id in jobProcessIds() ?? [] where id != own {
-            guard let descendant = OpenProcess(DWORD(PROCESS_TERMINATE), false, id) else { continue }
+            guard let descendant = OpenProcess(access, false, id) else { continue }
+            defer { CloseHandle(descendant) }
+            var inJob: WindowsBool = false
+            guard IsProcessInJob(descendant, job, &inJob), inJob.boolValue else { continue }
             TerminateProcess(descendant, 1)
-            CloseHandle(descendant)
         }
     }
 

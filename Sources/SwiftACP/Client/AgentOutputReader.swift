@@ -139,9 +139,12 @@ struct AgentCommandQuirks {
         "Cleanup completed. Exiting..."
     ]
 
+    #if os(macOS) || os(Linux) || os(Windows)
     /// How long a closing agent gets to exit on its own once its stdin ends — acpx's
-    /// `resolveAgentCloseAfterStdinEndMs`: 100 ms, `qodercli` 750.
+    /// `resolveAgentCloseAfterStdinEndMs`: 100 ms, `qodercli` 750. Where agents are started here
+    /// (iOS 15 has no `Duration`).
     var closeAfterStdinEnd: Duration { isQoder ? .milliseconds(750) : .milliseconds(100) }
+    #endif
 
     /// acpx's `basenameToken`: the lowercased file name with a Windows executable suffix
     /// dropped. Node's `path.basename` is platform-dependent, so a backslash only
