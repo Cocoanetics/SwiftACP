@@ -59,6 +59,7 @@ final class MessageWriter: @unchecked Sendable {
                 tap.delivery(next, .writing)
                 do {
                     try process.write(Array(next) + [0x0A])
+                    tap.delivery(next, .written)
                 } catch {
                     // The agent closed its stdin — mostly by exiting, which is noticed
                     // on its own. What remains is not written.

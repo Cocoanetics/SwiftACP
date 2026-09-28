@@ -238,18 +238,12 @@ extension ACPXDaemonBackend {
         do {
             return try await attemptPrompt(turn, retriesOnAFreshLaunch: wasHeld)
         } catch is RetriedOnAFreshLaunch {
-            // A held session can disappear (the agent dropped it — e.g. after an
-            // earlier failure). Evict the stale entry and try once more from a fresh
-            // launch. Only retry for session-gone errors, never transient ones like
-            // rate limits — and only for a session held before this turn: when the
-            // turn connected it, the agent has just answered for a fresh launch, and a
-            // refused reconnect (which reads like a gone session) would only be asked
-            // again.
-            //
-            // A held agent can also exit just after `ensure` found it open. When none of
-            // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
-            // launch unseen; one it did reach is never sent twice. Nor is one the agent
-            // answered at all (`TurnWireFeed.agentAnswered`): the attempt decides.
+            // A held agent can exit just after `ensure` found it open. When none of the
+            // turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh launch
+            // unseen; one it did reach is never sent twice. Nor is one the agent answered at
+            // all (`TurnWireFeed.agentAnswered`): the attempt decides. A session the held
+            // agent dropped is no reason to go round again: acpx's owner makes no such retry,
+            // and its turn fails on the agent's error (#198).
             await evict(turn.recordId)
             return try await attemptPrompt(turn, retriesOnAFreshLaunch: false)
         }
@@ -261,10 +255,10 @@ extension ACPXDaemonBackend {
         let underlying: Error
     }
 
-    /// A failure a fresh launch of the agent would not have: the held agent dropped the
-    /// session, or exited before any of the turn reached it.
+    /// A failure a fresh launch of the agent would not have: the held agent exited before
+    /// any of the turn reached it.
     func isFixedByAFreshLaunch(_ error: Error) -> Bool {
-        isSessionGone(error) || error is AgentExitedBeforeTheTurn
+        error is AgentExitedBeforeTheTurn
     }
 
     /// Forwards what connecting an agent for a turn put on the wire to the MCP client
@@ -457,7 +451,15 @@ extension ACPXDaemonBackend {
         }
         entry.agent.rawWire.onDelivery { [self] body, delivery in
             guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
-            guard delivery == .writing else { return wrote.unmark() }
+            switch delivery {
+            case .writing: break
+            case .failed: return wrote.unmark()
+            case .written:
+                // From here on no fresh launch takes the attempt over: what it held back goes
+                // out, and the rest streams, as acpx's does (#198). Not before: a write that
+                // fails sends the attempt to one, its messages unseen (#236 review).
+                return wireFeed.promptWritten()
+            }
             wrote.mark(noting: true)
             let note: @Sendable () async -> Void = {
                 await self.promptWritten(

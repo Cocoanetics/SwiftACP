@@ -136,54 +136,6 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A prompt a fresh launch takes over, its held agent having dropped the session, runs
-    /// the turn's controls on the fresh launch: one sent as the turn moves over waits for
-    /// the retry's prompt to go out, then runs on its agent (Codex review on #174).
-    ///
-    /// So it does whenever the notes that the prompts went out reach the backend — each in
-    /// a task of its own, which under load can come after the prompt's answer. `late`, the
-    /// given-up prompt's note comes as the retry connects, where it would publish the
-    /// controls for no agent to run on, and the retry's never, where the control would fail
-    /// as though the retry's prompt had not gone out.
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: [false, true])
-    func aControlWhileAPromptMovesToAFreshLaunchWaitsForItsPrompt(late: Bool) async throws {
-        try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, methods in
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            _ = try await daemon.runPrompt(sessionId: id, text: "first")
-
-            let (notes, noting) = AsyncStream<@Sendable () async -> Void>.makeStream()
-            if late { await daemon.setPromptNoted { _, note in noting.yield(note) } }
-            // As the retry connects, a control is taken on the turn's ticket.
-            let (taken, taking) = AsyncStream<Void>.makeStream()
-            let (controls, sending) = AsyncStream<Task<SessionControlResult, Error>>.makeStream()
-            await daemon.setControlTakenHook { _ in taking.yield() }
-            await daemon.setReconnected { _ in
-                if late {
-                    var given = notes.makeAsyncIterator()
-                    if let givenUp = await given.next() { await givenUp() }
-                }
-                sending.yield(Task { try await daemon.setMode(sessionId: id, modeId: "plan") })
-                var waiting = taken.makeAsyncIterator()
-                _ = await waiting.next()
-            }
-            _ = try await withTimeout(milliseconds: 10_000) {
-                try await daemon.runPrompt(sessionId: id, text: "second")
-            }
-            var sent = controls.makeAsyncIterator()
-            let control = try #require(await sent.next())
-            let result = try await withTimeout(milliseconds: 10_000) { try await control.value }
-            #expect(!result.resumed)
-            // Its mode went to the fresh launch after the retry's prompt, not to the agent
-            // that dropped the session.
-            let received = try methods()
-            let retried = try #require(received.lastIndex(of: "session/prompt"))
-            #expect(received.lastIndex(of: "session/set_mode").map { $0 > retried } == true, "\(received)")
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.desiredModeId == "plan")
-            await daemon.releaseAll()
-        }
-    }
-
     /// A control waiting for a prompt the held agent could not be sent — its stdin closed,
     /// so the write failed — runs on the fresh launch the turn goes to: the failed write
     /// leaves no note that the prompt went out (Codex review on #207). The notes of the

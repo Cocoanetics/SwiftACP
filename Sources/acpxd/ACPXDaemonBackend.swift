@@ -482,13 +482,4 @@ actor ACPXDaemonBackend: ACPXBackend {
         await entry.agent.close()
     }
 
-    /// Whether `error` indicates the agent no longer has the session (ACP has no
-    /// standard code, so match the text the agent puts in its error message/data).
-    func isSessionGone(_ error: Error) -> Bool {
-        let text = error.localizedDescription.lowercased()
-        guard text.contains("session") else { return false }
-        return ["not found", "unknown", "no such", "expired", "gone", "invalid"]
-            .contains { text.contains($0) }
-    }
-
 }
