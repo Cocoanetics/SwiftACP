@@ -16,7 +16,7 @@ import Glibc
 /// for the same `exit-agent.py`.
 @Suite struct AgentEndTests {
     static func command(_ environment: String) throws -> String {
-        let python = try #require(AgentRegistry.which("python3"))
+        let python = try #require(mockPython)
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("Fixtures/exit-agent.py")
         return "/usr/bin/env \(environment) '\(python)' '\(fixture.path)'"
