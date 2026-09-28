@@ -83,6 +83,34 @@ import Testing
         #expect(info(["ACPX_DEVIN_WINDSURF_VERSION": "9.9.9"]).version == "9.9.9")
     }
 
+    // MARK: The probe
+
+    /// A probe that closed before anyone asked for its output still gives it (#263 review).
+    @Test(.timeLimit(.minutes(1)))
+    func aProbesOutputIsKeptForALateCaller() async {
+        let capture = CommandProbeCapture()
+        capture.append(.stdout, Array("gemini 0.32.9".utf8))
+        capture.append(.stderr, Array("warn".utf8))
+        capture.pipeClosed()
+        capture.pipeClosed()
+        capture.exited()
+        #expect(await capture.output(within: 5_000) == "gemini 0.32.9\nwarn")
+    }
+
+    /// A probe whose caller is called off gives nothing at once, not at the end of its time
+    /// (#263 review).
+    @Test(.timeLimit(.minutes(1)))
+    func aProbeCalledOffReturnsAtOnce() async {
+        let started = ContinuousClock.now
+        let probing = Task {
+            await CommandProbe.output(
+                of: "/bin/sleep", ["30"], cwd: NSTemporaryDirectory(), environment: nil, timeoutMilliseconds: 30_000)
+        }
+        probing.cancel()
+        #expect(await probing.value == nil)
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     // MARK: Launches
 
     /// A stand-in for an agent's CLI, `name` in `directory`: `--version` and `--help` print what is
