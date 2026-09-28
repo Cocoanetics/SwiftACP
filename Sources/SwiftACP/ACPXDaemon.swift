@@ -30,6 +30,10 @@ import SwiftMCP
 ///   ``setConfigOption(sessionId:configId:value:)`` / ``closeSession(sessionId:)`` /
 ///   ``pruneSessions(agentCommand:olderThanDays:includeHistory:dryRun:)``
 ///   — mutate live sessions and the store.
+///
+/// A tool that fails answers with an MCP error result: its message as text, and what acpx's
+/// output reports of the failure beyond that — its codes, and the agent's error it is — as the
+/// result's `_meta` under `acpx/error` (``ToolFailure``).
 @MCPServer(name: "acpx")
 public actor ACPXDaemon {
     let backend: any ACPXBackend
@@ -43,8 +47,9 @@ public actor ACPXDaemon {
     /// (#181). SwiftMCP calls off a request's handler once its client's connection is
     /// gone, and none of that reaches `work`. `work` keeps the request's task-locals,
     /// the client's session among them, so the client hears of it for as long as it can.
+    /// Its failure is ``described(_:)``.
     private func admitted<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
-        try await Task { try await work() }.value
+        try await described { try await Task { try await work() }.value }
     }
 
     /// Create a new session for an agent, persist its `~/.acpx/sessions` record
@@ -110,13 +115,16 @@ public actor ACPXDaemon {
         verbose: Bool? = nil, creationToken: String? = nil, environment: [String: String]? = nil,
         terminalOutputCeiling: Int? = nil
     ) async throws -> String {
-        try await backend.newSession(
-            agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
-            sessionOptions: sessionOptions, creation: SessionCreationMode(
-                holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
-                nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
-                authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false,
-                creationToken: creationToken, environment: environment, terminalOutputCeiling: terminalOutputCeiling))
+        let creation = SessionCreationMode(
+            holdAgent: holdAgent ?? false, fs: fs, permissionMode: permissionMode,
+            nonInteractivePermissions: nonInteractivePermissions, permissionPolicy: permissionPolicy,
+            authPolicy: authPolicy, callerConfig: callerConfig, verbose: verbose ?? false,
+            creationToken: creationToken, environment: environment, terminalOutputCeiling: terminalOutputCeiling)
+        return try await described {
+            try await backend.newSession(
+                agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
+                sessionOptions: sessionOptions, creation: creation)
+        }
     }
 
     /// Call off the session `newSession` makes under `creationToken`, for a caller whose wait
@@ -126,7 +134,7 @@ public actor ACPXDaemon {
     /// - Returns: whether a session made under the token was let go.
     @MCPTool
     func callOffCreation(creationToken: String) async throws -> Bool {
-        try await backend.callOffCreation(creationToken: creationToken)
+        try await described { try await backend.callOffCreation(creationToken: creationToken) }
     }
 
     /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
@@ -150,8 +158,9 @@ public actor ACPXDaemon {
     func setSessionMcpServers(
         sessionId: String, mcpServers: [McpServerConfig], restart: Bool = false
     ) async throws -> Bool {
-        try await backend.setSessionMcpServers(
-            sessionId: sessionId, mcpServers: mcpServers, restart: restart)
+        try await described {
+            try await backend.setSessionMcpServers(sessionId: sessionId, mcpServers: mcpServers, restart: restart)
+        }
     }
 
     /// List persisted sessions (newest-first), optionally filtered to one agent —
@@ -170,7 +179,7 @@ public actor ACPXDaemon {
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     @MCPTool(readOnlyHint: true, idempotentHint: true)
     func showSession(sessionId: String) async throws -> SessionDetail {
-        try await backend.showSession(sessionId: sessionId)
+        try await described { try await backend.showSession(sessionId: sessionId) }
     }
 
     /// Return a session's conversation history (oldest-first) — mirrors the CLI's
@@ -181,7 +190,7 @@ public actor ACPXDaemon {
     ///   - limit: keep only the last N entries; 0 / omitted = all.
     @MCPTool(readOnlyHint: true, idempotentHint: true)
     func sessionHistory(sessionId: String, limit: Int? = nil) async throws -> [HistoryEntry] {
-        try await backend.sessionHistory(sessionId: sessionId, limit: limit)
+        try await described { try await backend.sessionHistory(sessionId: sessionId, limit: limit) }
     }
 
     /// Set a session's mode on the live agent (reconnecting if needed) and persist

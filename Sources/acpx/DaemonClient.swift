@@ -312,24 +312,26 @@ enum DaemonClient {
         }
     }
 
-    /// Under `--verbose`, acpx's line for a prompt or a control whose session had to start over:
-    /// it could not be taken back, and a new session replaced it — `loadError` says why.
-    static func noteFallback(_ loadError: String?, verbose: Bool) {
-        guard verbose, let loadError else { return }
-        Console.errLine("[acpx] session reconnect failed, started fresh session: \(loadError)")
-    }
-
-    /// A control the daemon ran under `timeoutMs`: one it failed as the timeout is the
-    /// ``TimeoutError`` it was, which acpx reports as `TIMEOUT` (exit 3), with its hint.
+    /// A control the daemon ran under `timeoutMs`, whose failure as the timeout is the ``TimeoutError``
+    /// it was — acpx's `TIMEOUT` (exit 3), with its hint — when a daemon from before failures said
+    /// more than their message (#171) reports it by that message alone. A failure the daemon said
+    /// more of stays as it said.
     static func timingOut<T>(after timeoutMs: Int?, _ body: () async throws -> T) async throws -> T {
         do {
             return try await body()
-        } catch let failure as DaemonControlFailure {
+        } catch let failure as DaemonControlFailure where failure.failure == nil {
             if let timeoutMs, timeoutMs > 0, failure.message == TimeoutError(milliseconds: timeoutMs).errorDescription {
                 throw TimeoutError(milliseconds: timeoutMs)
             }
             throw failure
         }
+    }
+
+    /// Under `--verbose`, acpx's line for a prompt or a control whose session had to start over:
+    /// it could not be taken back, and a new session replaced it — `loadError` says why.
+    static func noteFallback(_ loadError: String?, verbose: Bool) {
+        guard verbose, let loadError else { return }
+        Console.errLine("[acpx] session reconnect failed, started fresh session: \(loadError)")
     }
 
     /// Ask a *running* daemon to release its live agent for `sessionId` and mark the
@@ -377,11 +379,18 @@ enum DaemonClient {
     }
 
     /// The daemon's own error, said as acpx says it — without the MCP client's `Tool
-    /// call failed: `, since the control ran where acpx runs it, not in a tool. A daemon
-    /// that went away with the control is acpx's owner that did.
+    /// call failed: `, since the control ran where acpx runs it, not in a tool — and with
+    /// what the daemon said of it beyond its message (``ToolFailure``). A daemon that went
+    /// away with the control is acpx's owner that did.
     static func controlFailure(_ error: Error) -> Error {
         if (error as? JSONRPCPeerError) == .closed { return OwnerDisconnected(waitingFor: "responding") }
-        guard case MCPServerProxyError.toolError(let message) = error else { return error }
-        return DaemonControlFailure(message: message)
+        switch error {
+        case MCPServerProxyError.toolError(let message):
+            return DaemonControlFailure(message: message)
+        case MCPServerProxyError.toolErrorWithMeta(let message, let meta):
+            return DaemonControlFailure(message: message, failure: ToolFailure(meta: meta))
+        default:
+            return error
+        }
     }
 }

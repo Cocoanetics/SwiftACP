@@ -150,7 +150,7 @@ extension DaemonToolsTests {
             agent.openGate()
             try await idleEnds(idle, agent)
             #expect(try await withTimeout(milliseconds: 10_000) { try await prompt.value } == "")
-            await #expect(throws: PromptEndedBeforeControls.self) {
+            await expectOwnersAnswer(causedBy: PromptEndedBeforeControls.self) {
                 _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
             }
             // Only the first prompt reached the agent; the record and journal kept nothing of

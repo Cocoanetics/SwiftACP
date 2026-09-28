@@ -58,7 +58,13 @@ extension ACPXDaemonBackend {
         }
         let recordId = initial.acpxRecordId
         let arrived = DispatchTime.now()
-        try await takeTurn(recordId, within: timeout)
+        do {
+            try await takeTurn(recordId, within: timeout)
+        } catch {
+            // A session an owner holds has the control wait on its owner, which answers the
+            // wait's failure as its own.
+            throw owners[recordId] == nil ? error : OwnedControlFailure(error)
+        }
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
         defer { Task { await turnQueue.release(recordId) } }
@@ -86,8 +92,10 @@ extension ACPXDaemonBackend {
                     body)
             }
         } catch {
-            if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }
-            throw AgentFailure.shown(error)
+            var failure = AgentFailure.shown(error)
+            if let timeout, deadline?.hasPassed == true { failure = TimeoutError(milliseconds: timeout) }
+            // An owner's control fails as acpx's owner answers one it could not carry out.
+            throw direct ? failure : OwnedControlFailure(failure)
         }
     }
 
@@ -276,15 +284,18 @@ final class ControlDeadline: @unchecked Sendable {
 
 /// An agent's failure, as acpx's CLI shows a control's (`formatErrorMessage`): its error
 /// response by its message, and a connection that closed in the words of acpx's ACP SDK. The
-/// daemon's tool reports the failure by that text.
-struct AgentFailure: LocalizedError {
+/// daemon's tool reports the failure by that text, and the agent's error as the failure's own
+/// (acpx's `extractAcpError`).
+struct AgentFailure: LocalizedError, AcpErrorCarrier, ErrorWithCause {
     let message: String
+    let acp: AcpErrorPayload?
+    let cause: Error?
     var errorDescription: String? { message }
 
     /// `error`, as the tool reports it: an agent's error or a closed connection by acpx's
     /// words for it, anything else as it is.
     static func shown(_ error: Error) -> Error {
         guard error is JSONRPCErrorBody || (error as? JSONRPCPeerError) == .closed else { return error }
-        return AgentFailure(message: TurnFailure.message(of: error))
+        return AgentFailure(message: TurnFailure.message(of: error), acp: TurnFailure.payload(of: error), cause: error)
     }
 }

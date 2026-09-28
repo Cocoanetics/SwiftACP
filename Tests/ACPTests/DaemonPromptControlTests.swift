@@ -83,7 +83,7 @@ extension DaemonToolsTests {
                 _ = await waiting.next()
             }
             kill(try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8))), SIGKILL)
-            await #expect(throws: PromptEndedBeforeControls.self) {
+            await expectOwnersAnswer(causedBy: PromptEndedBeforeControls.self) {
                 _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
             }
             _ = try? await prompt.value
@@ -199,7 +199,7 @@ extension DaemonToolsTests {
             let control = Task { try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300) }
             // The control's request reached the agent, which holds it past the deadline.
             try await signalled(modeSent)
-            await #expect(throws: TimeoutError(milliseconds: 300)) {
+            await expectOwnersTimeout(300) {
                 _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
             }
             // The prompt ends on its agent's end, not by running on.

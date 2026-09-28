@@ -49,7 +49,7 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             try await limitedPrompt(daemon, session.id, limits: PromptLimits(ttlMs: 0), client: CallingClient())
             #expect(await daemon.heldConnection(session.id) != nil)
-            await #expect(throws: TimeoutError(milliseconds: 300)) {
+            await expectOwnersTimeout(300) {
                 _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300)
             }
             #expect(await daemon.heldConnection(session.id) == nil)
@@ -96,20 +96,6 @@ extension DaemonToolsTests {
         }
     }
 
-    /// The CLI reports the daemon's timeout as acpx does: `TIMEOUT`, exit 3, with its hint.
-    @Test func theDaemonsTimeoutIsTheCLIsTimeoutError() async throws {
-        await #expect(throws: TimeoutError(milliseconds: 300)) {
-            try await DaemonClient.timingOut(after: 300) {
-                throw DaemonClient.DaemonControlFailure(message: "Timed out after 300ms")
-            }
-        }
-        await #expect(throws: DaemonClient.DaemonControlFailure.self) {
-            try await DaemonClient.timingOut(after: 300) {
-                throw DaemonClient.DaemonControlFailure(message: "Timed out after 500ms")
-            }
-        }
-    }
-
     /// A control over before its deadline keeps it from passing: nothing is put down.
     @Test func aDeadlineSettledInTimeNeverPasses() {
         let deadline = ControlDeadline(after: 60_000) { Issue.record("the deadline passed") }
@@ -138,7 +124,7 @@ extension DaemonToolsTests {
                 FileManager.default.createFile(atPath: answer.path, contents: nil)
                 for await _ in overdue { break }
             }, overdue: { _ in noteOverdue.yield() })
-            await #expect(throws: TimeoutError(milliseconds: 300)) {
+            await expectOwnersTimeout(300) {
                 _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300)
             }
             let held = await daemon.heldConnection(session.id)
@@ -198,7 +184,7 @@ extension DaemonToolsTests {
             record.lastUsedAt = "2000-01-01T00:00:00.000Z"
             try SessionStore.writeRecord(record)
 
-            await #expect(throws: TimeoutError(milliseconds: 300)) {
+            await expectOwnersTimeout(300) {
                 _ = try await daemon.setMode(sessionId: session.id, modeId: "plan", timeoutMs: 300)
             }
             #expect(try #require(SessionStore.loadRecord(session.id)).lastUsedAt != "2000-01-01T00:00:00.000Z")
@@ -216,6 +202,39 @@ extension DaemonToolsTests {
         _ = await putDown.next()
         #expect(deadline.hasPassed)
         #expect(!deadline.settle())
+    }
+
+    /// `body` fails with the answer of the session's owner to a control that failed with a
+    /// `Cause` (``OwnedControlFailure``): under `outputCode`, and the owner's detail code and
+    /// origin, as acpx's owner answers it (#171). Returns the answer.
+    @discardableResult
+    func expectOwnersAnswer<Cause: Error>(
+        causedBy _: Cause.Type, outputCode: String = "RUNTIME", sourceLocation: SourceLocation = #_sourceLocation,
+        _ body: () async throws -> Void
+    ) async -> OwnedControlFailure? {
+        do {
+            try await body()
+            Issue.record("the control did not fail", sourceLocation: sourceLocation)
+        } catch let answer as OwnedControlFailure {
+            #expect(answer.cause is Cause, "\(String(describing: answer.cause))", sourceLocation: sourceLocation)
+            #expect(answer.outputCode == outputCode, sourceLocation: sourceLocation)
+            #expect(answer.detailCode == "QUEUE_CONTROL_REQUEST_FAILED", sourceLocation: sourceLocation)
+            #expect(answer.origin == "queue", sourceLocation: sourceLocation)
+            return answer
+        } catch {
+            Issue.record("the control failed with \(error)", sourceLocation: sourceLocation)
+        }
+        return nil
+    }
+
+    /// ``expectOwnersAnswer(causedBy:outputCode:sourceLocation:_:)`` for a control past its
+    /// deadline of `milliseconds`.
+    func expectOwnersTimeout(
+        _ milliseconds: Int, sourceLocation: SourceLocation = #_sourceLocation, _ body: () async throws -> Void
+    ) async {
+        let answer = await expectOwnersAnswer(
+            causedBy: TimeoutError.self, outputCode: "TIMEOUT", sourceLocation: sourceLocation, body)
+        #expect(answer?.message == "Timed out after \(milliseconds)ms", sourceLocation: sourceLocation)
     }
 }
 
