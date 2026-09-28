@@ -64,14 +64,35 @@ struct SessionUpdateDecodingTests {
         #expect(plain.locations == nil)
     }
 
-    /// A tool call without its id or title, or with one that is no string, fails.
-    @Test func aToolCallNeedsItsIdAndTitle() {
+    /// A tool call without its id or title, or with one that is no string, is no tool call: it
+    /// comes as `.other`, as it was sent, for acpx's formatter shows it though its SDK refuses it
+    /// (#175).
+    @Test func aToolCallNeedsItsIdAndTitle() throws {
         for json in [
             #"{"sessionUpdate":"tool_call","title":"Run"}"#, #"{"sessionUpdate":"tool_call","toolCallId":"t1"}"#,
             #"{"sessionUpdate":"tool_call","toolCallId":5,"title":"Run"}"#
         ] {
-            #expect(throws: DecodingError.self, "\(json)") { try decode(json) }
+            guard case .other("tool_call", let payload) = try decode(json) else {
+                Issue.record("\(json) was read as a tool call")
+                continue
+            }
+            #expect(payload == (try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))))
         }
+    }
+
+    /// A tool call's members sent as `null` are known as such, and go on as `null` — through
+    /// acpxd's relay to the CLI too — as a tool update's do (#270 review).
+    @Test func aToolCallKeepsItsNullMembers() throws {
+        let json = #"{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Run","kind":null,"status":null,"#
+            + #""rawInput":null,"rawOutput":{"a":1}}"#
+        guard case .toolCall(let call) = try decode(json) else { throw POSIXError(.EINVAL) }
+        #expect(call.nullMembers == ["kind", "status", "rawInput"])
+        let relayed = try JSONEncoder().encode(SessionUpdate.toolCall(call))
+        guard case .toolCall(let again) = try JSONDecoder().decode(SessionUpdate.self, from: relayed) else {
+            throw POSIXError(.EINVAL)
+        }
+        #expect(again.nullMembers == ["kind", "status", "rawInput"])
+        #expect(again.rawOutput == .object(["a": .integer(1)]))
     }
 
     /// An update's member that doesn't fit is left out, as if it were not sent: not taken
@@ -88,7 +109,10 @@ struct SessionUpdateDecodingTests {
         #expect(update.locations == [ToolCallLocation(path: "/a")])
         #expect(update.nullMembers == ["kind"])
         let unnamed = #"{"sessionUpdate":"tool_call_update","status":"completed"}"#
-        #expect(throws: DecodingError.self) { try decode(unnamed) }
+        guard case .other("tool_call_update", _) = try decode(unnamed) else {
+            Issue.record("an update without its tool's id was read as one")
+            return
+        }
     }
 
     /// Commands and a plan's entries: the update fails without the list, the list is empty

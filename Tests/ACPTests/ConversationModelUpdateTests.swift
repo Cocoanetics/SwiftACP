@@ -27,6 +27,28 @@ struct ConversationModelUpdateTests {
         try #require(WireJSON(parsing: SessionRecordSerializer.data(for: record)))
     }
 
+    /// A tool update acpx's ACP SDK refuses — without the `toolCallId` or `title` its schema
+    /// requires — never reaches acpx's handler: the record is left as it was, not even stamped,
+    /// though acpx's formatter shows the update (#175).
+    @Test func aToolUpdateTheSDKRefusesLeavesTheRecord() throws {
+        var record = Self.record()
+        let before = try Self.written(record)
+        for json in [
+            #"{"sessionUpdate":"tool_call","title":"Read","status":"pending"}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"t1","status":"in_progress"}"#,
+            #"{"sessionUpdate":"tool_call_update","status":"completed"}"#
+        ] {
+            let update = try JSONDecoder().decode(SessionUpdate.self, from: Data(json.utf8))
+            guard case .other = update else {
+                Issue.record("\(json) was read as the SDK would not read it")
+                continue
+            }
+            let notification = SessionNotification(sessionId: "u-1", update: update)
+            #expect(!ConversationModel.recordSessionUpdate(into: &record, notification: notification))
+        }
+        #expect(try Self.written(record) == before)
+    }
+
     /// Each command is trimmed, an empty description left out, and whether it takes input
     /// noted; a bare name, a command without a description, and a blank name are not kept.
     @Test func advertisedCommandsAreRecordedAsAcpxNormalizesThem() throws {

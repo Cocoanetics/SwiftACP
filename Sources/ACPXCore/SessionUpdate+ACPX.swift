@@ -7,12 +7,14 @@ import SwiftACP
 /// updates the SDK refuses outright.
 extension SessionUpdate {
     /// Whether the update reaches acpx at all. The SDK refuses a `usage_update` without
-    /// numbers for `used` and `size` (``SwiftACP/UsageUpdate/reachesACPX``), and a
-    /// `config_option_update` without `configOptions` (``ConfigOptionSchema``).
+    /// numbers for `used` and `size` (``SwiftACP/UsageUpdate/reachesACPX``), a
+    /// `config_option_update` without `configOptions` (``ConfigOptionSchema``), and a tool update
+    /// without a member its schema requires, which only acpx's formatter shows (#175).
     public var reachesACPX: Bool {
         switch self {
         case .usageUpdate(let usage): return usage.reachesACPX
         case .other(kind: "config_option_update", let payload): return !ConfigOptionSchema.refuses(payload)
+        case .other(kind: "tool_call", _), .other(kind: "tool_call_update", _): return false
         default: return true
         }
     }
