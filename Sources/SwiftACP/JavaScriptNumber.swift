@@ -8,7 +8,7 @@ public enum JavaScriptNumber {
     /// decimal literal (with an optional sign, or `Infinity`), or an unsigned `0x`, `0o`
     /// or `0b` integer. Empty is 0; anything else is NaN.
     public static func parse(_ string: String) -> Double {
-        let text = string.javaScriptTrimmed
+        let text = trimmed(string)
         guard !text.isEmpty else { return 0 }
         let scalars = Array(text.unicodeScalars)
         if scalars.count > 2, scalars[0] == "0", let radix = radix(scalars[1]) {
@@ -47,6 +47,23 @@ public enum JavaScriptNumber {
     }
 
     // MARK: -
+
+    /// `String.prototype.trim`: JavaScript's whitespace and line terminators, each a single
+    /// UTF-16 code unit, off both ends.
+    private static func trimmed(_ string: String) -> String {
+        func isSpace(_ unit: UInt16) -> Bool {
+            switch unit {
+            case 0x09...0x0D, 0x20, 0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+                return true
+            default: return false
+            }
+        }
+        let units = Array(string.utf16)
+        guard let first = units.firstIndex(where: { !isSpace($0) }),
+              let last = units.lastIndex(where: { !isSpace($0) })
+        else { return "" }
+        return String(decoding: units[first...last], as: UTF16.self)
+    }
 
     private static func radix(_ marker: Unicode.Scalar) -> Int? {
         switch marker {

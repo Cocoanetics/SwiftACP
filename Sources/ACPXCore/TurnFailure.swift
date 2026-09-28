@@ -144,6 +144,22 @@ extension CopilotAcpUnsupportedError: OutputErrorMeta {
     public var retryable: Bool? { false }
 }
 
+/// acpx's `GeminiAcpStartupTimeoutError`: a timeout, which may pass (#248).
+extension GeminiAcpStartupTimeoutError: OutputErrorMeta {
+    public var outputCode: String? { "TIMEOUT" }
+    public var detailCode: String? { "GEMINI_ACP_STARTUP_TIMEOUT" }
+    public var origin: String? { "acp" }
+    public var retryable: Bool? { true }
+}
+
+/// acpx's `ClaudeAcpSessionCreateTimeoutError`: a timeout, which may pass (#248).
+extension ClaudeAcpSessionCreateTimeoutError: OutputErrorMeta {
+    public var outputCode: String? { "TIMEOUT" }
+    public var detailCode: String? { "CLAUDE_ACP_SESSION_CREATE_TIMEOUT" }
+    public var origin: String? { "acp" }
+    public var retryable: Bool? { true }
+}
+
 /// acpx's `UnsupportedPromptContentError`: a usage error, which exits 2.
 extension UnsupportedPromptContentError: OutputErrorMeta {
     public var outputCode: String? { "USAGE" }

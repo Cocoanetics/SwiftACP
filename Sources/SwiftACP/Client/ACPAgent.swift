@@ -171,9 +171,12 @@ public final class ACPAgent: Sendable {
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.
         if let onClientRequest { await connection.setClientRequestObserver(onClientRequest) }
+        // Claude's adapter answers `session/new` within its limit, or the session is not made.
+        if let limit = plan.sessionCreateLimit { await connection.setSessionCreateLimit(limit) }
         do {
-            let info = try await connection.initialize(
-                capabilities: plan.capabilities, clientInfo: plan.clientInfo)
+            let info = try await plan.initializing { [plan] in
+                try await connection.initialize(capabilities: plan.capabilities, clientInfo: plan.clientInfo)
+            }
             try await authenticateIfRequired(
                 connection: connection, methods: info.authMethods ?? [],
                 authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment,
@@ -203,12 +206,13 @@ public final class ACPAgent: Sendable {
                 agent.close()
                 await connection.close()
                 await agent.terminate()
-                throw failure
+                // A Gemini that did not get through `initialize` in time says why, once it is gone.
+                throw await plan.startupFailure(error) ?? failure
             }
             #endif
             await connection.close()
             transport.close()
-            throw error
+            throw await plan.startupFailure(error) ?? error
         }
     }
 

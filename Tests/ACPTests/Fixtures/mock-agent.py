@@ -297,6 +297,9 @@ def main():
         method = message.get("method")
         req_id = message.get("id")
         log_request(message)
+        # MOCK_NEVER_ANSWER=<method>: a request the agent takes and never answers.
+        if method is not None and method == os.environ.get("MOCK_NEVER_ANSWER"):
+            continue
 
         # The answers to the agent's own requests (MOCK_HOLD_TERMINAL).
         if method is None and req_id == "mock-terminal-create":

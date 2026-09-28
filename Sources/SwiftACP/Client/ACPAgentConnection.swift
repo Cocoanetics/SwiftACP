@@ -43,6 +43,8 @@ public actor ACPAgentConnection {
     /// The agent's capabilities as its `initialize` answer wrote them — every member, in its order,
     /// as acpx records them (#119); `nil` without a wire tap to read them from, or without any.
     public private(set) var agentCapabilitiesAsSent: WireJSON?
+    /// How long `session/new` may take, in milliseconds — Claude's adapter's limit (#248).
+    private(set) var sessionCreateLimit: Int?
 
     /// How far an agent's `fs/*` requests may reach. Confined to each session's own
     /// working directory by default; an embedder that mediates filesystem access itself
@@ -286,6 +288,11 @@ public actor ACPAgentConnection {
         return response
     }
 
+    /// Set the limit ``newSession(_:)`` waits for `session/new` within.
+    func setSessionCreateLimit(_ milliseconds: Int?) {
+        sessionCreateLimit = milliseconds
+    }
+
     public func authenticate(methodId: String) async throws {
         let _: EmptyResponse = try await send("authenticate", AuthenticateRequest(methodId: methodId))
     }
@@ -298,7 +305,17 @@ public actor ACPAgentConnection {
         let creation = UUID()
         sessionRootsBeingCreated[creation] = request.cwd
         defer { sessionRootsBeingCreated[creation] = nil }
-        let response: NewSessionResponse = try await send("session/new", request)
+        let response: NewSessionResponse
+        if let limit = sessionCreateLimit {
+            // Claude's adapter, as acpx's `createSession` caps it (#248).
+            do {
+                response = try await AgentLaunchCompat.within(limit) { try await self.send("session/new", request) }
+            } catch is AgentLaunchCompat.StartupTimedOut {
+                throw ClaudeAcpSessionCreateTimeoutError()
+            }
+        } else {
+            response = try await send("session/new", request)
+        }
         sessionRoots[response.sessionId] = request.cwd
         sessionOpened?()
         return response
