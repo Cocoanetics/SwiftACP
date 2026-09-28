@@ -174,7 +174,7 @@ enum SessionLifecycle {
                 authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
                 sessionMcpServers: config.sessionMcpServers,
                 meta: meta, resumeSessionId: resumeSessionId, sessionOptions: options,
-                capabilities: flags.clientCapabilities,
+                capabilities: flags.clientCapabilities, timeoutMilliseconds: flags.timeoutMs,
                 inheritStderr: flags.verbose, onLog: flags.clientLog,
                 onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })
         }
