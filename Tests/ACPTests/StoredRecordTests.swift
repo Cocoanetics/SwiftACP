@@ -45,7 +45,7 @@ import Testing
             let expected = try #require(full.parsed).replacingOccurrences(of: #""/work""#, with: #""\#(cwd)""#)
             for (arguments, output) in [
                 (["--format", "json", "--cwd", cwd, "codex", "sessions", "show", "alpha"], expected + "\n"),
-                (["--format", "json", "--cwd", cwd, "codex", "sessions", "list"], "[" + expected + "]\n")
+                (["--format", "json", "--cwd", cwd, "codex", "sessions", "list", "--local"], "[" + expected + "]\n")
             ] {
                 let capture = Console.Capture()
                 let code = Console.$capture.withValue(capture) { runCommandLine(arguments) }

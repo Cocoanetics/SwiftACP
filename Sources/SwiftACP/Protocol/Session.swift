@@ -314,6 +314,17 @@ public struct CloseSessionRequest: Codable, Sendable {
     }
 }
 
+/// `session/list` (unstable): the sessions the agent keeps, in `cwd` and after `cursor` when
+/// given — offered when it advertises ``SessionCapabilities/list``. What is not given is not sent.
+public struct ListSessionsRequest: Codable, Sendable {
+    public var cwd: String?
+    public var cursor: String?
+    public init(cwd: String? = nil, cursor: String? = nil) {
+        self.cwd = cwd
+        self.cursor = cursor
+    }
+}
+
 public struct SetSessionModeRequest: Codable, Sendable {
     public var sessionId: SessionId
     public var modeId: String
