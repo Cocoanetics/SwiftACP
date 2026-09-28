@@ -35,6 +35,13 @@ struct AcpxdCommand: AsyncParsableCommand {
         help: "Inherit spawned agents' stderr (surfaces agent diagnostics like rate-limit messages).")
     var verbose = false
 
+    @Flag(
+        name: .customLong("on-demand"),
+        help: ArgumentHelp(
+            "Started on demand by acpx: stop once no session is held and no call is served for a while, "
+                + "as acpx's queue owner exits after its TTL. Without it, acpxd runs until it is stopped."))
+    var onDemand = false
+
     // The transports acpxd serves over (TCPBonjourTransport, HTTPSSETransport) are
     // compiled out of SwiftMCP when SwiftACP's `Server` trait is disabled, but SwiftPM
     // can't conditionally declare the executable target itself — so a client-only
@@ -112,6 +119,19 @@ struct AcpxdCommand: AsyncParsableCommand {
             }
         }
         defer { portRecorder.cancel() }
+
+        // Started on demand, acpxd stops by itself once it holds nothing (#253): as a signal
+        // stops it, having given up its lock at once.
+        let idleExit = onDemand ? IdleExit.watch(isIdle: { [daemon, backend] in
+            guard await daemon.callsInFlight == 0 else { return false }
+            return await backend.holdsNothing()
+        }, stop: { [backend, log] in
+            guard await backend.stopIfHoldingNothing() else { return false }
+            log.info("acpxd: started on demand, and idle: stopping")
+            stopSignals.hear()
+            return true
+        }) : nil
+        defer { idleExit?.cancel() }
 
         // A ServiceGroup owns the run loop for all transports, and SIGINT, SIGTERM and
         // SIGHUP stop it in order, gracefully.

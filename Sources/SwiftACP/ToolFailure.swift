@@ -65,13 +65,22 @@ struct DescribedToolFailure: LocalizedError, MCPToolErrorMetaProviding {
 
 extension ACPXDaemon {
     /// `work`, whose failure goes to the caller with what it says beyond its message, as the
-    /// backend describes it (``ACPXBackend/toolFailure(for:)``).
+    /// backend describes it (``ACPXBackend/toolFailure(for:)``) — served (``serving(_:)``).
     func described<T>(_ work: () async throws -> T) async throws -> T {
-        do {
-            return try await work()
-        } catch {
-            guard let failure = backend.toolFailure(for: error), !failure.isEmpty else { throw error }
-            throw DescribedToolFailure(underlying: error, failure: failure)
+        try await serving {
+            do {
+                return try await work()
+            } catch {
+                guard let failure = backend.toolFailure(for: error), !failure.isEmpty else { throw error }
+                throw DescribedToolFailure(underlying: error, failure: failure)
+            }
         }
+    }
+
+    /// `work`, one of the calls the daemon serves (``callsInFlight``) until it is over.
+    func serving<T>(_ work: () async throws -> T) async rethrows -> T {
+        callsInFlight += 1
+        defer { callsInFlight -= 1 }
+        return try await work()
     }
 }

@@ -123,6 +123,11 @@ swift run acpxd                       # Bonjour + local TCP (how the acpx CLI di
 swift run acpxd --http-port 9090 -v   # also expose MCP over HTTP+SSE (unauthenticated — keep on loopback)
 ```
 
+The CLI starts `acpxd` when it needs one (`--on-demand`). That daemon stops by itself once it has
+held no session and served no call for ten seconds. It holds each session until the session's
+`--ttl` runs out, as acpx's queue owner exits after its TTL. A daemon started any other way —
+by hand, by launchd, or hosted in an app — runs until it is stopped.
+
 The CLI and daemon are built on the library plus SwiftMCP's server side: `acpxd` is
 an `@MCPServer` whose tools the CLI calls over MCP — the same generated
 `ACPXDaemon.Client` an iOS app uses to drive a remote daemon. The extra

@@ -127,4 +127,28 @@ extension ACPXDaemonBackend {
     func forgetOwner(_ recordId: String) {
         owners.removeValue(forKey: recordId)?.idle?.cancel()
     }
+
+    /// Whether the daemon holds nothing, as a daemon started on demand looks before it stops
+    /// (``IdleExit``): no session held — by an owner, or by an agent held or being connected —
+    /// no turn or control running or waiting, and no session being made or shut down.
+    func holdsNothing() async -> Bool {
+        guard await turnQueue.isIdle else { return false }
+        return holdsNoSession
+    }
+
+    /// Stop as a daemon started on demand stops once it is idle (``IdleExit``) — unless it holds
+    /// something by now: it starts no more agents (``stopping``), and gives its lock up at once,
+    /// so that a CLI needing a daemon from now on starts another while this one stops. Returns
+    /// whether it stopped.
+    func stopIfHoldingNothing() async -> Bool {
+        guard await turnQueue.isIdle, holdsNoSession else { return false }
+        stopping = true
+        lock?.release()
+        return true
+    }
+
+    private var holdsNoSession: Bool {
+        owners.isEmpty && live.isEmpty && connecting.isEmpty && turns.isEmpty && directTurns.isEmpty
+            && promptLines.isEmpty && creatingTokens.isEmpty && shuttingDown.isEmpty
+    }
 }

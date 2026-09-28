@@ -37,6 +37,9 @@ import SwiftMCP
 @MCPServer(name: "acpx")
 public actor ACPXDaemon {
     let backend: any ACPXBackend
+    /// How many tool calls it is serving: each from its start until its work is over, however
+    /// its client fares meanwhile (``serving(_:)``).
+    public internal(set) var callsInFlight = 0
 
     public init(backend: any ACPXBackend) {
         self.backend = backend
@@ -171,7 +174,7 @@ public actor ACPXDaemon {
     ///   expanded launch command. Blank / omitted = every session.
     @MCPTool(readOnlyHint: true, idempotentHint: true)
     func listSessions(agentCommand: String? = nil) async -> [SessionSummary] {
-        await backend.listSessions(agentCommand: agentCommand)
+        await serving { await backend.listSessions(agentCommand: agentCommand) }
     }
 
     /// Show one persisted session's details — mirrors the CLI's `sessions show`.
@@ -326,9 +329,11 @@ public actor ACPXDaemon {
         agentCommand: String? = nil, olderThanDays: Int? = nil,
         includeHistory: Bool = false, dryRun: Bool = false
     ) async -> PruneResult {
-        await backend.pruneSessions(
-            agentCommand: agentCommand, olderThanDays: olderThanDays,
-            includeHistory: includeHistory, dryRun: dryRun)
+        await serving {
+            await backend.pruneSessions(
+                agentCommand: agentCommand, olderThanDays: olderThanDays, includeHistory: includeHistory,
+                dryRun: dryRun)
+        }
     }
 
     /// Run a prompt against an existing session, streaming each update as a log
@@ -456,7 +461,7 @@ public actor ACPXDaemon {
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     @MCPTool(readOnlyHint: true, idempotentHint: true)
     func sessionStatus(sessionId: String) async -> LiveSessionStatus {
-        await backend.sessionStatus(sessionId: sessionId)
+        await serving { await backend.sessionStatus(sessionId: sessionId) }
     }
 
     /// Cancel an in-flight prompt for a session.
