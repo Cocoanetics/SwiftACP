@@ -5,9 +5,7 @@ import Testing
 /// acpx lists config-defined agents in config order (#47). Its merge is a JavaScript
 /// object spread, `{...globalAgents, ...projectAgents}`: global names in file order,
 /// then project-only ones in theirs, and a name in both keeps its global place.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct ConfigAgentOrderTests {
+struct ConfigAgentOrderTests {
     private func project(global: String?, project: String?) throws -> String {
         let cwd = NSTemporaryDirectory() + "acpx-agent-order-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)

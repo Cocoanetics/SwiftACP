@@ -6,9 +6,7 @@ import Testing
 /// submodule marks its root with a `.git` *file* — a `gitdir:` pointer — rather than a
 /// directory, and a directory whose own name begins with two dots is still inside its
 /// boundary. Ports acpx 0.19.1's `hasGitMarker` / `isWithinBoundary` (issue #22).
-///
-/// Serialized because the store cases redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct SessionScopeTests {
+struct SessionScopeTests {
     // MARK: Fixtures
 
     /// A fresh temp tree, symlink-resolved so its paths compare equal to the ones the

@@ -37,12 +37,7 @@ import Testing
             let arguments = ["--agent", "probe-agent", "--cwd", "/tmp/watch"] + options
             let capture = Console.Capture()
             // The command blocks its thread until it is done, as the CLI does: a thread of its own.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    let code = Console.$capture.withValue(capture) { runCommandLine(arguments) }
-                    continuation.resume(returning: code)
-                }.start()
-            }
+            let code = await onThreadOfItsOwn { Console.$capture.withValue(capture) { runCommandLine(arguments) } }
             return Watched(code: code, out: capture.out, err: capture.err)
         }
     }

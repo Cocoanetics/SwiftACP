@@ -9,7 +9,7 @@ import Testing
 /// `retry-agent.py`: every update its connection has read is the turn's, however the turn
 /// ends — the agent is closed only once they are handled, as acpx's client takes in all it
 /// has read before it closes.
-@Suite(.enabled(if: mockPythonAvailable)) struct FlowAgentSessionsTests {
+@Suite(.enabled(if: mockPythonAvailable), .serialized, .agentLane) struct FlowAgentSessionsTests {
     /// The agent answers, then sends an update. Its handling is held until something waits
     /// for it: here the end of the turn, before it closes the agent.
     @Test(.timeLimit(.minutes(1)))

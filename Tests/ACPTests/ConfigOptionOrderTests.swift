@@ -8,7 +8,7 @@ import Testing
 /// A session's config options written in the order acpx 0.19.3 writes them (#175): those a
 /// `config_option_update` gave in the order its SDK builds them, and an option changed in place
 /// keeping its members' places.
-@Suite struct ConfigOptionOrderTests {
+@Suite(.serialized, .agentLane) struct ConfigOptionOrderTests {
     /// The SDK builds an option as zod intersects its kind with the rest: `currentValue`,
     /// `options`, `type`, then `id`, `name`, `description`, `category`, `_meta`; a select option
     /// `value`, `name`, `description`, `_meta`; a group `group`, `name`, `options`, `_meta`.

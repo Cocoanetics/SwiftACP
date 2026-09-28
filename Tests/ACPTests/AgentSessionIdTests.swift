@@ -8,7 +8,7 @@ import Testing
 /// The agent's own session id, which acpx records as `agent_session_id` (#75): read from
 /// the `_meta` of the replies that open a session, set when the session is created, and
 /// reconciled on every reconnect — a new id replaces the old, none keeps it.
-@Suite(.serialized) struct AgentSessionIdTests {
+@Suite(.serialized, .agentLane) struct AgentSessionIdTests {
     /// acpx's `extractAgentSessionId`.
     @Test func theIdIsTheMetasAgentSessionIdElseItsSessionId() {
         let extract = { (meta: JSONValue?) in AgentSessionId.extract(from: meta) }

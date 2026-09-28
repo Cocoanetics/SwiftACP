@@ -7,7 +7,7 @@ import Testing
 /// it: its text formatter shows each error it reads on the wire (`onAcpMessage`), and the
 /// top level then says nothing more; quiet output gives the agent's details. Each output is
 /// what acpx printed for the same run on `model-agent.py`.
-struct ExecSetupErrorTests {
+@Suite(.serialized, .agentLane) struct ExecSetupErrorTests {
     struct Run {
         var code: Int32
         var out: String
@@ -26,11 +26,7 @@ struct ExecSetupErrorTests {
                          "--agent", agent, "exec", "hi"]
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-                }.start()
-            }
+            let code = await onThreadOfItsOwn { Console.$capture.withValue(capture) { runCommandLine(arguments) } }
             return Run(code: code, out: capture.out, err: capture.err)
         }
     }

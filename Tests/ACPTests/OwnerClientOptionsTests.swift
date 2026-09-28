@@ -12,7 +12,7 @@ import Testing
 /// builds its queue owner's client from the prompt that spawns it. A control with no owner
 /// builds its own from its own flags, and `sessions new` keeps nothing of them (#246). Each
 /// expectation is what acpx 0.19.3 offered the same agent.
-@Suite(.serialized) struct OwnerClientOptionsTests {
+@Suite(.serialized, .agentLane) struct OwnerClientOptionsTests {
     /// `initialize`'s `fs` and `terminal`, as acpx offered them.
     struct Offered: Equatable, CustomStringConvertible {
         var fs: Bool
@@ -99,14 +99,12 @@ import Testing
     /// `acpx <flags> --agent <agent> <args>` against `backend`, the daemon running.
     static func acpx(_ args: [String], agent: String, cwd: URL, backend: ACPXDaemonBackend) async -> Int32 {
         let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
-        return await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(Console.Capture()) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        return await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(Console.Capture()) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
     }
 

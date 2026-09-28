@@ -12,10 +12,11 @@
 - `fail-after-update`, `fail-after-read`, `fail-after-bad-read`, `fail-after-permission`:
   first sends an update, reads `<cwd>/notes.txt`, reads `notes.txt` (a path the client
   refuses), or asks permission to edit — then fails as `fail-once` does.
-- `fail-then-update`: fails as `fail-once` does, and sends an update 300 ms later —
-  inside the pause before a retry. `fail-then-ask` asks permission to edit then instead,
-  and `fail-then-write` writes `<cwd>/out.txt`. `fail-then-update-at-once` sends the update
-  right after the failure.
+- `fail-then-update`: fails as `fail-once` does, and sends an update inside the pause
+  before a retry: once the file `RETRY_AGENT_PAUSE` names exists, which the client makes
+  as its pause begins — exiting with status 4 if it has not in 30 s — or else 300 ms later. `fail-then-ask` asks permission to edit then
+  instead, and `fail-then-write` writes `<cwd>/out.txt`. `fail-then-update-at-once` sends
+  the update right after the failure.
 - `fail-auth-once`: its first prompt fails with -32000 (authentication required).
 - `fail-after-updates`: sends twenty updates, then fails as `fail-once` does.
   `burst-then-hang` sends them and never answers.
@@ -112,6 +113,20 @@ def fail(req_id, code=-32603, message="Internal error", details="model overloade
                                                      "data": {"details": details}}})
 
 
+def await_pause():
+    pause = os.environ.get("RETRY_AGENT_PAUSE")
+    if not pause:
+        time.sleep(0.3)
+        return
+    # A pause that never begins ends the agent: that fails the run, where carrying on
+    # could leave the retried prompt unread and the run waiting on it for good.
+    deadline = time.time() + 30
+    while not os.path.exists(pause):
+        if time.time() > deadline:
+            os._exit(4)
+        time.sleep(0.01)
+
+
 def signal_ready():
     if os.environ.get("RETRY_AGENT_READY"):
         with open(os.environ["RETRY_AGENT_READY"], "w") as ready:
@@ -159,15 +174,15 @@ def prompt(req_id, session_id):
         if MODE.startswith("fail-"):
             fail(req_id)
             if MODE == "fail-then-update":
-                time.sleep(0.3)
+                await_pause()
                 update(session_id, "late ")
             elif MODE == "fail-then-update-at-once":
                 update(session_id, "late ")
             elif MODE == "fail-then-ask":
-                time.sleep(0.3)
+                await_pause()
                 ask_to_edit(session_id)
             elif MODE == "fail-then-write":
-                time.sleep(0.3)
+                await_pause()
                 ask("fs/write_text_file", {"sessionId": session_id, "path": os.path.join(cwd, "out.txt"),
                                            "content": "x"})
             return

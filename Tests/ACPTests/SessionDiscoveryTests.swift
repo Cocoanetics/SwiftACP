@@ -6,9 +6,7 @@ import Testing
 /// outside the store is seen immediately, a record whose filename disagrees with its own
 /// id is ignored, and a legacy `index.json` has no say. Ports acpx 0.19.0's
 /// `scanSessionRecords` / record-resolved queries (issue #27).
-///
-/// Serialized because these redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct SessionDiscoveryTests {
+struct SessionDiscoveryTests {
     private func seed(
         id: String, cwd: String, name: String? = nil, agent: String = "codex",
         lastUsedAt: String? = nil

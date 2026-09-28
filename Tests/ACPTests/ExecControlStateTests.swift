@@ -8,7 +8,7 @@ import Testing
 /// acpx's `controlState` in `runOnce`, which takes in each `config_option_update` the
 /// agent sends as it arrives (acpx 0.19.1 and 0.19.3 alike), and keeps what an
 /// acknowledged selection left (0.19.3, #778).
-struct ExecControlStateTests {
+@Suite(.serialized, .agentLane) struct ExecControlStateTests {
     struct Run {
         var code: Int32
         var err: String
@@ -28,11 +28,7 @@ struct ExecControlStateTests {
                          "exec"] + execOptions + ["hi"]
         let (code, err): (Int32, String) = await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-                }.start()
-            }
+            let code = await onThreadOfItsOwn { Console.$capture.withValue(capture) { runCommandLine(arguments) } }
             return (code, capture.err)
         }
         let selections = ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n")

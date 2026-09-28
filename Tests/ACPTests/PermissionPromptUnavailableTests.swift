@@ -8,7 +8,7 @@ import Testing
 /// acpx fails it, unless the stream already shows the client's refusal saying the same
 /// (#93). A refused write shows it, since the refusal is an error on the wire. A tool
 /// permission answered `cancelled` does not. Lines are acpx 0.19.1's.
-@Suite struct PermissionPromptUnavailableTests {
+@Suite(.serialized, .agentLane) struct PermissionPromptUnavailableTests {
     static let message = "Permission prompt unavailable in non-interactive mode"
 
     /// The daemon's turn: text output shows it as the queue owner's error.
@@ -74,14 +74,16 @@ import Testing
         let flags = ["--approve-reads", "--non-interactive-permissions", "fail", "--agent", command]
         try await withIsolatedStore {
             let text = Console.Capture()
-            let textCode = Console.$capture.withValue(text) { runCommandLine(flags + ["exec", "go"]) }
+            let textCode = await onThreadOfItsOwn {
+                Console.$capture.withValue(text) { runCommandLine(flags + ["exec", "go"]) }
+            }
             #expect(textCode == ExitCodes.permissionDenied)
             #expect(text.out.contains("outcome:cancelled"))
             #expect(text.err.hasSuffix(Self.message + "\n"))
 
             let json = Console.Capture()
-            let jsonCode = Console.$capture.withValue(json) {
-                runCommandLine(["--format", "json"] + flags + ["exec", "go"])
+            let jsonCode = await onThreadOfItsOwn {
+                Console.$capture.withValue(json) { runCommandLine(["--format", "json"] + flags + ["exec", "go"]) }
             }
             #expect(jsonCode == ExitCodes.permissionDenied)
             #expect(json.out.hasSuffix(#"""

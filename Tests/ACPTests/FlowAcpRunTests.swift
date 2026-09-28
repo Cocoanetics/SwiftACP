@@ -9,9 +9,9 @@ import Testing
 let pythonAvailable = AgentRegistry.which("python3") != nil
 
 /// ACP nodes in `flow run` as acpx 0.19.3 runs them (#202, step 3), through the CLI with a
-/// real agent — the fixture agent `mock-agent.py`, a flow's `mock` profile — under the
-/// process-wide store isolation. `FlowAcpRunnerTests` has what the runner alone decides.
-@Suite(.serialized) struct FlowAcpRunTests {
+/// real agent — the fixture agent `mock-agent.py`, a flow's `mock` profile — each in a
+/// store of its own. `FlowAcpRunnerTests` has what the runner alone decides.
+@Suite(.serialized, .agentLane) struct FlowAcpRunTests {
     static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .appendingPathComponent("Fixtures")
 
@@ -71,13 +71,10 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
         let interrupting = interruptWhenLogged != nil
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    let code = Console.$capture.withValue(capture) {
-                        Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(args) }
-                    }
-                    continuation.resume(returning: code)
-                }.start()
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(args) }
+                }
             }
             var run = Run(out: capture.out, err: capture.err, code: code)
             let runs = FlowRunner.runsBaseDir()

@@ -12,9 +12,7 @@ import Testing
 /// output, with the cwd shown as `<cwd>`, as acpx 0.19.3 prints it: 0.19.1's build with
 /// 0.19.3's one change to how acpx parses, the root's `help [command]` (#778), which
 /// reproduces every earlier case byte for byte unpatched.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct CommanderTests {
+struct CommanderTests {
     private struct Case: Decodable {
         let args: [String]
         let exitCode: Int32

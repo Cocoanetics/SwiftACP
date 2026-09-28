@@ -12,7 +12,7 @@ import Testing
 /// `session/resume` when the agent advertises it, else `session/load`, refused by an agent
 /// that can do neither. An open record under that id is closed first (acpx 0.19.3, #782).
 /// Each output is what acpx printed for the same steps on `mock-agent.py`.
-@Suite(.serialized) struct SessionResumeTests {
+@Suite(.serialized, .agentLane) struct SessionResumeTests {
     struct Run {
         var code: Int32
         var out: String
@@ -31,14 +31,12 @@ import Testing
         _ args: [String], agent: String, cwd: URL, daemon: MCPServerConfig? = nil
     ) async -> Run {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
         return Run(code: code, out: capture.out, err: capture.err)
     }
