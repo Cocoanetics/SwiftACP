@@ -33,7 +33,7 @@ extension ConversationModel {
             rawInput = call.rawInput
             hasRawOutput = call.rawOutput != nil
             rawOutput = call.rawOutput
-            (rawInputWire, rawOutputWire) = Self.wireForms(in: raw, input: rawInput, output: rawOutput)
+            (rawInputWire, rawOutputWire) = Self.wireForms(in: raw, of: id, input: rawInput, output: rawOutput)
         }
 
         init(_ update: ToolCallUpdate, raw: WireJSON? = nil) {
@@ -45,18 +45,21 @@ extension ConversationModel {
             rawInput = update.rawInput
             hasRawOutput = update.rawOutput != nil
             rawOutput = update.rawOutput
-            (rawInputWire, rawOutputWire) = Self.wireForms(in: raw, input: rawInput, output: rawOutput)
+            (rawInputWire, rawOutputWire) = Self.wireForms(in: raw, of: id, input: rawInput, output: rawOutput)
         }
 
         /// `raw`'s `rawInput` and `rawOutput`, each when it is an object or an array — whose
-        /// order the value lost — and holds what was read.
+        /// order the decoded value lost — and `raw` is the update decoded: the tool `id`'s. Read
+        /// as JavaScript's `JSON.parse` reads it, it is what acpx records, down to a repeated
+        /// member, which JavaScript takes the last value of and Foundation the first (#242 review).
         static func wireForms(
-            in raw: WireJSON?, input: JSONValue?, output: JSONValue?
+            in raw: WireJSON?, of id: String, input: JSONValue?, output: JSONValue?
         ) -> (input: WireJSON?, output: WireJSON?) {
+            guard raw?["toolCallId"]?.stringValue == id else { return (nil, nil) }
             func form(_ key: String, _ value: JSONValue?) -> WireJSON? {
-                guard let value, let wire = raw?[key] else { return nil }
+                guard value != nil, let wire = raw?[key] else { return nil }
                 switch wire {
-                case .object, .array: return wire.holds(value) ? wire : nil
+                case .object, .array: return wire
                 default: return nil
                 }
             }
