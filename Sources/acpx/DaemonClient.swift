@@ -168,7 +168,7 @@ enum DaemonClient {
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
         terminalOutputCeiling: Int? = nil, model: String? = nil, sessionOptions: PromptSessionOptions? = nil,
-        limits: PromptLimits? = nil, renderer: OutputRenderer
+        limits: PromptLimits? = nil, renderer: OutputRenderer, requestId: String? = nil
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let daemon = try await connectToDaemon(spawnIfNeeded: true) { proxy in
@@ -181,7 +181,8 @@ enum DaemonClient {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
             sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(
-                streamWire: renderer.streamsWireJSON, environment: ProcessInfo.processInfo.environment))
+                streamWire: renderer.streamsWireJSON, environment: ProcessInfo.processInfo.environment,
+                requestId: requestId))
         turn.ownerPid = daemon.pid
         return turn
     }

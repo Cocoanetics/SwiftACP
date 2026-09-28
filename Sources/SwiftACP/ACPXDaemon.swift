@@ -405,6 +405,9 @@ public actor ACPXDaemon {
     ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
     ///     caller as ``AgentStderrEvent`` log notifications while the turn runs — first what
     ///     a held agent wrote since its session was made. Omitted, it is not.
+    ///   - requestId: the caller's name for a queued turn, which its journal records are keyed by
+    ///     (`turn_started`, `turn_result`, `last_request_id`), as acpx's owner keys them by the
+    ///     request id its CLI sent — the id `--no-wait` prints. Omitted, one of the daemon's own.
     ///   - environment: the environment an agent the turn connects starts over — the caller's
     ///     own, as `newSession`'s. A queued turn's agents start over the environment of the
     ///     prompt that started the session's owner, as acpx's queue owner starts its agent in
@@ -419,7 +422,8 @@ public actor ACPXDaemon {
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
         direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
-        callerConfig: CallerConfig? = nil, verbose: Bool? = nil, environment: [String: String]? = nil
+        callerConfig: CallerConfig? = nil, verbose: Bool? = nil, environment: [String: String]? = nil,
+        requestId: String? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -429,7 +433,7 @@ public actor ACPXDaemon {
                 mode: PromptTurnMode(
                     streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
                     turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false,
-                    environment: environment),
+                    environment: environment, requestId: requestId),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }

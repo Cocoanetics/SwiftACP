@@ -121,9 +121,11 @@ public struct SessionCreationMode: Sendable {
 /// `nil`, as configured), the caller's name for the turn, which a cancel can give before it
 /// begins (`turnToken`), the config that agent is started with (`callerConfig`; `nil`, the one
 /// where the session works), whether what the agent writes to stderr is streamed to the
-/// caller (`verbose`, acpx's `--verbose`), and the environment that agent starts over
+/// caller (`verbose`, acpx's `--verbose`), the environment that agent starts over
 /// (`environment`; `nil`, the daemon's own) — for a queued turn, the one its session's owner
-/// was started with (#222).
+/// was started with (#222) — and the caller's name for the queued turn, which its journal
+/// records are keyed by, as acpx's owner keys them by the request id its CLI sent (`requestId`;
+/// `nil`, one of the daemon's own).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool
@@ -133,11 +135,12 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var callerConfig: CallerConfig?
     public var verbose: Bool
     public var environment: [String: String]?
+    public var requestId: String?
 
     public init(
         streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, authPolicy: String? = nil,
         turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil, requestId: String? = nil
     ) {
         self.streamWire = streamWire
         self.direct = direct
@@ -147,6 +150,7 @@ public struct PromptTurnMode: Sendable, Equatable {
         self.callerConfig = callerConfig
         self.verbose = verbose
         self.environment = environment
+        self.requestId = requestId
     }
 }
 

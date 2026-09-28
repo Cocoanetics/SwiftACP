@@ -137,8 +137,22 @@ extension DaemonToolsTests {
             #expect(try await acpx(["--format", "quiet", "prompt", "after"]).code == 0)
             let asked = try await backend.sessionHistory(sessionId: id).filter { $0.role == "user" }
             #expect(asked.map(\.textPreview) == ["hold turn", "first", "second", "third", "after"])
+            // Each turn's journal records are keyed by the id its CLI printed, as acpx's owner keys
+            // them by the request id its CLI sent.
+            let journal = try String(contentsOf: ACPXPaths.sessionStreamPath(id), encoding: .utf8)
+            let printed = [text.out, json.out].compactMap(Self.requestId(in:))
+            #expect(printed.count == 2)
+            for requestId in printed {
+                #expect(journal.contains(#""type":"turn_started","request_id":"\#(requestId)""#))
+            }
             await backend.releaseAll()
         }
+    }
+
+    /// The lowercase UUID in `output`.
+    static func requestId(in output: String) -> String? {
+        output.range(of: "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", options: .regularExpression)
+            .map { String(output[$0]) }
     }
 
     /// Whether `output` is `prefix`, a lowercase UUID, then `suffix`.

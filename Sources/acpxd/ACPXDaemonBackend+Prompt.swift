@@ -47,7 +47,7 @@ extension ACPXDaemonBackend {
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
         fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil,
-        verbose: Bool = false, environment: [String: String]? = nil
+        verbose: Bool = false, environment: [String: String]? = nil, requestId: String? = nil
     ) async throws -> String {
         // acpx's `--no-wait`: queued as any prompt, the call over once the owner's line has it (#239).
         guard wait || direct else {
@@ -58,7 +58,7 @@ extension ACPXDaemonBackend {
                     streamWire: streamWire, permissionPolicy: permissionPolicy,
                     terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
                     fs: fs, authPolicy: authPolicy, turnToken: turnToken, callerConfig: callerConfig,
-                    verbose: verbose, environment: environment)
+                    verbose: verbose, environment: environment, requestId: requestId)
             }
         }
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -158,7 +158,8 @@ extension ACPXDaemonBackend {
         // The turn's journal records are keyed by its id, as acpx's by its queue request's. A
         // direct turn is no queue request, and its journal has only its messages.
         let persister = TurnPersister(
-            record: prompted, eventBuffer: eventBuffer, requestId: direct ? nil : control.id.uuidString.lowercased())
+            record: prompted, eventBuffer: eventBuffer,
+            requestId: direct ? nil : requestId ?? control.id.uuidString.lowercased())
         // The controls the turn takes change and save the prompt's record.
         started.ticket?.persister = persister
         await persister.recordPrompt(content)
