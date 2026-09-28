@@ -58,7 +58,7 @@ import Testing
         standIn name: String, environment: [String: String], agentEnvironment: [String: String]? = nil,
         _ lines: Lines
     ) async throws -> ACPAgent {
-        let python = try #require(AgentRegistry.which("python3"))
+        let python = try #require(mockPython)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("grok-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

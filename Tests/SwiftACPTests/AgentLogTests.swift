@@ -14,7 +14,7 @@ import Testing
         let lines = Lines()
         let agent = try await Self.launch("EXIT_AGENT_CODE=3", lines)
         await agent.close()
-        let python = try #require(AgentRegistry.which("python3"))
+        let python = try #require(mockPython)
         #expect(lines.all == [
             "spawning agent: /usr/bin/env EXIT_AGENT_CODE=3 \(python) \(Self.fixture.path)",
             "initialized protocol version 1"

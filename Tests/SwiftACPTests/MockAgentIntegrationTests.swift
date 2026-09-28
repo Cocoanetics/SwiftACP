@@ -3,7 +3,15 @@ import SwiftACP
 import Testing
 
 /// Whether `python3` is available for the bundled mock-agent fixture.
-let mockPythonAvailable = AgentRegistry.which("python3") != nil
+/// The Python the mock agents run on: `python3`, or on Windows, where it is `python`.
+let mockPython: String? = {
+    #if os(Windows)
+    return AgentRegistry.which("python") ?? AgentRegistry.which("python3")
+    #else
+    return AgentRegistry.which("python3")
+    #endif
+}()
+let mockPythonAvailable = mockPython != nil
 
 /// Drives a full ACP turn against the bundled `mock-agent.py` over a real
 /// subprocess + stdio transport — the complete client stack, hermetically.
@@ -25,7 +33,7 @@ struct MockAgentIntegrationTests {
     }
 
     private func mockOverride() -> [String: String]? {
-        guard let python = AgentRegistry.which("python3") else { return nil }
+        guard let python = mockPython else { return nil }
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .appendingPathComponent("Fixtures/mock-agent.py")

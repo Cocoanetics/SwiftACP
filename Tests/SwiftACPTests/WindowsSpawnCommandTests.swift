@@ -12,7 +12,18 @@ import Testing
 struct WindowsSpawnCommandTests {
     private struct Fixture: Decodable {
         let spawns: [Spawn]
+        let installed: [Installed]
         let paths: Paths
+    }
+
+    private struct Installed: Decodable {
+        let name: String
+        let command: String
+        let env: [String: String]
+        let files: [String]
+        let directories: [String]
+        let processDirectory: String
+        let expected: String?
     }
 
     private struct Spawn: Decodable {
@@ -62,12 +73,20 @@ struct WindowsSpawnCommandTests {
         return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
     }
 
-    /// A Windows file system holding `files`, as the fixture's fake one holds them: names compared in
-    /// any case, either slash, `.` and `..` read as Win32 reads them.
-    private static func fileSystem(_ files: [String]) -> WindowsSpawnCommand.FileSystem {
-        let existing = Set(files.map { WindowsPath.normalize($0).lowercased() })
-        let holds: @Sendable (String) -> Bool = { existing.contains(WindowsPath.normalize($0).lowercased()) }
-        return WindowsSpawnCommand.FileSystem(exists: holds, isFile: holds)
+    /// A Windows file system holding `files` and `directories`, as the fixture's fake one holds them:
+    /// names compared in any case, either slash, `.` and `..` read as Win32 reads them, and a
+    /// relative path taken from `processDirectory`.
+    private static func fileSystem(
+        _ files: [String], directories: [String] = [], processDirectory: String = #"C:\work"#
+    ) -> WindowsSpawnCommand.FileSystem {
+        let canonical: @Sendable (String) -> String = {
+            WindowsPath.resolve([$0], processDirectory: processDirectory).lowercased()
+        }
+        let fileSet = Set(files.map(canonical))
+        let directorySet = Set(directories.map(canonical))
+        return WindowsSpawnCommand.FileSystem(
+            exists: { fileSet.contains(canonical($0)) || directorySet.contains(canonical($0)) },
+            isFile: { fileSet.contains(canonical($0)) })
     }
 
     /// Each case's command, started as acpx starts it: an npm `.cmd` shim through `cmd.exe`,
@@ -85,6 +104,19 @@ struct WindowsSpawnCommandTests {
             let resolved = WindowsSpawnCommand.resolve(
                 spawn.command, environment: spawn.env, cwd: spawn.cwd, fileSystem: files)
             #expect(resolved == spawn.resolved, "\(spawn.name)")
+        }
+    }
+
+    /// An installed command, found as acpx's `resolveInstalledExecutable` finds it on Windows, which
+    /// `AgentRegistry.which` is there.
+    @Test func installedCommandsAreFoundAsAcpxFindsThem() throws {
+        for install in try Self.fixture().installed {
+            let files = Self.fileSystem(
+                install.files, directories: install.directories, processDirectory: install.processDirectory)
+            let found = WindowsSpawnCommand.installedExecutable(
+                install.command, environment: install.env, fileSystem: files,
+                processDirectory: install.processDirectory)
+            #expect(found == install.expected, "\(install.name)")
         }
     }
 
