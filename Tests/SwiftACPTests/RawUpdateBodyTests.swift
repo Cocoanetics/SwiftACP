@@ -72,6 +72,32 @@ import Testing
         #expect(raw == [#"{"z":1,"a":2}"#, #"{"second":true}"#])
     }
 
+    /// An update written twice in one notification is the last one, as acpx's `JSON.parse` reads
+    /// it — the update and the payloads it carries as written both — never the first update with
+    /// the second's payloads (#242 review).
+    @Test(.timeLimit(.minutes(1)))
+    func anUpdateWrittenTwiceIsTheLastOne() async throws {
+        let (clientEnd, agentEnd) = LoopbackTransport.pair()
+        let tap = RawWireTap()
+        let connection = ACPAgentConnection(transport: clientEnd, rawUpdates: tap)
+        await connection.start()
+        let (subscription, stream) = await connection.makeEventSubscription()
+        let body = #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","#
+            + #""update":{"sessionUpdate":"tool_call","toolCallId":"t","title":"First","rawInput":{"first":true}},"#
+            + #""update":{"sessionUpdate":"tool_call","toolCallId":"t","title":"Second","rawInput":{"second":true}}}}"#
+        tap.observe(.inbound, Data(body.utf8))
+        for message in try JSONRPCMessage.decodeMessages(from: Data(body.utf8)) { try agentEnd.send(message) }
+        var seen: (title: String, raw: String?)?
+        for await event in stream {
+            guard case .update(let note) = event, case .toolCall(let call) = note.update else { continue }
+            seen = (call.title, note.rawUpdate?["rawInput"]?.stringified)
+            break
+        }
+        await connection.endSubscription(subscription)
+        #expect(seen?.title == "Second")
+        #expect(seen?.raw == #"{"second":true}"#)
+    }
+
     /// A body the peer does not take as a notification is never kept, though it parses as JSON
     /// with the method last: a repeated `method` whose first value is no string fails the peer's
     /// decoding, so the next update gets its own body; a batch's updates are kept each in turn
