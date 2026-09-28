@@ -155,9 +155,8 @@ enum DaemonClient {
     /// ``DaemonUnavailable`` if the daemon can't be reached or started (there is no
     /// fallback — the daemon is the single manager that owns the session).
     ///
-    /// - Parameter wait: when `false` (`--no-wait`), the daemon rejects the turn
-    ///   immediately if another turn is already running for the session, instead of
-    ///   queueing behind it.
+    /// - Parameter wait: when `false` (`--no-wait`), the call returns once the session's
+    ///   line has the prompt, which then runs on in the daemon, its output going to no one.
     ///
     /// The tool result is the agent's aggregate response text, which the CLI
     /// ignores (it streams the same output live via `renderer`). The stop reason

@@ -353,9 +353,13 @@ public actor ACPXDaemon {
     ///     acpx's rules instead of `blocks`' stricter ones — any `image/*` or `audio/*`
     ///     type, a `blob` resource — and refused, like acpx, by the first block that falls
     ///     short (`prompt[<i>] …`). What the acpx CLI sends for a structured prompt.
-    ///   - wait: when another turn is already running for this session, `true` (the
-    ///     default) queues this one behind it; `false` rejects it immediately with a
-    ///     "session busy" error instead of waiting.
+    ///   - wait: `true` (the default) runs the turn — behind any the session runs or has
+    ///     waiting — and returns once it is over. `false` is acpx's `--no-wait`: the turn is
+    ///     queued the same way, and the call returns (`""`) as soon as the session's line has
+    ///     it; the turn runs on, its output going to no one, as acpx's owner runs a task it
+    ///     does not wait for. A prompt refused before the line takes it fails the call either
+    ///     way. A direct turn that may not wait is refused at once with "session busy" while
+    ///     anything holds the session.
     ///   - permissionMode: how this turn's permission requests and file writes are
     ///     answered — `approve-all`, `approve-reads` or `deny-all`, as acpx's
     ///     `--approve-all` / `--approve-reads` / `--deny-all`. Applies to this turn

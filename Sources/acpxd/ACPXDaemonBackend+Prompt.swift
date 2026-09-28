@@ -49,6 +49,18 @@ extension ACPXDaemonBackend {
         fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil,
         verbose: Bool = false, environment: [String: String]? = nil
     ) async throws -> String {
+        // acpx's `--no-wait`: queued as any prompt, the call over once the owner's line has it (#239).
+        guard wait || direct else {
+            return try await queuedWithoutWaiting { [self] in
+                try await runPrompt(
+                    sessionId: rawSessionId, text: text, blocks: blocks, content: rawContent,
+                    permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
+                    streamWire: streamWire, permissionPolicy: permissionPolicy,
+                    terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
+                    fs: fs, authPolicy: authPolicy, turnToken: turnToken, callerConfig: callerConfig,
+                    verbose: verbose, environment: environment)
+            }
+        }
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
         let (retries, timeout) = try Self.checkedLimits(limits)
@@ -66,22 +78,15 @@ extension ACPXDaemonBackend {
         // The prompt begins as acpx's queue owner begins the prompt task it takes
         // (`runPromptTurn`): at once, unless another prompt of the session runs or waits
         // before it — then once those are over. Keyed by the record, whose ACP session a
-        // fallback can replace. When `wait` is false, a session running anything rejects it.
+        // fallback can replace. A refusal — the owner shutting down, or its line full — fails it.
         // Begun, the turn is the session's before it holds the session: a cancel is its
         // (``cancelSession(sessionId:)``), and so is a control sent, run on the prompt's
         // agent once the prompt goes out (acpx's `beginPrompt`). A turn that ends before
         // then fails the controls still waiting. A direct turn — a flow's — begins apart from
         // the owner's line, as acpx's `sendSessionDirect` takes only the session's turn (#225).
-        let started: StartedTurn
-        var heldTheSlot: Bool
-        do {
-            (started, heldTheSlot) = try await startTurn(
-                recordId, direct: direct, wait: wait, turnToken: turnToken, queueMaxDepth: limits?.queueMaxDepth)
-        } catch let refused as QueueOwnerShuttingDown {
-            return try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
-        } catch let refused as QueueOwnerOverloaded {
-            return try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
-        }
+        let (started, holdsTheSlot) = try await startTurnTellingRefusal(
+            recordId, direct: direct, wait: wait, turnToken: turnToken, queueMaxDepth: limits?.queueMaxDepth)
+        var heldTheSlot = holdsTheSlot
         let control = started.control
         defer { turnOver(recordId, started, heldTheSlot: heldTheSlot) }
         // One turn per session at a time, so concurrent CLI/MCP callers never drive one
@@ -107,13 +112,8 @@ extension ACPXDaemonBackend {
             return try await failedBeforeItsAttempt(QueueOwnerShuttingDown(inLine: true), of: recordId, direct: direct)
         }
         // A free slot is had at once, however the prompt was called off meanwhile: then it
-        // ends here, nothing sent and nothing kept — a direct turn's agent with it, as acpx's
-        // closes the client it was handed however it ends, from a task this cancellation
-        // cannot cut short (#219 review).
-        if Task.isCancelled {
-            if direct { await Task { await self.evict(recordId) }.value }
-            throw CancellationError()
-        }
+        // ends here, nothing sent and nothing kept (#219 review).
+        try await endIfCalledOff(recordId, direct: direct)
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
@@ -266,19 +266,6 @@ extension ACPXDaemonBackend {
         error is AgentExitedBeforeTheTurn
     }
 
-    /// Forwards what connecting an agent for a turn put on the wire to the MCP client
-    /// the turn is for, before the turn's own messages — noting its errors on the way.
-    static func forwardToClient(logger: String, errors: TurnErrorWatch? = nil) -> ConnectOutputHandler {
-        let clientSession = Session.current
-        return { messages in
-            errors?.observe(messages)
-            for message in messages {
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
-            }
-        }
-    }
-
     /// - Parameter retriesOnAFreshLaunch: whether a failure a fresh launch would not
     ///   have (``isFixedByAFreshLaunch(_:)``) is retried on one, as long as the agent has
     ///   not answered the attempt. It then throws ``RetriedOnAFreshLaunch``, and nothing
@@ -305,7 +292,7 @@ extension ACPXDaemonBackend {
         // launch asks for it again, which does no harm. Cleared when the turn ends.
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
-        let clientSession = Session.current
+        let clientSession = Self.caller
         let wireFeed = TurnWireFeed(
             streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
         // The prompt's result as it crossed the wire: its usage and cost go to the

@@ -25,9 +25,9 @@ extension ACPXDaemonBackend {
     }
 
     /// Begin a prompt for `recordId`: at once when no other prompt of the session has
-    /// begun, else once those before it are over (``promptEnded(_:_:heldTheSlot:)``).
-    /// When `wait` is false, a session running anything refuses it with
-    /// ``DaemonError/sessionBusy``, and it takes the slot as it begins. A daemon that is
+    /// begun, else once those before it are over (``promptEnded(_:_:heldTheSlot:)``). Taken
+    /// either way, it tells a caller that queued it without waiting (``NoWaitAdmission``), as
+    /// acpx's owner answers `accepted` once it enqueued a task. A daemon that is
     /// stopping takes none, nor does a session being closed or let go, as acpx's owner takes
     /// no task once it shuts down (`enqueue`). The turn takes the caller's `turnToken` as it
     /// begins (``claimTurnToken(_:for:)``), and a call-off of it is kept while the prompt waits
@@ -35,29 +35,16 @@ extension ACPXDaemonBackend {
     /// behind as many as the owner's depth allows is refused (``QueueOwnerOverloaded``), as acpx's
     /// owner refuses one past its `maxQueueDepth` (#240).
     func beginPrompt(
-        _ recordId: String, wait: Bool, turnToken: String? = nil, queueMaxDepth: Int? = nil
+        _ recordId: String, turnToken: String? = nil, queueMaxDepth: Int? = nil
     ) async throws -> BegunPrompt {
         guard !stopping, shuttingDown[recordId] == nil else { throw QueueOwnerShuttingDown(inLine: false) }
         func begins(_ begun: BegunPrompt) -> BegunPrompt {
             if let turnToken { claimTurnToken(turnToken, for: recordId) }
             return begun
         }
-        guard wait else {
-            guard promptLines[recordId] == nil else { throw DaemonError.sessionBusy(recordId) }
-            // Begun before it tries the slot, so that nothing sent meanwhile finds the session
-            // idle (Codex review on #196); a session something holds ends it at once.
-            promptLines[recordId] = PromptLine(maxQueueDepth: Self.queueDepth(queueMaxDepth))
-            let begun = begins(promptBegins(recordId))
-            do {
-                try await turnQueue.acquire(recordId, wait: false)
-            } catch {
-                promptEnded(recordId, begun, heldTheSlot: false)
-                throw error
-            }
-            return begun
-        }
         guard let line = promptLines[recordId] else {
             promptLines[recordId] = PromptLine(maxQueueDepth: Self.queueDepth(queueMaxDepth))
+            Self.noWaitAdmission?.admit()
             return begins(promptBegins(recordId))
         }
         let depth = owners[recordId]?.maxQueueDepth ?? line.maxQueueDepth
@@ -70,6 +57,7 @@ extension ACPXDaemonBackend {
         let begun = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 promptLines[recordId]?.waiting.append((token, continuation))
+                Self.noWaitAdmission?.admit()
                 promptWaits?(recordId)
             }
         } onCancel: {
