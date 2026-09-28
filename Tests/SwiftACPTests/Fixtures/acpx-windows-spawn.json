@@ -1,5 +1,5 @@
 {
-  "generatedBy": "acpx v0.19.3 src/spawn-command-options.ts, path.win32, Node v25.9.0",
+  "generatedBy": "acpx v0.19.3 src/spawn-command-options.ts and src/acp/terminal-manager.ts, path.win32, Node v25.9.0",
   "spawns": [
     {
       "name": "an npm shim on PATH",
@@ -2891,6 +2891,1288 @@
       "contents": {},
       "processDirectory": "C:\\work",
       "expected": null
+    }
+  ],
+  "terminals": [
+    {
+      "name": "a program on PATH",
+      "command": "where",
+      "args": [
+        "node"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\WINDOWS\\system32\\where.exe"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "where",
+        "args": [
+          "node"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "an npm shim, with arguments",
+      "command": "gemini",
+      "args": [
+        "--version"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini --version\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "an npm shim, no arguments",
+      "command": "gemini",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "an empty argument",
+      "command": "gemini",
+      "args": [
+        "",
+        "x",
+        ""
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini  x \""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "arguments joined as they are",
+      "command": "gemini",
+      "args": [
+        "-p",
+        "say \"hi\" & exit",
+        "a\\b\\"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini -p say \"hi\" & exit a\\b\\\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a bat on PATH",
+      "command": "build",
+      "args": [
+        "release"
+      ],
+      "parent": {
+        "Path": "C:\\tools;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\build.bat"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"build release\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a cmd by a relative path",
+      "command": ".\\scripts\\setup.cmd",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\proj",
+      "files": [
+        "C:\\proj\\scripts\\setup.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\".\\scripts\\setup.cmd x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a cmd named in full, with a space",
+      "command": "C:\\Program Files\\tool\\run.cmd",
+      "args": [
+        "a b"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Program Files\\tool\\run.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\Program Files\\tool\\run.cmd a b\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a cmd that is not there",
+      "command": "missing.cmd",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"missing.cmd x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "an upper-case extension",
+      "command": "C:\\tools\\RUN.CMD",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\RUN.CMD"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\tools\\RUN.CMD\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "an exe before a cmd",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.exe",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "gemini",
+        "args": [
+          "x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "no ComSpec",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "an empty ComSpec",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "COMSPEC in upper case",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "COMSPEC": "D:\\cmd.exe"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "D:\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "another shell",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        "args": [
+          "-c",
+          "gemini x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a ComSpec with forward slashes",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:/WINDOWS/system32/cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:/WINDOWS/system32/cmd.exe",
+        "args": [
+          "-c",
+          "gemini x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "CMD.EXE in upper case",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\SYSTEM32\\CMD.EXE",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\SYSTEM32\\CMD.EXE",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a bare cmd",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "cmd",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "cmd",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a ComSpec with a line break",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\a\nb\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\a\nb\\cmd.exe",
+        "args": [
+          "-c",
+          "gemini x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "cmd.exe after a slash",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS/cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS/cmd.exe",
+        "args": [
+          "-c",
+          "gemini x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "the request's Path",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [
+        {
+          "name": "Path",
+          "value": "C:\\tools"
+        }
+      ],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\gemini.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "the request's PATH, not looked at beside the client's Path",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [
+        {
+          "name": "PATH",
+          "value": "C:\\tools"
+        }
+      ],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\gemini.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "gemini",
+        "args": [
+          "x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "the request's PATH, with none of the client's",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [
+        {
+          "name": "PATH",
+          "value": "C:\\tools"
+        }
+      ],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\gemini.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "the request's first PATH",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [
+        {
+          "name": "PATH",
+          "value": "C:\\a"
+        },
+        {
+          "name": "path",
+          "value": "C:\\tools"
+        }
+      ],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\gemini.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "gemini",
+        "args": [
+          "x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "the request's PATH set twice",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [
+        {
+          "name": "PATH",
+          "value": "C:\\a"
+        },
+        {
+          "name": "path",
+          "value": "C:\\b"
+        },
+        {
+          "name": "PATH",
+          "value": "C:\\tools"
+        }
+      ],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\tools\\gemini.cmd"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"gemini x\""
+        ],
+        "windowsVerbatimArguments": true,
+        "fallback": null
+      }
+    },
+    {
+      "name": "the request's PATHEXT",
+      "command": "gemini",
+      "args": [
+        "x"
+      ],
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [
+        {
+          "name": "PATHEXT",
+          "value": ".EXE"
+        }
+      ],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "gemini",
+        "args": [
+          "x"
+        ],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a line",
+      "command": "echo hi",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "echo hi",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "echo hi"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a pipe",
+      "command": "dir|more",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "dir|more",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "dir|more"
+          ]
+        }
+      }
+    },
+    {
+      "name": "an ampersand",
+      "command": "a&b",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "a&b",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "a&b"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a word",
+      "command": "nothere",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "nothere",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a backslash is no syntax",
+      "command": "C:\\nothere\\x",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\nothere\\x",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a percent is none",
+      "command": "%COMSPEC%",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "%COMSPEC%",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a caret is none",
+      "command": "a^b",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "a^b",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a carriage return",
+      "command": "x\r",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "x\r",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "x\r"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a tab",
+      "command": "echo\thi",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "echo\thi",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "echo\thi"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a no-break space",
+      "command": "echo hi",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "echo hi",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "echo hi"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a line separator",
+      "command": "echo hi",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "echo hi",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "echo hi"
+          ]
+        }
+      }
+    },
+    {
+      "name": "an ideographic space",
+      "command": "echo　hi",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "echo　hi",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "echo　hi"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a zero-width space is none",
+      "command": "echo​hi",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "echo​hi",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a path that is there",
+      "command": "C:\\Program Files\\app\\run.exe",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Program Files\\app\\run.exe"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\Program Files\\app\\run.exe",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a path that is not there",
+      "command": "C:\\Program Files\\app\\missing.exe",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\Program Files\\app\\missing.exe",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/s",
+            "/c",
+            "C:\\Program Files\\app\\missing.exe"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a relative path that is there",
+      "command": "tools\\run me",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\proj",
+      "files": [
+        "C:\\proj\\tools\\run me"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "tools\\run me",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a relative path, forward slashes",
+      "command": "tools/run me",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\proj",
+      "files": [
+        "C:\\proj\\tools\\run me"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "tools/run me",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a relative directory",
+      "command": "tools\\run me",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "proj",
+      "files": [
+        "C:\\work\\proj\\tools\\run me"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "tools\\run me",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
+    },
+    {
+      "name": "a directory that is there",
+      "command": "C:\\my dir",
+      "parent": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "request": [],
+      "cwd": "C:\\work",
+      "files": [],
+      "directories": [
+        "C:\\my dir"
+      ],
+      "processDirectory": "C:\\work",
+      "expected": {
+        "command": "C:\\my dir",
+        "args": [],
+        "windowsVerbatimArguments": false,
+        "fallback": null
+      }
     }
   ],
   "paths": {

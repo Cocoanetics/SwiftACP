@@ -15,12 +15,12 @@ extension ClientCapabilities {
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: false)
 
     /// What acpx advertises: real file access, and client-side terminals — where
-    /// ``TerminalManager`` can run them (macOS and Linux). ``ACPAgent/launch(agent:argv:cwd:handlers:clientInfo:capabilities:environment:authCredentials:authPolicy:inheritStderr:overrides:terminalOutputCeiling:onClientRequest:onRawWire:)``
+    /// ``TerminalManager`` can run them (macOS, Linux and Windows). ``ACPAgent/launch(agent:argv:cwd:handlers:clientInfo:capabilities:environment:authCredentials:authPolicy:inheritStderr:overrides:terminalOutputCeiling:onClientRequest:onRawWire:)``
     /// gives a connection advertising terminals a ``TerminalManager`` to run them on.
     public static let acpx = ClientCapabilities(
         fs: FileSystemCapability(readTextFile: true, writeTextFile: true), terminal: terminalsSupported)
 
-    #if os(macOS) || os(Linux)
+    #if os(macOS) || os(Linux) || os(Windows)
     static let terminalsSupported = true
     #else
     static let terminalsSupported = false
@@ -94,10 +94,8 @@ public final class ACPAgent: Sendable {
     /// process's `ACPX_TERMINAL_MAX_OUTPUT_BYTES`; a host running turns for other
     /// processes sets each caller's own. Nothing changes without a terminal manager.
     public func setTerminalOutputCeiling(_ ceiling: Int?) async {
-        #if os(macOS) || os(Linux)
         guard let manager = terminals as? TerminalManager else { return }
         await manager.setOutputCeiling(ceiling)
-        #endif
     }
 
     /// Spawn an agent's ACP adapter, run the `initialize` handshake, and return
@@ -234,13 +232,8 @@ public final class ACPAgent: Sendable {
         case .environment: ceiling = try TerminalOutputLimit.ceiling()
         case .given(let bytes): ceiling = bytes
         }
-        #if os(macOS) || os(Linux)
         guard capabilities.terminal else { return nil }
         return TerminalManager(cwd: cwd, outputCeiling: ceiling, environment: environment)
-        #else
-        _ = (ceiling, environment)
-        return nil
-        #endif
     }
 
     /// The command a launch failure names — acpx's `options.agentCommand`. Given an

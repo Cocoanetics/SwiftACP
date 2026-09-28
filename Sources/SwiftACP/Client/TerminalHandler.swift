@@ -41,6 +41,9 @@ public enum TerminalError: Error, Sendable, Equatable, LocalizedError, CustomStr
     /// inside the command, an argument, the directory or a variable, which C would cut
     /// short — in Node's `ERR_INVALID_ARG_VALUE` words.
     case invalidSpawnArgument(String)
+    /// On Windows, a killed command and what it started still ran after the `SIGKILL` stage's
+    /// grace, as acpx's `waitForFinalCleanup` reports it there.
+    case cleanupUnfinished
 
     public var description: String {
         switch self {
@@ -49,6 +52,7 @@ public enum TerminalError: Error, Sendable, Equatable, LocalizedError, CustomStr
         case .spawnFailed(let command, let code):
             return Self.reportedAsChildErrors.contains(code) ? "spawn \(command) \(code)" : "spawn \(code)"
         case .invalidSpawnArgument(let message): return message
+        case .cleanupUnfinished: return "Terminal process cleanup did not finish after SIGKILL"
         }
     }
 

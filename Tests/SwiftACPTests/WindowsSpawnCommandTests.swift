@@ -2,19 +2,45 @@
 import Foundation
 import Testing
 
-/// How a launch probe starts its command on Windows (#265), checked on every platform. acpx's side
-/// is checked against acpx's own code (`acpx-windows-spawn.json`, made by
+/// How a launch probe (#265) and a terminal (#272) start their commands on Windows, checked on every
+/// platform. acpx's side is checked against acpx's own code (`acpx-windows-spawn.json`, made by
 /// `scripts/windows-spawn-vectors`): 0.19.3's `buildAgentSpawnCommand` and
-/// `resolveWindowsCommand`, run with Node's `path.win32` and a Windows file system of each case's
-/// files, and `path.win32` itself. libuv's side, what Node then starts, is checked against libuv's
-/// own examples and rules.
+/// `resolveWindowsCommand`, and its terminal launch with what Node's `spawn` makes of it, run with
+/// Node's `path.win32` and a Windows file system of each case's files, and `path.win32` itself.
+/// libuv's side, what Node then starts, is checked against libuv's own examples and rules.
 @Suite(.timeLimit(.minutes(1)))
 struct WindowsSpawnCommandTests {
     private struct Fixture: Decodable {
         let spawns: [Spawn]
         let installed: [Installed]
         let claudeExecutable: [ClaudeCase]
+        let terminals: [TerminalCase]
         let paths: Paths
+    }
+
+    private struct TerminalCase: Decodable {
+        let name: String
+        let command: String
+        let args: [String]?
+        let parent: [String: String]
+        let request: [EnvVariable]
+        let cwd: String
+        let files: [String]
+        let directories: [String]
+        let processDirectory: String
+        let expected: TerminalStart
+    }
+
+    private struct TerminalStart: Decodable {
+        let command: String
+        let args: [String]
+        let windowsVerbatimArguments: Bool
+        let fallback: Fallback?
+    }
+
+    private struct Fallback: Decodable {
+        let command: String
+        let args: [String]
     }
 
     private struct ClaudeCase: Decodable {
@@ -145,6 +171,32 @@ struct WindowsSpawnCommandTests {
             let found = WindowsSpawnCommand.claudeCodeExecutable(
                 environment: claude.env, cwd: claude.cwd, fileSystem: files, processDirectory: claude.processDirectory)
             #expect(found == claude.expected, "\(claude.name)")
+        }
+    }
+
+    /// A terminal's command, started as acpx starts it on Windows: as it is, or a `.cmd` or `.bat`
+    /// through Node's own shell, the client's `%COMSPEC%`, found in the request's variables over the
+    /// client's as acpx looks them up; and, when it was not found, its line through `cmd.exe` if it
+    /// reads as one.
+    @Test func eachTerminalStartsAsAcpxStartsIt() throws {
+        for terminal in try Self.fixture().terminals {
+            let files = Self.fileSystem(
+                terminal.files, directories: terminal.directories, processDirectory: terminal.processDirectory)
+            let lookup = WindowsSpawnCommand.lookupEnvironment(
+                terminal.request.map { (name: $0.name, value: $0.value) }, over: terminal.parent)
+            let started = WindowsSpawnCommand.terminal(
+                command: terminal.command, arguments: terminal.args ?? [], environment: lookup, cwd: terminal.cwd,
+                fileSystem: files, shell: WindowsSpawnCommand.value(of: "COMSPEC", in: terminal.parent))
+            let expected = WindowsSpawnCommand(
+                command: terminal.expected.command, arguments: terminal.expected.args,
+                verbatimArguments: terminal.expected.windowsVerbatimArguments)
+            #expect(started == expected, "\(terminal.name)")
+            let fallback = WindowsSpawnCommand.terminalFallback(
+                terminal.command, cwd: terminal.cwd, fileSystem: files, processDirectory: terminal.processDirectory)
+            let expectedFallback = terminal.expected.fallback.map {
+                WindowsSpawnCommand(command: $0.command, arguments: $0.args)
+            }
+            #expect(fallback == expectedFallback, "\(terminal.name)")
         }
     }
 
