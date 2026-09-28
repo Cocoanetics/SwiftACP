@@ -27,6 +27,8 @@ public actor ACPAgentConnection {
     var afterServingOwnedRequest: (@Sendable () async -> Void)?
     /// For tests: runs before a `session/update` read is handled.
     var beforeHandlingUpdate: (@Sendable () async -> Void)?
+    /// For tests: runs once a `session/load` waits for another load of its session to finish.
+    var waitingToLoad: (@Sendable (SessionId) -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
