@@ -21,7 +21,7 @@ enum DaemonError: LocalizedError {
     case invalidPromptRetries(Int)
     case invalidTimeout(Int)
     case invalidTTL(Int)
-    case sessionResumeRequired(String, reason: String)
+    case sessionResumeRequired(String, reason: String, cause: Error? = nil)
     case stopping
 
     var errorDescription: String? {
@@ -47,12 +47,21 @@ enum DaemonError: LocalizedError {
             return "invalid timeoutMs \(milliseconds): exceeds the maximum supported timer delay"
         case .invalidTTL(let milliseconds):
             return "invalid ttlMs \(milliseconds): exceeds the maximum supported timer delay"
-        case .sessionResumeRequired(let id, let reason):
+        case .sessionResumeRequired(let id, let reason, _):
             // npm acpx's SessionResumeRequiredError wording.
             return "Persistent ACP session \(id) could not be resumed: \(reason)"
         case .stopping:
             return "acpxd is stopping and starts no more agents"
         }
+    }
+}
+
+/// acpx's `SessionResumeRequiredError` keeps what refused the session as its `cause`, where
+/// acpx's output finds the agent's error (`extractAcpError`, #290).
+extension DaemonError: ErrorWithCause {
+    var cause: Error? {
+        if case .sessionResumeRequired(_, _, let cause) = self { return cause }
+        return nil
     }
 }
 

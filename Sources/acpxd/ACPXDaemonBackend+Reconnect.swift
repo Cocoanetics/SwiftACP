@@ -384,7 +384,8 @@ extension ACPXDaemonBackend {
                 after: error, sameSessionOnly: sameSessionOnly || record?.importedFrom != nil,
                 sessionHasAgentMessages: record?.hasAgentMessages ?? false) {
             case .surface: throw error
-            case .refuse: throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error))
+            case .refuse:
+                throw DaemonError.sessionResumeRequired(sessionId, reason: reconnectReason(error), cause: error)
             case .startFresh: break
             }
             let session = try await withTimeout(milliseconds: timeout) {

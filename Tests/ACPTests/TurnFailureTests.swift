@@ -28,6 +28,21 @@ import Testing
 
     // MARK: What a failure is
 
+    /// A session that could not be taken back as itself carries what refused it, as acpx's
+    /// `SessionResumeRequiredError` keeps it as its `cause`: the agent's error, which acpx's
+    /// output reports as the failure's own — its code, message and data (#290).
+    @Test func aRefusalToTakeASessionBackCarriesTheAgentsError() {
+        let data: JSONValue = .object(["a": .integer(1)])
+        let gone = JSONRPCErrorBody(code: -32002, message: "Resource not found: s", data: data)
+        let refusal = DaemonError.sessionResumeRequired("s", reason: "Resource not found: s", cause: gone)
+        let agents = AcpErrorPayload(code: -32002, message: "Resource not found: s", data: WireJSON(data))
+        #expect(TurnFailure.payload(of: refusal) == agents)
+        let event = Self.event(refusal)
+        #expect(event.acp == agents.jsonValue)
+        #expect((event.outputCode, event.detailCode, event.origin) == ("NO_SESSION", "SESSION_RESUME_REQUIRED", "acp"))
+        #expect(TurnFailure.payload(of: DaemonError.sessionResumeRequired("s", reason: "gone")) == nil)
+    }
+
     /// The agent's own error response, which the exchange showed: a runtime failure of
     /// the queued prompt, carrying the error as acpx's `acp` payload.
     @Test func anAgentErrorTheWireShowedIsTheQueuedPromptsRuntimeFailure() {

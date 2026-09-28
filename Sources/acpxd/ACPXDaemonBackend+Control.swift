@@ -23,7 +23,9 @@ extension ACPXDaemonBackend {
     /// output is capped by the caller's `terminalOutputCeiling`, as a turn's is.
     ///
     /// A session a queue owner holds (``SessionOwner``) has the control on the owner's
-    /// agent, which stays. One no owner holds has it as acpx runs a control then —
+    /// agent, which stays — taken back as itself or not at all, should the owner have to take
+    /// it back, as acpx's owner runs every control `same-session-only` (`runIdleControlWithRecord`,
+    /// #290). One no owner holds has it as acpx runs a control then —
     /// directly (`withConnectedSession`): its agent connected for the control, and closed
     /// once it is done, however it went.
     ///
@@ -87,8 +89,8 @@ extension ACPXDaemonBackend {
                     current, direct: direct, replacing: replacing, deadline: deadline, step: step,
                     settings: CallerSettings(
                         handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
-                        capabilities: .acpx(connecting), authPolicy: connecting.authPolicy, stderr: stderr,
-                        environment: direct ? environment : owners[recordId]?.environment),
+                        sameSessionOnly: !direct, capabilities: .acpx(connecting), authPolicy: connecting.authPolicy,
+                        stderr: stderr, environment: direct ? environment : owners[recordId]?.environment),
                     body)
             }
         } catch {
