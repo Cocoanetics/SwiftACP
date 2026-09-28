@@ -1,0 +1,23 @@
+#!/bin/sh
+# Regenerates Tests/SwiftACPTests/Fixtures/acpx-windows-spawn.json from acpx's own Windows command
+# resolution (src/spawn-command-options.ts), run with Node's path.win32 and a fake Windows file
+# system (#265).
+#   ACPX_CHECKOUT  an acpx clone (required)
+#   ACPX_TAG       the tag to take the resolution from (default: v0.19.3)
+#   NODE           the node to run it with; 23.6 or later runs the TypeScript as it is
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+: "${ACPX_CHECKOUT:?set ACPX_CHECKOUT to an acpx clone}"
+ACPX_TAG=${ACPX_TAG:-v0.19.3}
+export ACPX_TAG
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+git -C "$ACPX_CHECKOUT" show "$ACPX_TAG:src/spawn-command-options.ts" \
+    | sed -e 's#^import fs from "node:fs";#import { fakeFs as fs } from "./fake-fs.ts";#' \
+          -e 's#^import path from "node:path";#import nodePath from "node:path"; const path = nodePath.win32;#' \
+    > "$work/spawn-command-options.ts"
+grep -q 'nodePath.win32' "$work/spawn-command-options.ts"
+grep -q 'fakeFs as fs' "$work/spawn-command-options.ts"
+cp "$here/fake-fs.ts" "$here/cases.ts" "$work/"
+"${NODE:-node}" "$work/cases.ts" > "$repo/Tests/SwiftACPTests/Fixtures/acpx-windows-spawn.json"

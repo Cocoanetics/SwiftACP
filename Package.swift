@@ -54,7 +54,10 @@ var targets: [Target] = [
     .testTarget(
         name: "SwiftACPTests",
         dependencies: ["SwiftACP"],
-        exclude: ["Fixtures/mock-agent.py", "Fixtures/exit-agent.py", "Fixtures/acpx-client-params.json"]
+        exclude: [
+            "Fixtures/mock-agent.py", "Fixtures/exit-agent.py", "Fixtures/acpx-client-params.json",
+            "Fixtures/acpx-windows-spawn.json"
+        ]
     )
 ]
 
