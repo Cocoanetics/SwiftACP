@@ -21,6 +21,8 @@ extension ACPXDaemonBackend {
         let value: Value
         let resumed: Bool
         let owned: Bool
+        /// Why the session could not be taken back when a new session replaced it (acpx's `loadError`).
+        var loadError: String?
     }
 
     /// Run a control as acpx's queue owner runs one (`QueueOwnerControlAdmission.run`): on

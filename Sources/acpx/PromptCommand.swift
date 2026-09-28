@@ -92,8 +92,11 @@ enum PromptCommand {
         }
         let permissions = turn.permissions ?? PermissionStats()
         if permissions.promptUnavailable { renderer.permissionPromptUnavailable(sessionId: record.acpxRecordId) }
-        return permissionExitCode(
+        let code = permissionExitCode(
             permissions, quiet: flags.format == "quiet", queueDetail: "QUEUE_RUNTIME_PROMPT_FAILED")
+        // Last, after the permissions' verdict, as acpx's prompt handler ends.
+        DaemonClient.noteFallback(turn.loadError, verbose: flags.verbose)
+        return code
     }
 
     /// How a failed turn reaches the top level. When the JSON stream already shows how

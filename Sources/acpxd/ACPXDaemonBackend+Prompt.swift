@@ -278,7 +278,8 @@ extension ACPXDaemonBackend {
         errors.reset()
         // Until this attempt's prompt goes out, a cancel waits for it.
         promptUnsent(recordId: recordId, turn: turn.id)
-        let entry = try await connectForPrompt(turn)
+        let connected = try await connectForPrompt(turn)
+        let entry = connected.entry
         // The attempt proper starts once connected: a restore the agent refused while
         // connecting is on the wire, but it is not how this attempt fails.
         errors.reset()
@@ -365,7 +366,8 @@ extension ACPXDaemonBackend {
                 ? await connection.permissionTotals(for: boundSessionId).counted(since: countedBefore)
                 : PermissionStats()
             await Self.announceTheEnd(
-                of: response, permissions: permissions, result: promptResult, as: sessionId, to: clientSession)
+                of: response, permissions: permissions, result: promptResult, as: sessionId, to: clientSession,
+                loadError: connected.loadError)
             return fullText
         } catch let unwritten as SessionJournalWriteError {
             // The prompt is over, and its end said all it has to.
@@ -388,10 +390,10 @@ extension ACPXDaemonBackend {
     /// applies it to that turn — are the live agent's from before connecting on, as is its cap
     /// on terminal output. Turns are serialized per session, so no other turn can be reading
     /// them meanwhile.
-    func connectForPrompt(_ turn: Turn) async throws -> Live {
+    func connectForPrompt(_ turn: Turn) async throws -> Connected {
         let (recordId, persister, eventBuffer, errors) = (turn.recordId, turn.persister, turn.eventBuffer, turn.errors)
         let startedAt = ContinuousClock.now
-        let entry = try await ensure(
+        let connected = try await connect(
             recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
             settings: CallerSettings(
                 handlers: turn.permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
@@ -406,7 +408,7 @@ extension ACPXDaemonBackend {
             onConnectWire: { _, body in eventBuffer.append(body) })
         turn.stderr?.log(PromptTimings.metric(
             "prompt.connect_and_load", milliseconds: PromptTimings.milliseconds(since: startedAt, whole: true)))
-        return entry
+        return connected
     }
 
     /// acpx's `prompt.agent_turn`, for a caller under `--verbose`: how long the answered attempt
