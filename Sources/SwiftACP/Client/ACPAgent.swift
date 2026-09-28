@@ -155,6 +155,13 @@ public final class ACPAgent: Sendable {
         rawWire.onLog(onLog)
         rawWire.log("spawning agent: \(spec.executable) \(spec.arguments.joined(separator: " "))")
         try await plan.ensureSupported()
+        if let claudeCode = plan.claudeCodeExecutable(
+            cwd: spec.workingDirectory ?? FileManager.default.currentDirectoryPath) {
+            var environment = spec.environment ?? ProcessInfo.processInfo.environment
+            environment["CLAUDE_CODE_EXECUTABLE"] = claudeCode
+            spec.environment = environment
+            rawWire.log("resolved system Claude Code executable: \(claudeCode)")
+        }
         // A launch called off while it asked a probe goes no further, as acpx's probe admission
         // stops a client closed meanwhile: a probe given up says nothing, which is no leave (#263 review).
         try Task.checkCancellation()

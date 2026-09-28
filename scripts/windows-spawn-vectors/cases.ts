@@ -4,6 +4,7 @@
 import nodePath from "node:path";
 import { fakeFs } from "./fake-fs.ts";
 import { buildAgentSpawnCommand, resolveInstalledExecutable, resolveWindowsCommand } from "./spawn-command-options.ts";
+import { resolveClaudeCodeExecutable } from "./agent-command.ts";
 
 // As on Windows: `resolveInstalledExecutable` asks `process.platform`, and a relative path is
 // taken from `process.cwd()`.
@@ -182,6 +183,95 @@ const installedResults = installs.map((install) => {
   };
 });
 
+type Claude = {
+  name: string;
+  env?: Record<string, string>;
+  cwd?: string;
+  files: string[];
+  contents?: Record<string, string>;
+};
+
+// npm's shim for a JavaScript CLI, as it writes one for `claude`.
+const npmCmdShim = (script: string) => [
+  "@ECHO off", "GOTO start", ":find_dp0", "SET dp0=%~dp0", "EXIT /b", ":start", "SETLOCAL", "CALL :find_dp0",
+  "", 'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ") ELSE (", '  SET "_prog=node"', ")", "",
+  `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${script}" %*`, "",
+].join("\r\n");
+const local = "C:\\Users\\me\\.local\\bin";
+const claudes: Claude[] = [
+  { name: "an exe on PATH", env: { ...base, Path: `${local};${npm}` }, files: [`${local}\\claude.exe`] },
+  { name: "a cmd with an exe beside it", files: [`${npm}\\claude.cmd`, `${npm}\\claude.exe`] },
+  {
+    name: "npm's shim for the JavaScript CLI",
+    files: [`${npm}\\claude.cmd`],
+    contents: { [`${npm}\\claude.cmd`]: npmCmdShim("node_modules\\@anthropic-ai\\claude-code\\cli.js") },
+  },
+  {
+    name: "a shim naming the native program",
+    files: [`${npm}\\claude.cmd`, `${npm}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`],
+    contents: { [`${npm}\\claude.cmd`]: npmCmdShim("node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe") },
+  },
+  {
+    name: "%~dp0 and ..",
+    files: [`${npm}\\claude.cmd`, "C:\\Users\\me\\AppData\\Roaming\\claude\\claude.exe"],
+    contents: { [`${npm}\\claude.cmd`]: '@"%~dp0\\..\\claude\\claude.exe" %*' },
+  },
+  {
+    name: "slashes and case",
+    files: [`${npm}\\claude.bat`, `${npm}\\bin\\claude.exe`],
+    contents: { [`${npm}\\claude.bat`]: '"%DP0%/bin//claude.exe" %*' },
+  },
+  {
+    name: "space after the directory",
+    files: [`${npm}\\claude.cmd`, `${npm}\\claude-native.exe`],
+    contents: { [`${npm}\\claude.cmd`]: '"%dp0%  \\claude-native.exe" %*' },
+  },
+  {
+    name: "the first program there wins",
+    files: [`${npm}\\claude.cmd`, `${npm}\\b\\claude.exe`],
+    contents: { [`${npm}\\claude.cmd`]: '"%dp0%" "%dp0%\\a\\claude.exe" "%dp0%\\b\\claude.exe" "%dp0%\\c\\claude.exe"' },
+  },
+  {
+    name: "a quote left open on its line",
+    files: [`${npm}\\claude.cmd`, `${npm}\\claude-native.exe`],
+    contents: { [`${npm}\\claude.cmd`]: '"%dp0%\\claude-native.exe\r\n"%dp0%\\claude-native.exe"' },
+  },
+  {
+    name: "a ps1 with an exe beside it",
+    env: { ...base, PATHEXT: ".PS1" },
+    files: [`${npm}\\claude.ps1`, `${npm}\\claude.exe`],
+  },
+  {
+    name: "a ps1 naming nothing it can read",
+    env: { ...base, PATHEXT: ".PS1" },
+    files: [`${npm}\\claude.ps1`, `${npm}\\bin\\claude.exe`],
+    contents: { [`${npm}\\claude.ps1`]: '& "$basedir/bin/claude.exe" $args' },
+  },
+  { name: "CLAUDE_CODE_EXECUTABLE named", env: { ...base, claude_code_executable: "D:\\claude.exe" }, files: [`${npm}\\claude.exe`] },
+  { name: "CLAUDE_CODE_EXECUTABLE empty", env: { ...base, CLAUDE_CODE_EXECUTABLE: "" }, files: [`${npm}\\claude.exe`] },
+  { name: "a relative PATH entry", env: { ...base, Path: "tools" }, cwd: "C:\\proj", files: ["C:\\proj\\tools\\claude.exe"] },
+  { name: "nothing found", files: [] },
+];
+const claudeResults = claudes.map((claude) => {
+  const env = claude.env ?? base;
+  const cwd = claude.cwd ?? "C:\\work";
+  fakeFs.set(claude.files, [], claude.contents ?? {});
+  return {
+    name: claude.name,
+    env,
+    cwd,
+    files: claude.files,
+    contents: claude.contents ?? {},
+    processDirectory: process.cwd(),
+    expected: resolveClaudeCodeExecutable("win32", env, cwd) ?? null,
+  };
+});
+
+const dirname = [
+  "C:\\a\\b.cmd", "C:\\a\\", "C:\\a", "C:\\", "C:", "C:x", "\\\\srv\\sh\\x.cmd", "\\\\srv\\sh", "\\\\srv\\sh\\",
+  "/a/b", "a", "", "\\", "a\\\\b\\\\", "C:\\a\\\\\\b", "\\\\srv", "C:a\\b",
+];
+
 const normalize = [
   "C:\\a\\b", "C:/a/b", "C:\\a\\..\\b", "C:\\a\\.\\b\\", "C:\\..", "C:", "C:a\\b", "\\a\\b",
   "//server/share/x", "\\\\server\\share", "a\\b\\..\\..\\..", ".\\a", "", "a//b", "C:\\a\\\\b",
@@ -215,11 +305,13 @@ console.log(JSON.stringify({
   generatedBy: `acpx ${process.env.ACPX_TAG ?? "v0.19.3"} src/spawn-command-options.ts, path.win32, Node ${process.version}`,
   spawns: spawnResults,
   installed: installedResults,
+  claudeExecutable: claudeResults,
   paths: {
     normalize: normalize.map((input) => ({ input, output: win.normalize(input) })),
     resolve: resolve.map(([cwd, input]) => ({ cwd, input, output: win.resolve(cwd, input) })),
     join: join.map(([a, b]) => ({ input: [a, b], output: win.join(a, b) })),
     isAbsolute: isAbsolute.map((input) => ({ input, output: win.isAbsolute(input) })),
     extname: extname.map((input) => ({ input, output: win.extname(input) })),
+    dirname: dirname.map((input) => ({ input, output: win.dirname(input) })),
   },
 }, null, 2));

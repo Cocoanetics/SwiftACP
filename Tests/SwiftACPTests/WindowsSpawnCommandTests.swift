@@ -13,7 +13,18 @@ struct WindowsSpawnCommandTests {
     private struct Fixture: Decodable {
         let spawns: [Spawn]
         let installed: [Installed]
+        let claudeExecutable: [ClaudeCase]
         let paths: Paths
+    }
+
+    private struct ClaudeCase: Decodable {
+        let name: String
+        let env: [String: String]
+        let cwd: String
+        let files: [String]
+        let contents: [String: String]
+        let processDirectory: String
+        let expected: String?
     }
 
     private struct Installed: Decodable {
@@ -49,6 +60,7 @@ struct WindowsSpawnCommandTests {
         let join: [JoinCase]
         let isAbsolute: [PathCase<Bool>]
         let extname: [PathCase<String>]
+        let dirname: [PathCase<String>]
     }
 
     private struct PathCase<Output: Decodable & Equatable>: Decodable {
@@ -73,20 +85,23 @@ struct WindowsSpawnCommandTests {
         return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
     }
 
-    /// A Windows file system holding `files` and `directories`, as the fixture's fake one holds them:
-    /// names compared in any case, either slash, `.` and `..` read as Win32 reads them, and a
-    /// relative path taken from `processDirectory`.
+    /// A Windows file system holding `files` and `directories`, and `contents` as their text, as the
+    /// fixture's fake one holds them: names compared in any case, either slash, `.` and `..` read as
+    /// Win32 reads them, and a relative path taken from `processDirectory`.
     private static func fileSystem(
-        _ files: [String], directories: [String] = [], processDirectory: String = #"C:\work"#
+        _ files: [String], directories: [String] = [], contents: [String: String] = [:],
+        processDirectory: String = #"C:\work"#
     ) -> WindowsSpawnCommand.FileSystem {
         let canonical: @Sendable (String) -> String = {
             WindowsPath.resolve([$0], processDirectory: processDirectory).lowercased()
         }
         let fileSet = Set(files.map(canonical))
         let directorySet = Set(directories.map(canonical))
+        let texts = Dictionary(contents.map { (canonical($0.key), $0.value) }) { first, _ in first }
         return WindowsSpawnCommand.FileSystem(
             exists: { fileSet.contains(canonical($0)) || directorySet.contains(canonical($0)) },
-            isFile: { fileSet.contains(canonical($0)) })
+            isFile: { fileSet.contains(canonical($0)) },
+            read: { texts[canonical($0)] })
     }
 
     /// Each case's command, started as acpx starts it: an npm `.cmd` shim through `cmd.exe`,
@@ -120,6 +135,19 @@ struct WindowsSpawnCommandTests {
         }
     }
 
+    /// Claude Code's program, for Claude's adapter on Windows, found as acpx's
+    /// `resolveClaudeCodeExecutable` finds it: an `.exe`, or the one a shim sits beside or names
+    /// from its own directory, unless `CLAUDE_CODE_EXECUTABLE` names one.
+    @Test func claudeCodesProgramIsFoundAsAcpxFindsIt() throws {
+        for claude in try Self.fixture().claudeExecutable {
+            let files = Self.fileSystem(
+                claude.files, contents: claude.contents, processDirectory: claude.processDirectory)
+            let found = WindowsSpawnCommand.claudeCodeExecutable(
+                environment: claude.env, cwd: claude.cwd, fileSystem: files, processDirectory: claude.processDirectory)
+            #expect(found == claude.expected, "\(claude.name)")
+        }
+    }
+
     /// Node's `path.win32`, which acpx resolves with.
     @Test func pathsAreReadAsNodesWin32Reads() throws {
         let paths = try Self.fixture().paths
@@ -137,6 +165,9 @@ struct WindowsSpawnCommandTests {
         }
         for path in paths.extname {
             #expect(WindowsPath.extname(path.input) == path.output, "extname(\(path.input))")
+        }
+        for path in paths.dirname {
+            #expect(WindowsPath.dirname(path.input) == path.output, "dirname(\(path.input))")
         }
     }
 

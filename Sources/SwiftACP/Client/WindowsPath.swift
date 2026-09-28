@@ -70,6 +70,44 @@ enum WindowsPath {
         return string(units[startDot..<end])
     }
 
+    /// The path without its last component: its root as it is when that is all there is.
+    static func dirname(_ path: String) -> String {
+        let units = Array(path.utf16)
+        guard units.count > 1 else { return units.first.map(isSeparator) == true ? path : "." }
+        var rootEnd = -1
+        var offset = 0
+        if isSeparator(units[0]) {
+            rootEnd = 1
+            offset = 1
+            if isSeparator(units[1]), let unc = uncParts(of: units) {
+                // A UNC root alone is its own directory; after one, the separator is the root's.
+                if unc.second.upperBound == units.count { return path }
+                rootEnd = unc.second.upperBound + 1
+                offset = rootEnd
+            }
+        } else if isDriveLetter(units[0]), units[1] == colon {
+            rootEnd = units.count > 2 && isSeparator(units[2]) ? 3 : 2
+            offset = rootEnd
+        }
+        var end = -1
+        var matchedSlash = true
+        for index in stride(from: units.count - 1, through: offset, by: -1) {
+            if isSeparator(units[index]) {
+                if !matchedSlash {
+                    end = index
+                    break
+                }
+            } else {
+                matchedSlash = false
+            }
+        }
+        if end == -1 {
+            guard rootEnd != -1 else { return "." }
+            end = rootEnd
+        }
+        return string(units[..<end])
+    }
+
     static func join(_ parts: String...) -> String {
         let parts = parts.filter { !$0.isEmpty }
         guard let first = parts.first.map({ Array($0.utf16) }) else { return "." }

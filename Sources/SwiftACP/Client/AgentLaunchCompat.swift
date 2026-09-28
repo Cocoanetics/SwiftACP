@@ -52,6 +52,7 @@ enum AgentLaunchCompat {
         /// How long Claude's adapter may take to answer `session/new`; none for any other agent.
         let sessionCreateLimit: Int?
         private let copilot: Bool
+        private let claude: Bool
         private let command: String
         private let agentEnvironment: [String: String]
         private let probe: Probe
@@ -75,6 +76,7 @@ enum AgentLaunchCompat {
                 self.capabilities.meta = devinMeta(merging: capabilities.meta)
             }
             copilot = isCopilot(spec.executable, spec.arguments)
+            claude = isClaude(spec.executable, spec.arguments)
             initializeLimit = isGemini(spec.executable, spec.arguments)
                 ? startupMilliseconds(callerEnvironment["ACPX_GEMINI_ACP_STARTUP_TIMEOUT_MS"], fallback: 15_000) : nil
             sessionCreateLimit = isClaude(spec.executable, spec.arguments)
@@ -103,6 +105,20 @@ enum AgentLaunchCompat {
         /// acpx's `ensureLaunchSupport`: Copilot's CLI must have an ACP mode.
         func ensureSupported() async throws {
             if copilot { try await ensureCopilotSupport(command, probe: probe) }
+        }
+
+        /// The rest of acpx's `ensureLaunchSupport`: on Windows, the Claude Code program for Claude's
+        /// adapter to run (`resolveClaudeCodeExecutable`), unless its environment names one; `nil`
+        /// for any other agent, or elsewhere (#272).
+        func claudeCodeExecutable(cwd: String) -> String? {
+            #if os(Windows)
+            guard claude else { return nil }
+            return WindowsSpawnCommand.claudeCodeExecutable(
+                environment: agentEnvironment, cwd: cwd, fileSystem: .local,
+                processDirectory: FileManager.default.currentDirectoryPath)
+            #else
+            return nil
+            #endif
         }
     }
 
