@@ -249,18 +249,14 @@ public final class ACPAgent: Sendable {
     }
 
     /// How the launch asks a helper command something (``CommandProbe``): in the agent's
-    /// directory and environment. Where agents are not spawned as child processes, it hears nothing.
+    /// directory and environment, on Windows too (#265).
     static func probe(for spec: ProcessLaunch) -> AgentLaunchCompat.Probe {
-        #if os(macOS) || os(Linux)
         let directory = spec.workingDirectory ?? FileManager.default.currentDirectoryPath
         let environment = spec.environment
         return { command, arguments, timeout in
             await CommandProbe.output(
                 of: command, arguments, cwd: directory, environment: environment, timeoutMilliseconds: timeout)
         }
-        #else
-        return { _, _, _ in nil }
-        #endif
     }
 
     /// Convenience that builds standard handlers from a permission policy. Writes
