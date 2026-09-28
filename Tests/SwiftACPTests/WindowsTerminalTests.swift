@@ -180,6 +180,21 @@ struct WindowsTerminalTests {
         await manager.shutdown()
     }
 
+    /// Probe (throwaway): what a missing `.cmd` and an unknown command give.
+    @Test func probeMissingCommandExitCodes() async throws {
+        let manager = TerminalManager(cwd: NSTemporaryDirectory())
+        let name = "swiftacp-missing-\(UUID().uuidString)"
+        let viaShell = try await Self.create(manager, name + ".cmd", ["x"])
+        let shellExit = try await Self.exit(manager, viaShell)
+        let shellOutput = try await Self.output(manager, viaShell).output
+        Issue.record("PROBE missing .cmd: \(shellExit) output: \(shellOutput.debugDescription)")
+        let unknown = try await Self.create(manager, "cmd.exe", ["/d", "/c", name])
+        let unknownExit = try await Self.exit(manager, unknown)
+        let unknownOutput = try await Self.output(manager, unknown).output
+        Issue.record("PROBE unknown via cmd /d /c: \(unknownExit) output: \(unknownOutput.debugDescription)")
+        await manager.shutdown()
+    }
+
     /// A command that is not found, and does not read as a command line, fails as Node's `spawn`
     /// says. A `.cmd` that is not there runs through the shell all the same, which says so with
     /// cmd.exe's code for a command it cannot find.
