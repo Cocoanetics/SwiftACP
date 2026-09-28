@@ -27,6 +27,8 @@ public actor ACPAgentConnection {
     var afterServingOwnedRequest: (@Sendable () async -> Void)?
     /// For tests: runs before a `session/update` read is handled.
     var beforeHandlingUpdate: (@Sendable () async -> Void)?
+    /// For tests: runs once a `session/load` waits for another load of its session to finish.
+    var waitingToLoad: (@Sendable (SessionId) -> Void)?
 
     /// The agent's `initialize` response once the handshake succeeded. Its
     /// `agentInfo` identifies the adapter for the compatibility rules applied to
@@ -106,9 +108,20 @@ public actor ACPAgentConnection {
     /// Mirrors acpx's `cancellingSessionIds`.
     var cancellingSessionIds: Set<SessionId> = []
 
-    public init(transport: JSONRPCMessageTransport, handlers: ACPClientHandlers = ACPClientHandlers()) {
+    /// Where each `session/update`'s body, as the agent wrote it, is taken from: the tap on the
+    /// agent's stdio, when the connection is an agent's (#119).
+    nonisolated let rawUpdates: RawWireTap?
+
+    /// - Parameter rawUpdates: the tap on the transport's bodies, which each `session/update`
+    ///   handled is given its own of (``SessionNotification/rawUpdate``).
+    public init(
+        transport: JSONRPCMessageTransport, handlers: ACPClientHandlers = ACPClientHandlers(),
+        rawUpdates: RawWireTap? = nil
+    ) {
         self.rpc = JSONRPCPeer(transport: transport)
         self.handlers = handlers
+        self.rawUpdates = rawUpdates
+        rawUpdates?.keepUpdateBodies()
     }
 
     public func setHandlers(_ handlers: ACPClientHandlers) {

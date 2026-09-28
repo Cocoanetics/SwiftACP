@@ -76,7 +76,7 @@ public enum ConversationModel {
         timestamp: String = nowISO()
     ) -> Bool {
         guard notification.update.reachesACPX else { return false }
-        applySessionUpdate(into: &record, update: notification.update)
+        applySessionUpdate(into: &record, update: notification.update, raw: notification.rawUpdate)
         record.updatedAt = timestamp
         trimForRuntime(&record)
         return true
@@ -121,7 +121,8 @@ public enum ConversationModel {
 
     // MARK: - Update dispatch (SESSION_UPDATE_HANDLERS)
 
-    private static func applySessionUpdate(into record: inout SessionRecord, update: SessionUpdate) {
+    /// `raw`: the update as the agent wrote it, which a tool's payloads are recorded in the order of.
+    private static func applySessionUpdate(into record: inout SessionRecord, update: SessionUpdate, raw: WireJSON?) {
         switch update {
         case .userMessageChunk(let block):
             // Recorded as a prompt's block is (`appendUserMessageChunk`).
@@ -137,9 +138,9 @@ public enum ConversationModel {
                 withCurrentAgentMessage(&record) { appendAgentThinking(&$0, text) }
             }
         case .toolCall(let call):
-            withCurrentAgentMessage(&record) { applyToolCall(&$0, fields: ToolFields(call)) }
+            withCurrentAgentMessage(&record) { applyToolCall(&$0, fields: ToolFields(call, raw: raw)) }
         case .toolCallUpdate(let update):
-            withCurrentAgentMessage(&record) { applyToolCall(&$0, fields: ToolFields(update)) }
+            withCurrentAgentMessage(&record) { applyToolCall(&$0, fields: ToolFields(update, raw: raw)) }
         case .currentModeUpdate(let modeId):
             var acpx = record.acpx ?? SessionAcpxState()
             acpx.currentModeId = modeId
@@ -322,114 +323,6 @@ public enum ConversationModel {
         }
     }
 
-    // MARK: - Tool calls → ToolUse content + tool_results
-
-    /// The subset of fields acpx reads from a `tool_call` / `tool_call_update`,
-    /// with presence flags (it distinguishes "field absent" from "field present").
-    private struct ToolFields {
-        let id: String
-        let title: String?
-        let kind: ToolKind?
-        let status: ToolCallStatus?
-        let hasRawInput: Bool
-        let rawInput: JSONValue?
-        let hasRawOutput: Bool
-        let rawOutput: JSONValue?
-
-        // acpx's ACP SDK reads a kind or a status it doesn't know as none, so acpx never
-        // sees one.
-        init(_ call: ToolCall) {
-            id = call.toolCallId
-            title = call.title
-            kind = call.kind.flatMap { $0.reachesACPX ? $0 : nil }
-            status = call.status.flatMap { $0.reachesACPX ? $0 : nil }
-            hasRawInput = call.rawInput != nil
-            rawInput = call.rawInput
-            hasRawOutput = call.rawOutput != nil
-            rawOutput = call.rawOutput
-        }
-
-        init(_ update: ToolCallUpdate) {
-            id = update.toolCallId
-            title = update.title
-            kind = update.kind.flatMap { $0.reachesACPX ? $0 : nil }
-            status = update.status.flatMap { $0.reachesACPX ? $0 : nil }
-            hasRawInput = update.rawInput != nil
-            rawInput = update.rawInput
-            hasRawOutput = update.rawOutput != nil
-            rawOutput = update.rawOutput
-        }
-
-        var hasResultPatch: Bool {
-            hasRawOutput || status != nil || title != nil || kind != nil
-        }
-    }
-
-    private static func applyToolCall(_ agent: inout SessionAgentMessage, fields: ToolFields) {
-        let index = ensureToolUseIndex(&agent, id: fields.id)
-        guard case .toolUse(var tool) = agent.content[index] else { return }
-
-        // Identity: prefer the title, else fall back to the kind.
-        if let title = trimmedString(fields.title) {
-            tool.name = title
-        }
-        if let kind = trimmedString(fields.kind?.rawValue), tool.name.isEmpty || tool.name == "tool_call" {
-            tool.name = kind
-        }
-        // Input.
-        if fields.hasRawInput {
-            tool.input = fields.rawInput
-            tool.rawInput = toRawInput(fields.rawInput)
-        }
-        // Status → whether the input is complete.
-        if let status = fields.status {
-            tool.isInputComplete = statusIndicatesComplete(status.rawValue)
-        }
-        agent.content[index] = .toolUse(tool)
-
-        // Result (output) goes into tool_results, keyed by id.
-        if fields.hasResultPatch {
-            // No `status` in this patch means "unchanged", not "not an error" — a
-            // recorded failure must survive a later output-only update (acpx:
-            // `is_error: status === undefined ? undefined : statusIndicatesError(status)`).
-            let isError = fields.status.map { statusIndicatesError($0.rawValue) }
-            // `JSONValue?.none`, not a bare `nil`: `JSONValue` is `ExpressibleByNilLiteral`,
-            // so `nil` here unifies as `JSONValue.null` and a status-only patch would
-            // overwrite recorded output with null instead of keeping it.
-            let content: JSONValue? =
-                fields.hasRawOutput ? toToolResultContent(fields.rawOutput) : JSONValue?.none
-            upsertToolResult(
-                &agent, id: fields.id, toolName: tool.name, isError: isError,
-                content: content, output: fields.hasRawOutput ? fields.rawOutput : nil)
-        }
-    }
-
-    /// Index of the `ToolUse` block with `id`, creating one if absent.
-    private static func ensureToolUseIndex(_ agent: inout SessionAgentMessage, id: String) -> Int {
-        for (index, content) in agent.content.enumerated() {
-            if case .toolUse(let tool) = content, tool.id == id { return index }
-        }
-        agent.content.append(
-            .toolUse(
-                SessionToolUse(
-                    id: id, name: "tool_call", rawInput: "{}", input: .object([:]),
-                    isInputComplete: false, thoughtSignature: .null)))
-        return agent.content.count - 1
-    }
-
-    private static func upsertToolResult(
-        _ agent: inout SessionAgentMessage, id: String, toolName: String, isError: Bool?,
-        content: JSONValue?, output: JSONValue?
-    ) {
-        let existing = agent.toolResults[id]
-        agent.toolResults[id] = SessionToolResult(
-            toolUseId: id,
-            toolName: toolName,
-            isError: isError ?? existing?.isError ?? false,
-            content: content ?? existing?.content ?? .object(["Text": .string("")]),
-            output: output ?? existing?.output)
-    }
-
     // MARK: - Helpers
 
     private static func nextUserMessageId() -> String { UUID().uuidString.lowercased() }
@@ -442,48 +335,5 @@ public enum ConversationModel {
         case .audio(let audio): return "[audio] \(audio.mimeType)"
         default: return block.text
         }
-    }
-
-    private static func trimmedString(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
-        else { return nil }
-        return trimmed
-    }
-
-    private static func statusIndicatesComplete(_ status: String?) -> Bool {
-        guard let status = status?.lowercased() else { return false }
-        return ["complete", "done", "success", "failed", "error", "cancel"].contains {
-            status.contains($0)
-        }
-    }
-
-    private static func statusIndicatesError(_ status: String?) -> Bool {
-        guard let status = status?.lowercased() else { return false }
-        return status.contains("fail") || status.contains("error")
-    }
-
-    /// `toRawInput` — a tool's input as a trimmed JSON string.
-    private static func toRawInput(_ value: JSONValue?) -> String {
-        guard let value, value != .null else { return "{}" }
-        if case .string(let text) = value { return trimRuntimeText(text, maxRuntimeToolIOChars) }
-        return trimRuntimeText(javaScriptJSON(value) ?? "{}", maxRuntimeToolIOChars)
-    }
-
-    /// `toToolResultContent` — a tool's output as `{ "Text": <trimmed string> }`.
-    private static func toToolResultContent(_ value: JSONValue?) -> JSONValue {
-        guard let value, value != .null else { return .object(["Text": .string("")]) }
-        if case .string(let text) = value {
-            return .object(["Text": .string(trimRuntimeText(text, maxRuntimeToolIOChars))])
-        }
-        let json = javaScriptJSON(value) ?? "[Unserializable value]"
-        return .object(["Text": .string(trimRuntimeText(json, maxRuntimeToolIOChars))])
-    }
-
-    /// `JSON.stringify(value)`, with its escapes and number forms. The members come
-    /// sorted: the order the agent sent them in is gone once the value is a `JSONValue`.
-    private static func javaScriptJSON(_ value: JSONValue) -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return (try? encoder.encode(value)).flatMap { WireJSON(parsing: $0) }?.stringified
     }
 }

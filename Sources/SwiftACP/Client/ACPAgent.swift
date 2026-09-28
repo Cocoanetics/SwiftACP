@@ -156,7 +156,7 @@ public final class ACPAgent: Sendable {
         }
         let transport = try startTransport(
             spec, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes, tap: rawWire)
-        let connection = ACPAgentConnection(transport: transport, handlers: handlers)
+        let connection = ACPAgentConnection(transport: transport, handlers: handlers, rawUpdates: rawWire)
         if let terminals { await connection.setTerminalHandler(terminals) }
         await connection.start()
         // Set the observer before `initialize` so the handshake requests are seen.

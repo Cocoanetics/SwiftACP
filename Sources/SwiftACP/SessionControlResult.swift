@@ -21,21 +21,27 @@ public struct SessionControlResult: Codable, Sendable {
     /// runs one sent while it holds the session — which acpx's CLI names under `--verbose`
     /// (#232). `nil` when none did, and from a daemon that predates it.
     public var ownerPid: Int?
+    /// Why the session could not be taken back when a control run without an owner connected
+    /// its agent, and a new session replaced it — acpx's `loadError`, which its CLI names under
+    /// `--verbose`. `nil` otherwise, and from a daemon that predates it.
+    public var loadError: String?
 
-    public init(resumed: Bool, configOptions: [JSONValue]? = nil, ownerPid: Int? = nil) {
+    public init(resumed: Bool, configOptions: [JSONValue]? = nil, ownerPid: Int? = nil, loadError: String? = nil) {
         self.resumed = resumed
         self.rawConfigOptions = configOptions.map(JSONValue.array)
         self.ownerPid = ownerPid
+        self.loadError = loadError
     }
 
-    public init(resumed: Bool, rawConfigOptions: JSONValue?, ownerPid: Int? = nil) {
+    public init(resumed: Bool, rawConfigOptions: JSONValue?, ownerPid: Int? = nil, loadError: String? = nil) {
         self.resumed = resumed
         self.rawConfigOptions = rawConfigOptions
         self.ownerPid = ownerPid
+        self.loadError = loadError
     }
 
     private enum CodingKeys: String, CodingKey {
-        case resumed, configOptions, ownerPid
+        case resumed, configOptions, ownerPid, loadError
     }
 
     /// Also reads what a daemon from before this result returned: `true` from
@@ -47,11 +53,13 @@ public struct SessionControlResult: Codable, Sendable {
             resumed = try keyed.decode(Bool.self, forKey: .resumed)
             rawConfigOptions = try keyed.raw(forKey: .configOptions)
             ownerPid = try keyed.decodeIfPresent(Int.self, forKey: .ownerPid)
+            loadError = try keyed.decodeIfPresent(String.self, forKey: .loadError)
             return
         }
         let legacy = try decoder.singleValueContainer()
         resumed = false
         ownerPid = nil
+        loadError = nil
         if let options = try? legacy.decode([JSONValue].self) {
             rawConfigOptions = .array(options)
         } else {
@@ -66,5 +74,6 @@ public struct SessionControlResult: Codable, Sendable {
         try container.encode(resumed, forKey: .resumed)
         try container.encodeIfPresent(rawConfigOptions, forKey: .configOptions)
         try container.encodeIfPresent(ownerPid, forKey: .ownerPid)
+        try container.encodeIfPresent(loadError, forKey: .loadError)
     }
 }

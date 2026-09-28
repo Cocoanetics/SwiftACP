@@ -114,7 +114,7 @@ extension ACPXDaemonBackend {
     func relayingStderr<T>(
         _ relay: AgentStderrRelay?, logger: String, _ body: () async throws -> T
     ) async throws -> T {
-        relay?.attach(to: Session.current, logger: logger)
+        relay?.attach(to: ACPXDaemonBackend.caller, logger: logger)
         let outcome: Result<T, Error>
         do {
             outcome = .success(try await body())

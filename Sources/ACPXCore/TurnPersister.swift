@@ -131,11 +131,12 @@ public actor TurnPersister {
         flush()
     }
 
-    /// Fold one streamed `session/update` into the conversation, then schedule a save.
-    public func apply(_ update: SessionUpdate) {
+    /// Fold one streamed `session/update` into the conversation — its payloads in the order the
+    /// agent sent them, when the notification has its raw form — then schedule a save.
+    public func apply(_ update: SessionUpdate, raw: WireJSON? = nil) {
         guard ConversationModel.recordSessionUpdate(
             into: &record,
-            notification: SessionNotification(sessionId: record.acpSessionId, update: update))
+            notification: SessionNotification(sessionId: record.acpSessionId, update: update, rawUpdate: raw))
         else { return }
         request()
     }

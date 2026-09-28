@@ -324,23 +324,4 @@ extension WireJSON {
             self = .object(members.keys.sorted().map { key in Member(key, WireJSON(members[key] ?? .null)) })
         }
     }
-
-    /// The value as JSONFoundation's `JSONValue` — object member order is lost. A number
-    /// too large for a double (`1e400`) parses to infinity, as in `JSON.parse`, and
-    /// becomes `null`, which is how `JSON.stringify` sends it on.
-    var jsonValue: JSONValue {
-        switch self {
-        case .null: return .null
-        case .bool(let flag): return .bool(flag)
-        case .number(let value):
-            guard value.isFinite else { return .null }
-            return value.rounded() == value && abs(value) < 9e15 ? .integer(Int(value)) : .double(value)
-        case .string: return .string(stringValue ?? "")
-        case .array(let items): return .array(items.map(\.jsonValue))
-        case .object(let members):
-            return .object(Dictionary(
-                members.map { (String(decoding: $0.key, as: UTF16.self), $0.value.jsonValue) },
-                uniquingKeysWith: { _, last in last }))
-        }
-    }
 }

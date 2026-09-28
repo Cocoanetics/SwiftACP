@@ -95,11 +95,11 @@ extension ACPXDaemonBackend {
         var ticket: PromptControlTicket? { begun?.ticket }
     }
 
-    /// Begin a turn for `recordId`: a queued one in its owner's line (``beginPrompt(_:wait:turnToken:)``);
-    /// a direct one apart from it. Either takes the slot as it begins when it may not wait, and
+    /// Begin a turn for `recordId`: a queued one in its owner's line (``beginPrompt(_:turnToken:queueMaxDepth:)``);
+    /// a direct one apart from it, which takes the slot as it begins when it may not wait, and
     /// is refused at once with ``DaemonError/sessionBusy`` when something holds it (#229 review).
     func startTurn(
-        _ recordId: String, direct: Bool, wait: Bool, turnToken: String?
+        _ recordId: String, direct: Bool, wait: Bool, turnToken: String?, queueMaxDepth: Int? = nil
     ) async throws -> (turn: StartedTurn, holdsTheSlot: Bool) {
         if direct {
             let control = try beginDirectTurn(recordId, turnToken: turnToken)
@@ -112,8 +112,34 @@ extension ACPXDaemonBackend {
             }
             return (StartedTurn(control: control, begun: nil), true)
         }
-        let begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
-        return (StartedTurn(control: begun.control, begun: begun), !wait)
+        let begun = try await beginPrompt(recordId, turnToken: turnToken, queueMaxDepth: queueMaxDepth)
+        return (StartedTurn(control: begun.control, begun: begun), false)
+    }
+
+    /// ``startTurn(_:direct:wait:turnToken:queueMaxDepth:)``, a refusal — the owner shutting down,
+    /// or its line full — told to the client as acpx's owner tells it: the turn's error.
+    func startTurnTellingRefusal(
+        _ recordId: String, direct: Bool, wait: Bool, turnToken: String?, queueMaxDepth: Int?
+    ) async throws -> (turn: StartedTurn, holdsTheSlot: Bool) {
+        do {
+            return try await startTurn(
+                recordId, direct: direct, wait: wait, turnToken: turnToken, queueMaxDepth: queueMaxDepth)
+        } catch let refused as QueueOwnerShuttingDown {
+            _ = try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
+            throw refused
+        } catch let refused as QueueOwnerOverloaded {
+            _ = try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
+            throw refused
+        }
+    }
+
+    /// A turn called off by the time it has the session ends there, nothing sent and nothing
+    /// kept — a direct turn's agent with it, as acpx's closes the client it was handed however
+    /// it ends, from a task this cancellation cannot cut short (#219 review).
+    func endIfCalledOff(_ recordId: String, direct: Bool) async throws {
+        guard Task.isCancelled else { return }
+        if direct { await Task { await self.evict(recordId) }.value }
+        throw CancellationError()
     }
 
     /// A turn is over, of either kind, and the slot it held — if it did — goes on.
@@ -130,7 +156,7 @@ extension ACPXDaemonBackend {
     static func endedCancelled(as sessionId: String) async -> String {
         await announceTheEnd(
             of: PromptResponse(stopReason: .cancelled), permissions: PermissionStats(),
-            result: PromptResultCapture(), as: sessionId, to: Session.current)
+            result: PromptResultCapture(), as: sessionId, to: Self.caller)
         return ""
     }
 

@@ -21,6 +21,8 @@ extension ACPXDaemonBackend {
         let value: Value
         let resumed: Bool
         let owned: Bool
+        /// Why the session could not be taken back when a new session replaced it (acpx's `loadError`).
+        var loadError: String?
     }
 
     /// Run a control as acpx's queue owner runs one (`QueueOwnerControlAdmission.run`): on
@@ -30,7 +32,7 @@ extension ACPXDaemonBackend {
     func runControl<Response: Sendable, Value: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
         terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
-        _ step: ControlStep<Response, Value>
+        client: ClientOptions = ClientOptions(), _ step: ControlStep<Response, Value>
     ) async throws -> ControlOutcome<Value> {
         _ = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
@@ -47,7 +49,7 @@ extension ACPXDaemonBackend {
         return try await withSessionTurn(
             sessionId, replacing: replacing, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
-            verbose: verbose
+            verbose: verbose, client: client
         ) { entry, record, timeout in
             let response = try await step.request(entry, record, timeout)
             return step.apply(response, &record)
