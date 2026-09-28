@@ -14,6 +14,8 @@ struct CallGate {
     }
 
     var inFlight = 0
+    /// How many calls it has taken, ever: a call taken and over between two looks still counts.
+    var taken = 0
     var state = State.open
     /// The calls waiting for the answer, told whether they are taken.
     var waiting: [CheckedContinuation<Bool, Never>] = []
@@ -35,11 +37,15 @@ extension ACPXDaemon {
     /// client fares meanwhile (``serving(_:)``).
     public var callsInFlight: Int { calls.inFlight }
 
-    /// Stop taking calls, if it serves none and `stop` — the backend's own look — says the daemon
-    /// stops (#253). A call that comes meanwhile waits for the answer: it is served should the
-    /// daemon go on, and refused once it stops. Returns whether it stopped.
-    public func stopTakingCallsIfIdle(_ stop: @Sendable () async -> Bool) async -> Bool {
-        guard calls.state == .open, calls.inFlight == 0 else { return false }
+    /// How many tool calls it has taken since it started.
+    public var callsTaken: Int { calls.taken }
+
+    /// Stop taking calls, if it serves none, has taken none since it had taken `callsTaken`, and
+    /// `stop` — the backend's own look — says the daemon stops (#253). A call that comes meanwhile
+    /// waits for the answer: it is served should the daemon go on, and refused once it stops.
+    /// Returns whether it stopped.
+    public func stopTakingCalls(ifNoneSince callsTaken: Int, _ stop: @Sendable () async -> Bool) async -> Bool {
+        guard calls.state == .open, calls.inFlight == 0, calls.taken == callsTaken else { return false }
         calls.state = .deciding
         let stopped = await stop()
         calls.state = stopped ? .closed : .open
@@ -65,6 +71,7 @@ extension ACPXDaemon {
     /// until it is over.
     func serving<T>(_ work: () async throws -> T) async throws -> T {
         try await takeCall()
+        calls.taken += 1
         calls.inFlight += 1
         defer { calls.inFlight -= 1 }
         return try await work()

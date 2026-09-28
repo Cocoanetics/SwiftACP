@@ -14,7 +14,22 @@ struct IdleExitTests {
             (true, .zero), (true, .seconds(9)), (false, .milliseconds(9_500)), (true, .seconds(10)),
             (true, .seconds(19)), (true, .seconds(20))
         ]
-        let stops = looks.map { tracker.observe(idle: $0.idle, at: start + $0.after) }
+        let stops = looks.map { tracker.observe(IdleExit.Look(idle: $0.idle, callsTaken: 0), at: start + $0.after) }
+        #expect(stops == [false, false, false, false, false, true])
+    }
+
+    /// A call taken and over between two looks restarts the wait too, however fast it was: the
+    /// count of calls taken tells it (Codex review on #289).
+    @Test func aCallBetweenTwoLooksStartsTheWaitAnew() {
+        var tracker = IdleExit.Tracker(grace: .seconds(10))
+        let start = ContinuousClock.now
+        let looks: [(callsTaken: Int, after: Duration)] = [
+            (3, .zero), (3, .seconds(9)), (4, .milliseconds(9_500)), (4, .seconds(10)), (4, .milliseconds(19_500)),
+            (4, .seconds(20))
+        ]
+        let stops = looks.map {
+            tracker.observe(IdleExit.Look(idle: true, callsTaken: $0.callsTaken), at: start + $0.after)
+        }
         #expect(stops == [false, false, false, false, false, true])
     }
 
@@ -23,9 +38,9 @@ struct IdleExitTests {
     @Test(.timeLimit(.minutes(1)))
     func theWatchStopsTheDaemonOnceIdleUnlessItFoundWork() async {
         let asks = StopAsks()
-        let watch = IdleExit.watch(grace: .milliseconds(20), interval: .milliseconds(5), isIdle: { true }, stop: {
-            await asks.ask()
-        })
+        let watch = IdleExit.watch(
+            grace: .milliseconds(20), interval: .milliseconds(5), look: { IdleExit.Look(idle: true, callsTaken: 0) },
+            stop: { _ in await asks.ask() })
         await watch.value
         #expect(await asks.count == 2)
     }
@@ -38,12 +53,12 @@ extension IdleExitTests {
     @Test func aDaemonThatStoppedTakesNoMoreCalls() async throws {
         try await withIsolatedStore {
             let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
-            #expect(await daemon.stopTakingCallsIfIdle { true })
+            #expect(await daemon.stopTakingCalls(ifNoneSince: 0) { true })
             let refusal = await #expect(throws: DescribedToolFailure.self) { _ = try await daemon.listSessions() }
             #expect(refusal?.failure == StoppedTakingCalls.failure)
             #expect(refusal?.localizedDescription == "Queue owner is shutting down")
             #expect(await daemon.callsInFlight == 0)
-            #expect(await !daemon.stopTakingCallsIfIdle { true })
+            #expect(await !daemon.stopTakingCalls(ifNoneSince: 0) { true })
         }
     }
 
@@ -51,9 +66,23 @@ extension IdleExitTests {
     @Test func aDaemonServingACallDoesNotStop() async throws {
         try await withIsolatedStore {
             let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
-            let stopped = try await daemon.serving { await daemon.stopTakingCallsIfIdle { true } }
+            let stopped = try await daemon.serving {
+                await daemon.stopTakingCalls(ifNoneSince: daemon.callsTaken) { true }
+            }
             #expect(!stopped)
             #expect(try await daemon.listSessions().isEmpty)
+        }
+    }
+
+    /// Nor does one that took a call since the look that found it idle for the grace — a call
+    /// over by now included.
+    @Test func aDaemonThatTookACallSinceTheLookDoesNotStop() async throws {
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
+            let seen = await daemon.callsTaken
+            _ = try await daemon.listSessions()
+            #expect(await !daemon.stopTakingCalls(ifNoneSince: seen) { true })
+            #expect(await daemon.stopTakingCalls(ifNoneSince: daemon.callsTaken) { true })
         }
     }
 
@@ -66,7 +95,7 @@ extension IdleExitTests {
             let (waits, waiting) = AsyncStream<Void>.makeStream()
             await daemon.observeWaits { waiting.yield() }
             let call = CallBox()
-            let stopped = await daemon.stopTakingCallsIfIdle {
+            let stopped = await daemon.stopTakingCalls(ifNoneSince: 0) {
                 call.start { try await daemon.listSessions() }
                 var waited = waits.makeAsyncIterator()
                 _ = await waited.next()

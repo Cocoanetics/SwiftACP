@@ -16,19 +16,30 @@ enum IdleExit {
     /// How often it looks.
     static let interval: Duration = .milliseconds(500)
 
+    /// What a look at the daemon finds: whether it is idle — no call in flight, no session held —
+    /// and how many calls it has taken so far, which tells a call taken and over since the last
+    /// look, however fast (Codex review on #289).
+    struct Look: Sendable, Equatable {
+        var idle: Bool
+        var callsTaken: Int
+    }
+
     /// Whether the daemon has been idle for the grace, as it is seen over time.
     struct Tracker {
         let grace: Duration
         private var since: ContinuousClock.Instant?
+        private var callsTaken: Int?
 
         init(grace: Duration) {
             self.grace = grace
         }
 
-        /// Whether the daemon, found `idle` at `now`, has been idle for the grace since it was
-        /// first found so: finding it busy starts the wait anew.
-        mutating func observe(idle: Bool, at now: ContinuousClock.Instant) -> Bool {
-            guard idle else {
+        /// Whether the daemon, as `look` finds it at `now`, has been idle for the grace since it
+        /// was first found so: finding it busy — or having taken a call since the last look —
+        /// starts the wait anew.
+        mutating func observe(_ look: Look, at now: ContinuousClock.Instant) -> Bool {
+            defer { callsTaken = look.callsTaken }
+            guard look.idle, look.callsTaken == callsTaken ?? look.callsTaken else {
                 since = nil
                 return false
             }
@@ -38,18 +49,19 @@ enum IdleExit {
         }
     }
 
-    /// Look every `interval` whether the daemon is idle (`isIdle`), and once it has been for
-    /// `grace`, stop it (`stop`), which says whether it did: one that found work meanwhile goes
-    /// on, and is waited for anew.
+    /// Look at the daemon every `interval` (`look`), and once it has been idle for `grace`, stop
+    /// it (`stop`) — unless it has taken a call since that look, whose count `stop` is given. It
+    /// says whether it stopped: one that found work meanwhile goes on, and is waited for anew.
     static func watch(
-        grace: Duration = grace, interval: Duration = interval, isIdle: @escaping @Sendable () async -> Bool,
-        stop: @escaping @Sendable () async -> Bool
+        grace: Duration = grace, interval: Duration = interval, look: @escaping @Sendable () async -> Look,
+        stop: @escaping @Sendable (_ callsTaken: Int) async -> Bool
     ) -> Task<Void, Never> {
         Task {
             var tracker = Tracker(grace: grace)
             while !Task.isCancelled {
-                if tracker.observe(idle: await isIdle(), at: .now) {
-                    if await stop() { return }
+                let seen = await look()
+                if tracker.observe(seen, at: .now) {
+                    if await stop(seen.callsTaken) { return }
                     tracker = Tracker(grace: grace)
                 }
                 try? await Task.sleep(for: interval)

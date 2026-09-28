@@ -122,11 +122,13 @@ struct AcpxdCommand: AsyncParsableCommand {
 
         // Started on demand, acpxd stops by itself once it holds nothing (#253): as a signal
         // stops it, having given up its lock at once.
-        let idleExit = onDemand ? IdleExit.watch(isIdle: { [daemon, backend] in
-            guard await daemon.callsInFlight == 0 else { return false }
-            return await backend.holdsNothing()
-        }, stop: { [daemon, backend, log] in
-            guard await daemon.stopTakingCallsIfIdle({ await backend.stopIfHoldingNothing() }) else { return false }
+        let idleExit = onDemand ? IdleExit.watch(look: { [daemon, backend] in
+            let callsTaken = await daemon.callsTaken
+            guard await daemon.callsInFlight == 0 else { return IdleExit.Look(idle: false, callsTaken: callsTaken) }
+            return IdleExit.Look(idle: await backend.holdsNothing(), callsTaken: callsTaken)
+        }, stop: { [daemon, backend, log] callsTaken in
+            guard await daemon.stopTakingCalls(ifNoneSince: callsTaken, { await backend.stopIfHoldingNothing() })
+            else { return false }
             log.info("acpxd: started on demand, and idle: stopping")
             stopSignals.hear()
             return true
