@@ -163,13 +163,18 @@ struct ConversationModelUpdateTests {
     }
 
     /// Exec's control state takes reported options as the record does: an update without
-    /// options changes nothing, and an option that doesn't fit is left out.
+    /// options changes nothing, and an option that doesn't fit is left out. The updates are the
+    /// run's own session's, once its `session/new` has answered (openclaw/acpx#794).
     @Test func theControlStateTakesReportedOptionsAsTheSDKReadsThem() throws {
         let control = ModelApplication.ControlState()
+        func message(_ json: String) throws -> JSONRPCMessage {
+            try JSONDecoder().decode(JSONRPCMessage.self, from: Data(json.utf8))
+        }
+        control.observe(.outbound, try message(#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#))
+        control.observe(.inbound, try message(#"{"jsonrpc":"2.0","id":1,"result":{"sessionId":"s"}}"#))
         func observe(_ update: String) throws {
-            let message = try JSONDecoder().decode(JSONRPCMessage.self, from: Data(
-                #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":\#(update)}}"#.utf8))
-            control.observe(.inbound, message)
+            control.observe(.inbound, try message(
+                #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":\#(update)}}"#))
         }
         try observe(#"""
             {"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","type":"select",
