@@ -41,12 +41,6 @@ extension DaemonClient {
         Console.errLine("[acpx] \(said) \(pid) for session \(recordId)")
     }
 
-    /// The pid of the acpxd this CLI talks to: its lock's holder, or this process for one a test
-    /// stands in for (``standIn``), which runs here.
-    static func daemonPid() -> Int32? {
-        standIn != nil ? ProcessInfo.processInfo.processIdentifier : liveHolder()?.pid
-    }
-
     /// Whether the daemon `proxy` is connected to holds `sessionId`. A daemon that answers
     /// without saying — one from before the tool, which does not know it — cannot say; one
     /// that stopped answering once connected is one that does not answer.

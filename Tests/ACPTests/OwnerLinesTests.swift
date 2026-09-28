@@ -16,6 +16,8 @@ import Testing
         var code: Int32
         var out: String
         var err: String
+        /// Both, as written.
+        var merged: String
     }
 
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
@@ -35,6 +37,24 @@ import Testing
             let cancel = await run(["--verbose", "cancel"])
             #expect(cancel.err.contains("[acpx] requested cancel on active owner pid \(pid) for session \(id)\n"))
             #expect(!(await run(["set-mode", "plan"])).err.contains("owner pid"))
+        }
+    }
+
+    /// The prompt's line comes once the owner has the turn's result, as acpx's CLI writes it
+    /// when `submitToQueueOwner` resolves: after the turn's output — its `[done]` — and never
+    /// for a turn that failed.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func thePromptsLineFollowsItsResult() async throws {
+        let agent = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_EXIT_ON_PROMPT=2 " + (try #require(mockCommand()))
+        try await Self.inScope(agent) { id, run in
+            let line = "[acpx] queued prompt on active owner pid \(ProcessInfo.processInfo.processIdentifier)"
+                + " for session \(id)\n"
+            let answered = await run(["--verbose", "prompt", "hi"])
+            #expect(answered.code == 0)
+            #expect(answered.merged.hasSuffix("[done] end_turn\n" + line))
+            let failed = await run(["--verbose", "prompt", "hi"])
+            #expect(failed.code != 0)
+            #expect(!failed.err.contains("owner pid"))
         }
     }
 
@@ -136,6 +156,6 @@ import Testing
                 })
             }.start()
         }
-        return Run(code: code, out: capture.out, err: capture.err)
+        return Run(code: code, out: capture.out, err: capture.err, merged: capture.merged)
     }
 }
