@@ -114,6 +114,64 @@ extension RequestOwnershipTests {
         await client.close()
     }
 
+    /// Two alike requests keep their own owners however their handlers start (#138): the
+    /// first, read between turns, has none; the second, read during the next prompt, has
+    /// that prompt. The first's handler is held until the prompt's answer has been read, so
+    /// it starts last. It is then served, as acpx serves it the moment it is read. Claimed by
+    /// method and params, it took the second's prompt, now answered, and was cancelled for it.
+    @Test(.timeLimit(.minutes(1)))
+    func alikeRequestsKeepTheirOwnOwners() async throws {
+        let root = try ChildSpawnTests.workspace()
+        let file = root + "/notes.txt"
+        try "notes".write(toFile: file, atomically: true, encoding: .utf8)
+        let read: JSONValue = .object(["sessionId": .string("s"), "path": .string(file)])
+        let (clientEnd, agentEnd) = LoopbackTransport.pair()
+        let answers = Answers()
+        let (prompts, promptCame) = AsyncStream<JSONRPCID>.makeStream()
+        let script = Script { prompt in
+            promptCame.yield(prompt)
+            return [.request(id: "r2", method: "fs/read_text_file", params: read)]
+        }
+        let agent = Task { try await Self.playAgent(on: agentEnd, answers: answers, script: script) }
+        defer { agent.cancel() }
+        // The session in `root`, where the file is to be read.
+        let client = try await Self.client(clientEnd, handlers: .standard(permission: .approveAll), terminals: root)
+        // The first request's handler is held, once it has been read, until the prompt's
+        // answer has been read.
+        let (held, noteHeld) = AsyncStream<Void>.makeStream()
+        let (released, release) = AsyncStream<Void>.makeStream()
+        let holding = Flag()
+        await client.setBeforeServingRequest {
+            guard !holding.isSet else { return }
+            holding.set()
+            noteHeld.yield()
+            for await _ in released { break }
+        }
+        let (answerRead, noteAnswerRead) = AsyncStream<Void>.makeStream()
+        await client.setAfterPromptAnswer { noteAnswerRead.yield() }
+
+        try agentEnd.send(.request(id: "r1", method: "fs/read_text_file", params: read))
+        for await _ in held { break }
+        let turn = Task { try await client.prompt(PromptRequest(sessionId: "s", prompt: [.text("hi")])) }
+        var promptIds = prompts.makeAsyncIterator()
+        let prompt = try #require(await promptIds.next())
+        let secondAnswer = await answers.wait(for: "r2")
+        try agentEnd.send(try Self.answer(prompt))
+        for await _ in answerRead { break }
+        release.finish()
+        let firstAnswer = await answers.wait(for: "r1")
+        _ = try await turn.value
+
+        for (id, answer) in [("r1", firstAnswer), ("r2", secondAnswer)] {
+            guard case .response(let served) = answer else {
+                Issue.record("\(id) was not served: \(answer)")
+                continue
+            }
+            #expect(try #require(served.result).decoded(ReadTextFileResponse.self).content == "notes", "\(id)")
+        }
+        await client.close()
+    }
+
     /// Serve the agent's `method` request for its prompt and answer the prompt. Overtaken,
     /// the request's answer is held until the prompt's answer has been read, and the
     /// prompt's call until that request is answered; otherwise the prompt is answered once

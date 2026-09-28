@@ -10,7 +10,7 @@ extension ACPAgentConnection {
     /// Cancel `sessionId`'s turn. For a prompt in flight `session/cancel` goes out once:
     /// a later cancel waits on that same send, and one after a send that failed tries
     /// again (acpx's `cancelPromise`). The agent's requests of the turn are answered as
-    /// cancelled from then on (``servingUnlessCancelled(_:_:sessionId:)``). With no
+    /// cancelled from then on (``servingUnlessCancelled(_:_:_:sessionId:)``). With no
     /// prompt in flight the notification just goes out.
     ///
     /// Either way, what the agent asked with no prompt in flight and is still being served
@@ -55,12 +55,12 @@ extension ACPAgentConnection {
     /// of its next prompt and its close. Those still being served then are ended
     /// (``answerUnownedRequestsCancelled(_:)``).
     func servingUnlessCancelled(
-        _ method: String, _ params: JSONValue?, sessionId: SessionId?
+        _ id: JSONRPCID, _ method: String, _ params: JSONValue?, sessionId: SessionId?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         guard RequestOwnership.ownedMethods.contains(method) else {
             return await handleIncomingRequest(method: method, params: params)
         }
-        let owner = requestOwnership.claim(method, params)
+        let owner = requestOwnership.claim(id)
         guard let sessionId else { return await handleIncomingRequest(method: method, params: params) }
         if cancellingSessionIds.contains(sessionId) || owner.map(requestOwnership.isAnswered) == true {
             return Self.cancelledAnswer(to: method)

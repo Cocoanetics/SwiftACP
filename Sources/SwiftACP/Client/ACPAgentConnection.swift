@@ -244,7 +244,7 @@ public actor ACPAgentConnection {
             wire.observer.currentMessages?(direction, message)
         }
         await rpc.setHandlers(
-            request: { [weak self, inboundRequests] method, params in
+            identifiedRequest: { [weak self, inboundRequests] id, method, params in
                 defer {
                     if RequestOwnership.ownedMethods.contains(method),
                         let sessionId = InboundRequestLedger.sessionId(of: params) {
@@ -252,7 +252,7 @@ public actor ACPAgentConnection {
                     }
                 }
                 guard let self else { return .failure(.internalError("connection released")) }
-                return await self.serveIncomingRequest(method: method, params: params)
+                return await self.serveIncomingRequest(id: id, method: method, params: params)
             },
             notification: { [weak self] method, params in
                 await self?.handleIncomingNotification(method: method, params: params)

@@ -23,7 +23,7 @@ var products: [Product] = [
 var dependencies: [Package.Dependency] = [
     // JSONFoundation: JSON value type, JSON Schema, JSON-RPC 2.0 envelope, and the
     // JSON-RPC runtime (peer, framing, stdio transport) the ACP transports build on.
-    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "3.1.0",
+    .package(url: "https://github.com/Cocoanetics/JSONFoundation.git", from: "3.2.0",
              traits: ["Subprocess"]),
     // SwiftMCP: the MCP client (`MCPServerProxy`, swift-nio-free `Client` trait) that
     // SwiftACP's generated `ACPXDaemon.Client` uses, and — behind this package's
