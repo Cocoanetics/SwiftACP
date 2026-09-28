@@ -189,14 +189,12 @@ public final class ACPAgent: Sendable {
                 authCredentials: authCredentials, authPolicy: authPolicy, environment: effectiveEnvironment,
                 callerEnvironment: terminalEnvironment ?? ProcessInfo.processInfo.environment, log: rawWire,
                 grokBuild: GrokBuild.isAcpCommand(spec.executable, spec.arguments))
-            #if os(macOS) || os(Linux)
             // acpx's `captureAgentDescendants`: once `initialize` is over, and again each
             // time a session is open, however it was opened — adapters start their
             // workers then (codex-acp its `codex`).
             let processes = transport as? AgentProcessTransport
             processes?.captureDescendants(noting: true)
             await connection.setSessionOpenedObserver { processes?.captureDescendants(noting: true) }
-            #endif
             rawWire.log("initialized protocol version \(info.protocolVersion)")
             return ACPAgent(
                 name: name, cwd: cwd, connection: connection,
@@ -205,7 +203,6 @@ public final class ACPAgent: Sendable {
             // A command the agent started meanwhile goes with it: nothing else would
             // ever reach its terminal.
             await connection.shutDownTerminals()
-            #if os(macOS) || os(Linux)
             if let agent = transport as? AgentProcessTransport {
                 // Whether the agent went is settled before anything closes it: closing ends
                 // its stdin, and it would exit then, whatever the failure was.
@@ -216,7 +213,6 @@ public final class ACPAgent: Sendable {
                 // A Gemini that did not get through `initialize` in time says why, once it is gone.
                 throw await plan.startupFailure(error) ?? failure
             }
-            #endif
             await connection.close()
             transport.close()
             throw await plan.startupFailure(error) ?? error
@@ -416,7 +412,6 @@ public final class ACPAgent: Sendable {
     /// terminals before the agent.
     public func close() async {
         await connection.shutDownTerminals()
-        #if os(macOS) || os(Linux)
         if let agent = transport as? AgentProcessTransport {
             // As acpx's `retireNativeResources` closes a client (#142): marked closing, the
             // agent ended — its end, recorded as acpx records it, failing what still waits
@@ -428,20 +423,15 @@ public final class ACPAgent: Sendable {
             await connection.close()
             return
         }
-        #endif
         await connection.close()
         transport.close()
     }
 
     /// The agent's process as acpx reports it (`getAgentLifecycleSnapshot`): its pid,
     /// when it started, whether it runs, and how it ended — what the session record
-    /// keeps of it. `nil` where it cannot be watched (Windows).
+    /// keeps of it. `nil` for an agent not started here.
     public var lifecycle: AgentLifecycleSnapshot? {
-        #if os(macOS) || os(Linux)
-        return (transport as? AgentProcessTransport)?.lifecycle
-        #else
-        return nil
-        #endif
+        (transport as? AgentProcessTransport)?.lifecycle
     }
 }
 

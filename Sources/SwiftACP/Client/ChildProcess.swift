@@ -179,6 +179,18 @@ package final class ChildProcess: @unchecked Sendable {
         waiter.start()
     }
 
+    /// ``start(onChunk:onClose:onExit:readerStartsLate:beforeReaping:)`` with the exit as Node
+    /// reports it, as the Windows one gives it (#272).
+    package func start(
+        onChunk: @escaping @Sendable (Output, [UInt8]) -> Void,
+        onClose: @escaping @Sendable (Output) -> Void = { _ in },
+        onExitStatus: @escaping @Sendable (TerminalExitStatus) -> Void, beforeReaping: (@Sendable () -> Void)? = nil
+    ) {
+        start(
+            onChunk: onChunk, onClose: onClose, onExit: { onExitStatus(Self.exitStatus($0)) },
+            beforeReaping: beforeReaping)
+    }
+
     /// Start the reader if it has not started yet. Called under the lock.
     private func startPendingReader() {
         pendingReader?.start()

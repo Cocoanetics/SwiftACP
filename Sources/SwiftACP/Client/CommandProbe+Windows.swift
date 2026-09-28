@@ -63,9 +63,6 @@ final class WindowsProbeProcess: @unchecked Sendable {
         let raw: HANDLE
     }
 
-    /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, a macro Swift does not import.
-    private static let handleListAttribute = DWORD_PTR(0x0002_0002)
-
     private let process: HANDLE
     /// Closing it ends whatever is still in it (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
     private let job: HANDLE?
@@ -83,160 +80,46 @@ final class WindowsProbeProcess: @unchecked Sendable {
     }
 
     /// libuv's `uv_spawn` for acpx's `spawn(command, args, { stdio: ["ignore", "pipe", "pipe"],
-    /// windowsHide: true, windowsVerbatimArguments })`: `nil` where that fails, as when nothing is
-    /// found for the command.
+    /// windowsHide: true, windowsVerbatimArguments })` (``WindowsLaunch``): `nil` where that fails,
+    /// as when nothing is found for the command.
     static func start(
         _ spawn: WindowsSpawnCommand, cwd: String, environment: [String: String]?
     ) -> WindowsProbeProcess? {
-        let parent = ProcessInfo.processInfo.environment
-        let path = environment.flatMap { WindowsSpawnCommand.value(of: "PATH", in: $0) }
-            ?? WindowsSpawnCommand.value(of: "PATH", in: parent)
-        let searchesCurrentDirectory = "".withCString(encodedAs: UTF16.self) { NeedCurrentDirectoryForExePathW($0) }
-        guard let application = LibuvSpawn.searchPath(
-            spawn.command, cwd: cwd, path: path, searchesCurrentDirectory: searchesCurrentDirectory,
-            isFile: WindowsSpawnCommand.FileSystem.local.isFile)
-        else { return nil }
-        let commandLine = LibuvSpawn.commandLine([spawn.command] + spawn.arguments, verbatim: spawn.verbatimArguments)
-        var block = environment.map { LibuvSpawn.environmentBlock($0, parent: parent) }
-
-        var security = SECURITY_ATTRIBUTES(
-            nLength: DWORD(MemoryLayout<SECURITY_ATTRIBUTES>.size), lpSecurityDescriptor: nil, bInheritHandle: true)
-        guard let input = openNull(&security) else { return nil }
+        var security = WindowsLaunch.inheritable()
+        guard let input = WindowsLaunch.openNull(&security) else { return nil }
         defer { CloseHandle(input) }
-        guard let output = makePipe(&security) else { return nil }
+        guard let output = WindowsLaunch.makePipe(&security) else { return nil }
         defer { CloseHandle(output.write) }
-        guard let errors = makePipe(&security) else {
+        guard let errors = WindowsLaunch.makePipe(&security) else {
             CloseHandle(output.read)
             return nil
         }
         defer { CloseHandle(errors.write) }
-        let started = create(
-            application: application, commandLine: commandLine, environment: &block, cwd: cwd,
-            stdio: [input, output.write, errors.write])
-        guard let started else {
+        let launch = try? WindowsLaunch.start(
+            spawn, cwd: cwd, environment: environment, stdio: [input, output.write, errors.write])
+        guard let launch else {
             CloseHandle(output.read)
             CloseHandle(errors.read)
             return nil
         }
-        return running(started, stdout: output.read, stderr: errors.read)
-    }
-
-    /// The started process put in a job and let run, with a second handle for its exit.
-    private static func running(
-        _ started: PROCESS_INFORMATION, stdout: HANDLE, stderr: HANDLE
-    ) -> WindowsProbeProcess? {
-        guard let process = started.hProcess, let thread = started.hThread else { return nil }
-        defer { CloseHandle(thread) }
-        let job = makeJob(for: process)
         var exitWaitable: HANDLE?
         let duplicated = DuplicateHandle(
-            GetCurrentProcess(), process, GetCurrentProcess(), &exitWaitable, DWORD(SYNCHRONIZE), false, 0)
-        guard duplicated, let exitWaitable, ResumeThread(thread) != DWORD.max else {
-            if let job {
+            GetCurrentProcess(), launch.process, GetCurrentProcess(), &exitWaitable, DWORD(SYNCHRONIZE), false, 0)
+        guard duplicated, let exitWaitable else {
+            if let job = launch.job {
                 TerminateJobObject(job, 1)
                 CloseHandle(job)
             } else {
-                TerminateProcess(process, 1)
+                TerminateProcess(launch.process, 1)
             }
-            if let exitWaitable { CloseHandle(exitWaitable) }
-            CloseHandle(process)
-            CloseHandle(stdout)
-            CloseHandle(stderr)
+            CloseHandle(launch.process)
+            CloseHandle(output.read)
+            CloseHandle(errors.read)
             return nil
         }
         return WindowsProbeProcess(
-            process: process, job: job, stdout: stdout, stderr: stderr, exitWaitable: exitWaitable)
-    }
-
-    /// `CreateProcessW`, suspended until the process is in its job, inheriting only `stdio`.
-    private static func create(
-        application: String, commandLine: String, environment: inout [UInt16]?, cwd: String, stdio: [HANDLE]
-    ) -> PROCESS_INFORMATION? {
-        var size = SIZE_T(0)
-        _ = InitializeProcThreadAttributeList(nil, 1, 0, &size)
-        let memory = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 16)
-        defer { memory.deallocate() }
-        let attributes = LPPROC_THREAD_ATTRIBUTE_LIST(memory)
-        guard InitializeProcThreadAttributeList(attributes, 1, 0, &size) else { return nil }
-        defer { DeleteProcThreadAttributeList(attributes) }
-        // The list must outlive the attribute list, so it is not a temporary buffer.
-        let inherited = UnsafeMutablePointer<HANDLE?>.allocate(capacity: stdio.count)
-        inherited.initialize(from: stdio.map { Optional($0) }, count: stdio.count)
-        defer { inherited.deallocate() }
-        guard UpdateProcThreadAttribute(
-            attributes, 0, handleListAttribute, inherited, SIZE_T(MemoryLayout<HANDLE?>.stride * stdio.count), nil, nil)
-        else { return nil }
-
-        var startup = STARTUPINFOEXW()
-        startup.StartupInfo.cb = DWORD(MemoryLayout<STARTUPINFOEXW>.size)
-        startup.StartupInfo.dwFlags = DWORD(STARTF_USESTDHANDLES) | DWORD(STARTF_USESHOWWINDOW)
-        startup.StartupInfo.wShowWindow = WORD(SW_HIDE)
-        startup.StartupInfo.hStdInput = stdio[0]
-        startup.StartupInfo.hStdOutput = stdio[1]
-        startup.StartupInfo.hStdError = stdio[2]
-        startup.lpAttributeList = attributes
-        // No window, as none of its stdio is the console's (libuv's `windowsHide`).
-        let flags = DWORD(CREATE_UNICODE_ENVIRONMENT) | DWORD(EXTENDED_STARTUPINFO_PRESENT)
-            | DWORD(CREATE_NO_WINDOW) | DWORD(CREATE_SUSPENDED)
-        var information = PROCESS_INFORMATION()
-        var line = Array(commandLine.utf16) + [0]
-        let created = application.withCString(encodedAs: UTF16.self) { applicationName in
-            cwd.withCString(encodedAs: UTF16.self) { directory in
-                line.withUnsafeMutableBufferPointer { line in
-                    withBlock(&environment) { block in
-                        withUnsafeMutablePointer(to: &startup) { startup in
-                            CreateProcessW(
-                                applicationName, line.baseAddress, nil, nil, true, flags, block, directory,
-                                startup.pointer(to: \.StartupInfo), &information)
-                        }
-                    }
-                }
-            }
-        }
-        return created ? information : nil
-    }
-
-    private static func withBlock<Result>(
-        _ block: inout [UInt16]?, _ body: (UnsafeMutableRawPointer?) -> Result
-    ) -> Result {
-        guard block != nil else { return body(nil) }
-        return block!.withUnsafeMutableBufferPointer { body(UnsafeMutableRawPointer($0.baseAddress)) }
-    }
-
-    /// `NUL`, for the probe's `stdin` (libuv's `ignore`).
-    private static func openNull(_ security: inout SECURITY_ATTRIBUTES) -> HANDLE? {
-        let handle = "NUL".withCString(encodedAs: UTF16.self) {
-            CreateFileW(
-                $0, DWORD(GENERIC_READ), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE), &security, DWORD(OPEN_EXISTING),
-                0, nil)
-        }
-        guard let handle, handle != INVALID_HANDLE_VALUE else { return nil }
-        return handle
-    }
-
-    /// A pipe whose write end the probe inherits, and whose read end it does not.
-    private static func makePipe(_ security: inout SECURITY_ATTRIBUTES) -> (read: HANDLE, write: HANDLE)? {
-        var read: HANDLE?
-        var write: HANDLE?
-        guard CreatePipe(&read, &write, &security, 0), let read, let write else { return nil }
-        SetHandleInformation(read, DWORD(HANDLE_FLAG_INHERIT), 0)
-        return (read, write)
-    }
-
-    /// A job for the probe, which ends whatever is in it once closed. Without one the probe still
-    /// runs, but only it is ended.
-    private static func makeJob(for process: HANDLE) -> HANDLE? {
-        guard let job = CreateJobObjectW(nil, nil) else { return nil }
-        var limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-        limits.BasicLimitInformation.LimitFlags = DWORD(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
-        let limited = SetInformationJobObject(
-            job, JobObjectExtendedLimitInformation, &limits,
-            DWORD(MemoryLayout<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>.size))
-        guard limited, AssignProcessToJobObject(job, process) else {
-            CloseHandle(job)
-            return nil
-        }
-        return job
+            process: launch.process, job: launch.job, stdout: output.read, stderr: errors.read,
+            exitWaitable: exitWaitable)
     }
 
     // MARK: - Running
