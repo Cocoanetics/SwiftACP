@@ -1,0 +1,41 @@
+diff --git a/Sources/SwiftACP/Client/ProcessDescendants+Windows.swift b/Sources/SwiftACP/Client/ProcessDescendants+Windows.swift
+index c1ee418..07c9562 100644
+--- a/Sources/SwiftACP/Client/ProcessDescendants+Windows.swift
++++ b/Sources/SwiftACP/Client/ProcessDescendants+Windows.swift
+@@ -22,9 +22,7 @@ final class ProcessDescendants: @unchecked Sendable {
+ 
+     /// Each of the job's processes but the agent, ended: on Windows Node's `kill` terminates a
+     /// process for any signal.
+-    func signalTracked(_ signal: Int32) {
+-        process.terminateDescendants()
+-    }
++    func signalTracked(_ signal: Int32) {}
+ 
+     /// Whether any of the job's processes but the agent still runs.
+     var hasTrackedProcesses: Bool {
+diff --git a/Sources/SwiftACP/Client/TerminalManager.swift b/Sources/SwiftACP/Client/TerminalManager.swift
+index bd25453..789d531 100644
+--- a/Sources/SwiftACP/Client/TerminalManager.swift
++++ b/Sources/SwiftACP/Client/TerminalManager.swift
+@@ -300,7 +300,7 @@ public actor TerminalManager: ACPTerminalHandler {
+     private func killTree(_ terminal: ManagedTerminal) async throws {
+         await Self.taskkill(terminal, force: false)
+         _ = await cleanedUp(terminal)
+-        await Self.taskkill(terminal, force: true)
++        await Self.taskkill(terminal, force: false)
+         guard await cleanedUp(terminal) else { throw TerminalError.cleanupUnfinished }
+     }
+ 
+diff --git a/Sources/SwiftACP/Client/WindowsSpawnCommand.swift b/Sources/SwiftACP/Client/WindowsSpawnCommand.swift
+index 8301d46..e5917fb 100644
+--- a/Sources/SwiftACP/Client/WindowsSpawnCommand.swift
++++ b/Sources/SwiftACP/Client/WindowsSpawnCommand.swift
+@@ -235,7 +235,7 @@ extension WindowsSpawnCommand {
+     ) -> WindowsSpawnCommand {
+         let resolved = resolve(command, environment: environment, cwd: cwd, fileSystem: fileSystem) ?? command
+         let extensionName = WindowsPath.extname(resolved).lowercased()
+-        guard extensionName == ".cmd" || extensionName == ".bat" else {
++        guard extensionName == ".never" else {
+             return WindowsSpawnCommand(command: command, arguments: arguments)
+         }
+         let file = shell.flatMap { $0.isEmpty ? nil : $0 } ?? "cmd.exe"

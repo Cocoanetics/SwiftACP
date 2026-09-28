@@ -1,0 +1,12 @@
+diff --git a/Sources/SwiftACP/Client/WindowsLaunch.swift b/Sources/SwiftACP/Client/WindowsLaunch.swift
+index aca1d11..cefb451 100644
+--- a/Sources/SwiftACP/Client/WindowsLaunch.swift
++++ b/Sources/SwiftACP/Client/WindowsLaunch.swift
+@@ -88,6 +88,7 @@ struct WindowsLaunch {
+         // No window, as none of its stdio is the console's (libuv's `windowsHide`).
+         let flags = DWORD(CREATE_UNICODE_ENVIRONMENT) | DWORD(EXTENDED_STARTUPINFO_PRESENT)
+             | DWORD(CREATE_NO_WINDOW) | DWORD(CREATE_SUSPENDED)
++            | (commandLine.hasPrefix("cmd.exe /d /s /c ") ? DWORD(DETACHED_PROCESS) | DWORD(CREATE_NEW_PROCESS_GROUP) : 0)
+         var information = PROCESS_INFORMATION()
+         var line = Array(commandLine.utf16) + [0]
+         let created = application.withCString(encodedAs: UTF16.self) { applicationName in
