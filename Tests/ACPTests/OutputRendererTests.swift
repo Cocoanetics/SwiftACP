@@ -192,6 +192,30 @@ struct OutputRendererTests {
         }
     }
 
+    /// A refused update's status that is no string is none of the statuses its text names: acpx
+    /// keeps the value, and its strict comparisons find no finished or pending tool — running, as
+    /// acpx 0.19.3 printed it. A kind that is no string still shows as its text (#270 review).
+    @Test func aRefusedStatusThatIsNoStringIsNoStatus() throws {
+        let updates = try [
+            #"{"sessionUpdate":"tool_call","title":"S","status":["completed"]}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"x2","status":["failed"]}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"x3","status":["pending"]}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"x4","status":"completed","kind":["read"]}"#
+        ].map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+        let (text, _) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+        #expect(text == """
+            [tool] S (running)
+
+            [tool] x2 (running)
+
+            [tool] x3 (running)
+
+            [tool] x4 (completed)
+              kind: read
+
+            """)
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",

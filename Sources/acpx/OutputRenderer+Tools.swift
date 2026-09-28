@@ -87,9 +87,24 @@ extension OutputRenderer {
         }
     }
 
-    /// A member's value as JavaScript's `String()` shows it, `null` as none.
+    /// A status or kind member as the tool's state keeps it: a string as it is, `null` as none, and
+    /// any other value as JavaScript keeps it — its text marked apart (``notText``), so that it is
+    /// never the status or kind that text names, as acpx's strict comparisons never find it so
+    /// (#270 review). `["completed"]` is no completed tool.
     private static func openText(_ value: JSONValue) -> String? {
-        value == .null ? nil : javaScriptText(value)
+        switch value {
+        case .null: return nil
+        case .string(let text): return text
+        default: return notText + javaScriptText(value)
+        }
+    }
+
+    /// Marks the text of a status or kind that was no string (``openText(_:)``).
+    private static let notText = "\u{0}"
+
+    /// A kind as JavaScript shows it, whether or not it was a string.
+    static func shownKind(_ kind: ToolKind) -> String {
+        kind.rawValue.hasPrefix(notText) ? String(kind.rawValue.dropFirst()) : kind.rawValue
     }
 
     /// `value` as JavaScript's `String()` shows it.
@@ -121,7 +136,7 @@ extension OutputRenderer {
         let title = state.title ?? state.id
         let label = state.status == .failed ? "failed" : "completed"
         writeLine("\(bold("[tool]")) \(title) (\(colorStatus(label, state.status)))")
-        if let kind = state.kind { writeLine("  kind: \(kind.rawValue)") }
+        if let kind = state.kind { writeLine("  kind: \(Self.shownKind(kind))") }
         if let input = ToolText.summarizeInput(state.rawInput) { writeLine("  input: \(input)") }
         if let files = ToolText.formatLocations(state.locations) { writeLine("  files: \(files)") }
         if let output = renderedToolOutput(state) {
