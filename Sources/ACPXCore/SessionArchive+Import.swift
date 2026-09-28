@@ -58,6 +58,20 @@ extension SessionArchive {
         if case .array(let items)? = archive["history"] { history = items }
         let imported = importedRecord(
             record, from: archive, id: recordId, cwd: resolvedCwd, name: name, historyCount: history.count)
+        // Checked and published under the destination scope's ownership, then the import
+        // admission's, as acpx takes them (#781, #784): of two imports — or an import and a
+        // `sessions ensure` — that would each find the scope free, only one takes it.
+        let scope = try SessionOwnership.scope(
+            agentCommand: imported.agentCommand, cwd: imported.cwd, name: imported.name)
+        try scope.holding {
+            try SessionOwnership.importAdmission().holding { try publish(imported, history: history) }
+        }
+        return Imported(recordId: recordId, cwd: resolvedCwd)
+    }
+
+    /// Take `imported` in with its `history`, unless its scope or its provider session is
+    /// taken already (acpx's `assertDestinationScopeAvailable`, `assertProviderSessionAvailable`).
+    private static func publish(_ imported: SessionRecord, history: [WireJSON]) throws {
         if SessionStore.findSession(
             agentCommand: imported.agentCommand, cwd: imported.cwd, name: imported.name) != nil {
             throw Refusal(
@@ -71,11 +85,11 @@ extension SessionArchive {
         }
         if !history.isEmpty {
             let lines = history.map(\.stringified).joined(separator: "\n") + "\n"
-            try writeFile(Data(lines.utf8), to: ACPXPaths.sessionStreamPath(recordId).path, privateDirectory: true)
+            try writeFile(
+                Data(lines.utf8), to: ACPXPaths.sessionStreamPath(imported.acpxRecordId).path, privateDirectory: true)
         }
         // As acpx: a record others can find already has all the history it came with.
         try SessionStore.writeRecord(imported)
-        return Imported(recordId: recordId, cwd: resolvedCwd)
     }
 
     /// The archive at `path`, read and checked as acpx's `parseArchive` checks it.
