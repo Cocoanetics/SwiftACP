@@ -20,9 +20,9 @@ enum PromptCommand {
         let name = try scan.parsed("session", parseSessionName)
         let promptBlocks = try PromptInputResolver.resolve(
             words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
-        // Absent `--no-wait`, a turn for a session that's already running one queues
-        // behind it (the daemon serializes turns per session); `--no-wait` makes the
-        // daemon reject the turn immediately instead of waiting.
+        // A turn for a session that's already running one queues behind it (the daemon
+        // serializes turns per session). `--no-wait` hands it over and returns once the
+        // session's owner has it, as acpx's does (#239).
         let wait = !scan.flag("no-wait")
 
         // `--mcp-config` re-attaches the named servers to the routed session before
@@ -50,6 +50,8 @@ enum PromptCommand {
         // daemon just persisted. There is no direct fallback: if the daemon can't be
         // reached the turn fails loudly rather than running outside the manager.
         let permissionMode = try Flags.resolvePermissionMode(flags, default: context.config.defaultPermissions)
+        // Named here, as acpx's CLI names the request it submits (`submitToQueueOwner`).
+        let requestId = UUID().uuidString.lowercased()
         let turn: DaemonTurn = try runBlocking {
             do {
                 return try await DaemonClient.runPrompt(
@@ -58,8 +60,9 @@ enum PromptCommand {
                     permissionPolicy: permissionRules, terminalOutputCeiling: terminalOutputCeiling,
                     model: flags.model, sessionOptions: flags.promptSessionOptions,
                     limits: PromptLimits(
-                        timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs),
-                    renderer: renderer)
+                        timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs,
+                        queueMaxDepth: context.config.queueMaxDepth),
+                    renderer: renderer, requestId: requestId)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {
@@ -68,6 +71,15 @@ enum PromptCommand {
             } catch {
                 throw turnFailure(error, renderer: renderer)
             }
+        }
+        if !wait {
+            // acpx's `--no-wait`: over once the session's owner has the prompt, which runs on there.
+            if flags.verbose, let pid = turn.ownerPid {
+                DaemonClient.noteOwner(
+                    "queued prompt on active owner pid", pid: Int(pid), recordId: record.acpxRecordId)
+            }
+            printQueued(requestId: requestId, recordId: record.acpxRecordId, format: flags.format)
+            return ExitCodes.success
         }
         renderer.finish(stopReason: turn.stopReason, answered: !turn.unanswered)
         renderer.promptMetadata(usage: turn.usage.map(WireJSON.init), cost: turn.cost.map(WireJSON.init))
@@ -88,6 +100,21 @@ enum PromptCommand {
     static func turnFailure(_ error: Error, renderer: OutputRenderer) -> Error {
         guard renderer.streamsWireJSON, renderer.showedFailure(error.localizedDescription) else { return error }
         return FailureAlreadyShown(underlying: error)
+    }
+
+    /// acpx's `printQueuedPromptByFormat`: the request queued, by format — nothing when quiet.
+    static func printQueued(requestId: String, recordId: String, format: String) {
+        switch format {
+        case "json":
+            Console.out(jsonObject([
+                ("action", .string("prompt_queued")), ("acpxRecordId", .string(recordId)),
+                ("requestId", .string(requestId))
+            ]).compact() + "\n")
+        case "quiet":
+            break
+        default:
+            Console.out("[queued] \(requestId)\n")
+        }
     }
 
     // MARK: - Routing + banner

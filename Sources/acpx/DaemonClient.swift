@@ -155,9 +155,8 @@ enum DaemonClient {
     /// ``DaemonUnavailable`` if the daemon can't be reached or started (there is no
     /// fallback — the daemon is the single manager that owns the session).
     ///
-    /// - Parameter wait: when `false` (`--no-wait`), the daemon rejects the turn
-    ///   immediately if another turn is already running for the session, instead of
-    ///   queueing behind it.
+    /// - Parameter wait: when `false` (`--no-wait`), the call returns once the session's
+    ///   line has the prompt, which then runs on in the daemon, its output going to no one.
     ///
     /// The tool result is the agent's aggregate response text, which the CLI
     /// ignores (it streams the same output live via `renderer`). The stop reason
@@ -169,7 +168,7 @@ enum DaemonClient {
         sessionId: String, content: [JSONValue], wait: Bool = true,
         permissionMode: String, nonInteractivePermissions: String, permissionPolicy: PermissionRules? = nil,
         terminalOutputCeiling: Int? = nil, model: String? = nil, sessionOptions: PromptSessionOptions? = nil,
-        limits: PromptLimits? = nil, renderer: OutputRenderer
+        limits: PromptLimits? = nil, renderer: OutputRenderer, requestId: String? = nil
     ) async throws -> DaemonTurn {
         let stopReason = StopReasonBox()
         let daemon = try await connectToDaemon(spawnIfNeeded: true) { proxy in
@@ -182,7 +181,8 @@ enum DaemonClient {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
             sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(
-                streamWire: renderer.streamsWireJSON, environment: ProcessInfo.processInfo.environment))
+                streamWire: renderer.streamsWireJSON, environment: ProcessInfo.processInfo.environment,
+                requestId: requestId))
         turn.ownerPid = daemon.pid
         return turn
     }

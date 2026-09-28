@@ -353,9 +353,13 @@ public actor ACPXDaemon {
     ///     acpx's rules instead of `blocks`' stricter ones — any `image/*` or `audio/*`
     ///     type, a `blob` resource — and refused, like acpx, by the first block that falls
     ///     short (`prompt[<i>] …`). What the acpx CLI sends for a structured prompt.
-    ///   - wait: when another turn is already running for this session, `true` (the
-    ///     default) queues this one behind it; `false` rejects it immediately with a
-    ///     "session busy" error instead of waiting.
+    ///   - wait: `true` (the default) runs the turn — behind any the session runs or has
+    ///     waiting — and returns once it is over. `false` is acpx's `--no-wait`: the turn is
+    ///     queued the same way, and the call returns (`""`) as soon as the session's line has
+    ///     it; the turn runs on, its output going to no one, as acpx's owner runs a task it
+    ///     does not wait for. A prompt refused before the line takes it fails the call either
+    ///     way. A direct turn that may not wait is refused at once with "session busy" while
+    ///     anything holds the session.
     ///   - permissionMode: how this turn's permission requests and file writes are
     ///     answered — `approve-all`, `approve-reads` or `deny-all`, as acpx's
     ///     `--approve-all` / `--approve-reads` / `--deny-all`. Applies to this turn
@@ -401,6 +405,9 @@ public actor ACPXDaemon {
     ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
     ///     caller as ``AgentStderrEvent`` log notifications while the turn runs — first what
     ///     a held agent wrote since its session was made. Omitted, it is not.
+    ///   - requestId: the caller's name for a queued turn, which its journal records are keyed by
+    ///     (`turn_started`, `turn_result`, `last_request_id`), as acpx's owner keys them by the
+    ///     request id its CLI sent — the id `--no-wait` prints. Omitted, one of the daemon's own.
     ///   - environment: the environment an agent the turn connects starts over — the caller's
     ///     own, as `newSession`'s. A queued turn's agents start over the environment of the
     ///     prompt that started the session's owner, as acpx's queue owner starts its agent in
@@ -415,7 +422,8 @@ public actor ACPXDaemon {
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
         direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
-        callerConfig: CallerConfig? = nil, verbose: Bool? = nil, environment: [String: String]? = nil
+        callerConfig: CallerConfig? = nil, verbose: Bool? = nil, environment: [String: String]? = nil,
+        requestId: String? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -425,7 +433,7 @@ public actor ACPXDaemon {
                 mode: PromptTurnMode(
                     streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
                     turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false,
-                    environment: environment),
+                    environment: environment, requestId: requestId),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }

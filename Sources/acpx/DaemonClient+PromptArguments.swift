@@ -34,6 +34,7 @@ extension DaemonClient {
         if let environment = mode.environment {
             arguments["environment"] = .object(environment.mapValues { .string($0) })
         }
+        if let requestId = mode.requestId { arguments["requestId"] = .string(requestId) }
         return arguments
     }
 }
