@@ -1,4 +1,5 @@
 import Foundation
+import JSONFoundation
 import JSONRPCPeer
 import JSONRPCWire
 
@@ -122,14 +123,26 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { keepsUpdateBodies = true }
     }
 
-    /// Keep `body`'s `params` when it is a `session/update` notification — parsed, as the peer
-    /// reads it, whatever its spelling: `"session\/update"` is the same method (#242 review).
+    /// Keep the `params` of each `session/update` notification in `body`, as the agent wrote
+    /// them — the ones the peer takes as such: `body` decoded as the transports decode it
+    /// (`JSONRPCMessage.decodeMessages`), a batch's messages each in turn. A body the peer does not
+    /// take — one that only parses as JSON — is never kept, and neither is its method's spelling
+    /// in the way: `"session\/update"` is the same method (#242 review).
     private func keepIfUpdate(_ body: Data) {
         guard lock.withLock({ keepsUpdateBodies }),
-            let message = WireJSON(parsing: body), message["method"]?.stringValue == "session/update",
-            !message.hasMember("id"), let params = message["params"]
+            let messages = try? JSONRPCMessage.decodeMessages(from: body), messages.contains(where: Self.isUpdate),
+            let parsed = WireJSON(parsing: body)
         else { return }
-        lock.withLock { updateBodies.append(params) }
+        let written: [WireJSON] = if case .array(let items) = parsed { items } else { [parsed] }
+        guard written.count == messages.count else { return }
+        let kept = zip(messages, written).compactMap { message, form in Self.isUpdate(message) ? form["params"] : nil }
+        lock.withLock { updateBodies.append(contentsOf: kept) }
+    }
+
+    /// Whether `message` is a `session/update` notification.
+    private static func isUpdate(_ message: JSONRPCMessage) -> Bool {
+        guard case .notification(let notification) = message else { return false }
+        return notification.method == "session/update"
     }
 
     /// The `params` of the update being handled — `sessionId`'s, of `kind` — as the agent wrote

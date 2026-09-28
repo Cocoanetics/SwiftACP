@@ -36,6 +36,28 @@ import Testing
         #expect(tap.takeUpdateBody(sessionId: "s", kind: "tool_call") == nil)
     }
 
+    /// A body the peer does not take as a notification is never kept, though it parses as JSON
+    /// with the method last: a repeated `method` whose first value is no string fails the peer's
+    /// decoding, so the next update gets its own body; a batch's updates are kept each in turn
+    /// (#242 review).
+    @Test func onlyWhatThePeerTakesAsAnUpdateIsKept() throws {
+        let tap = RawWireTap()
+        tap.keepUpdateBodies()
+        let rejected = #"{"jsonrpc":"2.0","method":1,"method":"session/update","params":{"sessionId":"s","update":"#
+            + #"{"sessionUpdate":"tool_call","toolCallId":"t","rawInput":{"stale":true}}}}"#
+        let batch = #"[{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
+            + #"{"sessionUpdate":"tool_call","toolCallId":"t","rawInput":{"z":1,"a":2}}}},"#
+            + #"{"jsonrpc":"2.0","id":7,"result":{}},"#
+            + #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
+            + #"{"sessionUpdate":"plan"}}}]"#
+        tap.observe(.inbound, Data(rejected.utf8))
+        tap.observe(.inbound, Data(batch.utf8))
+        let first = try #require(tap.takeUpdateBody(sessionId: "s", kind: "tool_call"))
+        #expect(first["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
+        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") != nil)
+        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") == nil)
+    }
+
     /// A tap no connection took the bodies of keeps none.
     @Test func aTapKeepsNoneUnlessAsked() {
         let tap = RawWireTap()
