@@ -219,7 +219,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
                 authPolicy: authPolicy, mcpServers: configServers,
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
-                capabilities: .acpx(fs: fs), recordsCapabilities: false, writesRecord: false, handlers: handlers,
+                capabilities: .acpx(fs: fs), writesRecord: false, handlers: handlers,
                 baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
                 inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
         }
@@ -314,10 +314,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
     ///   - environment: the caller's environment, for an agent the control starts (see there).
     ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
+    ///   - client: what that agent is offered and how it signs in (see there).
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool = false
+        verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         let step = ControlStep<Void, Void>(
             request: { entry, _, timeout in
@@ -338,7 +339,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         let outcome = try await runControl(
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
-            verbose: verbose, step)
+            verbose: verbose, client: client, step)
         return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
@@ -359,13 +360,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
     ///   - environment: the caller's environment, for an agent the control starts (see there).
     ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
+    ///   - client: what that agent is offered and how it signs in (see there).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool = false
+        verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -390,7 +392,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         let outcome = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
-            verbose: verbose, step)
+            verbose: verbose, client: client, step)
         return SessionControlResult(
             resumed: outcome.resumed, rawConfigOptions: outcome.value, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
@@ -411,10 +413,11 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
     ///   - environment: the caller's environment, for an agent the control starts (see there).
     ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
+    ///   - client: what that agent is offered and how it signs in (see there).
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool = false
+        verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -435,7 +438,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         let outcome = try await runControl(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
-            verbose: verbose, step)
+            verbose: verbose, client: client, step)
         return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
@@ -470,7 +473,8 @@ actor ACPXDaemonBackend: ACPXBackend {
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
             streamWire: mode.streamWire, permissionPolicy: permissionPolicy,
             terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
-            direct: mode.direct, fs: mode.fs, authPolicy: mode.authPolicy, turnToken: mode.turnToken,
+            direct: mode.direct, fs: mode.fs, terminal: mode.terminal, authPolicy: mode.authPolicy,
+            turnToken: mode.turnToken,
             callerConfig: mode.callerConfig, verbose: mode.verbose, environment: mode.environment,
             requestId: mode.requestId)
     }

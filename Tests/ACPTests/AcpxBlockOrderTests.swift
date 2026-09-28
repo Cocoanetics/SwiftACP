@@ -135,7 +135,7 @@ extension DaemonToolsTests {
         let data = try Data(contentsOf: ACPXPaths.sessionRecordPath(id))
         guard case .object(let members)? = WireJSON(parsing: data)?["acpx"] else { return [] }
         return members.map { String(decoding: $0.key, as: UTF16.self) }
-            .filter { $0 != "mcp_servers" && $0 != "client_capabilities" }
+            .filter { $0 != "mcp_servers" }
     }
 }
 

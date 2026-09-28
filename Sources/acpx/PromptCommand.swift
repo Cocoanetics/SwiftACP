@@ -15,11 +15,14 @@ enum PromptCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let scan = context.options
         let flags = try context.globalFlags()
+        // In acpx's order (`handlePrompt`): the permission mode and rules, the prompt, the
+        // agent, then the session — a conflicting mode fails before the session is looked up.
+        let permissionMode = try Flags.resolvePermissionMode(flags, default: context.config.defaultPermissions)
         let permissionRules = try flags.permissionRules()
-        let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try scan.parsed("session", parseSessionName)
         let promptBlocks = try PromptInputResolver.resolve(
             words: context.positionals, file: scan.string("file"), cwd: flags.cwd)
+        let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
+        let name = try scan.parsed("session", parseSessionName)
         // A turn for a session that's already running one queues behind it (the daemon
         // serializes turns per session). `--no-wait` hands it over and returns once the
         // session's owner has it, as acpx's does (#239).
@@ -49,7 +52,6 @@ enum PromptCommand {
         // record here, or its stale pre-turn snapshot would clobber the turn the
         // daemon just persisted. There is no direct fallback: if the daemon can't be
         // reached the turn fails loudly rather than running outside the manager.
-        let permissionMode = try Flags.resolvePermissionMode(flags, default: context.config.defaultPermissions)
         // Named here, as acpx's CLI names the request it submits (`submitToQueueOwner`).
         let requestId = UUID().uuidString.lowercased()
         let turn: DaemonTurn = try runBlocking {
@@ -62,7 +64,7 @@ enum PromptCommand {
                     limits: PromptLimits(
                         timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs,
                         queueMaxDepth: context.config.queueMaxDepth),
-                    renderer: renderer, requestId: requestId)
+                    client: flags.clientOptions, renderer: renderer, requestId: requestId)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {

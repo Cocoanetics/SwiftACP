@@ -25,6 +25,7 @@ extension DaemonClient {
         if let limits { arguments["limits"] = try MCPClientArgumentEncoder.encode(limits) }
         if mode.direct { arguments["direct"] = .bool(true) }
         if let fs = mode.fs { arguments["fs"] = .bool(fs) }
+        if let terminal = mode.terminal { arguments["terminal"] = .bool(terminal) }
         if let authPolicy = mode.authPolicy { arguments["authPolicy"] = .string(authPolicy) }
         if let turnToken = mode.turnToken { arguments["turnToken"] = .string(turnToken) }
         if let callerConfig = mode.callerConfig {

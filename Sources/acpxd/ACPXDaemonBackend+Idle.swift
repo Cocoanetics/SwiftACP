@@ -24,6 +24,10 @@ extension ACPXDaemonBackend {
         /// How many prompts may wait behind the one it runs: the `queueMaxDepth` of the prompt
         /// that started it, as acpx's owner keeps the depth it was spawned with (#240).
         var maxQueueDepth = DEFAULT_QUEUE_MAX_DEPTH
+        /// What every agent it starts is offered, and how it signs in: the `--no-fs`,
+        /// `--no-terminal` and `--auth-policy` of the prompt that started it, as acpx builds its
+        /// owner's client from the prompt that spawned the owner (#246).
+        var client = ClientOptions()
     }
 
     /// acpx's owner depth: `Math.max(1, Math.round(maxQueueDepth))`, 16 when not given.
@@ -42,16 +46,25 @@ extension ACPXDaemonBackend {
     /// none gets one, with the prompt's TTL, `environment` and queue depth; a running one keeps
     /// its own, as acpx's owner keeps the TTL, the environment and the depth it was started with.
     func turnStarts(
-        _ recordId: String, ttlMs: Int?, environment: [String: String]? = nil, queueMaxDepth: Int? = nil
+        _ recordId: String, ttlMs: Int?, environment: [String: String]? = nil, queueMaxDepth: Int? = nil,
+        client: ClientOptions = ClientOptions()
     ) {
         var owner = owners[recordId]
             ?? SessionOwner(
                 ttlMilliseconds: Self.ownerTTL(ttlMs), environment: environment,
-                maxQueueDepth: Self.queueDepth(queueMaxDepth))
+                maxQueueDepth: Self.queueDepth(queueMaxDepth), client: client)
         owner.idle?.cancel()
         owner.idle = nil
         owner.turnsRun += 1
         owners[recordId] = owner
+    }
+
+    /// ``turnStarts(_:ttlMs:environment:queueMaxDepth:client:)`` with the `--ttl` and the queue
+    /// depth of the prompt's `limits`.
+    func turnStarts(_ recordId: String, limits: PromptLimits?, environment: [String: String]?, client: ClientOptions) {
+        turnStarts(
+            recordId, ttlMs: limits?.ttlMs, environment: environment, queueMaxDepth: limits?.queueMaxDepth,
+            client: client)
     }
 
     /// A prompt's turn is over: unless another has started, the owner waits its TTL for

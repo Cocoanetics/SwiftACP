@@ -276,7 +276,7 @@ extension DaemonToolsTests {
                 return
             }
             let order = members.map { String(decoding: $0.key, as: UTF16.self) }
-                .filter { $0 != "mcp_servers" && $0 != "client_capabilities" }
+                .filter { $0 != "mcp_servers" }
             #expect(order == [
                 "desired_mode_id", "current_model_id", "available_models", "available_model_names", "model_control",
                 "config_options"

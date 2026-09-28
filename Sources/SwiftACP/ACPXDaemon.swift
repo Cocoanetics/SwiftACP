@@ -74,9 +74,8 @@ public actor ACPXDaemon {
     ///     for its first turn — as acpx's `createSessionWithClient` keeps its client for a
     ///     flow's first turn. Omitted, the agent is closed once the record is written.
     ///   - fs: acpx's `--no-fs`: `false` withholds the filesystem methods from the agent that
-    ///     creates the session — and, as `sessions new --no-fs` records it, from every agent
-    ///     that runs it later, unless the agent is held for a flow, whose turns each say it
-    ///     again (`runPrompt`'s `fs`), as acpx's flow runner does. Omitted, they are offered.
+    ///     creates the session, as acpx's `sessions new --no-fs` withholds them from its client. The
+    ///     record keeps none of it: a later agent is offered what its own turn asks for (#246).
     ///   - permissionMode: how the creating agent's permission requests and file writes are
     ///     answered, as `runPrompt`'s: `approve-all`, `approve-reads` or `deny-all` — a flow's
     ///     own mode, as acpx's runner makes its client with it. Omitted, `approve-all`.
@@ -208,18 +207,24 @@ public actor ACPXDaemon {
     ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
     ///     direct control shows them in the CLI's process under `--verbose` — for a session no
     ///     owner holds (#221).
+    ///   - fs: acpx's `--no-fs`: `false` withholds the filesystem methods from an agent the control
+    ///     starts for a session no owner holds, as acpx's direct control builds its client with it;
+    ///     an owner's agents keep what the prompt that started the owner asked for (#246).
+    ///   - terminal: acpx's `--no-terminal`, the same way: `false` withholds the terminal.
+    ///   - authPolicy: acpx's `--auth-policy`, the same way. Omitted, the session's config's.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool? = nil
+        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setMode(
                 sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
                 terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
-                environment: environment, verbose: verbose ?? false)
+                environment: environment, verbose: verbose ?? false,
+                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy))
         }
     }
 
@@ -230,23 +235,14 @@ public actor ACPXDaemon {
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - configId: the config option key the agent advertised.
     ///   - value: the value to set for that option.
-    ///   - nonInteractivePermissions: `deny` (the default) or `fail` — what a request
-    ///     needing confirmation does while the agent answers. A control approves reads
-    ///     and asks about the rest, as acpx's direct controls do, and the daemon never
-    ///     has anyone to ask.
-    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
-    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
-    ///     `0` is no cap; omitted, the daemon's own environment decides.
-    ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
-    ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
-    ///   - environment: the caller's environment. An agent the control starts for a session
-    ///     no owner holds starts over it, as acpx's direct control starts its client in the
-    ///     CLI's process; an owner's agents keep the one the owner started with (#222).
-    ///     Omitted, the daemon's own.
-    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
-    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
-    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
-    ///     owner holds (#221).
+    ///   - nonInteractivePermissions: as `setMode`'s: `deny` (the default) or `fail`.
+    ///   - terminalOutputCeiling: as `setMode`'s: the caller's cap on terminal output, `0` for none.
+    ///   - timeoutMs: as `setMode`'s: the caller's `--timeout`, in milliseconds.
+    ///   - environment: as `setMode`'s: the caller's environment, for an agent the control starts.
+    ///   - verbose: as `setMode`'s: whether that agent's stderr goes to the caller.
+    ///   - fs: as `setMode`'s: `false` withholds the filesystem methods from that agent.
+    ///   - terminal: as `setMode`'s: `false` withholds the terminal from that agent.
+    ///   - authPolicy: as `setMode`'s: how that agent signs in.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
@@ -254,13 +250,14 @@ public actor ACPXDaemon {
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool? = nil
+        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setConfigOption(
                 sessionId: sessionId, configId: configId, value: value,
                 nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
-                timeoutMs: timeoutMs, environment: environment, verbose: verbose ?? false)
+                timeoutMs: timeoutMs, environment: environment, verbose: verbose ?? false,
+                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy))
         }
     }
 
@@ -271,35 +268,27 @@ public actor ACPXDaemon {
     /// - Parameters:
     ///   - sessionId: the acpx record id or the ACP session id.
     ///   - modelId: the model id to switch to.
-    ///   - nonInteractivePermissions: `deny` (the default) or `fail` — what a request
-    ///     needing confirmation does while the agent answers. A control approves reads
-    ///     and asks about the rest, as acpx's direct controls do, and the daemon never
-    ///     has anyone to ask.
-    ///   - terminalOutputCeiling: the caller's cap on terminal output while the agent
-    ///     answers — `ACPX_TERMINAL_MAX_OUTPUT_BYTES`, as for ``runPrompt(sessionId:text:blocks:wait:)``.
-    ///     `0` is no cap; omitted, the daemon's own environment decides.
-    ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
-    ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
-    ///   - environment: the caller's environment. An agent the control starts for a session
-    ///     no owner holds starts over it, as acpx's direct control starts its client in the
-    ///     CLI's process; an owner's agents keep the one the owner started with (#222).
-    ///     Omitted, the daemon's own.
-    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
-    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
-    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
-    ///     owner holds (#221).
+    ///   - nonInteractivePermissions: as `setMode`'s: `deny` (the default) or `fail`.
+    ///   - terminalOutputCeiling: as `setMode`'s: the caller's cap on terminal output, `0` for none.
+    ///   - timeoutMs: as `setMode`'s: the caller's `--timeout`, in milliseconds.
+    ///   - environment: as `setMode`'s: the caller's environment, for an agent the control starts.
+    ///   - verbose: as `setMode`'s: whether that agent's stderr goes to the caller.
+    ///   - fs: as `setMode`'s: `false` withholds the filesystem methods from that agent.
+    ///   - terminal: as `setMode`'s: `false` withholds the terminal from that agent.
+    ///   - authPolicy: as `setMode`'s: how that agent signs in.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool? = nil
+        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setModel(
                 sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
                 terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
-                environment: environment, verbose: verbose ?? false)
+                environment: environment, verbose: verbose ?? false,
+                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy))
         }
     }
 
@@ -392,11 +381,14 @@ public actor ACPXDaemon {
     ///     turn: the session is taken back as itself or not at all, the agent is let go
     ///     when the turn ends, and the journal has the turn's messages without turn records.
     ///     Omitted, as a queued prompt.
-    ///   - fs: acpx's `--no-fs` for an agent the turn connects, as acpx's flow runner gives it
-    ///     every client it makes: `false` withholds the filesystem methods. Omitted, the
-    ///     agent is offered what the session was created with.
-    ///   - authPolicy: acpx's `--auth-policy` for an agent the turn connects, as acpx's flow
-    ///     runner gives it every client it makes. Omitted, as configured.
+    ///   - fs: acpx's `--no-fs` for an agent the turn connects: `false` withholds the filesystem
+    ///     methods, as acpx's flow runner gives it every client it makes. A queued turn's agents
+    ///     are offered what the prompt that started the session's owner asked for, as acpx's owner
+    ///     builds its client from the prompt that spawned it (#246). Omitted, they are offered.
+    ///   - terminal: acpx's `--no-terminal` for an agent the turn connects, the same way: `false`
+    ///     withholds the terminal. Omitted, it is offered.
+    ///   - authPolicy: acpx's `--auth-policy` for an agent the turn connects, the same way.
+    ///     Omitted, as configured.
     ///   - turnToken: the caller's name for the turn, which `cancelSession` can give: a
     ///     cancel that named it before it began ends it as it begins, nothing sent.
     ///   - callerConfig: the config an agent the turn connects is started with — its
@@ -421,9 +413,9 @@ public actor ACPXDaemon {
         wait: Bool = true, permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool? = nil, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
-        direct: Bool? = nil, fs: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
-        callerConfig: CallerConfig? = nil, verbose: Bool? = nil, environment: [String: String]? = nil,
-        requestId: String? = nil
+        direct: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil,
+        turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool? = nil,
+        environment: [String: String]? = nil, requestId: String? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -431,8 +423,8 @@ public actor ACPXDaemon {
                 sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
                 permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                 mode: PromptTurnMode(
-                    streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, authPolicy: authPolicy,
-                    turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false,
+                    streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, terminal: terminal,
+                    authPolicy: authPolicy, turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false,
                     environment: environment, requestId: requestId),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
