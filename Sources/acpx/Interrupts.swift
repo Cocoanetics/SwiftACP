@@ -282,20 +282,21 @@ private final class FirstOutcome<T: Sendable>: @unchecked Sendable {
 /// What putting a one-shot run down at a signal needs, as the run gets it — acpx's
 /// `handleInterrupt` for `runOnce`: the prompt out is cancelled and given 2.5 s to settle
 /// (`cancelActivePrompt`), then the agent is closed (`closeOwnedClient`) — or, still
-/// starting, its launch is called off, and an agent that came up just then closed.
+/// starting, its launch is put down, and an agent that came up just then closed.
 final class RunInterrupt: @unchecked Sendable {
     /// How long acpx waits for a prompt it cancels at an interrupt (`INTERRUPT_CANCEL_WAIT_MS`).
     static let cancelWaitMilliseconds = 2_500
 
     private let lock = NSLock()
     private var launching: Task<ACPAgent, Error>?
+    private let closing = AgentLaunchClosing()
     private var agent: ACPAgent?
     private var sessionId: SessionId?
     private var interrupted = false
 
-    /// Launch the agent with `launch`, which an interrupt calls off.
+    /// Launch the agent with `launch`, which an interrupt puts down.
     func launch(_ launch: @escaping @Sendable () async throws -> ACPAgent) async throws -> ACPAgent {
-        let task = Task { try await launch() }
+        let task = Task { [closing] in try await AgentLaunchClosing.$current.withValue(closing) { try await launch() } }
         if lock.withLock({ launching = task; return interrupted }) { task.cancel() }
         let agent = try await task.value
         lock.withLock { self.agent = agent }
@@ -309,10 +310,10 @@ final class RunInterrupt: @unchecked Sendable {
 
     /// Put the run down, as acpx's `handleInterrupt` does. The run ends by itself, as
     /// acpx's does before its interrupt, when it waits for something the close fails — a
-    /// prompt still out, `session/new`, the model's request — or when the agent answered
-    /// its prompt within the wait. Otherwise — nothing out, as in the pause before a
-    /// retry, a prompt the agent failed, or the agent still starting — it ends
-    /// interrupted (`endInterrupted`), before anything is put down.
+    /// prompt still out, `session/new`, the model's request, the agent's `initialize` — or
+    /// when the agent answered its prompt within the wait. Otherwise — nothing out, as in the
+    /// pause before a retry, a prompt the agent failed, or a launch still asking a probe — it
+    /// ends interrupted (`endInterrupted`), before anything is put down.
     func putDown(endInterrupted: @Sendable () -> Void) async {
         var agent: ACPAgent?
         var sessionId: SessionId?
@@ -324,10 +325,14 @@ final class RunInterrupt: @unchecked Sendable {
             launching = self.launching
         }
         guard let agent else {
-            // acpx closes the client it is starting, and the run fails on the agent's exit
-            // (#142 for how that exit is recorded); here the launch is called off.
-            endInterrupted()
-            launching?.cancel()
+            // acpx closes the client it is starting (#261). An agent it has started is ended, and
+            // the launch fails on its exit before the interrupt settles: `ACP agent exited before
+            // initialize completed`. Before one is started — a probe still asked — the launch is
+            // called off, and the run ends interrupted, as acpx's then does.
+            if !closing.close() {
+                endInterrupted()
+                launching?.cancel()
+            }
             if let late = try? await launching?.value { await late.close() }
             return
         }

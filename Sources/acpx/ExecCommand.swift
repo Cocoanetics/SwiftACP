@@ -51,6 +51,10 @@ enum ExecCommand {
                                     onClientRequest: onClientRequest, onRawWire: onRawWire, onLog: flags.clientLog)
                             }
                         }
+                    } catch let error as CancellationError {
+                        // Called off at a signal, still asking a probe (``RunInterrupt``): the run ends
+                        // interrupted, as acpx's does then, without a word.
+                        throw error
                     } catch {
                         return reportFailure(error, renderer: renderer, format: flags.format)
                     }

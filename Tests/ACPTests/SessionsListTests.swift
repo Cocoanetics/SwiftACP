@@ -171,13 +171,15 @@ import Testing
         #expect(kill(agent, 0) != 0, "the agent outlived the listing")
     } }
 
-    /// A signal while the agent starts calls its launch off, the agent put down, and the listing
-    /// ends `INTERRUPTED` without a word, as `exec` does (#258 review; #261 for acpx's own race).
+    /// A signal while the agent starts ends it, as acpx's close ends a client still starting, and
+    /// the listing fails on that exit before the interrupt settles, as acpx 0.19.3's does (#261):
+    /// exit 1, in its words. This agent reads nothing more while it holds `initialize`, so its
+    /// stdin's end goes unseen, and `SIGTERM` ends it.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aSignalWhileTheAgentStartsPutsItDown() async throws { try await withIsolatedStore {
         let listed = try await listRetryAgent("hang-init", interrupting: true)
-        #expect(listed.code == ExitCodes.interrupted)
-        #expect(listed.err.isEmpty)
+        #expect(listed.code == 1)
+        #expect(listed.err == "ACP agent exited before initialize completed (exit=null, signal=SIGTERM)\n")
         let agent = try #require(listed.pid)
         #expect(kill(agent, 0) != 0, "the agent outlived the listing")
     } }

@@ -64,6 +64,38 @@ import Testing
         #expect(!isRunning(run.pid))
     }
 
+    /// While the agent starts, its `initialize` out, the agent is ended, as acpx's close ends a
+    /// client still starting, and the run ends on that before the interrupt settles: exit 1, in
+    /// acpx 0.19.3's words (#261). This agent reads nothing more while it holds `initialize`, so
+    /// its stdin's end goes unseen, and `SIGTERM` ends it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: ["text", "json"])
+    func anInterruptWhileTheAgentStartsEndsTheRunOnItsExit(format: String) async throws {
+        let run = try await exec("hang-init", format: format)
+        let failure = "ACP agent exited before initialize completed (exit=null, signal=SIGTERM)"
+        #expect(run.code == 1)
+        if format == "text" {
+            #expect(run.out == "[client] initialize (running)\n")
+            #expect(run.err == failure + "\n")
+        } else {
+            #expect(run.err.isEmpty)
+            #expect(run.out.hasSuffix(#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":""# + failure
+                + #"","data":{"acpxCode":"RUNTIME","detailCode":"AGENT_STARTUP_FAILED","origin":"acp","#
+                + #""sessionId":"unknown"}}}"# + "\n"), "\(run.out)")
+        }
+        #expect(!isRunning(run.pid))
+    }
+
+    /// While the launch still asks Gemini's `--version`, there is no agent to end: the launch is
+    /// called off, and the run ends `INTERRUPTED` without a word, as acpx 0.19.3's does then.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anInterruptWhileTheLaunchAsksItsProbeEndsInterrupted() async throws {
+        let run = try await exec("ok", probing: true)
+        #expect(run.code == ExitCodes.interrupted)
+        #expect(run.out.isEmpty)
+        #expect(run.err.isEmpty)
+        #expect(run.pid == nil, "the agent was started")
+    }
+
     /// An agent gone before any prompt went out is reported, as acpx reports it: the
     /// connection closed, in its SDK's words. Should the prompt beat the agent's exit onto
     /// the wire, the run is the agent's disconnect instead, reported just as once (#778);
@@ -106,9 +138,12 @@ import Testing
     // MARK: - Support
 
     /// Run `exec` against the fixture agent in `mode`, `options` before `exec` — its
-    /// interrupt fired as the agent gets its prompt, unless not `interrupting`.
+    /// interrupt fired as the agent gets its prompt, unless not `interrupting`. `probing`, the
+    /// agent is Gemini, and the interrupt fires as the launch asks its `--version`, which never
+    /// answers.
     private func exec(
-        _ mode: String, _ options: [String] = [], format: String = "text", interrupting: Bool = true
+        _ mode: String, _ options: [String] = [], format: String = "text", interrupting: Bool = true,
+        probing: Bool = false
     ) async throws -> Run {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -122,10 +157,18 @@ import Testing
         let source = Interrupts.Source()
         let watch = interrupting ? try Self.fire(source, whenWrittenTo: ready) : nil
         defer { watch?.cancel() }
-        let agent = "/usr/bin/env RETRY_AGENT_MODE=\(mode) RETRY_AGENT_ATTEMPTS='\(attempts.path)' "
+        var agent = "/usr/bin/env RETRY_AGENT_MODE=\(mode) RETRY_AGENT_ATTEMPTS='\(attempts.path)' "
             + "RETRY_AGENT_PID='\(pidFile.path)' "
             + (interrupting ? "RETRY_AGENT_READY='\(ready.path)' " : "")
             + "'\(python)' '\(fixture.path)'"
+        if probing {
+            let gemini = dir.appendingPathComponent("gemini")
+            let script = "#!/bin/sh\nif [ \"$1\" = --version ]; then printf x > '\(ready.path)'; exec sleep 30; fi\n"
+                + "exec \(agent) \"$@\"\n"
+            try script.write(to: gemini, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gemini.path)
+            agent = "'\(gemini.path)' --acp"
+        }
         let arguments = ["--format", format, "--cwd", dir.path, "--agent", agent] + options + ["exec", "hi"]
         return await withIsolatedStore {
             let capture = Console.Capture()
