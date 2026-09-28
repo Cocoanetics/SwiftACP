@@ -43,6 +43,18 @@ import Testing
         #expect(TurnFailure.payload(of: DaemonError.sessionResumeRequired("s", reason: "gone")) == nil)
     }
 
+    /// The causes are followed five deep, as acpx looks: one further down is not found, and a
+    /// cause that leads back round ends the look instead of going on for ever (Codex review on #291).
+    @Test func theCausesAreFollowedFiveDeep() {
+        let agents = JSONRPCErrorBody(code: -32002, message: "Resource not found: s")
+        func wrapped(_ times: Int) -> Error {
+            (0 ..< times).reduce(agents as Error) { cause, _ in Wrapping(cause: cause) }
+        }
+        #expect(TurnFailure.payload(of: wrapped(5))?.code == -32002)
+        #expect(TurnFailure.payload(of: wrapped(6)) == nil)
+        #expect(TurnFailure.payload(of: Looping()) == nil)
+    }
+
     /// The agent's own error response, which the exchange showed: a runtime failure of
     /// the queued prompt, carrying the error as acpx's `acp` payload.
     @Test func anAgentErrorTheWireShowedIsTheQueuedPromptsRuntimeFailure() {
@@ -220,4 +232,14 @@ import Testing
     static func json<T: Encodable>(_ value: T) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
     }
+}
+
+/// An error standing for the one it wraps.
+private struct Wrapping: ErrorWithCause {
+    let cause: Error?
+}
+
+/// An error whose cause is itself.
+private struct Looping: ErrorWithCause {
+    var cause: Error? { self }
 }
