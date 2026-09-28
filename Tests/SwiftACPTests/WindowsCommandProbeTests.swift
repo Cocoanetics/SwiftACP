@@ -20,7 +20,7 @@ struct WindowsCommandProbeTests {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
             for (name, lines) in scripts {
                 let text = (["@echo off"] + lines).joined(separator: "\r\n") + "\r\n"
-                FileManager.default.createFile(atPath: directory + "\\" + name, contents: Data(text.utf8))
+                _ = FileManager.default.createFile(atPath: directory + "\\" + name, contents: Data(text.utf8))
             }
             let inherited = ProcessInfo.processInfo.environment
             var environment = inherited.filter { $0.key.uppercased() != "PATH" }
@@ -109,7 +109,7 @@ struct WindowsCommandProbeTests {
         let scripts = try Scripts([:])
         defer { scripts.remove() }
         let program = scripts.directory + "\\claude.exe"
-        FileManager.default.createFile(atPath: program, contents: Data())
+        _ = FileManager.default.createFile(atPath: program, contents: Data())
         func plan(_ executable: String, _ environment: [String: String]) async -> AgentLaunchCompat.Plan {
             var launch = ProcessLaunch(
                 executable: executable, environment: environment, workingDirectory: scripts.directory)

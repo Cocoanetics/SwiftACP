@@ -88,7 +88,7 @@ struct WindowsAgentTransportTests {
         defer { try? FileManager.default.removeItem(atPath: directory) }
         let shim = directory + "\\mock agent.cmd"
         let script = "@echo off\r\n\"\(python)\" \"\(mock)\" %*\r\n"
-        FileManager.default.createFile(atPath: shim, contents: Data(script.utf8))
+        _ = FileManager.default.createFile(atPath: shim, contents: Data(script.utf8))
 
         let agent = try await ACPAgent.launch(
             agent: "mock", argv: [shim], cwd: directory, permission: .approveAll, inheritStderr: false)
