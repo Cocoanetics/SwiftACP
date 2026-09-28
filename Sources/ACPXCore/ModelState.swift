@@ -256,6 +256,8 @@ public enum ModelSupport {
             || (state.modelControl == nil && modelState(fromConfigOptions: state.configOptions) == nil
                 && state.availableModels != nil)
         state.configOptions = configOptions
+        // Whatever order these came in, the one they replace is not theirs.
+        state.configOptionsOrder = nil
         if let models = modelState(fromConfigOptions: configOptions) {
             applyAdvertisedModelState(models, to: &state)
         } else if preservesLegacyControl {

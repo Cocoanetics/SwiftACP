@@ -18,6 +18,8 @@ struct FlowAgentSessions: FlowSessionRunner {
     /// Called with the agent's connection once the agent is up: lets a test hold what the
     /// connection does.
     var onConnected: (@Sendable (ACPAgentConnection) async -> Void)?
+    /// The token each persistent session of the run was made under (``FlowCreations``).
+    let creations = FlowCreations()
 
     func runIsolated(_ turn: FlowTurn) async throws -> String {
         let owner = FlowTurnOwner()
@@ -62,7 +64,7 @@ struct FlowAgentSessions: FlowSessionRunner {
                     guard let message = WireJSON(parsing: body) else { return }
                     errors.observe(message, inbound: direction == .inbound)
                     turn.onMessage(direction == .outbound, message)
-                })
+                }, onLog: flags.clientLog)
         }
         await onConnected?(handle.connection)
         await events.follow(handle.connection)
@@ -192,7 +194,7 @@ final class FlowTurnOwner: @unchecked Sendable {
         let task = Task {
             let connection = running.connection
             if let prompted, await connection.hasPromptInFlight(sessionId: prompted) {
-                try? await connection.cancel(sessionId: prompted)
+                await running.sendCancel(prompted)
                 _ = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) {
                     await connection.waitForPromptToSettle(sessionId: prompted)
                 }

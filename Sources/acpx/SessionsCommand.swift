@@ -8,7 +8,7 @@ enum SessionsCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         // Bare `sessions` lists, as acpx's `sessions` action does.
         switch context.path.dropFirst().first ?? "list" {
-        case "list": return try list(context)
+        case "list": return try SessionsList.run(context)
         case "show": return try show(context)
         case "history": return try history(context, defaultLimit: DEFAULT_HISTORY_LIMIT, tail: false)
         case "read": return try history(context, defaultLimit: 0, tail: true)
@@ -24,24 +24,6 @@ enum SessionsCommand {
     }
 
     // MARK: list
-
-    private static func list(_ context: CommandContext) throws -> Int32 {
-        let scan = context.options
-        let flags = try context.globalFlags()
-        let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let filterCwd = scan.string("filter-cwd").map {
-            URL(fileURLWithPath: $0, relativeTo: URL(fileURLWithPath: agent.cwd)).standardizedFileURL.path
-        }
-        // Agents we target (codex/claude) don't advertise session/list, so acpx
-        // falls back to local records. --local additionally honors --filter-cwd.
-        let effectiveFilter = scan.flag("local") ? filterCwd : nil
-        var records = SessionStore.listSessions(forAgent: agent.agentCommand)
-        if let effectiveFilter {
-            records = records.filter { $0.cwd == effectiveFilter }
-        }
-        printSessions(records, format: flags.format)
-        return ExitCodes.success
-    }
 
     static func printSessions(_ records: [SessionRecord], format: String) {
         switch format {

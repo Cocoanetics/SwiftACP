@@ -180,23 +180,22 @@ extension DaemonToolsTests {
         try SessionStore.writeRecord(record)
     }
 
-    /// A session the daemon already holds can still vanish — the agent drops it — and
-    /// then the turn goes round once more on a fresh launch, which takes it back.
+    /// A session the daemon already holds can still vanish — the agent drops it — and then
+    /// the turn fails on the agent's error, as acpx's owner's does: acpx makes no retry of it
+    /// on a fresh launch (#198).
     @Test(.enabled(if: mockPythonAvailable))
-    func aHeldSessionTheAgentDropsIsTakenBack() async throws {
+    func aHeldSessionTheAgentDropsFailsTheTurn() async throws {
         try await withLoggedMock(loadMode: "ok", forgetAfterPrompts: 1) { command, methods in
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             _ = try await daemon.runPrompt(sessionId: id, text: "first")
-            let answer = try await daemon.runPrompt(sessionId: id, text: "second")
-            #expect(!answer.isEmpty)
-            // `newSession` leaves no agent running (like acpx's `sessions new`), so the
-            // first turn loads the session; the second finds it dropped, relaunches,
-            // loads it again and asks once more.
-            #expect(try methods() == [
-                "session/new", "session/load", "session/prompt",
-                "session/prompt", "session/load", "session/prompt"
-            ])
+            let error = await #expect(throws: (any Error).self) {
+                _ = try await daemon.runPrompt(sessionId: id, text: "second")
+            }
+            #expect(error?.localizedDescription.contains("Resource not found") == true)
+            // `newSession` leaves no agent running (like acpx's `sessions new`), so the first
+            // turn loads the session; the second finds it dropped, and asks no more.
+            #expect(try methods() == ["session/new", "session/load", "session/prompt", "session/prompt"])
         }
     }
 

@@ -16,8 +16,17 @@ extension ACPAgentConnection {
         guard method == "session/update" else { return }
         let sessionId = InboundRequestLedger.sessionId(of: params)
         defer { if let sessionId { sessionUpdates.finished(sessionId) } }
+        // Its body is taken whatever becomes of it, so that the next update's is the next's.
+        let raw = rawUpdates?.takeUpdateBody()
         await beforeHandlingUpdate?()
-        guard let params, let notification = try? params.decoded(SessionNotification.self) else { return }
+        // The update as acpx reads it: from the agent's words when they are kept — a member written
+        // twice taken last, as `JSON.parse` takes it — so that it and the payloads it carries as
+        // written are one and the same update (#242 review); else as the peer decoded it.
+        let asWritten = raw.flatMap { try? $0.jsonValue.decoded(SessionNotification.self) }
+        guard let params, var notification = asWritten ?? (try? params.decoded(SessionNotification.self)) else {
+            return
+        }
+        notification.rawUpdate = raw?["update"]
         if replaySuppressed[notification.sessionId] != nil { return }
         for sink in updateSinks.values {
             sink.yield(notification)
@@ -71,6 +80,7 @@ extension ACPAgentConnection {
         }
         await withCheckedContinuation { continuation in
             loadWaiters[sessionId, default: []].append(continuation)
+            waitingToLoad?(sessionId)
         }
     }
 

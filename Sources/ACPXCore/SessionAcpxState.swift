@@ -26,20 +26,17 @@ public struct SessionAcpxState: Codable, Sendable {
     /// `nil` = the session uses the cwd's config-file servers. (A SwiftACP extension
     /// of the npm record: npm acpx keeps MCP servers per invocation, not per record.)
     public var mcpServers: [McpServerConfig]?
-    /// The client capabilities the session was created under — what `--no-fs` and
-    /// `--no-terminal` withheld — persisted as `client_capabilities` so every reconnect
-    /// advertises the same ones. `nil` = the defaults.
-    ///
-    /// A SwiftACP extension of the npm record, like `mcp_servers`, and for the same
-    /// reason: npm acpx carries capabilities on the queue owner that *is* the session,
-    /// while `acpxd` outlives any one connection and has to read them back.
-    public var clientCapabilities: PersistedCapabilities?
     /// The member order acpx gave each map of this block that it built anew since the
     /// record was read, by the map's name in the record: `available_model_names` from the
     /// models an agent advertised, `desired_config_options` from a control's reply —
     /// JavaScript objects, built by insertion (``ModelSupport``). A map not here keeps the
     /// order it was read with. Never written.
     var rebuiltOrders: [String: [String]] = [:]
+    /// The order `config_options` came in, which it is written in (``ConfigOptionSchema/inOrder(_:of:)``):
+    /// the SDK's, for options a `config_option_update` gave, and the order they were read with,
+    /// for options read back — which an option acpx changes in place keeps. `nil` for those
+    /// whose order is not known. Never written.
+    var configOptionsOrder: WireJSON?
     /// The places of acpx's members in its object, by their names in the record: those
     /// its parser gave a read block, in its order (``parseOrder()``), or those a new block
     /// was given — each since set in a place of its own, last, unless it had one, and
@@ -51,20 +48,7 @@ public struct SessionAcpxState: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case resetOnNextEnsure, currentModeId, desiredModeId, desiredConfigOptions, currentModelId
         case availableModels, availableModelNames, modelControl, availableCommands, configOptions
-        case sessionOptions, mcpServers, clientCapabilities
-    }
-
-    /// The `fs` / `terminal` switches in the record's own shape.
-    public struct PersistedCapabilities: Codable, Sendable, Hashable {
-        public var readTextFile: Bool
-        public var writeTextFile: Bool
-        public var terminal: Bool
-
-        public init(readTextFile: Bool, writeTextFile: Bool, terminal: Bool) {
-            self.readTextFile = readTextFile
-            self.writeTextFile = writeTextFile
-            self.terminal = terminal
-        }
+        case sessionOptions, mcpServers
     }
 
     /// A persisted slash command. Agents advertise these either as bare strings
@@ -185,10 +169,10 @@ extension SessionAcpxState {
     /// the record: acpx drops what it cannot read in this block and keeps the record
     /// (`parseAcpxState`), and so does SwiftACP.
     ///
-    /// SwiftACP's own `mcp_servers` and `client_capabilities`, which acpx never reads,
-    /// restrict a session, so one that does not read fails closed: no MCP servers rather
-    /// than the config file's, and no client capabilities rather than the defaults — a
-    /// session created under `--no-fs` must not get the filesystem back.
+    /// SwiftACP's own `mcp_servers`, which acpx never reads, restricts a session, so one that
+    /// does not read fails closed: no MCP servers rather than the config file's. A record's
+    /// `client_capabilities`, which SwiftACP wrote before #246, is read no more: what an agent is
+    /// offered is what the prompt that starts its owner asks for, as in acpx.
     public init(from decoder: Decoder) throws {
         self.init()
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -211,11 +195,6 @@ extension SessionAcpxState {
             mcpServers = try container.decodeIfPresent([McpServerConfig].self, forKey: .mcpServers)
         } catch {
             mcpServers = []
-        }
-        do {
-            clientCapabilities = try container.decodeIfPresent(PersistedCapabilities.self, forKey: .clientCapabilities)
-        } catch {
-            clientCapabilities = PersistedCapabilities(readTextFile: false, writeTextFile: false, terminal: false)
         }
         // acpx builds a read block anew, in its parser's order.
         slots = parseOrder()

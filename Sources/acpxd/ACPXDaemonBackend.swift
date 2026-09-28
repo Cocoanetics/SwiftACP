@@ -32,6 +32,8 @@ actor ACPXDaemonBackend: ACPXBackend {
         /// config-file-backed session (`nil`) never conflicts, matching npm, where
         /// only an explicit `--mcp-config` is fingerprinted — see ``ensure``.
         let sessionSpecs: [MCPServerSpec]?
+        /// Where what a held agent writes to stderr waits for the next verbose call.
+        var stderr: AgentStderrRelay?
     }
 
     /// Live sessions held open between prompts, keyed by acpx record id.
@@ -48,8 +50,23 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Internal (not private) so the prompt turns in `ACPXDaemonBackend+Prompt.swift`
     /// can take a session's slot.
     let turnQueue = SessionTurnQueue()
-    /// The turn each session runs, by record: see ``TurnControl``.
+    /// The turn each session's queue owner runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The direct turns — a flow's — each session runs or has waiting for it, by record, in the
+    /// order they began, outside its queue owner, as acpx's `sendSessionDirect` takes only the
+    /// session's turn (#225). Only one has the session at a time.
+    var directTurns: [String: [TurnControl]] = [:]
+    /// The tokens of turns a cancel named before they began, and when: each ends as it
+    /// begins (``claimTurnToken(_:for:)``).
+    var calledOffTurns: [String: Date] = [:]
+    /// The creation tokens a call-off named before their session was made, and the session each
+    /// made, with when: see ``callOffCreation(creationToken:)``.
+    var calledOffCreations: [String: Date] = [:]
+    var madeCreations: [String: MadeCreation] = [:]
+    /// The tokens of the creations under way, whose call-offs are kept however long they take.
+    var creatingTokens: Set<String> = []
+    /// The tokens of the turns waiting to begin, whose call-offs are kept however long they wait.
+    var waitingTurnTokens: Set<String> = []
     /// The controls each prompt's turn takes while it runs, by record: see ``PromptControlTicket``.
     var tickets: [String: PromptControlTicket] = [:]
     /// Each session's prompts in line to begin, by record, while one has begun: see ``PromptLine``.
@@ -90,8 +107,13 @@ actor ACPXDaemonBackend: ACPXBackend {
     var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: run once a prompt's turn has sealed its controls, before the turn is over.
     var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a close or a let-go has sent the cancel of a prompt that was out,
+    /// before it sends the next.
+    var cancelSent: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: told the record id whenever a prompt waits to begin behind another.
     var promptWaits: (@Sendable (_ recordId: String) -> Void)?
+    /// For tests: run once a flow's new session is held, before its call-off is looked for.
+    var creationKept: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: handed each note that a turn's prompt went out, as the writer's thread
     /// tells it, in place of bringing the note to the backend: it comes once the test runs
     /// it, if ever — as late as its task can come under load.
@@ -128,24 +150,93 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - mcpServers: the session's own MCP servers, replacing the cwd's config-file
     ///     ones (like `--mcp-config`); persisted on the record and replayed on every
     ///     reconnect. `nil` = config-file servers; `[]` = none.
+    ///   - agentArgv: the argv the caller resolved for `agentCommand`, which is then taken as
+    ///     it is; `nil` to resolve and split the command here.
+    ///   - sessionOptions: the session's options, recorded and sent as `_meta`.
+    ///   - creation: how the session is made (``SessionCreationMode``): its agent kept for
+    ///     its first turn (`holdAgent`), `fs` — `false` withholds the filesystem methods from
+    ///     the creating agent, and records it unless that agent is held (a flow says it with
+    ///     each turn) — how the agent's requests are answered meanwhile, as a turn's are —
+    ///     the config it is started with, and whether what it writes to stderr goes to the
+    ///     caller (`verbose`).
     /// - Returns: the new session's acpx record id.
     func newSession(
-        agentCommand: String, cwd rawCwd: String, name: String? = nil,
-        mcpServers: [McpServerConfig]? = nil
+        agentCommand: String, agentArgv: [String]?, cwd rawCwd: String, name: String?,
+        mcpServers: [McpServerConfig]?, sessionOptions promptOptions: PromptSessionOptions?,
+        creation: SessionCreationMode
     ) async throws -> String {
-        let cwd = try resolveCwd(rawCwd)
-        let config = try ConfigLoader.load(cwd: cwd, ownMcpServers: mcpServers != nil)
+        let (holdAgent, fs) = (creation.holdAgent, creation.fs)
+        // The agent's requests while the session is made are answered by the caller's mode and
+        // rules — a flow's own, as acpx's runner makes its client with them.
+        let handlers = try TurnPermissions(
+            mode: creation.permissionMode, nonInteractive: creation.nonInteractivePermissions,
+            rules: creation.permissionPolicy).handlers
+        // A session held for a flow's first turn is made where it is asked for, as acpx's
+        // `createSessionWithClient` makes it: a working directory that is not there fails
+        // the agent's launch.
+        let cwd = holdAgent ? ACPXPaths.resolve(rawCwd, base: FileManager.default.currentDirectoryPath)
+            : try resolveCwd(rawCwd)
+        // The caller's config — a flow's, read once, as acpx's runner gives every client of the
+        // run the invocation's `auth` and MCP servers, wherever the node works — else the cwd's.
+        let config = try Self.config(creation.callerConfig, cwd: cwd, ownMcpServers: mcpServers != nil)
+        // The caller's `--auth-policy`, as acpx's runner makes its client with the flow's.
+        let authPolicy = creation.authPolicy ?? config.authPolicy
         // Only normalize the config-file servers when they're the ones being sent:
         // a caller supplying its own set must not be refused over an unrelated bad
         // entry in the cwd's config.
         let configServers = mcpServers == nil ? try config.mcpServerSpecs() : []
         let launch = config.agentLaunch(for: agentCommand)
-        let record = try await SessionEngine.createSession(
-            agentCommand: launch.command, agentArgv: launch.argv, cwd: cwd,
-            name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-            authPolicy: config.authPolicy, mcpServers: configServers,
-            sessionMcpServers: mcpServers, inheritStderr: inheritAgentStderr)
-        return record.acpxRecordId
+        let (command, argv) = agentArgv.map { (agentCommand, Optional($0)) } ?? (launch.command, launch.argv)
+        let options = SessionAcpxState.SessionOptions(turnModel: promptOptions?.model, promptOptions)
+        let meta = SessionMeta.build(options: options, agentCommand: command)
+        // Under `--verbose`, what the agent writes to stderr goes to the caller as the session
+        // is made, as acpx's client shows it in the flow's process; a held agent's then waits
+        // for its first turn.
+        let stderr = creation.verbose ? AgentStderrRelay() : nil
+        // The creating agent's terminals are capped as the caller's (#219 review).
+        let ceiling = TerminalOutputLimit.Source.given(try Self.terminalOutputCeiling(creation.terminalOutputCeiling))
+        guard holdAgent else {
+            let record = try await relayingStderr(stderr, logger: "newSession") {
+                try await SessionEngine.createSession(
+                    agentCommand: command, agentArgv: argv, cwd: cwd,
+                    name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
+                    authPolicy: authPolicy, mcpServers: configServers,
+                    sessionMcpServers: mcpServers, meta: meta, sessionOptions: options, capabilities: .acpx(fs: fs),
+                    handlers: handlers, baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
+                    inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
+            }
+            return record.acpxRecordId
+        }
+        guard !stopping else { throw DaemonError.stopping }
+        // Under way, a call-off of this creation is kept until it is over, however long the
+        // agent takes to open the session (#219 review).
+        let token = creation.creationToken
+        if let token { creatingTokens.insert(token) }
+        defer { if let token { creatingTokens.remove(token) } }
+        let held = try await relayingStderr(stderr, logger: "newSession") {
+            try await SessionEngine.createSessionHoldingAgent(
+                agentCommand: command, agentArgv: argv, cwd: cwd,
+                name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
+                authPolicy: authPolicy, mcpServers: configServers,
+                sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
+                capabilities: .acpx(fs: fs), writesRecord: false, handlers: handlers,
+                baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
+                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
+        }
+        let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
+        return try await keepMadeSession(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
+    }
+
+    /// ``newSession(agentCommand:agentArgv:cwd:name:mcpServers:sessionOptions:creation:)`` with
+    /// its agent kept or not, and offered the filesystem or not; its requests approved.
+    func newSession(
+        agentCommand: String, agentArgv: [String]? = nil, cwd: String, name: String? = nil,
+        mcpServers: [McpServerConfig]? = nil, sessionOptions: PromptSessionOptions? = nil,
+        holdAgent: Bool = false, fs: Bool? = nil
+    ) async throws -> String {
+        try await newSession(
+            agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
+            sessionOptions: sessionOptions, creation: SessionCreationMode(holdAgent: holdAgent, fs: fs))
     }
 
     /// Replace a session's own MCP servers and persist them (see `newSession`'s
@@ -220,10 +311,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
+    ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
+    ///   - client: what that agent is offered and how it signs in (see there).
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         let step = ControlStep<Void, Void>(
             request: { entry, _, timeout in
@@ -241,10 +336,12 @@ actor ACPXDaemonBackend: ACPXBackend {
                 acpx.desiredModeId = modeId
                 record.acpx = acpx
             })
-        let (_, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, client: client, step)
+        return SessionControlResult(
+            resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned), loadError: outcome.loadError)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -261,13 +358,17 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
+    ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
+    ///   - client: what that agent is offered and how it signs in (see there).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -289,10 +390,13 @@ actor ACPXDaemonBackend: ACPXBackend {
                 // As the agent reported them: none, for a reply that only acknowledges.
                 return response.rawConfigOptions
             })
-        let (options, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed, rawConfigOptions: options)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, client: client, step)
+        return SessionControlResult(
+            resumed: outcome.resumed, rawConfigOptions: outcome.value, ownerPid: Self.pid(ifOwned: outcome.owned),
+            loadError: outcome.loadError)
     }
 
     /// Set a session's model on the live agent (reconnecting if needed) through the
@@ -308,10 +412,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
+    ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
+    ///   - client: what that agent is offered and how it signs in (see there).
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -329,10 +437,12 @@ actor ACPXDaemonBackend: ACPXBackend {
                 ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
                 record.acpx = acpx
             })
-        let (_, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, client: client, step)
+        return SessionControlResult(
+            resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned), loadError: outcome.loadError)
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
@@ -353,42 +463,32 @@ actor ACPXDaemonBackend: ACPXBackend {
         return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
 
+    /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:authPolicy:turnToken:callerConfig:verbose:environment:)``
+    /// as the tool calls it.
+    func runPrompt(
+        sessionId: String, text: String, blocks: [PromptBlock]?, content: [JSONValue]?, wait: Bool,
+        permissionMode: String?, nonInteractivePermissions: String?, mode: PromptTurnMode,
+        permissionPolicy: PermissionRules?, terminalOutputCeiling: Int?, sessionOptions: PromptSessionOptions?,
+        limits: PromptLimits?
+    ) async throws -> String {
+        try await runPrompt(
+            sessionId: sessionId, text: text, blocks: blocks, content: content, wait: wait,
+            permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
+            streamWire: mode.streamWire, permissionPolicy: permissionPolicy,
+            terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
+            direct: mode.direct, fs: mode.fs, terminal: mode.terminal, authPolicy: mode.authPolicy,
+            turnToken: mode.turnToken,
+            callerConfig: mode.callerConfig, verbose: mode.verbose, environment: mode.environment,
+            requestId: mode.requestId)
+    }
+
     /// Drop a live session — by its acpx record id — and terminate its agent (so the
     /// next call relaunches).
     func evict(_ recordId: String) async {
         guard let entry = live.removeValue(forKey: recordId) else { return }
+        // A creation's token keeps its agent no longer: nothing is left for a call-off.
+        madeCreations = madeCreations.filter { $0.value.agent !== entry.agent }
         await entry.agent.close()
-    }
-
-    /// Let every held agent go the way acpx's queue owner does when it stops
-    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
-    /// into its record, best effort — no pid, and the connection it was closed on unless
-    /// it had ended before.
-    func releaseAll() async {
-        // Before anything is let go: a turn whose agent this closes must not start another.
-        stopping = true
-        // The prompts still in line are refused, as each owner acpx stops refuses its own.
-        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
-        for recordId in owners.keys { forgetOwner(recordId) }
-        while let recordId = live.keys.first {
-            guard let entry = live.removeValue(forKey: recordId) else { continue }
-            await entry.agent.close()
-            // A turn the close ends saves its record first.
-            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
-            defer { Task { await turnQueue.release(recordId) } }
-            guard var record = findRecord(recordId) else { continue }
-            record.applyLifecycle(entry.agent.lifecycle)
-            try? SessionStore.writeRecord(record)
-        }
-    }
-
-    /// Whether `error` indicates the agent no longer has the session (ACP has no
-    /// standard code, so match the text the agent puts in its error message/data).
-    func isSessionGone(_ error: Error) -> Bool {
-        let text = error.localizedDescription.lowercased()
-        guard text.contains("session") else { return false }
-        return ["not found", "unknown", "no such", "expired", "gone", "invalid"]
-            .contains { text.contains($0) }
     }
 
 }

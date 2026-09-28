@@ -22,8 +22,8 @@ import Musl
 ///   or the connection ending another way (`connection_close`). Requests still waiting
 ///   then fail with ``AgentDisconnectedError``, which names it;
 /// - its stderr is kept, the last 8,192 characters of it, for ``AgentStartupError``,
-///   and passed on to this process's stderr when `inheritStderr` says so — acpx shows
-///   it only with `--verbose`;
+///   passed on to this process's stderr when `inheritStderr` says so — acpx shows it
+///   only with `--verbose` — and shown to the tap (``RawWireTap/onStderr(_:)``);
 /// - ``terminate()`` ends it as acpx's `cleanupAgentProcess` does.
 final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable {
     let process: ChildProcess
@@ -224,11 +224,12 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         waiting.forEach { $0.resume() }
     }
 
-    /// Note the processes the agent has started so far — acpx looks once `initialize`
-    /// is over — so they are ended with it even if it is gone by then and they have
-    /// been handed to `init`.
-    func captureDescendants() {
-        descendantsLock.withLock { _ = descendants.capture(rootIsRunning: !process.hasBeenReaped) }
+    /// Note the processes the agent has started so far — acpx looks once `initialize` is over — so
+    /// they are ended with it even if it is gone by then and they have been handed to `init`. A
+    /// look that fails is told to the tap when `noting`, as acpx's `captureAgentDescendants` logs it.
+    func captureDescendants(noting: Bool = false) {
+        let captured = descendantsLock.withLock { descendants.capture(rootIsRunning: !process.hasBeenReaped) }
+        if !captured, noting { tap.log("could not verify agent descendants; skipping unverified process cleanup") }
     }
 
     // MARK: - Reading
@@ -277,6 +278,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
     private func readStderr(_ bytes: [UInt8]) {
         lock.withLock { stderr.append(bytes) }
         if inheritStderr { FileHandle.standardError.write(Data(bytes)) }
+        tap.stderr(Data(bytes))
     }
 
     /// Stdout reached its end. The process exiting closes it too, and Node reports
@@ -375,6 +377,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         writer.finish()
         settleHeldEnd(quitOnStdinEnd: await exits(within: remaining(atMost: quirks.closeAfterStdinEnd)))
         if await !signalAgentAndDescendants(SIGTERM, waiting: remaining(atMost: .milliseconds(1500))) {
+            tap.log("agent processes did not exit after SIGTERM; forcing SIGKILL")
             _ = await signalAgentAndDescendants(SIGKILL, waiting: remaining(atMost: .milliseconds(1000)))
         }
         descendantsLock.withLock { descendants.retire() }
@@ -423,78 +426,6 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
-    }
-}
-
-/// Writes the agent's messages to its stdin, in order, on a thread of its own — a write
-/// waits while the agent does not read — and closes stdin once told to finish and the
-/// queue is empty. Each body is shown to the tap as it is queued, in the sender's
-/// context and in the order it is written, and told of again as it starts to be
-/// written and should the write fail (``RawWireTap/onDelivery(_:)``).
-private final class MessageWriter: @unchecked Sendable {
-    private let process: ChildProcess
-    private let tap: RawWireTap
-    private let lock = NSLock()
-    private let available = DispatchSemaphore(value: 0)
-    private var queue: [Data] = []
-    private var finishing = false
-    /// Told, once, that a write failed. Set before ``start()``.
-    var onFailure: (@Sendable () -> Void)?
-
-    init(process: ChildProcess, tap: RawWireTap) {
-        self.process = process
-        self.tap = tap
-    }
-
-    func start() {
-        let thread = Thread { [self] in run() }
-        thread.name = "acp.agent.stdin"
-        thread.start()
-    }
-
-    /// Queue `body` to be written. Throws ``JSONRPCPeerError/closed`` once finishing.
-    func enqueue(_ body: Data) throws {
-        try lock.withLock {
-            guard !finishing else { throw JSONRPCPeerError.closed }
-            tap.observe(.outbound, body)
-            queue.append(body)
-        }
-        available.signal()
-    }
-
-    /// Write what is queued, then close stdin — Node's `stdin.end()`.
-    func finish() {
-        let first: Bool = lock.withLock {
-            defer { finishing = true }
-            return !finishing
-        }
-        if first { available.signal() }
-    }
-
-    private func run() {
-        var failed = false
-        while true {
-            available.wait()
-            let (next, done): (Data?, Bool) = lock.withLock {
-                queue.isEmpty ? (nil, finishing) : (queue.removeFirst(), false)
-            }
-            if let next {
-                guard !failed else { continue }
-                tap.delivery(next, .writing)
-                do {
-                    try process.write(Array(next) + [0x0A])
-                } catch {
-                    // The agent closed its stdin — mostly by exiting, which is noticed
-                    // on its own. What remains is not written.
-                    tap.delivery(next, .failed)
-                    failed = true
-                    onFailure?()
-                }
-                continue
-            }
-            if done { break }
-        }
-        process.closeInput()
     }
 }
 #endif

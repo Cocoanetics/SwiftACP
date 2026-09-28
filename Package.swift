@@ -140,6 +140,7 @@ targets += [
             "Fixtures/image-probe.png", "Fixtures/wirejson-node.json", "Fixtures/v8-json-errors.json",
             "Fixtures/acpx-config-errors.json", "Fixtures/acpx-argv-parse.json",
             "Fixtures/acpx-record-parse.json", "Fixtures/record-agent.py", "Fixtures/acpx-turn-record.json",
+            "Fixtures/acpx-turn-record-as-written.json",
             "Fixtures/acpx-session-archive.json", "Fixtures/retry-agent.py", "Fixtures/watch", "Fixtures/flows"
         ]
     )

@@ -188,27 +188,36 @@ struct ReplaySuppressionTests {
     /// Loads of one session take turns. An ordinary load that comes while another load
     /// of the session keeps its replay back waits for it to finish, and gets its own
     /// replay, which it would otherwise lose inside the other's suppression.
-    @Test func loadsOfOneSessionTakeTurns() async throws {
+    ///
+    /// The first load's replay is kept back for as long as the test says: an update read
+    /// and not yet handled holds its drain until the second load waits, whatever the time
+    /// either takes on a busy machine.
+    @Test(.timeLimit(.minutes(1)))
+    func loadsOfOneSessionTakeTurns() async throws {
         let (loads, loaded) = AsyncStream<Void>.makeStream()
-        let agent = ReplayingAgent(trickle: .milliseconds(5), trickleCount: 60, onLoad: { loaded.yield() })
-        let (client, server) = try await connect(agent)
+        let (client, server) = try await connect(ReplayingAgent(onLoad: { loaded.yield() }))
         defer { server.cancel() }
+        let (waits, waiting) = AsyncStream<Void>.makeStream()
+        await client.setWaitingToLoad { _ in waiting.yield() }
         let (subscription, stream) = await client.makeSubscription()
         let delivered = Task { await texts(stream) }
         let request = LoadSessionRequest(sessionId: "replay-session", cwd: "/")
 
-        // A replay window far wider than the trickle's gaps, so a slow machine cannot
-        // end the first load's drain while its replay is still going.
+        client.sessionUpdates.arrived("replay-session")
         let suppressed = Task {
-            try await client.loadSession(request, suppressReplayUpdates: true, replayIdleMilliseconds: 500)
+            try await client.loadSession(request, suppressReplayUpdates: true, replayDrainTimeoutMilliseconds: 60_000)
         }
         var reached = loads.makeAsyncIterator()
         _ = await reached.next()
-        _ = try await client.loadSession(request, suppressReplayUpdates: false, replayIdleMilliseconds: 500)
+        let ordinary = Task { try await client.loadSession(request, suppressReplayUpdates: false) }
+        var waited = waits.makeAsyncIterator()
+        _ = await waited.next()
+        client.sessionUpdates.finished("replay-session")
         _ = try await suppressed.value
+        _ = try await ordinary.value
         await client.endSubscription(subscription)
 
-        #expect(await delivered.value.first == "earlier answer")
+        #expect(await delivered.value == ["earlier answer"])
         await client.close()
     }
 
@@ -280,5 +289,11 @@ struct ReplaySuppressionTests {
         #expect(seen.lines == [
             "in " + update("b"), "in " + request, "in " + other, "out " + update("a"), "in " + update("a")
         ])
+    }
+}
+
+extension ACPAgentConnection {
+    func setWaitingToLoad(_ hook: (@Sendable (SessionId) -> Void)?) {
+        waitingToLoad = hook
     }
 }

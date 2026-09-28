@@ -6,10 +6,19 @@ import JSONFoundation
 public struct SessionNotification: Codable, Sendable {
     public var sessionId: SessionId
     public var update: SessionUpdate
+    /// The update as the agent wrote it, members in its order — what acpx records an agent's
+    /// payloads in (#119). Set by a connection that read it from an agent's stdio
+    /// (``RawWireTap``); never encoded.
+    public var rawUpdate: WireJSON?
 
-    public init(sessionId: SessionId, update: SessionUpdate) {
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, update
+    }
+
+    public init(sessionId: SessionId, update: SessionUpdate, rawUpdate: WireJSON? = nil) {
         self.sessionId = sessionId
         self.update = update
+        self.rawUpdate = rawUpdate
     }
 }
 

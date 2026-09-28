@@ -158,8 +158,9 @@ extension DaemonToolsTests {
     }
 
     /// A held agent whose stdin closed between turns never gets the next prompt: its
-    /// write fails, so the turn goes to a fresh launch unseen. A prompt counts as sent
-    /// from when it starts to be written until its write fails (#113 review).
+    /// write fails, so the turn goes to a fresh launch unseen — its JSON stream has only the
+    /// fresh launch's prompt (#236 review). A prompt counts as sent from when it starts to be
+    /// written until its write fails (#113 review).
     @Test(.enabled(if: mockPythonAvailable))
     func aPromptAHeldAgentCouldNotBeSentGoesToAFreshLaunch() async throws {
         let armed = NSTemporaryDirectory() + "exit-agent-stdin-\(UUID().uuidString)"
@@ -171,9 +172,11 @@ extension DaemonToolsTests {
             try "".write(toFile: armed, atomically: true, encoding: .utf8)
             try await prompt(daemon, id, text: "first", client: CallingClient())
             let first = try #require(SessionStore.loadRecord(id)?.pid)
-            try await prompt(daemon, id, text: "second", client: CallingClient())
+            let client = CallingClient()
+            try await prompt(daemon, id, text: "second", streamWire: true, client: client)
             let second = try #require(SessionStore.loadRecord(id)?.pid)
             #expect(second != first)
+            #expect(client.wireKinds.filter { $0 == "wire:outbound:session/prompt" }.count == 1, "\(client.wireKinds)")
         }
     }
 

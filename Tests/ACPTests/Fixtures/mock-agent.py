@@ -32,6 +32,11 @@ def session_update(session_id, update):
     notify("session/update", {"sessionId": session_id, "update": update})
 
 
+# The prompt an `fs-read` or `fs-write` waits to answer, and its session, until the client
+# answers the file request (see `handle_prompt`).
+pending_fs = {}
+
+
 # How `session/load` behaves: gone (default) | ok | internal | unsupported | error, which
 # answers with the error object `MOCK_LOAD_ERROR` holds.
 LOAD_MODE = os.environ.get("MOCK_LOAD_SESSION", "gone")
@@ -65,6 +70,12 @@ HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
 # the client open past its answer, until a test creates the path. (Files, not FIFOs: a
 # test creates one without blocking, so no step of it waits where cancelling cannot reach.)
 HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
+# The terminal's command. It ends once the path exists — or once its directory is gone, or
+# after two minutes: a test that creates the path and at once removes its directory can do
+# both between two looks, and a test that crashes never creates it. The command outlives
+# the test's process, so it would otherwise loop for good, starting 50 `sleep`s a second.
+HOLD_TERMINAL_LOOP = ('i=0; while [ ! -e "$1" ] && [ -d "${1%/*}" ] && [ "$i" -lt 6000 ]; '
+                      'do sleep 0.02; i=$((i + 1)); done')
 
 # A path, with MOCK_HOLD_TERMINAL. Once the prompt is answered, the agent waits for it to
 # exist, then asks a permission question; answered, it creates MOCK_HOLD_TERMINAL itself.
@@ -94,6 +105,11 @@ def log_request(message):
     if path and message.get("method", "").startswith("session/"):
         with open(path, "a", encoding="utf-8") as output:
             output.write(json.dumps(message) + "\n")
+
+
+def prompt_text(params):
+    """The text of a prompt's text blocks."""
+    return "".join(block.get("text", "") for block in params.get("prompt", []) if block.get("type") == "text")
 
 
 def handle_prompt(req_id, params):
@@ -137,6 +153,28 @@ def handle_prompt(req_id, params):
             "code": -32000, "message": "Authentication required", "data": {"details": "login first"}}})
         return
 
+    # "fs-read PATH" / "fs-write PATH TEXT": the file, through the client's `fs/*` methods.
+    # Once the client answers, the reply is what came of it — the text read, `wrote`, or
+    # `error: ` and the client's error message — and the turn ends.
+    words = text.strip().split(" ", 2)
+    if words[0] in ("fs-read", "fs-write") and len(words) > 1:
+        pending_fs["prompt"] = (req_id, session_id)
+        params = {"sessionId": session_id, "path": words[1]}
+        if words[0] == "fs-write":
+            params["content"] = words[2] if len(words) > 2 else ""
+        method = "fs/read_text_file" if words[0] == "fs-read" else "fs/write_text_file"
+        send({"jsonrpc": "2.0", "id": "mock-fs", "method": method, "params": params})
+        return
+
+    # "terminal-env NAME": the client runs `printf %s "$NAME"` in a terminal the request gives
+    # no `env`, and once it has exited the reply is NAME=<what it printed>: the environment the
+    # client runs the agent's commands in.
+    if words[0] == "terminal-env" and len(words) > 1:
+        pending_fs["terminal"] = {"prompt": req_id, "session": session_id, "name": words[1]}
+        send({"jsonrpc": "2.0", "id": "mock-term-env-create", "method": "terminal/create", "params": {
+            "sessionId": session_id, "command": "/bin/sh", "args": ["-c", 'printf %s "$' + words[1] + '"']}})
+        return
+
     # "fail turn": a partial reply, then the agent's error response, with details.
     if text.strip() == "fail turn":
         session_update(session_id, {
@@ -146,6 +184,21 @@ def handle_prompt(req_id, params):
         send({"jsonrpc": "2.0", "id": req_id, "error": {
             "code": -32603, "message": "Internal error", "data": {"details": "model overloaded"}}})
         return
+
+    # "env NAME": the reply is NAME=<its value in the agent's environment>, and the turn ends.
+    if text.startswith("env "):
+        name = text[len("env "):].strip()
+        session_update(session_id, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "%s=%s" % (name, os.environ.get(name, ""))},
+        })
+        respond(req_id, {"stopReason": "end_turn"})
+        return
+
+    # "stderr TEXT": the text on stderr, then the reply as usual.
+    if text.startswith("stderr "):
+        sys.stderr.write(text[len("stderr "):] + "\n")
+        sys.stderr.flush()
 
     # A short plan.
     session_update(session_id, {
@@ -219,6 +272,10 @@ def main():
     if argv_log:
         with open(argv_log, "a", encoding="utf-8") as output:
             output.write(json.dumps(sys.argv[1:]) + "\n")
+    # MOCK_STDERR_AT_START: a line on stderr as the agent starts, before it is asked anything.
+    if os.environ.get("MOCK_STDERR_AT_START"):
+        sys.stderr.write(os.environ["MOCK_STDERR_AT_START"] + "\n")
+        sys.stderr.flush()
     prompts_answered = 0
     held_prompt = None
     terminal_prompt, terminal_session = None, None
@@ -265,6 +322,40 @@ def main():
             session_update(terminal_session, {
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after the terminal"}})
             continue
+        if method is None and req_id == "mock-new-ask" and "new" in pending_fs:
+            with open(os.environ["MOCK_ASK_AT_NEW"], "w", encoding="utf-8") as output:
+                output.write(json.dumps(message.get("result", message.get("error"))))
+            respond(pending_fs.pop("new"), {"sessionId": SESSION_ID})
+            continue
+        if method is None and req_id == "mock-fs" and "prompt" in pending_fs:
+            prompt_id, fs_session = pending_fs.pop("prompt")
+            error = message.get("error")
+            result = message.get("result") or {}
+            reply = "error: " + error.get("message", "") if error else result.get("content", "wrote")
+            session_update(fs_session, {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+            respond(prompt_id, {"stopReason": "end_turn"})
+            continue
+        if method is None and req_id in ("mock-term-env-create", "mock-term-env-wait", "mock-term-env-output") \
+                and "terminal" in pending_fs:
+            step = pending_fs["terminal"]
+            if req_id == "mock-term-env-create":
+                step["terminal"] = (message.get("result") or {}).get("terminalId")
+                next_step = ("mock-term-env-wait", "terminal/wait_for_exit")
+            elif req_id == "mock-term-env-wait":
+                next_step = ("mock-term-env-output", "terminal/output")
+            else:
+                output = (message.get("result") or {}).get("output", "")
+                pending_fs.pop("terminal")
+                session_update(step["session"], {"sessionUpdate": "agent_message_chunk", "content": {
+                    "type": "text", "text": "%s=%s" % (step["name"], output)}})
+                send({"jsonrpc": "2.0", "id": "mock-term-env-release", "method": "terminal/release", "params": {
+                    "sessionId": step["session"], "terminalId": step["terminal"]}})
+                respond(step["prompt"], {"stopReason": "end_turn"})
+                continue
+            send({"jsonrpc": "2.0", "id": next_step[0], "method": next_step[1], "params": {
+                "sessionId": step["session"], "terminalId": step["terminal"]}})
+            continue
         if method is None and str(req_id).startswith("mock-"):
             continue
 
@@ -278,8 +369,12 @@ def main():
                     # MOCK_LOAD_SESSION picks how `session/load` behaves (see below);
                     # only `unsupported` stops advertising it.
                     "loadSession": LOAD_MODE != "unsupported",
-                    # MOCK_CAN_CLOSE advertises `session/close`, which it answers with `{}`.
-                    **({"sessionCapabilities": {"close": {}}} if os.environ.get("MOCK_CAN_CLOSE") else {}),
+                    # MOCK_CAN_CLOSE advertises `session/close`, which it answers with `{}`;
+                    # MOCK_LIST_REPLY advertises `session/list`, which it answers with that JSON.
+                    **({"sessionCapabilities": {
+                        **({"close": {}} if os.environ.get("MOCK_CAN_CLOSE") else {}),
+                        **({"list": {}} if os.environ.get("MOCK_LIST_REPLY") else {})}}
+                       if os.environ.get("MOCK_CAN_CLOSE") or os.environ.get("MOCK_LIST_REPLY") else {}),
                     "promptCapabilities": {
                         "image": bool(os.environ.get("MOCK_IMAGE_CAPABLE")),
                         "audio": False,
@@ -292,6 +387,17 @@ def main():
         elif method == "session/new" and os.environ.get("MOCK_NEW_ERROR"):
             # MOCK_NEW_ERROR: the JSON-RPC error (JSON) to answer `session/new` with.
             send({"jsonrpc": "2.0", "id": req_id, "error": json.loads(os.environ["MOCK_NEW_ERROR"])})
+        elif method == "session/new" and os.environ.get("MOCK_ASK_AT_NEW") and "new" not in pending_fs:
+            # MOCK_ASK_AT_NEW=<path>: a permission question before `session/new` is answered;
+            # the client's answer goes to the path, then the session is opened.
+            pending_fs["new"] = req_id
+            send({"jsonrpc": "2.0", "id": "mock-new-ask", "method": "session/request_permission", "params": {
+                "sessionId": SESSION_ID,
+                "toolCall": {"toolCallId": "call-new", "title": "a question while the session opens"},
+                "options": [
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                ]}})
         elif method == "session/new":
             # MOCK_NEW_META / MOCK_LOAD_META: the `_meta` (JSON) of the replies that
             # open a session, where an agent names its own session id.
@@ -299,6 +405,10 @@ def main():
             if os.environ.get("MOCK_NEW_META"):
                 result["_meta"] = json.loads(os.environ["MOCK_NEW_META"])
             respond(req_id, result)
+        elif method == "session/list" and os.environ.get("MOCK_LIST_REPLY"):
+            # Written as given, members in their order.
+            sys.stdout.write('{"jsonrpc":"2.0","id":%s,"result":%s}\n' % (json.dumps(req_id), os.environ["MOCK_LIST_REPLY"]))
+            sys.stdout.flush()
         elif method == "session/close" and os.environ.get("MOCK_CAN_CLOSE"):
             respond(req_id, {})
         elif method == "session/load" and LOAD_MODE != "unsupported":
@@ -338,7 +448,8 @@ def main():
             if EXIT_ON_PROMPT and prompts_answered + 1 >= EXIT_ON_PROMPT:
                 os._exit(0)
             prompts_answered += 1
-            if HOLD_UNTIL_CANCEL:
+            # MOCK_HOLD_UNTIL_CANCEL, or a prompt that is `hold turn`: held until cancelled.
+            if HOLD_UNTIL_CANCEL or prompt_text(message.get("params", {})).strip() == "hold turn":
                 held_prompt = req_id
                 continue
             if REACT_AFTER_GATE:
@@ -358,7 +469,7 @@ def main():
                     time.sleep(0.1)
                 send({"jsonrpc": "2.0", "id": "mock-terminal-create", "method": "terminal/create", "params": {
                     "sessionId": terminal_session, "command": "/bin/sh",
-                    "args": ["-c", 'while [ ! -e "$1" ]; do sleep 0.02; done', "hold", HOLD_TERMINAL]}})
+                    "args": ["-c", HOLD_TERMINAL_LOOP, "hold", HOLD_TERMINAL]}})
                 continue
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:
@@ -384,6 +495,9 @@ def main():
                 continue
             respond(req_id, {})
         elif method == "session/set_model":
+            respond(req_id, {})
+        elif method == "authenticate":
+            # The client signing in with one of MOCK_AUTH_METHODS: accepted.
             respond(req_id, {})
         elif method == "session/cancel":
             if held_prompt is not None:

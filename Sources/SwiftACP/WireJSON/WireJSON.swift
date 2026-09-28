@@ -1,4 +1,5 @@
 import Foundation
+import JSONFoundation
 
 /// A JSON value as JavaScript's `JSON.parse` sees it, so that ``stringified`` is what
 /// `JSON.stringify` would print for it — byte for byte what acpx writes when it echoes
@@ -268,4 +269,25 @@ extension WireJSON {
 
     /// A string value from Swift text.
     public static func text(_ string: String) -> WireJSON { .string(Array(string.utf16)) }
+}
+
+extension WireJSON {
+    /// The value as JSONFoundation's `JSONValue` — object member order is lost. A number
+    /// too large for a double (`1e400`) parses to infinity, as in `JSON.parse`, and
+    /// becomes `null`, which is how `JSON.stringify` sends it on.
+    public var jsonValue: JSONValue {
+        switch self {
+        case .null: return .null
+        case .bool(let flag): return .bool(flag)
+        case .number(let value):
+            guard value.isFinite else { return .null }
+            return value.rounded() == value && abs(value) < 9e15 ? .integer(Int(value)) : .double(value)
+        case .string: return .string(stringValue ?? "")
+        case .array(let items): return .array(items.map(\.jsonValue))
+        case .object(let members):
+            return .object(Dictionary(
+                members.map { (String(decoding: $0.key, as: UTF16.self), $0.value.jsonValue) },
+                uniquingKeysWith: { _, last in last }))
+        }
+    }
 }
