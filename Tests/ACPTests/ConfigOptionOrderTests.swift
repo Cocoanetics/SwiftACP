@@ -53,6 +53,53 @@ import Testing
         #expect(Self.keys(written, 1) == ["alpha", "id", "zeta"])
     }
 
+    /// Every object in an option takes its counterpart's order — its `_meta`, and whatever it
+    /// holds — as read back options keep what they were read with (#243 review).
+    @Test func nestedObjectsKeepTheirOrder() throws {
+        let read = #"[{"id":"m","_meta":{"z":1,"a":{"y":2,"b":3}},"currentValue":"x","#
+            + #""options":[{"value":"x","_meta":{"q":1,"c":2},"name":"X"}]}]"#
+        let template = try #require(WireJSON(parsing: read))
+        let current = try JSONDecoder().decode(JSONValue.self, from: Data(read.replacingOccurrences(
+            of: #""currentValue":"x""#, with: #""currentValue":"y""#).utf8))
+        let written = ConfigOptionSchema.inOrder(current, of: template)
+        let changed = read.replacingOccurrences(of: #""currentValue":"x""#, with: #""currentValue":"y""#)
+        #expect(written.stringified == changed)
+    }
+
+    /// Options with no `id`, or one another has too, have only their place to go by, as do
+    /// select options without a unique `value` (#243 review).
+    @Test func entriesWithoutAUniqueKeyKeepTheirPlaces() throws {
+        let read = #"[{"b":1,"a":2},{"id":"x","d":1,"c":2},{"id":"x","f":1,"e":2},"#
+            + #"{"id":"u","options":[{"value":"v","n":1,"m":2},{"value":"v","l":1,"k":2}]}]"#
+        let template = try #require(WireJSON(parsing: read))
+        let current = try JSONDecoder().decode(JSONValue.self, from: Data(read.utf8))
+        #expect(ConfigOptionSchema.inOrder(current, of: template).stringified == read)
+    }
+
+    /// A record read back and written again keeps its options exactly as they were read.
+    @Test func aRecordReadBackKeepsItsOptions() async throws {
+        try await withIsolatedStore {
+            let now = nowISO()
+            try SessionStore.writeRecord(SessionRecord(
+                acpxRecordId: "opts", acpSessionId: "opts", agentCommand: "codex", cwd: "/tmp",
+                createdAt: now, lastUsedAt: now))
+            let path = ACPXPaths.sessionRecordPath("opts")
+            let options = #"[{"type":"select","id":"m","_meta":{"z":1,"a":2},"name":"M","currentValue":"x","#
+                + #""options":[{"name":"X","value":"x"}]},{"name":"No id","b":1,"a":2}]"#
+            guard case .object(let members)? = WireJSON(parsing: try Data(contentsOf: path)) else {
+                Issue.record("no record")
+                return
+            }
+            let block = WireJSON.object([.init("config_options", try #require(WireJSON(parsing: options)))])
+            let file = WireJSON.object(members.filter { $0.key != Array("acpx".utf16) } + [.init("acpx", block)])
+            try Data((file.stringified(indent: 2) + "\n").utf8).write(to: path)
+            let record = try #require(SessionStore.loadRecord("opts"))
+            try SessionStore.writeRecord(record)
+            let written = try #require(WireJSON(parsing: try Data(contentsOf: path)))
+            #expect(written["acpx"]?["config_options"]?.stringified == options)
+        }
+    }
+
     /// A turn's `config_option_update` leaves its options in the record in the SDK's order, and
     /// a selection a reply only acknowledges changes them in place: what acpx 0.19.3 wrote for
     /// the same session, turn and `set model` (`model-agent.py`).
