@@ -250,12 +250,14 @@ enum DaemonClient {
         sessionId: String, modeId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
         timeoutMs: Int?, verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
-        try await withClient(logs: verbose ? AgentStderrLog() : nil) {
-            try await $0.setMode(
-                sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
-                terminal: client.terminal, authPolicy: client.authPolicy)
+        try await timingOut(after: timeoutMs) {
+            try await withClient(logs: verbose ? AgentStderrLog() : nil) {
+                try await $0.setMode(
+                    sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
+                    terminal: client.terminal, authPolicy: client.authPolicy)
+            }
         }
     }
 
@@ -279,12 +281,14 @@ enum DaemonClient {
         sessionId: String, modelId: String, nonInteractivePermissions: String, terminalOutputCeiling: Int?,
         timeoutMs: Int?, verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
-        try await withClient(logs: verbose ? AgentStderrLog() : nil) {
-            try await $0.setModel(
-                sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
-                terminal: client.terminal, authPolicy: client.authPolicy)
+        try await timingOut(after: timeoutMs) {
+            try await withClient(logs: verbose ? AgentStderrLog() : nil) {
+                try await $0.setModel(
+                    sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
+                    terminal: client.terminal, authPolicy: client.authPolicy)
+            }
         }
     }
 
@@ -296,13 +300,30 @@ enum DaemonClient {
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String,
         terminalOutputCeiling: Int?, timeoutMs: Int?, verbose: Bool = false, client: ClientOptions = ClientOptions()
     ) async throws -> SessionControlResult {
-        try await withClient(logs: verbose ? AgentStderrLog() : nil) {
-            try await $0.setConfigOption(
-                sessionId: sessionId, configId: configId, value: value,
-                nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
-                environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
-                terminal: client.terminal, authPolicy: client.authPolicy)
+        try await timingOut(after: timeoutMs) {
+            try await withClient(logs: verbose ? AgentStderrLog() : nil) {
+                try await $0.setConfigOption(
+                    sessionId: sessionId, configId: configId, value: value,
+                    nonInteractivePermissions: nonInteractivePermissions,
+                    terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
+                    environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
+                    terminal: client.terminal, authPolicy: client.authPolicy)
+            }
+        }
+    }
+
+    /// A control the daemon ran under `timeoutMs`, whose failure as the timeout is the ``TimeoutError``
+    /// it was — acpx's `TIMEOUT` (exit 3), with its hint — when a daemon from before failures said
+    /// more than their message (#171) reports it by that message alone. A failure the daemon said
+    /// more of stays as it said.
+    static func timingOut<T>(after timeoutMs: Int?, _ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let failure as DaemonControlFailure where failure.failure == nil {
+            if let timeoutMs, timeoutMs > 0, failure.message == TimeoutError(milliseconds: timeoutMs).errorDescription {
+                throw TimeoutError(milliseconds: timeoutMs)
+            }
+            throw failure
         }
     }
 
