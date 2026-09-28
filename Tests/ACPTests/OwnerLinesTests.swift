@@ -56,16 +56,53 @@ import Testing
         }
     }
 
-    /// Whether an owner ran the control goes with its result only when it did: the result
-    /// reads the same to a CLI from before.
-    @Test func whetherAnOwnerRanTheControlIsSaidOnlyWhenItDid() throws {
-        let owned = try JSONEncoder().encode(SessionControlResult(resumed: false, owned: true))
-        #expect(String(decoding: owned, as: UTF8.self) == #"{"owned":true,"resumed":false}"#
-            || String(decoding: owned, as: UTF8.self) == #"{"resumed":false,"owned":true}"#)
+    /// The pid of the owner that ran the control goes with its result only when one did: the
+    /// result reads the same to a CLI from before.
+    @Test func theOwnerThatRanTheControlIsNamedOnlyWhenOneDid() throws {
+        let owned = try JSONEncoder().encode(SessionControlResult(resumed: false, ownerPid: 42))
+        #expect(Self.keys(owned) == ["ownerPid": 42, "resumed": false])
         let direct = try JSONEncoder().encode(SessionControlResult(resumed: true))
         #expect(String(decoding: direct, as: UTF8.self) == #"{"resumed":true}"#)
-        #expect(try JSONDecoder().decode(SessionControlResult.self, from: owned).owned)
-        #expect(try !JSONDecoder().decode(SessionControlResult.self, from: Data(#"{"resumed":true}"#.utf8)).owned)
+        #expect(try JSONDecoder().decode(SessionControlResult.self, from: owned).ownerPid == 42)
+        #expect(try JSONDecoder().decode(SessionControlResult.self, from: direct).ownerPid == nil)
+    }
+
+    /// So does the pid of the owner that took a cancel, and the reply of a daemon from before —
+    /// whether it cancelled, alone — still reads, as taken by none.
+    @Test func theOwnerThatTookTheCancelIsNamedOnlyWhenOneDid() throws {
+        let owned = try JSONEncoder().encode(SessionCancelResult(cancelled: true, ownerPid: 42))
+        #expect(Self.keys(owned) == ["cancelled": true, "ownerPid": 42])
+        let unowned = try JSONEncoder().encode(SessionCancelResult(cancelled: false))
+        #expect(String(decoding: unowned, as: UTF8.self) == #"{"cancelled":false}"#)
+        #expect(try JSONDecoder().decode(SessionCancelResult.self, from: owned)
+            == SessionCancelResult(cancelled: true, ownerPid: 42))
+        #expect(try JSONDecoder().decode(SessionCancelResult.self, from: Data("true".utf8))
+            == SessionCancelResult(cancelled: true))
+        #expect(try JSONDecoder().decode(SessionCancelResult.self, from: Data("false".utf8))
+            == SessionCancelResult(cancelled: false))
+    }
+
+    /// A cancel's reply names the owner that took it as it took it, and a cancel for the
+    /// caller's own turn (`turnToken`) none: acpx's CLI hands only a plain cancel to the owner.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aCancelsReplyNamesTheOwnerThatTookIt() async throws {
+        let agent = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await backend.newSession(agentCommand: agent, cwd: NSTemporaryDirectory())
+            let pid = Int(ProcessInfo.processInfo.processIdentifier)
+            #expect(try await backend.cancelSessionReportingOwner(sessionId: id, turnToken: nil).ownerPid == nil)
+            _ = try await backend.runPrompt(sessionId: id, text: "hi")
+            #expect(try await backend.cancelSessionReportingOwner(sessionId: id, turnToken: nil).ownerPid == pid)
+            #expect(try await backend.cancelSessionReportingOwner(sessionId: id, turnToken: "t").ownerPid == nil)
+            await backend.releaseAll()
+            #expect(try await backend.cancelSessionReportingOwner(sessionId: id, turnToken: nil).ownerPid == nil)
+        }
+    }
+
+    /// `data`'s top-level keys and values, whatever order they were written in.
+    private static func keys(_ data: Data) -> [String: JSONValue] {
+        (try? JSONDecoder().decode([String: JSONValue].self, from: data)) ?? [:]
     }
 
     /// A session made for `agent` in a scratch scope, and `body` given its id and a way to run the

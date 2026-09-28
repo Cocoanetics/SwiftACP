@@ -34,20 +34,10 @@ extension DaemonClient {
         return hold
     }
 
-    /// Whether acpxd holds `sessionId` as acpx's queue owner holds one (``LiveSessionStatus/owned``).
-    /// Never starts a daemon; one that cannot say holds none.
-    static func sessionOwned(sessionId: String) async -> Bool {
-        guard let proxy = try? await connect(spawnIfNeeded: false) else { return false }
-        let status = try? await ACPXDaemon.Client(proxy: proxy).sessionStatus(sessionId: sessionId)
-        await proxy.disconnect()
-        return status?.owned == true
-    }
-
     /// acpx's line under `--verbose` for a request its CLI handed to the session's running owner
     /// (`trySubmitToRunningOwner`, `tryControlOnRunningOwner`): `<said> <pid> for session
     /// <recordId>`, the pid acpxd's, which holds every session as acpx's owner holds one (#232).
-    static func noteOwner(_ said: String, recordId: String) {
-        guard let pid = daemonPid() else { return }
+    static func noteOwner(_ said: String, pid: Int, recordId: String) {
         Console.errLine("[acpx] \(said) \(pid) for session \(recordId)")
     }
 

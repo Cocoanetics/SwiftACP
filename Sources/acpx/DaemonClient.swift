@@ -268,7 +268,9 @@ enum DaemonClient {
         defer { Task { await proxy.disconnect() } }
         // Under `--verbose`, acpx's line once the prompt goes to the session's owner — acpxd,
         // started for it or not.
-        if let recordId { noteOwner("queued prompt on active owner pid", recordId: recordId) }
+        if let recordId, let pid = daemonPid() {
+            noteOwner("queued prompt on active owner pid", pid: Int(pid), recordId: recordId)
+        }
         return try await runPrompt(
             on: proxy, stopReason: stopReason, sessionId: sessionId, content: content, wait: wait,
             permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
@@ -414,17 +416,17 @@ enum DaemonClient {
     }
 
     /// Ask a *running* daemon to cancel the in-flight prompt for `sessionId`.
-    /// Returns whether a live turn was cancelled. Never spawns a daemon — if none
-    /// is reachable (or the session isn't live) there is nothing to cancel. A daemon
-    /// that could not send the cancel throws why.
-    static func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
+    /// Returns whether a live turn was cancelled, and acpxd's pid if the session's owner took
+    /// the cancel. Never spawns a daemon — if none is reachable (or the session isn't live)
+    /// there is nothing to cancel. A daemon that could not send the cancel throws why.
+    static func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> SessionCancelResult {
         do {
             return try await withClient(spawnIfNeeded: false) {
                 try await $0.cancelSession(sessionId: sessionId, turnToken: turnToken)
             }
         } catch is DaemonUnavailable {
             // acpx with no queue owner: nothing holds the turn.
-            return false
+            return SessionCancelResult(cancelled: false)
         }
     }
 

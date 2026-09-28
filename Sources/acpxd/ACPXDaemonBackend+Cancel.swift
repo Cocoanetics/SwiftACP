@@ -77,6 +77,21 @@ extension ACPXDaemonBackend {
         return true
     }
 
+    /// ``cancelSession(sessionId:turnToken:)``, saying whether the session's owner took the
+    /// cancel — as it is taken: whether an owner holds the session is read in the same step
+    /// the cancel begins in, and names this daemon, whose owner took it (#237 review).
+    func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult {
+        let owned = turnToken == nil && findRecord(sessionId).map { owners[$0.acpxRecordId] != nil } == true
+        let cancelled = try await cancelSession(sessionId: sessionId, turnToken: turnToken)
+        return SessionCancelResult(cancelled: cancelled, ownerPid: Self.pid(ifOwned: owned))
+    }
+
+    /// This daemon's pid when its owner of a session took a request, as acpx's CLI names the
+    /// owner that took one (#232).
+    static func pid(ifOwned owned: Bool) -> Int? {
+        owned ? Int(ProcessInfo.processInfo.processIdentifier) : nil
+    }
+
     /// Cancel what runs on `recordId`'s session, its owner's turn and a direct one alike: a
     /// close or a let-go ends the session under both. Every turn is marked cancelled before the
     /// first cancel goes out: sending one suspends, and a turn waiting for the session could take

@@ -273,7 +273,8 @@ final class FlowDaemonTurnStop: @unchecked Sendable {
         lock.withLock { didStop = true }
         let (recordId, turnToken) = (self.recordId, self.turnToken)
         let task = Task {
-            let cancelled = try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)
+            let cancel = try? await DaemonClient.cancelSession(sessionId: recordId, turnToken: turnToken)
+            let cancelled = cancel?.cancelled
             let settled = try? await withTimeout(milliseconds: FlowTurnOwner.cancelWaitMilliseconds) {
                 await self.waitForEnd()
             }

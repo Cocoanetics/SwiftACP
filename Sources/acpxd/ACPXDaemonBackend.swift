@@ -339,7 +339,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, step)
-        return SessionControlResult(resumed: outcome.resumed, owned: outcome.owned)
+        return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -392,7 +392,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, step)
         return SessionControlResult(
-            resumed: outcome.resumed, rawConfigOptions: outcome.value, owned: outcome.owned)
+            resumed: outcome.resumed, rawConfigOptions: outcome.value, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
     /// Set a session's model on the live agent (reconnecting if needed) through the
@@ -436,7 +436,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, step)
-        return SessionControlResult(resumed: outcome.resumed, owned: outcome.owned)
+        return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
@@ -447,14 +447,14 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// agent has exited, or whose connection has closed, is only kept until the next turn
     /// replaces it.
     func sessionStatus(sessionId: String) async -> LiveSessionStatus {
-        guard let record = findRecord(sessionId) else { return LiveSessionStatus(live: false, owned: false) }
+        guard let record = findRecord(sessionId) else { return LiveSessionStatus(live: false) }
         let owned = owners[record.acpxRecordId] != nil
-        guard let entry = live[record.acpxRecordId] else { return LiveSessionStatus(live: owned, owned: owned) }
+        guard let entry = live[record.acpxRecordId] else { return LiveSessionStatus(live: owned) }
         let lifecycle = entry.agent.lifecycle
         guard lifecycle?.running != false, await !entry.agent.connection.isClosed else {
-            return LiveSessionStatus(live: owned, owned: owned)
+            return LiveSessionStatus(live: owned)
         }
-        return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) }, owned: owned)
+        return LiveSessionStatus(live: true, pid: lifecycle?.pid.map { Int($0) })
     }
 
     /// ``runPrompt(sessionId:text:blocks:content:wait:permissionMode:nonInteractivePermissions:streamWire:permissionPolicy:terminalOutputCeiling:sessionOptions:limits:direct:fs:authPolicy:turnToken:callerConfig:verbose:environment:)``

@@ -17,25 +17,25 @@ public struct SessionControlResult: Codable, Sendable {
     /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` for a
     /// reply that only acknowledges, and ``JSONValue/null`` when it is `null`.
     public var rawConfigOptions: JSONValue?
-    /// Whether the session's owner ran the control, as acpx's queue owner runs one sent while
-    /// it holds the session — which acpx's CLI says under `--verbose` (#232). `false` from a
-    /// daemon that predates it.
-    public var owned: Bool
+    /// The pid of the daemon whose owner of the session ran the control, as acpx's queue owner
+    /// runs one sent while it holds the session — which acpx's CLI names under `--verbose`
+    /// (#232). `nil` when none did, and from a daemon that predates it.
+    public var ownerPid: Int?
 
-    public init(resumed: Bool, configOptions: [JSONValue]? = nil, owned: Bool = false) {
+    public init(resumed: Bool, configOptions: [JSONValue]? = nil, ownerPid: Int? = nil) {
         self.resumed = resumed
         self.rawConfigOptions = configOptions.map(JSONValue.array)
-        self.owned = owned
+        self.ownerPid = ownerPid
     }
 
-    public init(resumed: Bool, rawConfigOptions: JSONValue?, owned: Bool = false) {
+    public init(resumed: Bool, rawConfigOptions: JSONValue?, ownerPid: Int? = nil) {
         self.resumed = resumed
         self.rawConfigOptions = rawConfigOptions
-        self.owned = owned
+        self.ownerPid = ownerPid
     }
 
     private enum CodingKeys: String, CodingKey {
-        case resumed, configOptions, owned
+        case resumed, configOptions, ownerPid
     }
 
     /// Also reads what a daemon from before this result returned: `true` from
@@ -46,12 +46,12 @@ public struct SessionControlResult: Codable, Sendable {
         if let keyed = try? decoder.container(keyedBy: CodingKeys.self) {
             resumed = try keyed.decode(Bool.self, forKey: .resumed)
             rawConfigOptions = try keyed.raw(forKey: .configOptions)
-            owned = try keyed.decodeIfPresent(Bool.self, forKey: .owned) ?? false
+            ownerPid = try keyed.decodeIfPresent(Int.self, forKey: .ownerPid)
             return
         }
         let legacy = try decoder.singleValueContainer()
         resumed = false
-        owned = false
+        ownerPid = nil
         if let options = try? legacy.decode([JSONValue].self) {
             rawConfigOptions = .array(options)
         } else {
@@ -65,6 +65,6 @@ public struct SessionControlResult: Codable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(resumed, forKey: .resumed)
         try container.encodeIfPresent(rawConfigOptions, forKey: .configOptions)
-        if owned { try container.encode(owned, forKey: .owned) }
+        try container.encodeIfPresent(ownerPid, forKey: .ownerPid)
     }
 }
