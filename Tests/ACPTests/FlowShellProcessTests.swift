@@ -130,6 +130,17 @@ struct FlowShellProcessTests {
         #expect(isAlive(pid), "descendant \(pid) was stopped with a command done in time")
     }
 
+    /// A shell action that exits before its deadline has finished, though the deadline passes
+    /// while its exit is still being taken in: the deadline goes as the exit is first seen, as
+    /// acpx takes the exit in one callback its timer cannot come between (#220 review).
+    @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
+    func anExitSeenBeforeTheDeadlineStands() async throws {
+        let result = try await FlowShellTermination.$exitIsTakenInLateBy.withValue(.milliseconds(2500)) {
+            try await self.runAction(self.nodeSpec("", [("timeoutMs", .number(2000))]))
+        }
+        #expect(!result.timedOut)
+    }
+
     /// acpx: "runShellAction rejects commands terminated by signal".
     @Test func aCommandEndedBySignalFails() async throws {
         let error = await #expect(throws: FlowShellError.self) {
