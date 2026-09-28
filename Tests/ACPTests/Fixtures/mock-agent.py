@@ -85,6 +85,9 @@ ASK_AFTER_ANSWER = os.environ.get("MOCK_ASK_AFTER_ANSWER")
 # With MOCK_HOLD_TERMINAL: the prompt is answered first, and the terminal opened 100 ms
 # after — its exit asked for while the client waits for the turn's updates to go quiet.
 HOLD_AFTER_ANSWER = bool(os.environ.get("MOCK_HOLD_TERMINAL_AFTER_ANSWER"))
+# Seconds, with MOCK_HOLD_TERMINAL, the agent takes once its terminal is created before it asks
+# for the command's exit: a slow agent, as under load.
+TERMINAL_WAIT_DELAY = float(os.environ.get("MOCK_TERMINAL_WAIT_DELAY", "0"))
 
 # A path. The prompt is answered at once; then the agent waits for the path to exist,
 # asks a permission question, and once answered says "reaction".
@@ -312,6 +315,7 @@ def main():
 
         # The answers to the agent's own requests (MOCK_HOLD_TERMINAL).
         if method is None and req_id == "mock-terminal-create":
+            time.sleep(TERMINAL_WAIT_DELAY)
             send({"jsonrpc": "2.0", "id": "mock-terminal-wait", "method": "terminal/wait_for_exit", "params": {
                 "sessionId": terminal_session, "terminalId": message.get("result", {}).get("terminalId")}})
             if HOLD_AFTER_ANSWER:
