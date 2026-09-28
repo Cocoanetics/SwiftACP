@@ -8,10 +8,15 @@ import Testing
 import Glibc
 #endif
 
+/// The ends acpx records for an idle agent it closes (#142): `connection_close` when the agent
+/// quits within its stdin's 100 ms grace, `process_exit` when it has to be signalled past it —
+/// as a loaded machine can make it. `AgentEndTests` has each end on its own.
+let idleCloseEnds: Set<String?> = ["connection_close", "process_exit"]
+
 /// What acpxd keeps of how its agent is doing, as acpx's queue owner keeps it (#87):
-/// closing a new session's agent is put down to the connection, a turn on a live agent
-/// records its pid, and an agent exiting mid-turn fails the turn in acpx's words and
-/// leaves its exit in the record.
+/// closing a new session's agent records its end, a turn on a live agent records its pid,
+/// and an agent exiting mid-turn fails the turn in acpx's words and leaves its exit in the
+/// record.
 extension DaemonToolsTests {
     /// SwiftACPTests' `exit-agent.py`, run with `environment`.
     static func exitAgent(_ environment: String) throws -> String {
@@ -32,8 +37,7 @@ extension DaemonToolsTests {
             let created = try #require(SessionStore.loadRecord(id))
             #expect(created.pid == nil)
             #expect(created.agentStartedAt != nil)
-            #expect(created.lastAgentDisconnectReason == "connection_close")
-            #expect(created.lastAgentExitCode.map { $0.value == nil } == true)
+            #expect(idleCloseEnds.contains(created.lastAgentDisconnectReason))
 
             try await prompt(daemon, id, text: "first", client: CallingClient())
             let held = try #require(SessionStore.loadRecord(id))
@@ -119,15 +123,18 @@ extension DaemonToolsTests {
         }
     }
 
-    /// Closing an agent is what its end is put down to, however fast it exits once its
-    /// stdin ends: the transport is closed before the stdin is (#113 review).
+    /// Closing an idle agent records one of the ends acpx records for it, and never as
+    /// unexpected: the transport marks the close its own before anything of the end is
+    /// recorded (#113 review, #142).
     @Test(.enabled(if: mockPythonAvailable))
-    func closingAnAgentIsWhatItsEndIsPutDownTo() async throws {
+    func closingAnIdleAgentIsNoUnexpectedEnd() async throws {
         for _ in 0..<5 {
             let agent = try await ACPAgent.launch(
                 agent: Self.exitAgent(""), cwd: NSTemporaryDirectory(), permission: .approveAll, inheritStderr: false)
             await agent.close()
-            #expect(agent.lifecycle?.lastExit?.reason == .connectionClose)
+            let exit = try #require(agent.lifecycle?.lastExit)
+            #expect(idleCloseEnds.contains(exit.reason.rawValue))
+            #expect(!exit.unexpectedDuringPrompt)
         }
     }
 
@@ -151,8 +158,9 @@ extension DaemonToolsTests {
     }
 
     /// A held agent whose stdin closed between turns never gets the next prompt: its
-    /// write fails, so the turn goes to a fresh launch unseen. A prompt counts as sent
-    /// from when it starts to be written until its write fails (#113 review).
+    /// write fails, so the turn goes to a fresh launch unseen — its JSON stream has only the
+    /// fresh launch's prompt (#236 review). A prompt counts as sent from when it starts to be
+    /// written until its write fails (#113 review).
     @Test(.enabled(if: mockPythonAvailable))
     func aPromptAHeldAgentCouldNotBeSentGoesToAFreshLaunch() async throws {
         let armed = NSTemporaryDirectory() + "exit-agent-stdin-\(UUID().uuidString)"
@@ -164,9 +172,11 @@ extension DaemonToolsTests {
             try "".write(toFile: armed, atomically: true, encoding: .utf8)
             try await prompt(daemon, id, text: "first", client: CallingClient())
             let first = try #require(SessionStore.loadRecord(id)?.pid)
-            try await prompt(daemon, id, text: "second", client: CallingClient())
+            let client = CallingClient()
+            try await prompt(daemon, id, text: "second", streamWire: true, client: client)
             let second = try #require(SessionStore.loadRecord(id)?.pid)
             #expect(second != first)
+            #expect(client.wireKinds.filter { $0 == "wire:outbound:session/prompt" }.count == 1, "\(client.wireKinds)")
         }
     }
 
@@ -188,8 +198,7 @@ extension DaemonToolsTests {
     }
 
     /// Stopping the daemon lets its agents go as acpx's queue owner does when it stops:
-    /// each record keeps no pid and names the connection its agent was closed on (#113
-    /// review).
+    /// each record keeps no pid and says how its agent ended once closed (#113 review).
     @Test(.enabled(if: mockPythonAvailable))
     func stoppingTheDaemonRecordsHowItsAgentsEnded() async throws {
         let command = try Self.exitAgent("")
@@ -202,9 +211,7 @@ extension DaemonToolsTests {
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.pid == nil)
             #expect(kill(pid_t(pid), 0) != 0)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
-            #expect(record.lastAgentExitCode.map { $0.value == nil } == true)
-            #expect(record.lastAgentExitSignal.map { $0.value == nil } == true)
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
             #expect(record.lastAgentExitAt != nil)
         }
     }

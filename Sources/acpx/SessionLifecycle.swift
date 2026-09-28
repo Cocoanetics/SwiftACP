@@ -55,24 +55,28 @@ enum SessionLifecycle {
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
         let name = try scan.parsed("name", parseSessionName)
 
-        let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
-        if let existing = SessionStore.findSessionByDirectoryWalk(
-            agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd) {
-            // Reusing a session still honours `--mcp-config`: ensure promises a
-            // session set up the way this invocation asked for.
-            var reused = try applyExplicitMcpServers(to: existing, config: context.config)
-            // And `--model`, as acpx's `ensureSessionWithOwnership` puts it on the session it
-            // keeps (`setSessionModel`), which fails the command if the session cannot take it.
-            if let model = flags.model { reused = try setModel(model, on: reused, flags: flags) }
-            printEnsured(reused, created: false, format: flags.format)
-            return ExitCodes.success
+        // Found or made under the scope's ownership, as acpx's `ensureSession` takes it (#784):
+        // of two ensures — or an ensure and an import — that find no session, one makes it.
+        let scope = try SessionOwnership.scope(agentCommand: agent.agentCommand, cwd: agent.cwd, name: name)
+        let (record, created) = try scope.holding { () throws -> (SessionRecord, Bool) in
+            let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
+            if let existing = SessionStore.findSessionByDirectoryWalk(
+                agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd) {
+                // Reusing a session still honours `--mcp-config`: ensure promises a
+                // session set up the way this invocation asked for.
+                var reused = try applyExplicitMcpServers(to: existing, config: context.config)
+                // And `--model`, as acpx's `ensureSessionWithOwnership` puts it on the session it
+                // keeps (`setSessionModel`), which fails the command if the session cannot take it.
+                if let model = flags.model { reused = try setModel(model, on: reused, flags: flags) }
+                return (reused, false)
+            }
+            let record = try createSession(
+                agent: agent, name: name, flags: flags, config: context.config, permissions: permissions,
+                resumeSessionId: scan.string("resume-session"))
+            return (record, true)
         }
-
-        let record = try createSession(
-            agent: agent, name: name, flags: flags, config: context.config, permissions: permissions,
-            resumeSessionId: scan.string("resume-session"))
-        printCreatedBanner(record, agentName: agent.agentName, flags: flags)
-        printEnsured(record, created: true, format: flags.format)
+        if created { printCreatedBanner(record, agentName: agent.agentName, flags: flags) }
+        printEnsured(record, created: created, format: flags.format)
         return ExitCodes.success
     }
 
@@ -87,7 +91,8 @@ enum SessionLifecycle {
             do {
                 return try await DaemonClient.setModel(
                     sessionId: recordId, modelId: model, nonInteractivePermissions: flags.nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs)
+                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs, verbose: flags.verbose,
+                    client: flags.clientOptions)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
@@ -170,8 +175,8 @@ enum SessionLifecycle {
                 authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
                 sessionMcpServers: config.sessionMcpServers,
                 meta: meta, resumeSessionId: resumeSessionId, sessionOptions: options,
-                capabilities: flags.clientCapabilities,
-                inheritStderr: flags.verbose,
+                capabilities: flags.clientCapabilities, timeoutMilliseconds: flags.timeoutMs,
+                inheritStderr: flags.verbose, onLog: flags.clientLog,
                 onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })
         }
     }

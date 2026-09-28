@@ -12,6 +12,9 @@ extension ACPXDaemonBackend {
     /// with what it begins with, or with why it never will.
     struct PromptLine {
         var waiting: [(token: Int, continuation: CheckedContinuation<BegunPrompt, Error>)] = []
+        /// How many may wait, until the session has an owner of its own: the depth of the
+        /// prompt the line began with, which starts that owner (#240).
+        var maxQueueDepth = DEFAULT_QUEUE_MAX_DEPTH
     }
 
     /// What a prompt begins with: its turn, which a cancel is for, and the ticket its
@@ -22,36 +25,39 @@ extension ACPXDaemonBackend {
     }
 
     /// Begin a prompt for `recordId`: at once when no other prompt of the session has
-    /// begun, else once those before it are over (``promptEnded(_:_:heldTheSlot:)``).
-    /// When `wait` is false, a session running anything refuses it with
-    /// ``DaemonError/sessionBusy``, and it takes the slot as it begins. A daemon that is
+    /// begun, else once those before it are over (``promptEnded(_:_:heldTheSlot:)``). Taken
+    /// either way, it tells a caller that queued it without waiting (``NoWaitAdmission``), as
+    /// acpx's owner answers `accepted` once it enqueued a task. A daemon that is
     /// stopping takes none, nor does a session being closed or let go, as acpx's owner takes
-    /// no task once it shuts down (`enqueue`).
-    func beginPrompt(_ recordId: String, wait: Bool) async throws -> BegunPrompt {
+    /// no task once it shuts down (`enqueue`). The turn takes the caller's `turnToken` as it
+    /// begins (``claimTurnToken(_:for:)``), and a call-off of it is kept while the prompt waits
+    /// in line, however long — until the token is taken (#219 review). A prompt that would wait
+    /// behind as many as the owner's depth allows is refused (``QueueOwnerOverloaded``), as acpx's
+    /// owner refuses one past its `maxQueueDepth` (#240).
+    func beginPrompt(
+        _ recordId: String, turnToken: String? = nil, queueMaxDepth: Int? = nil
+    ) async throws -> BegunPrompt {
         guard !stopping, shuttingDown[recordId] == nil else { throw QueueOwnerShuttingDown(inLine: false) }
-        guard wait else {
-            guard promptLines[recordId] == nil else { throw DaemonError.sessionBusy(recordId) }
-            // Begun before it tries the slot, so that nothing sent meanwhile finds the session
-            // idle (Codex review on #196); a session something holds ends it at once.
-            promptLines[recordId] = PromptLine()
-            let begun = promptBegins(recordId)
-            do {
-                try await turnQueue.acquire(recordId, wait: false)
-            } catch {
-                promptEnded(recordId, begun, heldTheSlot: false)
-                throw error
-            }
+        func begins(_ begun: BegunPrompt) -> BegunPrompt {
+            if let turnToken { claimTurnToken(turnToken, for: recordId) }
             return begun
         }
-        if promptLines[recordId] == nil {
-            promptLines[recordId] = PromptLine()
-            return promptBegins(recordId)
+        guard let line = promptLines[recordId] else {
+            promptLines[recordId] = PromptLine(maxQueueDepth: Self.queueDepth(queueMaxDepth))
+            Self.noWaitAdmission?.admit()
+            return begins(promptBegins(recordId))
         }
+        let depth = owners[recordId]?.maxQueueDepth ?? line.maxQueueDepth
+        guard line.waiting.count < depth else { throw QueueOwnerOverloaded(queued: line.waiting.count, depth: depth) }
         let token = nextPromptToken
         nextPromptToken += 1
+        // Waiting in line, the turn's call-off is kept however long it waits (#219 review).
+        if let turnToken { waitingTurnTokens.insert(turnToken) }
+        defer { if let turnToken { waitingTurnTokens.remove(turnToken) } }
         let begun = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 promptLines[recordId]?.waiting.append((token, continuation))
+                Self.noWaitAdmission?.admit()
                 promptWaits?(recordId)
             }
         } onCancel: {
@@ -59,6 +65,8 @@ extension ACPXDaemonBackend {
             // begun before the drop lands keeps what it began with, and ends below.
             Task { await self.dropWaitingPrompt(recordId, token: token) }
         }
+        // Begun, it takes its token while a call-off of it is still kept.
+        _ = begins(begun)
         // Called off as it began: it ends at once, handing the line on, as acpx's owner
         // cancels a task it has just taken (Codex review on #196).
         if Task.isCancelled {
@@ -132,6 +140,18 @@ extension ACPXDaemonBackend {
 
 /// acpx's error for a prompt its session's owner refuses as it shuts down: one still in line
 /// (`beginShutdown`), or one sent once it began to (`enqueue`).
+/// A prompt refused because as many as the owner's depth allows wait already, in acpx's
+/// words (`enqueue`, `QUEUE_OWNER_OVERLOADED`).
+struct QueueOwnerOverloaded: LocalizedError, OutputErrorMeta, Equatable {
+    let queued: Int
+    let depth: Int
+    var errorDescription: String? { "Queue owner is overloaded (\(queued)/\(depth) queued)" }
+    var outputCode: String? { "RUNTIME" }
+    var detailCode: String? { "QUEUE_OWNER_OVERLOADED" }
+    var origin: String? { "queue" }
+    var retryable: Bool? { true }
+}
+
 struct QueueOwnerShuttingDown: LocalizedError, OutputErrorMeta, Equatable {
     /// Whether the prompt was in line as the shutdown began.
     let inLine: Bool

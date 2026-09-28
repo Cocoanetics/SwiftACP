@@ -205,7 +205,7 @@ extension DaemonToolsTests {
     @Test func aPromptOverWithoutHoldingTheSessionHasTheOwnerWaitForTheNext() async throws {
         let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
         await daemon.holdAsAnOwner("owned", ttlMilliseconds: 60_000)
-        let begun = try await daemon.beginPrompt("owned", wait: true)
+        let begun = try await daemon.beginPrompt("owned")
         await daemon.promptEnded("owned", begun, heldTheSlot: false).value
         #expect(await daemon.ownerWaitsForItsNextPrompt("owned"))
         await daemon.forgetOwner("owned")
@@ -221,10 +221,10 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let (waits, waiting) = AsyncStream<Void>.makeStream()
             await daemon.setPromptWaits { _ in waiting.yield() }
-            let first = try await daemon.beginPrompt("s", wait: true)
-            let second = Task { try await daemon.beginPrompt("s", wait: true) }
+            let first = try await daemon.beginPrompt("s")
+            let second = Task { try await daemon.beginPrompt("s") }
             try await nextEvent(waits)
-            let third = Task { try await daemon.beginPrompt("s", wait: true) }
+            let third = Task { try await daemon.beginPrompt("s") }
             try await nextEvent(waits)
             try await daemon.turnQueue.acquire("s", wait: false)
             await daemon.turnQueue.release("s")
@@ -236,28 +236,7 @@ extension DaemonToolsTests {
             let thirdBegun = try await third.value
             #expect(afterSecond == thirdBegun.control.id)
             #expect(await daemon.endPromptAndLook("s", thirdBegun) == nil)
-            _ = try await daemon.beginPrompt("s", wait: false)
-        }
-    }
-
-    /// A prompt that will not wait is busy while anything holds the session — the slot, or a
-    /// prompt begun — and otherwise begins holding the slot.
-    @Test func aPromptThatWillNotWaitIsBusyWhileAnythingHoldsTheSession() async throws {
-        // Bounded, so that a line that never moves fails rather than hangs.
-        try await withTimeout(milliseconds: 10_000) {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            try await daemon.turnQueue.acquire("s", wait: true)
-            await #expect(throws: DaemonError.self) { try await daemon.beginPrompt("s", wait: false) }
-            await daemon.turnQueue.release("s")
-            let begun = try await daemon.beginPrompt("s", wait: true)
-            await #expect(throws: DaemonError.self) { try await daemon.beginPrompt("s", wait: false) }
-            await daemon.promptEnded("s", begun, heldTheSlot: false).value
-
-            let alone = try await daemon.beginPrompt("s", wait: false)
-            await #expect(throws: DaemonError.self) { try await daemon.turnQueue.acquire("s", wait: false) }
-            await #expect(throws: DaemonError.self) { try await daemon.beginPrompt("s", wait: false) }
-            await daemon.promptEnded("s", alone, heldTheSlot: true).value
-            #expect(await !daemon.turnQueue.isBusy("s"))
+            #expect(await daemon.sessionIsFree("s"))
         }
     }
 
@@ -268,14 +247,14 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let (waits, waiting) = AsyncStream<Void>.makeStream()
             await daemon.setPromptWaits { _ in waiting.yield() }
-            let first = try await daemon.beginPrompt("s", wait: true)
-            let calledOff = Task { try await daemon.beginPrompt("s", wait: true) }
+            let first = try await daemon.beginPrompt("s")
+            let calledOff = Task { try await daemon.beginPrompt("s") }
             try await nextEvent(waits)
             calledOff.cancel()
             await #expect(throws: CancellationError.self) { try await calledOff.value }
 
             #expect(await daemon.endPromptAndLook("s", first) == nil)
-            _ = try await daemon.beginPrompt("s", wait: false)
+            #expect(await daemon.sessionIsFree("s"))
         }
     }
 
@@ -287,13 +266,13 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let (waits, waiting) = AsyncStream<Void>.makeStream()
             await daemon.setPromptWaits { _ in waiting.yield() }
-            let first = try await daemon.beginPrompt("s", wait: true)
-            let second = Task { try await daemon.beginPrompt("s", wait: true) }
+            let first = try await daemon.beginPrompt("s")
+            let second = Task { try await daemon.beginPrompt("s") }
             try await nextEvent(waits)
             await daemon.endPrompt("s", first, thenCancel: second)
             await #expect(throws: CancellationError.self) { _ = try await second.value }
             #expect(await daemon.turnIsTheSessions("s") == false)
-            _ = try await daemon.beginPrompt("s", wait: false)
+            #expect(await daemon.sessionIsFree("s"))
         }
     }
 
@@ -382,6 +361,14 @@ extension ACPXDaemonBackend {
 
     func turnIsTheSessions(_ recordId: String) -> Bool {
         turns[recordId] != nil
+    }
+
+    /// Whether nothing holds `recordId`: no prompt begun or waiting, no turn, the slot free.
+    func sessionIsFree(_ recordId: String) async -> Bool {
+        guard promptLines[recordId] == nil, turns[recordId] == nil,
+              (try? await turnQueue.acquire(recordId, wait: false)) != nil else { return false }
+        await turnQueue.release(recordId)
+        return true
     }
 
     /// End `begun`, and say whose turn the session's is in that same step.

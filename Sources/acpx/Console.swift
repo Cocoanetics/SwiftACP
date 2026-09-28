@@ -11,13 +11,17 @@ enum Console {
         private let lock = NSLock()
         private var stdout = ""
         private var stderr = ""
+        private var both = ""
 
         var out: String { lock.withLock { stdout } }
         var err: String { lock.withLock { stderr } }
+        /// Both streams as they were written, in order, as `2>&1` shows them.
+        var merged: String { lock.withLock { both } }
 
         fileprivate func write(_ text: String, toStandardError: Bool) {
             lock.withLock {
                 if toStandardError { stderr += text } else { stdout += text }
+                both += text
             }
         }
     }

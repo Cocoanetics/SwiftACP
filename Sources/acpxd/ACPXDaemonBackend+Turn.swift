@@ -14,13 +14,14 @@ extension ACPXDaemonBackend {
     /// gone quiet, as acpx's does, so that what the agent sends after its answer is part
     /// of it. The answer is waited for within `timeout` (``answer(to:on:recordId:within:)``).
     func sendPrompt(
-        _ blocks: [ContentBlock], on entry: Live, recordId: String, within timeout: Int? = nil
+        _ blocks: [ContentBlock], on entry: Live, recordId: String, turn id: UUID, within timeout: Int? = nil
     ) async throws -> (response: PromptResponse, sent: Bool) {
-        guard turns[recordId]?.cancelPending != true else { return (PromptResponse(stopReason: .cancelled), false) }
+        guard turnControl(recordId, id)?.cancelPending != true else {
+            return (PromptResponse(stopReason: .cancelled), false)
+        }
         await promptGoingOut?(recordId)
         let (response, recovered) = try await answer(to: blocks, on: entry, recordId: recordId, within: timeout)
-        turns[recordId]?.prompt = nil
-        turns[recordId]?.answered = true
+        promptAnswered(recordId: recordId, turn: id)
         // An answer that came while a timed-out prompt's updates went quiet stands as it
         // is, as acpx's `recoveredSessionResult` does: they have gone quiet already.
         if recovered { return (response, true) }
@@ -110,7 +111,7 @@ extension ACPXDaemonBackend {
                 if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
                     fullText += chunk
                 }
-                await persister.apply(note.update)
+                await persister.apply(note.update, raw: note.rawUpdate)
                 let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
                 await clientSession?.sendLogNotification(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
@@ -145,7 +146,7 @@ extension ACPXDaemonBackend {
     /// them for its result (`toPromptResult`) — and the answer's usage and cost.
     static func announceTheEnd(
         of response: PromptResponse, permissions: PermissionStats, result: PromptResultCapture,
-        as sessionId: String, to clientSession: Session?
+        as sessionId: String, to clientSession: Session?, loadError: String? = nil
     ) async {
         // No answer crossed the wire: the turn was cancelled before its prompt went out, or
         // between attempts at it — nothing marks it done.
@@ -155,7 +156,7 @@ extension ACPXDaemonBackend {
                 level: .info, logger: sessionId,
                 data: toJSONValue(TurnEndedEvent(
                     stopReason: response.stopReason.rawValue, permissions: permissions,
-                    usage: result.usage, cost: result.cost, unanswered: unanswered))))
+                    usage: result.usage, cost: result.cost, unanswered: unanswered, loadError: loadError))))
     }
 
     /// Start the turn's journal before connecting, as acpx's prompt does. A journal it

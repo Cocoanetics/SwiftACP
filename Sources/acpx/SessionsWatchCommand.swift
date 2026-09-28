@@ -11,7 +11,9 @@ enum SessionsWatchCommand {
     static func run(_ context: CommandContext) throws -> Int32 {
         let flags = try context.globalFlags()
         let agent = try Flags.resolveAgentInvocation(context.explicitAgent, flags, config: context.config)
-        let name = try context.options.string("name").map(parseSessionName)
+        // Its own `--name`, else a `-s` given to the agent command, as acpx's
+        // `resolveSessionNameFromFlags` reads it through `optsWithGlobals()`.
+        let name = try (context.options.string("name") ?? context.options.string("session")).map(parseSessionName)
         // An open session, else a closed one, as acpx finds the session to watch.
         guard let record = SessionStore.findSession(
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, includeClosed: false)

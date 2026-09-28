@@ -5,6 +5,7 @@
 - `hang-init`, `hang-new`, `hang-prompt`: never answers `initialize`, `session/new` or
   `session/prompt`. `hang-model` and `hang-effort` never answer the
   `session/set_config_option` for the `model` or `effort` option it advertises.
+  `hang-load` advertises `session/load` and never answers it.
 - `fail-once`: its first prompt fails with ACP's internal error (-32603, details
   `model overloaded`), as a model API's hiccup does; later prompts answer. `fail-always`
   fails every prompt that way.
@@ -213,6 +214,8 @@ for line in sys.stdin:
             signal_ready()
             time.sleep(60)
         capabilities = {"sessionCapabilities": {"close": {}}} if os.environ.get("RETRY_AGENT_CAN_CLOSE") else {}
+        if MODE == "hang-load":
+            capabilities["loadSession"] = True
         send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": capabilities}})
     elif method == "session/new":
         if MODE == "hang-new":
@@ -222,6 +225,10 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "retry-session", "configOptions": OPTIONS}})
         if MODE == "die-after-new":
             os._exit(3)
+    elif method == "session/load" and MODE == "hang-load":
+        signal_ready()
+        time.sleep(60)
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"configOptions": OPTIONS}})
     elif method == "session/set_mode" and os.environ.get("RETRY_AGENT_SET_MODE_GATE"):
         if os.environ.get("RETRY_AGENT_SET_MODE_SENT"):
             with open(os.environ["RETRY_AGENT_SET_MODE_SENT"], "w") as sent:

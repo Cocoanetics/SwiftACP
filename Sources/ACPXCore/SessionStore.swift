@@ -58,9 +58,11 @@ public enum SessionStore {
             record.schema == SESSION_RECORD_SCHEMA
         else { return nil }
         record.parsedByAcpx = parsed
-        // The block's members in the places acpx's parser gives them.
+        // The block's members in the places acpx's parser gives them, and its config options in
+        // the order they were read in, which an option changed in place keeps.
         if case .object(let members)? = parsed["acpx"] {
             record.acpx?.slots = members.map { String(decoding: $0.key, as: UTF16.self) }
+            record.acpx?.configOptionsOrder = parsed["acpx"]?["config_options"]
         }
         return record
     }

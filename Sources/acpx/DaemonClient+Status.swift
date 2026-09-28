@@ -34,6 +34,13 @@ extension DaemonClient {
         return hold
     }
 
+    /// acpx's line under `--verbose` for a request its CLI handed to the session's running owner
+    /// (`trySubmitToRunningOwner`, `tryControlOnRunningOwner`): `<said> <pid> for session
+    /// <recordId>`, the pid acpxd's, which holds every session as acpx's owner holds one (#232).
+    static func noteOwner(_ said: String, pid: Int, recordId: String) {
+        Console.errLine("[acpx] \(said) \(pid) for session \(recordId)")
+    }
+
     /// Whether the daemon `proxy` is connected to holds `sessionId`. A daemon that answers
     /// without saying — one from before the tool, which does not know it — cannot say; one
     /// that stopped answering once connected is one that does not answer.

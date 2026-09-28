@@ -37,13 +37,15 @@ final class ConnectingAgent: @unchecked Sendable {
         return agent
     }
 
-    /// Put it down: its launch called off, or the agent it launched closed.
-    func abandon() async {
+    /// Put it down: its launch called off, or the agent it launched closed — which it returns.
+    @discardableResult
+    func abandon() async -> ACPAgent? {
         let (task, agent) = lock.withLock {
             abandoned = true
             return (launching, self.agent)
         }
         task?.cancel()
         await agent?.close()
+        return agent
     }
 }

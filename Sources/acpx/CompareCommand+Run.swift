@@ -57,7 +57,7 @@ extension CompareCommand {
                         nonInteractivePermissions: flags.nonInteractivePolicy, permissionRules: job.permissionRules,
                         capabilities: flags.clientCapabilities, authCredentials: job.config.auth,
                         authPolicy: flags.authPolicy, inheritStderr: flags.verbose,
-                        onRawWire: { capture.answer.observe($0, $1) })
+                        onRawWire: { capture.answer.observe($0, $1) }, onLog: flags.clientLog)
                 }
             }
             await capture.follow(handle.connection)

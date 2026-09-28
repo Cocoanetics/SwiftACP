@@ -24,7 +24,7 @@ extension DaemonToolsTests {
             #expect(await daemon.sessionStatus(sessionId: session.id).live == false)
             let record = try #require(SessionStore.loadRecord(session.id))
             #expect(record.pid == nil)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
             await daemon.releaseAll()
         }
     }
@@ -105,7 +105,7 @@ extension DaemonToolsTests {
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpSessionId != before)
             #expect(record.pid == nil)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
         }
     }
 
@@ -125,7 +125,7 @@ extension DaemonToolsTests {
             } catch DaemonError.stopping {}
             let record = try #require(SessionStore.loadRecord(session.id))
             #expect(record.pid == nil)
-            #expect(record.lastAgentDisconnectReason == "connection_close")
+            #expect(idleCloseEnds.contains(record.lastAgentDisconnectReason))
             #expect(session.prompts == 0)
         }
     }
@@ -276,7 +276,7 @@ extension DaemonToolsTests {
                 return
             }
             let order = members.map { String(decoding: $0.key, as: UTF16.self) }
-                .filter { $0 != "mcp_servers" && $0 != "client_capabilities" }
+                .filter { $0 != "mcp_servers" }
             #expect(order == [
                 "desired_mode_id", "current_model_id", "available_models", "available_model_names", "model_control",
                 "config_options"

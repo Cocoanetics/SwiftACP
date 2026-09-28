@@ -30,7 +30,7 @@ extension ACPXDaemonBackend {
         // Called off before it began, it does nothing at all: not even the prompt running is cancelled.
         try Task.checkCancellation()
         return try await whileShuttingDown(recordId) {
-            _ = try? await cancelSession(sessionId: recordId)
+            await cancelEveryTurn(recordId)
             try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
             defer { Task { await turnQueue.release(recordId) } }
             await askToClose(recordId)
@@ -56,19 +56,50 @@ extension ACPXDaemonBackend {
     /// session under the same id, and the record, now the new session's, left as it is.
     /// Returns whether the daemon had anything of the session's: an agent held or still
     /// connecting, a turn, or an owner.
-    func releaseSession(sessionId: String) async throws -> Bool {
+    ///
+    /// Given the `turnToken` its caller gave a turn, only the agent that turn connects or runs
+    /// on is put down, and only while the turn has the session's slot, as acpx's flow runner
+    /// closes the client its stopped turn was handed: a turn that has ended, or not begun,
+    /// leaves the session as it is, for what came since (#219 review).
+    func releaseSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
         guard let initial = findRecord(sessionId) else { return false }
         let recordId = initial.acpxRecordId
+        if let turnToken {
+            guard let turn = directTurn(recordId, token: turnToken), turn.running else { return false }
+            await putDown(recordId)
+            return true
+        }
         try Task.checkCancellation()
-        let held = live[recordId] != nil || connecting[recordId] != nil || turns[recordId] != nil
-            || owners[recordId] != nil
+        let held = live[recordId] != nil || connecting[recordId] != nil || hasTurn(recordId) || owners[recordId] != nil
         return try await whileShuttingDown(recordId) {
-            _ = try? await cancelSession(sessionId: recordId)
+            await cancelEveryTurn(recordId)
             try await takeSessionSlot(recordId, forcingAfter: Self.closeGraceMilliseconds)
             defer { Task { await turnQueue.release(recordId) } }
             forgetOwner(recordId)
             await evict(recordId)
             return held
+        }
+    }
+
+    /// Let every held agent go the way acpx's queue owner does when it stops
+    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
+    /// into its record, best effort — no pid, and the connection it was closed on unless
+    /// it had ended before.
+    func releaseAll() async {
+        // Before anything is let go: a turn whose agent this closes must not start another.
+        stopping = true
+        // The prompts still in line are refused, as each owner acpx stops refuses its own.
+        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
+        for recordId in owners.keys { forgetOwner(recordId) }
+        while let recordId = live.keys.first {
+            guard let entry = live.removeValue(forKey: recordId) else { continue }
+            await entry.agent.close()
+            // A turn the close ends saves its record first.
+            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
+            defer { Task { await turnQueue.release(recordId) } }
+            guard var record = findRecord(recordId) else { continue }
+            record.applyLifecycle(entry.agent.lifecycle)
+            try? SessionStore.writeRecord(record)
         }
     }
 
@@ -121,9 +152,34 @@ extension ACPXDaemonBackend {
         }
     }
 
+    /// For tests: run once a put-down has abandoned the agent it found connecting, before it
+    /// lets go of the one it found held.
+    @TaskLocal static var afterAbandoning: (@Sendable (_ recordId: String) async -> Void)?
+
+    /// What holds a session at a given moment: its agent held, and one still connecting.
+    struct Holding: Sendable {
+        let agent: ACPAgent?
+        let connecting: ConnectingAgent?
+    }
+
+    /// What holds `recordId` as this is called.
+    func holding(_ recordId: String) -> Holding {
+        Holding(agent: live[recordId]?.agent, connecting: connecting[recordId])
+    }
+
     /// What holds `recordId`, put down under it: its agent held, or one still connecting.
     func putDown(_ recordId: String) async {
-        await connecting[recordId]?.abandon()
+        await putDown(recordId, holding(recordId))
+    }
+
+    /// What held `recordId` at a given moment, put down under it — the agent then held, or the
+    /// one then connecting — and nothing else, though putting it down suspends: the turn on it
+    /// can end meanwhile, and a session made since under the same id can be held by then
+    /// (#219 review).
+    func putDown(_ recordId: String, _ holding: Holding) async {
+        let launched = await holding.connecting?.abandon()
+        await Self.afterAbandoning?(recordId)
+        guard let agent = live[recordId]?.agent, agent === holding.agent || agent === launched else { return }
         await evict(recordId)
     }
 }

@@ -32,18 +32,14 @@ import Testing
 
     /// An agent that does not answer is closed once 2.5 s have passed. That fails the
     /// prompt, which ends the run reported, once, as acpx 0.19.3 reports an agent gone with
-    /// the prompt out (#778). Which of the connection's end and its close fails the prompt
-    /// first decides SwiftACP's words. acpx's are always `ACP agent disconnected during
-    /// request (process_exit, exit=null, signal=SIGTERM)`, as it ends the agent's process
-    /// before it closes the connection, which #142 tracks.
+    /// the prompt out (#778) — in its words: the agent, busy in its prompt, is ended by
+    /// `SIGTERM` before the connection is closed, as acpx ends it (#142).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anAgentThatDoesNotAnswerIsClosed() async throws {
         let run = try await exec("hang-prompt")
         #expect(run.code == 1)
         #expect(run.out == "[client] initialize (running)\n\n[client] session/new (running)\n")
-        #expect(run.err == "ACP connection closed\n" || run.err.hasPrefix("ACP agent disconnected during request ("),
-                "\(run.err)")
-        #expect(run.err.components(separatedBy: "\n").count == 2, "\(run.err)")
+        #expect(run.err == "ACP agent disconnected during request (process_exit, exit=null, signal=SIGTERM)\n")
         #expect(!isRunning(run.pid))
     }
 
@@ -58,15 +54,13 @@ import Testing
     }
 
     /// While the session is being opened, the close fails `session/new`, and the run ends
-    /// on that — reported, exit 1, as acpx reports the agent's disconnect then. (Which of
-    /// the transport's end and the connection's close fails it first decides the words;
-    /// acpx's are `ACP agent disconnected during request (process_exit, exit=null,
-    /// signal=SIGTERM)`, the end as #142 would record it.)
+    /// on that — reported, exit 1, as acpx reports the agent's disconnect then, in its
+    /// words: the agent is ended before the connection is closed (#142).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func anInterruptWhileTheSessionOpensEndsTheRunOnItsFailure() async throws {
         let run = try await exec("hang-new")
         #expect(run.code == 1)
-        #expect(!run.err.isEmpty)
+        #expect(run.err == "ACP agent disconnected during request (process_exit, exit=null, signal=SIGTERM)\n")
         #expect(!isRunning(run.pid))
     }
 

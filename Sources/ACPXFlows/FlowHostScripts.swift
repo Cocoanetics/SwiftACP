@@ -285,6 +285,10 @@ const outputs = {};
 // What each attempt's callback returned last, until the runner makes it the node's output
 // or forgets the attempt.
 const returned = new Map();
+// Each output the runner committed, by the attempt that produced it: acpx's `state.steps` keeps
+// every step's output as the value itself, so a later change to it reaches every projection
+// written after (#206).
+const committed = new Map();
 // Each attempt the runner has not let go of, as acpx's `FlowAttempt` shows itself to the
 // flow's code: the `signal` every callback of it is handed, aborted with the reason it is
 // cancelled for; whether the runner is done with it; and what a callback of it threw.
@@ -955,7 +959,24 @@ function setOutput(params) {
   // A shell action without `parse` outputs its command's result, whose `args` are its spec's.
   if ("value" in params && node && "exec" in node) value = commandResult(value, returned.get(params.attemptId));
   returned.delete(params.attemptId);
+  committed.set(params.attemptId, value);
   Object.defineProperty(outputs, params.nodeId, { value, enumerable: true, configurable: true, writable: true });
+}
+
+// The run's live values as they are now, as acpx's `writeSnapshot` writes them with
+// `JSON.stringify`: the input; `outputs` as the flow's code holds it — `ctx.outputs` is acpx's
+// `state.outputs`, so a member a callback replaced, deleted or added is so there — each committed
+// output by its attempt, which a node's result and its step hold whatever `outputs` now has; and
+// what each attempt's callback returned last, not committed yet, which is its step's output only
+// when that output is the callback's own value (#206).
+function currentState() {
+  const encode = (values) => Object.fromEntries([...values].map(([id, value]) => [id, returnedValue(value)]));
+  return {
+    input: returnedValue(input),
+    outputs: returnedValue(outputs),
+    attempts: encode(committed),
+    returned: encode(returned),
+  };
 }
 
 // The runner cancelled an attempt: its `signal` aborted with the reason — for one that
@@ -1044,6 +1065,9 @@ async function handle(message) {
         break;
       case "outputs/set":
         setOutput(message.params);
+        break;
+      case "state/current":
+        result = currentState();
         break;
       case "attempt/cancel":
         cancelAttempt(message.params);

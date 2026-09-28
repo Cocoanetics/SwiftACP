@@ -363,14 +363,4 @@ struct FlowAcpRunnerTests {
         let one = try await FlowRunnerHarness.run(Self.node, sessions: operation)
         #expect(try session(one).record["acpx"] == .object([WireJSON.Member]()))
     }
-
-    /// A persistent session is the next step (#202).
-    @Test(.enabled(if: nodeAvailable))
-    func aPersistentSessionIsRefusedForNow() async throws {
-        let run = try await FlowRunnerHarness.run("""
-            export default defineFlow({ name: "main", startAt: "ask", nodes: {
-              ask: acp({ profile: "mock", prompt: () => "hi" }) }, edges: [] });
-            """, sessions: ScriptedTurn(ScriptedTurn.answering("never")))
-        #expect(run.err == "ACP nodes with a persistent session are not supported by SwiftACP's acpx yet")
-    }
 }

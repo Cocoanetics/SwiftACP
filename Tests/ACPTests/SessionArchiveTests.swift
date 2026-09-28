@@ -198,17 +198,21 @@ struct SessionArchiveTests {
         }
     }
 
-    /// SwiftACP's own fields, which acpx does not know: a session's restrictions go with
-    /// it and come back — one made under `--no-fs` must not get the filesystem back — but
-    /// its MCP servers, whose commands and credentials are this machine's, do neither.
-    @Test func restrictionsTravelButMCPServersDoNot() async throws {
+    /// SwiftACP's own fields, which acpx does not know, stay home: a session's MCP servers,
+    /// whose commands and credentials are this machine's, go neither out nor back in, and the
+    /// `client_capabilities` a record SwiftACP wrote before #246 has goes nowhere — acpx's
+    /// archive has neither.
+    @Test func swiftACPsOwnFieldsDoNotTravel() async throws {
         let fixture = try Self.fixture()
         try await withIsolatedStore {
             try Self.storeSource(fixture, home: "/home/user")
+            let stored = ACPXPaths.sessionRecordPath("rec-1")
+            let written = try String(contentsOf: stored, encoding: .utf8)
+            let old = written.replacingOccurrences(
+                of: #""acpx": {"#, with: #""acpx": {"client_capabilities": {"terminal": false},"#)
+            #expect(old != written)
+            try old.write(to: stored, atomically: true, encoding: .utf8)
             var record = try #require(SessionStore.loadRecord("rec-1"))
-            let restricted = SessionAcpxState.PersistedCapabilities(
-                readTextFile: true, writeTextFile: false, terminal: false)
-            record.acpx?.clientCapabilities = restricted
             record.acpx?.mcpServers = [try JSONDecoder().decode(McpServerConfig.self, from: Data(
                 #"{"name": "secret", "command": "run-me", "env": [{"name": "TOKEN", "value": "t0ken"}]}"#.utf8))]
             let archive = try Self.directory() + "/archive.json"
@@ -217,22 +221,20 @@ struct SessionArchiveTests {
                 record, agentName: "probe", to: archive, home: "/home/user", exportedAt: Self.exportedAt)
 
             let exported = try Self.text(at: archive)
-            #expect(exported.contains(#""client_capabilities": {"#))
+            #expect(!exported.contains("client_capabilities"))
             #expect(!exported.contains("mcp_servers") && !exported.contains("t0ken"))
 
             // A hand-made archive that brings MCP servers anyway is imported without them.
-            try Self.write(
-                exported.replacingOccurrences(
-                    of: #""client_capabilities": {"#,
-                    with: #""mcp_servers": [{"name": "s", "command": "run-me"}], "client_capabilities": {"#),
-                to: archive)
+            let smuggled = exported.replacingOccurrences(
+                of: #""acpx": {"#, with: #""acpx": {"mcp_servers": [{"name": "s", "command": "run-me"}],"#)
+            #expect(smuggled != exported)
+            try Self.write(smuggled, to: archive)
             try FileManager.default.removeItem(at: ACPXPaths.sessionRecordPath("rec-1"))
             let imported = try SessionArchive.importArchive(
                 at: archive, name: nil, cwd: nil, expectedAgentName: "probe", expectedAgentCommand: fixture.command,
                 home: "/home/user")
 
             let back = try #require(SessionStore.loadRecord(imported.recordId))
-            #expect(back.acpx?.clientCapabilities == restricted)
             #expect(back.acpx?.mcpServers == nil)
         }
     }
