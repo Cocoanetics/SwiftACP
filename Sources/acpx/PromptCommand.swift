@@ -58,7 +58,8 @@ enum PromptCommand {
                     permissionPolicy: permissionRules, terminalOutputCeiling: terminalOutputCeiling,
                     model: flags.model, sessionOptions: flags.promptSessionOptions,
                     limits: PromptLimits(
-                        timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs),
+                        timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs,
+                        queueMaxDepth: context.config.queueMaxDepth),
                     renderer: renderer)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)

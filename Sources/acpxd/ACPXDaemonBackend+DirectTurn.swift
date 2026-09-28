@@ -99,7 +99,7 @@ extension ACPXDaemonBackend {
     /// a direct one apart from it. Either takes the slot as it begins when it may not wait, and
     /// is refused at once with ``DaemonError/sessionBusy`` when something holds it (#229 review).
     func startTurn(
-        _ recordId: String, direct: Bool, wait: Bool, turnToken: String?
+        _ recordId: String, direct: Bool, wait: Bool, turnToken: String?, queueMaxDepth: Int? = nil
     ) async throws -> (turn: StartedTurn, holdsTheSlot: Bool) {
         if direct {
             let control = try beginDirectTurn(recordId, turnToken: turnToken)
@@ -112,7 +112,7 @@ extension ACPXDaemonBackend {
             }
             return (StartedTurn(control: control, begun: nil), true)
         }
-        let begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
+        let begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken, queueMaxDepth: queueMaxDepth)
         return (StartedTurn(control: begun.control, begun: begun), !wait)
     }
 

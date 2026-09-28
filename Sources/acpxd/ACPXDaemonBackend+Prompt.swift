@@ -75,8 +75,11 @@ extension ACPXDaemonBackend {
         let started: StartedTurn
         var heldTheSlot: Bool
         do {
-            (started, heldTheSlot) = try await startTurn(recordId, direct: direct, wait: wait, turnToken: turnToken)
+            (started, heldTheSlot) = try await startTurn(
+                recordId, direct: direct, wait: wait, turnToken: turnToken, queueMaxDepth: limits?.queueMaxDepth)
         } catch let refused as QueueOwnerShuttingDown {
+            return try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
+        } catch let refused as QueueOwnerOverloaded {
             return try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
         }
         let control = started.control
@@ -114,7 +117,9 @@ extension ACPXDaemonBackend {
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
-        if !direct { turnStarts(recordId, ttlMs: limits?.ttlMs, environment: environment) }
+        if !direct {
+            turnStarts(recordId, ttlMs: limits?.ttlMs, environment: environment, queueMaxDepth: limits?.queueMaxDepth)
+        }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
