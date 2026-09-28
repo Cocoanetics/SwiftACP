@@ -49,6 +49,16 @@ extension DaemonToolsTests {
             #expect(error?.detailCode == "SESSION_RESUME_REQUIRED" && error?.origin == "acp")
             #expect(error?.localizedDescription.hasPrefix(
                 "Persistent ACP session \(id) could not be resumed") == true)
+            // What refused it is the agent's error, which acpx's output reports (#290).
+            #expect(error?.acp?.code == -32002)
+            #expect(try methods().filter { $0 == "session/new" }.count == sessionsBefore)
+
+            // So is the next control's, though the exited agent is let go by now: acpx's owner
+            // runs every control `same-session-only`, not only one whose agent just exited (#290).
+            let again = await #expect(throws: OwnedControlFailure.self) {
+                _ = try await daemon.setMode(sessionId: id, modeId: "auto")
+            }
+            #expect(again?.detailCode == "SESSION_RESUME_REQUIRED")
             #expect(try methods().filter { $0 == "session/new" }.count == sessionsBefore)
 
             let answer = try await daemon.runPrompt(sessionId: id, text: "second")

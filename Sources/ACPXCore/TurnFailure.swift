@@ -60,13 +60,23 @@ public enum TurnFailure {
     }
 
     /// acpx's `extractAcpError` on the failure itself: the agent's error response, when
-    /// it has a message, or the one a session control wraps.
+    /// it has a message, or the one a session control wraps — or, as acpx looks in an error's
+    /// `cause`, the one it came of: a resume's, a refusal to take a session back (#290). Five
+    /// causes down at most, as acpx looks no deeper (`extractAcpErrorInternal`): a cause that
+    /// leads back round ends there.
     public static func payload(of error: Error) -> AcpErrorPayload? {
+        payload(of: error, depth: 0)
+    }
+
+    private static func payload(of error: Error, depth: Int) -> AcpErrorPayload? {
         if let carrier = error as? AcpErrorCarrier { return carrier.acp }
         if let control = error as? SessionControlError { return control.acp }
-        if let resume = error as? SessionResumeError { return payload(of: resume.underlying) }
-        guard let rpc = error as? JSONRPCErrorBody, !rpc.message.isEmpty else { return nil }
-        return AcpErrorPayload(code: Double(rpc.code), message: rpc.message, data: rpc.data.map(WireJSON.init))
+        if let rpc = error as? JSONRPCErrorBody {
+            guard !rpc.message.isEmpty else { return nil }
+            return AcpErrorPayload(code: Double(rpc.code), message: rpc.message, data: rpc.data.map(WireJSON.init))
+        }
+        guard depth < 5, let cause = (error as? ErrorWithCause)?.cause else { return nil }
+        return payload(of: cause, depth: depth + 1)
     }
 }
 

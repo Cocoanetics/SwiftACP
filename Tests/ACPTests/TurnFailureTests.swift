@@ -28,6 +28,33 @@ import Testing
 
     // MARK: What a failure is
 
+    /// A session that could not be taken back as itself carries what refused it, as acpx's
+    /// `SessionResumeRequiredError` keeps it as its `cause`: the agent's error, which acpx's
+    /// output reports as the failure's own — its code, message and data (#290).
+    @Test func aRefusalToTakeASessionBackCarriesTheAgentsError() {
+        let data: JSONValue = .object(["a": .integer(1)])
+        let gone = JSONRPCErrorBody(code: -32002, message: "Resource not found: s", data: data)
+        let refusal = DaemonError.sessionResumeRequired("s", reason: "Resource not found: s", cause: gone)
+        let agents = AcpErrorPayload(code: -32002, message: "Resource not found: s", data: WireJSON(data))
+        #expect(TurnFailure.payload(of: refusal) == agents)
+        let event = Self.event(refusal)
+        #expect(event.acp == agents.jsonValue)
+        #expect((event.outputCode, event.detailCode, event.origin) == ("NO_SESSION", "SESSION_RESUME_REQUIRED", "acp"))
+        #expect(TurnFailure.payload(of: DaemonError.sessionResumeRequired("s", reason: "gone")) == nil)
+    }
+
+    /// The causes are followed five deep, as acpx looks: one further down is not found, and a
+    /// cause that leads back round ends the look instead of going on for ever (Codex review on #291).
+    @Test func theCausesAreFollowedFiveDeep() {
+        let agents = JSONRPCErrorBody(code: -32002, message: "Resource not found: s")
+        func wrapped(_ times: Int) -> Error {
+            (0 ..< times).reduce(agents as Error) { cause, _ in Wrapping(cause: cause) }
+        }
+        #expect(TurnFailure.payload(of: wrapped(5))?.code == -32002)
+        #expect(TurnFailure.payload(of: wrapped(6)) == nil)
+        #expect(TurnFailure.payload(of: Looping()) == nil)
+    }
+
     /// The agent's own error response, which the exchange showed: a runtime failure of
     /// the queued prompt, carrying the error as acpx's `acp` payload.
     @Test func anAgentErrorTheWireShowedIsTheQueuedPromptsRuntimeFailure() {
@@ -205,4 +232,14 @@ import Testing
     static func json<T: Encodable>(_ value: T) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
     }
+}
+
+/// An error standing for the one it wraps.
+private struct Wrapping: ErrorWithCause {
+    let cause: Error?
+}
+
+/// An error whose cause is itself.
+private struct Looping: ErrorWithCause {
+    var cause: Error? { self }
 }
