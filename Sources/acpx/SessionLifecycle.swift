@@ -200,8 +200,9 @@ enum SessionLifecycle {
 
     /// acpx's `closeSession`, as `sessions close` and `sessions new` close a session: a
     /// running daemon drops its live agent and closes the record itself; with none
-    /// reachable nothing is held, and the record is marked closed here. Returns the
-    /// record as closed.
+    /// reachable nothing is held, and the record is marked closed here. Either way an agent
+    /// the record's pid still names — left running where no daemon held it — is ended, as
+    /// acpx ends it (``StrayAgent``). Returns the record as closed.
     ///
     /// The daemon is told the record by its id, which no other record has: a newer record
     /// can have been written under the ACP session id this one moved to.
@@ -210,6 +211,7 @@ enum SessionLifecycle {
         let closedByDaemon = try runBlocking {
             await DaemonClient.closeSession(sessionId: recordId)
         }
+        StrayAgent.end(namedBy: record)
         if closedByDaemon, let persisted = SessionStore.loadRecord(recordId) {
             return persisted
         }
@@ -231,9 +233,12 @@ enum SessionLifecycle {
             // The agent gave the new session the ACP session the replaced record had
             // moved to (a reconnect's fallback, an import): a `session/close` for it
             // would reach the new session. A daemon holding the replaced one lets its
-            // agent go, and the replaced record is closed here.
+            // agent go — one it named, left running, ends as a close ends it — and the
+            // replaced record is closed here.
             try release(replaced.acpxRecordId)
-            _ = try markClosed(SessionStore.loadRecord(replaced.acpxRecordId) ?? replaced)
+            let current = SessionStore.loadRecord(replaced.acpxRecordId) ?? replaced
+            StrayAgent.end(namedBy: current)
+            _ = try markClosed(current)
         } else {
             _ = try close(replaced)
         }
