@@ -61,10 +61,27 @@ enum ConfigCommand {
         } as [(String, WireJSON?)])
     }
 
+    /// Write `text` to a new file at `path` readable by its owner alone — `false` when a file is
+    /// there already, which is left as it is.
+    private static func writeExclusively(_ text: String, to path: String) throws -> Bool {
+        let descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else {
+            if errno == EEXIST { return false }
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path])
+        }
+        defer { close(descriptor) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+        try handle.write(contentsOf: Data(text.utf8))
+        return true
+    }
+
     private static func initConfig(format: String) throws -> Int32 {
         let path = ACPXPaths.globalConfigPath
+        // Owner-only, as acpx makes them (`initGlobalConfigFile`): the file can hold `auth`
+        // credentials. A directory there already keeps its mode.
         try FileManager.default.createDirectory(
-            at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            at: path.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
 
         let created: Bool
         if FileManager.default.fileExists(atPath: path.path) {
@@ -82,8 +99,9 @@ enum ConfigCommand {
                 ("agents", .object([])),
                 ("auth", .object([]))
             ] as [(String, WireJSON?)])
-            try Data((template.pretty() + "\n").utf8).write(to: path)
-            created = true
+            // Created only where no file is, `wx` with mode 0600 as acpx writes it: one written
+            // meanwhile is kept, and reported as not created.
+            created = try writeExclusively(template.pretty() + "\n", to: path.path)
         }
 
         switch format {
