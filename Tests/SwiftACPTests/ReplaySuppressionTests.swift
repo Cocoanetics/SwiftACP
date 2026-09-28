@@ -81,12 +81,18 @@ struct ReplaySuppressionTests {
     }
 
     /// The text of every agent message chunk `stream` delivers until the subscription
-    /// ends.
-    private func texts(_ stream: AsyncStream<SessionNotification>) async -> [String] {
+    /// ends, each handed to `each` too as it comes.
+    private func texts(
+        _ stream: AsyncStream<SessionNotification>, each: AsyncStream<String>.Continuation? = nil
+    ) async -> [String] {
         var texts: [String] = []
         for await note in stream {
-            if case .agentMessageChunk(let block) = note.update, let text = block.text { texts.append(text) }
+            if case .agentMessageChunk(let block) = note.update, let text = block.text {
+                texts.append(text)
+                each?.yield(text)
+            }
         }
+        each?.finish()
         return texts
     }
 
@@ -125,22 +131,28 @@ struct ReplaySuppressionTests {
 
     /// The drain lasts until the replay has stopped: every update the agent sent after
     /// answering has arrived by the time it returns. The agent goes on once the client has its
-    /// answer, when the test says — no clock paces it.
-    @Test func theDrainWaitsForAReplayThatGoesOnAfterTheAnswer() async throws {
+    /// answer, when the test says — no clock paces it — and the drain begins once the first of
+    /// those updates is in: however late the agent's side gets to run, the drain cannot have
+    /// ended before it did. A hundred of them, so the replay is still going on by then: a drain
+    /// that does not wait for it to stop misses some.
+    @Test(.timeLimit(.minutes(1)))
+    func theDrainWaitsForAReplayThatGoesOnAfterTheAnswer() async throws {
         let (counts, replay) = AsyncStream<Int>.makeStream()
         let (client, server) = try await connect(ReplayingAgent(afterAnswer: counts))
         defer { server.cancel() }
         let (subscription, stream) = await client.makeSubscription()
-        let delivered = Task { await texts(stream) }
+        let (seen, sees) = AsyncStream<String>.makeStream()
+        let delivered = Task { await texts(stream, each: sees) }
 
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
-        replay.yield(10)
+        replay.yield(100)
+        for await text in seen where text == "." { break }
         try await client.waitForSessionUpdateDrain(
             sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 10_000)
         replay.finish()
         await client.endSubscription(subscription)
 
-        #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 10))
+        #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 100))
         await client.close()
     }
 
