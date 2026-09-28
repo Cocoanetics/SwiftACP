@@ -18,6 +18,15 @@ enum FlowShellTree {
     /// the tree in between.
     @TaskLocal static var beforeSignalling: (@Sendable () -> Void)?
 
+    /// Called once a look at the tree has read the table, before the tree is judged by it:
+    /// lets a test make time pass there, as a slow read or a late wake-up does on a loaded
+    /// machine.
+    @TaskLocal static var afterLooking: (@Sendable () async -> Void)?
+
+    /// Called with each read of the process table: lets a test show a process as the
+    /// kernel can have it but a test cannot hold it — exiting, or yet to act on a signal.
+    @TaskLocal static var readingTable: (@Sendable (inout [pid_t: ProcessTableEntry]) -> Void)?
+
     /// acpx's `stopShellProcess`: the tree stopped with `signal`, then SIGKILL; then the
     /// pipes closed. A failure to stop is reported once the pipes have closed.
     static func stop(_ root: pid_t, signal: Int32, closed: FlowShellEvent) async throws {
@@ -96,7 +105,8 @@ enum FlowShellTree {
     }
 
     private static func snapshot() throws -> [pid_t: ProcessTableEntry] {
-        guard let table = ProcessTable.snapshot() else { throw FlowShellError("The process table could not be read") }
+        guard var table = ProcessTable.snapshot() else { throw FlowShellError("The process table could not be read") }
+        readingTable?(&table)
         return table
     }
 
@@ -113,21 +123,28 @@ enum FlowShellTree {
     }
 
     /// acpx's `waitForOwned`: until nothing owned is alive, looking every 25 ms, for the
-    /// grace period.
+    /// grace period — giving up only on a look begun once the grace is over. acpx gives up
+    /// after a wait that ends past the grace, and Node's timer ends it about on time; here
+    /// that wait can end seconds late on a busy task pool (on CI every test shares it), and
+    /// a read of the table can take hundreds of milliseconds under load. Judged by a look
+    /// begun before the grace's end, a tree that exited as it ended was taken for alive:
+    /// signalled again, or reported as not stopped by SIGKILL.
     private static func waitForOwned(_ owned: inout Owned) async throws -> Bool {
         let deadline = ContinuousClock.now + killGrace
-        repeat {
+        while true {
+            let looking = ContinuousClock.now
             let table = try snapshot()
             owned.remember(table)
+            await afterLooking?()
             if !owned.anyAlive(in: table) { return true }
+            guard looking < deadline else { return false }
             try? await Task.sleep(for: .milliseconds(25))
-        } while ContinuousClock.now < deadline
-        return false
+        }
     }
 
     /// acpx's `forceKnownProcesses`: SIGKILL to the group and every process known.
     private static func forceKnownProcesses(_ owned: Owned) throws {
-        let table = ProcessTable.snapshot() ?? [:]
+        let table = (try? snapshot()) ?? [:]
         var errors: [Error] = []
         do { try signalGroup(owned.root, SIGKILL) } catch { errors.append(error) }
         for (pid, birth) in owned.births where table[pid]?.birth == birth {
@@ -138,13 +155,19 @@ enum FlowShellTree {
 
     /// acpx's `signalGroup`: gone is done; not allowed is done too when none of the group
     /// is alive — as the table has it once the signal was refused, as acpx reads `ps` again
-    /// then. A member that exited since the table was last read is a zombie, which a group's
-    /// signal is refused for.
+    /// then. XNU refuses a group's signal when no member can take it: a member that exited
+    /// since the table was last read is a zombie, and one still exiting is already off the
+    /// kernel's lookup (`proc_prepareexit` marks it dead), though the table lists it for as
+    /// long as its exit takes — a second and more under load. acpx's `isLive` takes that
+    /// one, `ps`'s state `E`, for alive, and fails the stop with `kill EPERM`; it will run
+    /// no more than a zombie will.
     private static func signalGroup(_ root: pid_t, _ signal: Int32) throws {
         guard kill(-root, signal) != 0 else { return }
         let failure = errno
         if failure == ESRCH { return }
-        if failure == EPERM, try !snapshot().values.contains(where: { $0.groupPid == root }) { return }
+        if failure == EPERM, try !snapshot().values.contains(where: { $0.groupPid == root && !$0.exiting }) {
+            return
+        }
         throw FlowShellKillError(code: failure)
     }
 
