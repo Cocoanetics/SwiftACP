@@ -46,28 +46,10 @@ public final class RawWireTap: @unchecked Sendable {
     /// Where the updates not yet taken begin in `updateBodies`.
     private var updateHead = 0
     private var keepsUpdateBodies = false
-    /// The requests out whose answers are kept as written (``resultsKept``), by id: their method,
-    /// and the session their `params` name.
-    private var awaitedResults: [JSONRPCID: ResultKey] = [:]
-    /// Those answers' `result`s as the agent wrote them, until taken (``takeResult(of:sessionId:)``):
-    /// the latest for each method and session.
-    private var keptResults: [ResultKey: WireJSON] = [:]
-
-    /// A kept answer's method, and its session: the one its request named, or for `session/new`
-    /// the one it names itself.
-    private struct ResultKey: Hashable {
-        let method: String
-        let sessionId: String?
-    }
-
-    /// The answers acpx records as the agent wrote them (#119): `initialize`'s capabilities, and the
-    /// config options that a session's opening, or an option set on it, reports.
-    static let resultsKept: Set<String> = [
-        "initialize", "session/new", "session/load", "session/resume", "session/set_config_option"
-    ]
-    /// The longest outbound body looked at for a request whose answer is kept: those requests are
-    /// small, where a prompt, or a file read's answer, can be large.
-    private static let awaitedRequestLimit = 64 * 1024
+    /// The requests out whose answers are kept as written (``awaitAnswer(to:)``), by id.
+    private var awaitedAnswers: Set<JSONRPCID> = []
+    /// Those answers' `result`s as the agent wrote them, by id, until taken (``takeAnswer(to:)``).
+    private var keptAnswers: [JSONRPCID: WireJSON] = [:]
 
     public init(_ observer: Observer? = nil) {
         self.observer = observer
@@ -132,8 +114,6 @@ public final class RawWireTap: @unchecked Sendable {
         if direction == .inbound {
             keepIfUpdate(body)
             keepIfAwaited(body)
-        } else {
-            awaitIfKept(body)
         }
         lock.lock()
         let current = self.observer
@@ -173,33 +153,26 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { updateBodies.append(contentsOf: kept) }
     }
 
-    /// The `result` of the agent's latest answer to `method` for `sessionId` — `nil` for
-    /// `initialize` — as the agent wrote it, when it is one the tap keeps (``resultsKept``);
-    /// taken, it is gone. A request is seen on its way out before its answer can come in, so the
-    /// answer to a request just sent is here by the time the peer hands it on (#119).
-    func takeResult(of method: String, sessionId: String?) -> WireJSON? {
-        lock.withLock { keptResults.removeValue(forKey: ResultKey(method: method, sessionId: sessionId)) }
+    /// Keep the `result` of the agent's answer to request `id`, as the agent writes it, until
+    /// taken (#119). Told as the request goes out, before its answer can come in.
+    func awaitAnswer(to id: JSONRPCID) {
+        lock.withLock { _ = awaitedAnswers.insert(id) }
     }
 
-    /// Note each request in `body` whose answer is kept, by its id.
-    private func awaitIfKept(_ body: Data) {
-        guard body.count <= Self.awaitedRequestLimit,
-            let messages = try? JSONRPCMessage.decodeMessages(from: body) else { return }
-        for case .request(let request) in messages where Self.resultsKept.contains(request.method) {
-            var sessionId: String?
-            if case .object(let params)? = request.params, case .string(let named)? = params["sessionId"] {
-                sessionId = named
-            }
-            let key = ResultKey(method: request.method, sessionId: sessionId)
-            lock.withLock { awaitedResults[request.id] = key }
+    /// The `result` of the agent's answer to request `id` as the agent wrote it, when it has come
+    /// and ``awaitAnswer(to:)`` asked for it; taken, it is gone, and so is any wait for it.
+    func takeAnswer(to id: JSONRPCID) -> WireJSON? {
+        lock.withLock {
+            awaitedAnswers.remove(id)
+            return keptAnswers.removeValue(forKey: id)
         }
     }
 
-    /// Keep the `result` of each answer in `body` to a request ``awaitIfKept(_:)`` noted, as the
-    /// agent wrote it — `body` decoded as the transports decode it, a batch's answers each in
-    /// turn. An error answer only ends the wait.
+    /// Keep the `result` of each answer in `body` to a request awaited, as the agent wrote it —
+    /// `body` decoded as the transports decode it, a batch's answers each in turn. An error
+    /// answer only ends the wait.
     private func keepIfAwaited(_ body: Data) {
-        guard lock.withLock({ !awaitedResults.isEmpty }),
+        guard lock.withLock({ !awaitedAnswers.isEmpty }),
             let messages = try? JSONRPCMessage.decodeMessages(from: body) else { return }
         let parsed = WireJSON(parsing: body)
         let written: [WireJSON?] = if case .array(let items)? = parsed { items } else { [parsed] }
@@ -207,14 +180,12 @@ public final class RawWireTap: @unchecked Sendable {
         for (message, wire) in zip(messages, paired) {
             switch message {
             case .response(let response):
-                guard var key = lock.withLock({ awaitedResults.removeValue(forKey: response.id) }),
-                    let result = wire?["result"] else { continue }
-                if key.method == "session/new", let named = result["sessionId"]?.stringValue {
-                    key = ResultKey(method: key.method, sessionId: named)
+                lock.withLock {
+                    guard awaitedAnswers.remove(response.id) != nil, let result = wire?["result"] else { return }
+                    keptAnswers[response.id] = result
                 }
-                lock.withLock { keptResults[key] = result }
             case .errorResponse(let response):
-                if let id = response.id { _ = lock.withLock { awaitedResults.removeValue(forKey: id) } }
+                if let id = response.id { _ = lock.withLock { awaitedAnswers.remove(id) } }
             default:
                 continue
             }

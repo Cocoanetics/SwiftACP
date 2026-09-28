@@ -167,34 +167,30 @@ import Testing
         #expect(tap.takeUpdateBody() == nil)
     }
 
-    /// The tap keeps the `result` of the agent's answer to a request acpx records the answer of as
-    /// written — paired to it by id, from a batch too — for its method and the session it names,
-    /// until taken; `session/new` names its session in its answer. Nothing else is kept: the answer
-    /// to another method, an error, or an answer no request asked for (#119).
-    @Test func answersAreKeptAsWrittenForTheirRequests() {
+    /// The tap keeps the `result` of the agent's answer to each request it was told to await, as
+    /// the agent wrote it — by the request's id, from a batch too — until taken: two answers for
+    /// the same method and session are two (#268 review). Nothing else is kept: an answer no
+    /// request awaited, an error answer, or one already taken (#119).
+    @Test func answersAreKeptAsWrittenByTheirRequestsID() {
         let tap = RawWireTap()
-        func out(_ line: String) { tap.observe(.outbound, Data(line.utf8)) }
         func into(_ line: String) { tap.observe(.inbound, Data(line.utf8)) }
         into(#"{"jsonrpc":"2.0","id":1,"result":{"early":true}}"#)
-        out(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
-        out(#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s"}}"#)
-        out(#"{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/"}}"#)
-        out(#"{"jsonrpc":"2.0","id":4,"method":"session/set_config_option","params":{"sessionId":"s"}}"#)
-        out(#"{"jsonrpc":"2.0","id":5,"method":"session/load","params":{"sessionId":"t"}}"#)
+        for id in 1...4 { tap.awaitAnswer(to: .integer(id)) }
+        tap.awaitAnswer(to: .string("s"))
         into(#"[{"jsonrpc":"2.0","method":"x"},{"jsonrpc":"2.0","id":1,"result":{"zeta":1,"alpha":2}}]"#)
-        into(#"{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}"#)
-        into(#"{"jsonrpc":"2.0","id":3,"result":{"sessionId":"n","configOptions":[{"type":"select","id":"m"}]}}"#)
-        into(#"{"jsonrpc":"2.0","id":4,"result":{"configOptions":[{"z":1,"a":2}]}}"#)
-        into(#"{"jsonrpc":"2.0","id":5,"error":{"code":-32603,"message":"no"}}"#)
-        into(#"{"jsonrpc":"2.0","id":5,"result":{"late":true}}"#)
+        into(#"{"jsonrpc":"2.0","id":3,"result":{"configOptions":[{"z":1,"a":2}]}}"#)
+        into(#"{"jsonrpc":"2.0","id":2,"result":{"configOptions":[{"y":1,"b":2}]}}"#)
+        into(#"{"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"no"}}"#)
+        into(#"{"jsonrpc":"2.0","id":4,"result":{"late":true}}"#)
+        into(#"{"jsonrpc":"2.0","id":5,"result":{"unasked":true}}"#)
+        into(#"{"jsonrpc":"2.0","id":"s","result":{"b":1,"a":2}}"#)
 
-        #expect(tap.takeResult(of: "initialize", sessionId: nil)?.stringified == #"{"zeta":1,"alpha":2}"#)
-        #expect(tap.takeResult(of: "initialize", sessionId: nil) == nil)
-        #expect(tap.takeResult(of: "session/prompt", sessionId: "s") == nil)
-        #expect(tap.takeResult(of: "session/new", sessionId: "n")?["configOptions"]?.stringified
-            == #"[{"type":"select","id":"m"}]"#)
-        #expect(tap.takeResult(of: "session/set_config_option", sessionId: "s")?.stringified
-            == #"{"configOptions":[{"z":1,"a":2}]}"#)
-        #expect(tap.takeResult(of: "session/load", sessionId: "t") == nil)
+        #expect(tap.takeAnswer(to: .integer(1))?.stringified == #"{"zeta":1,"alpha":2}"#)
+        #expect(tap.takeAnswer(to: .integer(1)) == nil)
+        #expect(tap.takeAnswer(to: .integer(2))?.stringified == #"{"configOptions":[{"y":1,"b":2}]}"#)
+        #expect(tap.takeAnswer(to: .integer(3))?.stringified == #"{"configOptions":[{"z":1,"a":2}]}"#)
+        #expect(tap.takeAnswer(to: .integer(4)) == nil)
+        #expect(tap.takeAnswer(to: .integer(5)) == nil)
+        #expect(tap.takeAnswer(to: .string("s"))?.stringified == #"{"b":1,"a":2}"#)
     }
 }

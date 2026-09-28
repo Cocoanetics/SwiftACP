@@ -263,8 +263,9 @@ public enum ModelSupport {
             || (state.modelControl == nil && modelState(fromConfigOptions: state.configOptions) == nil
                 && state.availableModels != nil)
         state.configOptions = configOptions
-        // The order they were sent in, when it is known; the one they replace is not theirs.
-        state.configOptionsOrder = if case .array? = asSent { asSent } else { nil }
+        // The order they were sent in, when it is known — an object's members too (#268 review);
+        // the one they replace is not theirs.
+        state.configOptionsOrder = asSent
         if let models = modelState(fromConfigOptions: configOptions) {
             applyAdvertisedModelState(models, to: &state)
         } else if preservesLegacyControl {

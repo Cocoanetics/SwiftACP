@@ -236,6 +236,32 @@ import Testing
         }
     }
 
+    /// However large the request — a `_meta` past 64 KiB here — its reply's options are kept as
+    /// sent (#268 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aLargeRequestsReplyKeepsItsOptionsAsSent() async throws {
+        let command = try Self.modelAgent("'MODEL_AGENT_NEW_REPLY={\"configOptions\":\(Self.optionsAsSent)}'")
+        let agent = try await ACPAgent.launch(agent: command, cwd: NSTemporaryDirectory(), permission: .approveAll)
+        let padding = JSONValue.string(String(repeating: "x", count: 100_000))
+        let session = try await agent.newSession(meta: .object(["padding": padding]))
+        await agent.close()
+        #expect(session.configOptionsAsSent?.stringified == Self.optionsAsSent)
+    }
+
+    /// Options that are no list are kept as sent too — an object's members in the agent's order
+    /// (#268 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aReplysOptionsObjectKeepsItsOrder() async throws {
+        let options = #"{"z":1,"a":{"y":2,"b":3}}"#
+        let command = try Self.modelAgent("'MODEL_AGENT_NEW_REPLY={\"configOptions\":\(options)}'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified == options)
+        }
+    }
+
     /// And those a `session/set_config_option` reply reports.
     @Test(.enabled(if: mockPythonAvailable))
     func aSetOptionsReplyKeepsItsOptionsAsSent() async throws {

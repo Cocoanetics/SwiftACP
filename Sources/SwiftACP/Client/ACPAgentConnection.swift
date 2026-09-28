@@ -220,7 +220,13 @@ public actor ACPAgentConnection {
         let wire = (
             requests: inboundRequests, ownership: requestOwnership, ordered: wireOrderedEvents, sinks: eventSinks,
             updates: sessionUpdates, observer: wireObserver)
-        await rpc.setWireLog { [wire] direction, message in
+        await rpc.setWireLog { [wire, rawUpdates] direction, message in
+            // A request whose answer is kept as the agent writes it goes out under its token, on the
+            // sending task: from here on the request is known by its id (#119).
+            if direction == .outbound, case .request(let request) = message, let answer = KeptAnswer.current {
+                answer.sent(request.id)
+                rawUpdates?.awaitAnswer(to: request.id)
+            }
             if direction == .inbound, case .request(let request) = message,
                 RequestOwnership.ownedMethods.contains(request.method),
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
@@ -279,11 +285,11 @@ public actor ACPAgentConnection {
         clientInfo: Implementation? = nil
     ) async throws -> InitializeResponse {
         advertisedCapabilities = capabilities
-        let response: InitializeResponse = try await send(
+        let (response, written): (InitializeResponse, WireJSON?) = try await sendKeepingAnswer(
             "initialize",
             InitializeRequest(clientCapabilities: capabilities, clientInfo: clientInfo))
         initializeResult = response
-        agentCapabilitiesAsSent = rawUpdates?.takeResult(of: "initialize", sessionId: nil)?["agentCapabilities"]
+        agentCapabilitiesAsSent = written?["agentCapabilities"]
         return response
     }
 
@@ -304,18 +310,19 @@ public actor ACPAgentConnection {
         let creation = UUID()
         sessionRootsBeingCreated[creation] = request.cwd
         defer { sessionRootsBeingCreated[creation] = nil }
-        var response: NewSessionResponse
+        let response: NewSessionResponse
         if let limit = sessionCreateLimit {
             // Claude's adapter, as acpx's `createSession` caps it (#248).
             do {
-                response = try await AgentLaunchCompat.within(limit) { try await self.send("session/new", request) }
+                response = try await AgentLaunchCompat.within(limit) {
+                    try await self.sendKeepingConfigOptions("session/new", request)
+                }
             } catch is AgentLaunchCompat.StartupTimedOut {
                 throw ClaudeAcpSessionCreateTimeoutError()
             }
         } else {
-            response = try await send("session/new", request)
+            response = try await sendKeepingConfigOptions("session/new", request)
         }
-        response.configOptionsAsSent = configOptionsAsSent(answering: "session/new", in: response.sessionId)
         sessionRoots[response.sessionId] = request.cwd
         sessionOpened?()
         return response
