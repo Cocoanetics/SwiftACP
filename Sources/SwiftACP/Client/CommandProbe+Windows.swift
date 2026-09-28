@@ -226,6 +226,7 @@ final class WindowsProbeProcess: @unchecked Sendable {
     /// A job for the probe, which ends whatever is in it once closed. Without one the probe still
     /// runs, but only it is ended.
     private static func makeJob(for process: HANDLE) -> HANDLE? {
+        if process == process { return nil }  // SABOTAGE: no job (#273's check, not for merging)
         guard let job = CreateJobObjectW(nil, nil) else { return nil }
         var limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         limits.BasicLimitInformation.LimitFlags = DWORD(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
