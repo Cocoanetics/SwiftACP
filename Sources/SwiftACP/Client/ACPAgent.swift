@@ -216,49 +216,6 @@ public final class ACPAgent: Sendable {
         }
     }
 
-    /// The agent's transport: started and read as acpx's client does on macOS and
-    /// Linux; JSONFoundation's swift-subprocess transport elsewhere.
-    private static func startTransport(
-        _ spec: ProcessLaunch, agentCommand: String, maxMessageBytes: Int?, tap: RawWireTap
-    ) throws -> any JSONRPCMessageTransport {
-        #if os(macOS) || os(Linux)
-        do {
-            return try AgentProcessTransport.start(
-                spec, agentCommand: agentCommand, maxMessageBytes: maxMessageBytes, tap: tap)
-        } catch let error as ChildProcess.SpawnError {
-            // acpx's `AgentSpawnError`, qualified when a launch path is missing.
-            throw AgentLaunchError(
-                agentCommand: agentCommand, workingDirectory: spec.workingDirectory,
-                detailCode: error.code == ENOENT ? AgentLaunchError.spawnENOENT : nil)
-        }
-        #else
-        let framing = TappedFraming(LineFraming(), tap: tap)
-        guard let maxMessageBytes else { return StdioTransport(endpoint: .childProcess(spec), framing: framing) }
-        let limit = MessageLimit.Signal()
-        let limited = MessageLimit.Framing(framing, limit: maxMessageBytes, signal: limit)
-        return MessageLimit.Transport(StdioTransport(endpoint: .childProcess(spec), framing: limited), signal: limit)
-        #endif
-    }
-
-    #if os(macOS) || os(Linux)
-    /// acpx's `normalizeInitializeError`: a handshake that failed because the agent went
-    /// — its connection closed, or it has exited within 100 ms — is
-    /// ``AgentStartupError``, with its exit and the end of its stderr. A line too long
-    /// stays itself, and so does anything else the agent answered.
-    private static func startupFailure(
-        _ error: Error, of transport: AgentProcessTransport, agentCommand: String
-    ) async -> Error {
-        guard !(error is AcpMessageLimitError) else { return error }
-        let closed = ACPAgentConnection.isConnectionClosed(error)
-        let exited = await transport.waitForExit(timeout: .milliseconds(100))
-        guard closed || exited else { return error }
-        let exit = transport.lifecycle.lastExit
-        return AgentStartupError(
-            agentCommand: agentCommand, exitCode: exit?.exitCode, signal: exit?.signal,
-            stderrSummary: transport.stderrSummary)
-    }
-    #endif
-
     /// The terminal manager a connection advertising `capabilities` runs the agent's
     /// commands on: one per connection, capped by acpx's host ceiling, running commands
     /// in `cwd` unless a session or the request says otherwise.
