@@ -129,12 +129,11 @@ struct ReplaySuppressionTests {
         await client.close()
     }
 
-    /// The drain lasts until the replay has stopped: every update the agent sent after
-    /// answering has arrived by the time it returns. The agent goes on once the client has its
-    /// answer, when the test says — no clock paces it — and the drain begins once the first of
-    /// those updates is in: however late the agent's side gets to run, the drain cannot have
-    /// ended before it did. A hundred of them, so the replay is still going on by then: a drain
-    /// that does not wait for it to stop misses some.
+    /// The drain lasts until the replay has stopped: it ends no sooner than its idle window
+    /// after the last update the agent sent after answering, and every one of them has been
+    /// delivered by then. The agent goes on once the client has its answer, when the test says,
+    /// while an update in hand holds the drain: however late the agent's side gets to run, and
+    /// however long it pauses, nothing has to happen within the idle window.
     @Test(.timeLimit(.minutes(1)))
     func theDrainWaitsForAReplayThatGoesOnAfterTheAnswer() async throws {
         let (counts, replay) = AsyncStream<Int>.makeStream()
@@ -145,14 +144,27 @@ struct ReplaySuppressionTests {
         let delivered = Task { await texts(stream, each: sees) }
 
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
-        replay.yield(100)
-        for await text in seen where text == "." { break }
-        try await client.waitForSessionUpdateDrain(
-            sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 10_000)
+        client.sessionUpdates.arrived("replay-session")
+        let drained = Task {
+            try await client.waitForSessionUpdateDrain(
+                sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 50_000)
+            return DispatchTime.now().uptimeNanoseconds
+        }
+        replay.yield(10)
+        var dots = 0
+        for await text in seen where text == "." {
+            dots += 1
+            if dots == 10 { break }
+        }
+        let lastArrival = try #require(client.sessionUpdates.state(of: "replay-session").lastArrival)
+        client.sessionUpdates.finished("replay-session")
+        let ended = try await drained.value
         replay.finish()
         await client.endSubscription(subscription)
 
-        #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 100))
+        // Quiet for the whole idle window after the replay's last update, not merely nothing in hand.
+        #expect(ended >= lastArrival + 500 * 1_000_000)
+        #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 10))
         await client.close()
     }
 
