@@ -5,16 +5,18 @@ import SwiftACP
 import Testing
 
 /// CLI behaviours found by auditing acpx 0.19.3's CLI against SwiftACP's (#250, #252).
-@Suite(.serialized) struct CLIParityTests {
+@Suite(.serialized, .agentLane) struct CLIParityTests {
     struct Run {
         var code: Int32
         var out: String
         var err: String
     }
 
-    static func run(_ arguments: [String]) -> Run {
+    /// The CLI run on a thread of its own, the test's store with it: it blocks its thread until
+    /// it is done, which the tasks' pool must not lose.
+    static func run(_ arguments: [String]) async -> Run {
         let capture = Console.Capture()
-        let code = Console.$capture.withValue(capture) { runCommandLine(arguments) }
+        let code = await onThreadOfItsOwn { Console.$capture.withValue(capture) { runCommandLine(arguments) } }
         return Run(code: code, out: capture.out, err: capture.err)
     }
 
@@ -24,7 +26,7 @@ import Testing
     func comparesPromptIsTheWordsAfterTheSeparator() async throws {
         let agent = try #require(mockCommand())
         let run = await withIsolatedStore {
-            Self.run(["--approve-all", "--format", "json", "compare", agent, agent, "--", "hello", "there"])
+            await Self.run(["--approve-all", "--format", "json", "compare", agent, agent, "--", "hello", "there"])
         }
         #expect(run.code == ExitCodes.success)
         let rows = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [[String: Any]])
@@ -38,7 +40,7 @@ import Testing
     func aRootSeparatorLeavesTheLastWordThePrompt() async throws {
         let agent = try #require(mockCommand())
         let run = await withIsolatedStore {
-            Self.run(["--approve-all", "--format", "json", "--", "compare", agent, "hello"])
+            await Self.run(["--approve-all", "--format", "json", "--", "compare", agent, "hello"])
         }
         #expect(run.code == ExitCodes.success)
         let rows = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [[String: Any]])
@@ -63,7 +65,7 @@ import Testing
     /// Two different prompt files are refused, as acpx's `resolvePromptFile` refuses them (#250).
     @Test func compareRefusesTwoPromptFiles() async {
         let run = await withIsolatedStore {
-            Self.run(["compare", "--file", "a.txt", "--prompt-file", "b.txt", "codex", "claude"])
+            await Self.run(["compare", "--file", "a.txt", "--prompt-file", "b.txt", "codex", "claude"])
         }
         #expect(run.code == ExitCodes.usage)
         #expect(run.err.contains("Use only one prompt file flag: --file or --prompt-file"))
@@ -74,8 +76,8 @@ import Testing
     /// (#252).
     @Test func aConflictingPermissionModeFailsFirst() async {
         let (prompt, compare) = await withIsolatedStore {
-            (Self.run(["--approve-all", "--deny-all", "--agent", "/bin/true", "prompt", "hi"]),
-             Self.run(["--approve-all", "--deny-all", "compare", "codex", "--"]))
+            (await Self.run(["--approve-all", "--deny-all", "--agent", "/bin/true", "prompt", "hi"]),
+             await Self.run(["--approve-all", "--deny-all", "compare", "codex", "--"]))
         }
         for run in [prompt, compare] {
             #expect(run.code == ExitCodes.usage)
@@ -89,7 +91,7 @@ import Testing
         let run = try await withIsolatedStore {
             try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
             try Data(#"{"agents": {"probe": {"command": "/bin/true"}}}"#.utf8).write(to: ACPXPaths.globalConfigPath)
-            return Self.run(["probe", "-s", "backend", "sessions", "watch"])
+            return await Self.run(["probe", "-s", "backend", "sessions", "watch"])
         }
         #expect(run.code == ExitCodes.error)
         #expect(run.err.contains(#"No named session "backend""#))

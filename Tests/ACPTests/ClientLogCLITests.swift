@@ -6,7 +6,7 @@ import Testing
 /// Under `--verbose`, what acpx's client notes of an agent the CLI starts in its own process —
 /// `exec`, `sessions new` — goes to stderr as `[acpx] <line>`, as acpx 0.19.3 writes it (#221):
 /// the command it spawns, then the protocol version. Without `--verbose`, none of it.
-struct ClientLogCLITests {
+@Suite(.serialized, .agentLane) struct ClientLogCLITests {
     @Test(.enabled(if: mockPythonAvailable), arguments: [["exec", "hi"], ["sessions", "new"]])
     func theClientsLinesGoToStderrUnderVerbose(_ command: [String]) async throws {
         let mock = try #require(mockCommand())
@@ -33,10 +33,8 @@ struct ClientLogCLITests {
         let arguments = ["--approve-all", "--cwd", NSTemporaryDirectory(), "--agent", agent] + arguments
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-                }.start()
+            let code: Int32 = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) { runCommandLine(arguments) }
             }
             return (code, capture.err)
         }

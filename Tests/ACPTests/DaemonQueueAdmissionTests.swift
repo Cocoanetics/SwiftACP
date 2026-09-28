@@ -97,14 +97,12 @@ extension DaemonToolsTests {
             @Sendable func acpx(_ args: [String]) async throws -> OwnerLinesTests.Run {
                 try await withTimeout(milliseconds: 20_000) {
                     let capture = Console.Capture()
-                    let code: Int32 = await withCheckedContinuation { continuation in
-                        Thread {
-                            continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                                Console.$capture.withValue(capture) {
-                                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", directory.path] + args)
-                                }
-                            })
-                        }.start()
+                    let code: Int32 = await onThreadOfItsOwn {
+                        DaemonClient.$standIn.withValue(daemon) {
+                            Console.$capture.withValue(capture) {
+                                runCommandLine(["--approve-all", "--agent", agent, "--cwd", directory.path] + args)
+                            }
+                        }
                     }
                     return OwnerLinesTests.Run(code: code, out: capture.out, err: capture.err, merged: capture.merged)
                 }

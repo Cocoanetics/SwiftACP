@@ -9,7 +9,7 @@ import Testing
 /// Under `--verbose`, a prompt or a control run without an owner whose session could not be taken
 /// back — a new session replaced it — ends with acpx's line saying why (#252):
 /// `[acpx] session reconnect failed, started fresh session: <loadError>`.
-@Suite(.serialized) struct ReconnectFallbackLineTests {
+@Suite(.serialized, .agentLane) struct ReconnectFallbackLineTests {
     private static let line = "[acpx] session reconnect failed, started fresh session: Resource not found: session "
 
     /// The turn that had to connect the agent, and replaced the session the agent could not take
@@ -55,14 +55,12 @@ import Testing
     static func acpx(_ args: [String], agent: String, cwd: URL, backend: ACPXDaemonBackend) async -> (Int32, String) {
         let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code: Int32 = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
         return (code, capture.err)
     }

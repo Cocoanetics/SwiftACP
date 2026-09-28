@@ -8,7 +8,7 @@ import Testing
 /// acpx 0.19.3's `createSessionRecordWithClient` times the client's start, `session/new` or the
 /// resume, and the model's selection (#247). Each expected output is what acpx printed for the
 /// same agent (`Fixtures/retry-agent.py`).
-struct SessionCreationTimeoutTests {
+@Suite(.serialized, .agentLane) struct SessionCreationTimeoutTests {
     struct Run {
         var code: Int32
         var out: String
@@ -42,13 +42,10 @@ struct SessionCreationTimeoutTests {
         return await withIsolatedStore {
             let capture = Console.Capture()
             // The command blocks its thread until it is done, as the CLI does: a thread of its own.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    let code = Console.$capture.withValue(capture) {
-                        DeadlineSource.$current.withValue(deadlines) { runCommandLine(arguments) }
-                    }
-                    continuation.resume(returning: code)
-                }.start()
+            let code: Int32 = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    DeadlineSource.$current.withValue(deadlines) { runCommandLine(arguments) }
+                }
             }
             let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0) }
             return Run(

@@ -10,7 +10,7 @@ import Testing
 /// marker and fs-safe's guard beside it, as acpx writes them and judges them — held while
 /// their owner lives, taken back once it is gone — and the import and `sessions ensure` that
 /// take them.
-@Suite(.serialized) struct SessionOwnershipTests {
+@Suite(.serialized, .agentLane) struct SessionOwnershipTests {
     /// The marker is acpx's owner and when it was taken; the guard, the owner and a token of
     /// its own. Both are owner-only, and both go when the ownership is let go.
     @Test func anOwnershipIsAcpxsMarkerBesideFsSafesGuard() async throws {
@@ -253,14 +253,12 @@ import Testing
         _ args: [String], agent: String, cwd: URL, daemon: MCPServerConfig
     ) async -> (code: Int32, out: String) {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code: Int32 = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
         return (code, capture.out)
     }
