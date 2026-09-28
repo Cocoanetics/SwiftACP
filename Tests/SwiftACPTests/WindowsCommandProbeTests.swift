@@ -75,18 +75,21 @@ struct WindowsCommandProbeTests {
         #expect(output?.hasPrefix("\n") == true)
     }
 
-    /// A probe past its time gives no answer, and everything it started is ended with it.
+    /// A probe past its time gives no answer, and everything it started is ended with it: the
+    /// shim's `ping` was in the probe's job, and none of the job's processes runs any more.
     @Test func aProbePastItsTimeEndsWithAllItStarted() async throws {
         let scripts = try Scripts(["slow.cmd": ["ping -n 30 127.0.0.1 >nul", "echo late"]])
         defer { scripts.remove() }
-        let left = Left()
+        let retirement = Retirement()
         let started = ContinuousClock.now
         let output = await CommandProbe.output(
             of: "slow", ["--version"], cwd: scripts.directory, environment: scripts.environment,
-            timeoutMilliseconds: 500, retired: { left.set($0) })
+            timeoutMilliseconds: 2_000, retired: { retirement.set(held: $0, running: $1) })
         #expect(output == nil)
         #expect(ContinuousClock.now - started < .seconds(10))
-        #expect(left.value == 0)
+        let counts = try #require(retirement.counts)
+        #expect(counts.held >= 2)
+        #expect(counts.running == 0)
     }
 
     /// The launch asks Gemini's shim its version: one before 0.33.0 takes `--experimental-acp`.
@@ -111,17 +114,17 @@ struct WindowsCommandProbeTests {
     }
 }
 
-/// What a probe's retirement left running.
-private final class Left: @unchecked Sendable {
+/// What a probe's retirement found: how many processes its job held, and how many still ran.
+private final class Retirement: @unchecked Sendable {
     private let lock = NSLock()
-    private var count: Int?
+    private var found: (held: Int, running: Int)?
 
-    func set(_ value: Int) {
-        lock.withLock { count = value }
+    func set(held: Int, running: Int) {
+        lock.withLock { found = (held, running) }
     }
 
-    var value: Int? {
-        lock.withLock { count }
+    var counts: (held: Int, running: Int)? {
+        lock.withLock { found }
     }
 }
 #endif

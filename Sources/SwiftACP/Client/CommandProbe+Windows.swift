@@ -11,11 +11,11 @@ enum CommandProbe {
     /// What `command` wrote once it exited and both its pipes closed — stdout, a newline, then
     /// stderr, whatever its exit — or `nil` when it could not start, ran past
     /// `timeoutMilliseconds`, or its caller was called off first. Whatever is left of it is ended
-    /// then, as acpx's client retires a probe however it went. `retired` hears how many of its
-    /// processes still ran once that was done.
+    /// then, as acpx's client retires a probe however it went. `retired` hears, once that is done,
+    /// how many processes the probe's job held over its life and how many of them still run.
     static func output(
         of command: String, _ arguments: [String], cwd: String, environment: [String: String]?,
-        timeoutMilliseconds: Int, retired: (@Sendable (Int) -> Void)? = nil
+        timeoutMilliseconds: Int, retired: (@Sendable (_ held: Int, _ running: Int) -> Void)? = nil
     ) async -> String? {
         let spawn = WindowsSpawnCommand(
             command: command, arguments: arguments, environment: environment ?? ProcessInfo.processInfo.environment,
@@ -41,7 +41,9 @@ enum CommandProbe {
     /// Everything the probe started, ended at once: on Windows Node's `kill` terminates, for
     /// acpx's `SIGTERM` as for its `SIGKILL`. Then a second at most for all of it to go, looked
     /// at every 25 ms, as acpx's `waitForCleanupAfterSignal` looks.
-    private static func retire(_ child: WindowsProbeProcess, retired: (@Sendable (Int) -> Void)?) async {
+    private static func retire(
+        _ child: WindowsProbeProcess, retired: (@Sendable (_ held: Int, _ running: Int) -> Void)?
+    ) async {
         child.terminate()
         let deadline = DispatchTime.now() + .seconds(1)
         while child.runningProcesses > 0, DispatchTime.now() < deadline {
@@ -49,7 +51,7 @@ enum CommandProbe {
                 DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(25)) { continuation.resume() }
             }
         }
-        retired?(child.runningProcesses)
+        retired?(child.heldProcesses, child.runningProcesses)
         child.close()
     }
 }
@@ -283,11 +285,22 @@ final class WindowsProbeProcess: @unchecked Sendable {
     /// How many of the probe's processes still run.
     var runningProcesses: Int {
         guard let job else { return WaitForSingleObject(process, 0) == WAIT_TIMEOUT ? 1 : 0 }
+        return Int(Self.accounting(of: job)?.ActiveProcesses ?? 0)
+    }
+
+    /// How many processes the probe's job has held over its life: the probe and all it started.
+    /// Without a job, only the probe is known.
+    var heldProcesses: Int {
+        guard let job else { return 1 }
+        return Int(Self.accounting(of: job)?.TotalProcesses ?? 0)
+    }
+
+    private static func accounting(of job: HANDLE) -> JOBOBJECT_BASIC_ACCOUNTING_INFORMATION? {
         var accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
         let queried = QueryInformationJobObject(
             job, JobObjectBasicAccountingInformation, &accounting,
             DWORD(MemoryLayout<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>.size), nil)
-        return queried ? Int(accounting.ActiveProcesses) : 0
+        return queried ? accounting : nil
     }
 
     /// The job and the process let go of; closing the job ends anything still in it.
