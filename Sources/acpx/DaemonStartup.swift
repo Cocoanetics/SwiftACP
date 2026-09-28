@@ -35,6 +35,8 @@ final class DaemonStartup: @unchecked Sendable {
         let startup = DaemonStartup()
         let process = startup.process
         process.executableURL = URL(fileURLWithPath: executable)
+        // Started on demand, it stops by itself once idle, as acpx's queue owner does (#253).
+        process.arguments = ["--on-demand"]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = startup.stderr

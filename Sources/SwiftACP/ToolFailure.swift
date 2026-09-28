@@ -62,16 +62,3 @@ struct DescribedToolFailure: LocalizedError, MCPToolErrorMetaProviding {
     var errorDescription: String? { underlying.localizedDescription }
     var toolErrorMeta: JSONDictionary { failure.meta }
 }
-
-extension ACPXDaemon {
-    /// `work`, whose failure goes to the caller with what it says beyond its message, as the
-    /// backend describes it (``ACPXBackend/toolFailure(for:)``).
-    func described<T>(_ work: () async throws -> T) async throws -> T {
-        do {
-            return try await work()
-        } catch {
-            guard let failure = backend.toolFailure(for: error), !failure.isEmpty else { throw error }
-            throw DescribedToolFailure(underlying: error, failure: failure)
-        }
-    }
-}

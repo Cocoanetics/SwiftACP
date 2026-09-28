@@ -45,6 +45,15 @@ import Testing
             """)
     }
 
+    /// acpx starts acpxd on demand: it stops by itself once idle, as acpx's queue owner does
+    /// after its TTL (#253).
+    @Test func theCLIStartsTheDaemonOnDemand() async throws {
+        let daemon = try Self.daemon("echo \"$@\" >&2\nexit 3")
+        defer { try? FileManager.default.removeItem(at: daemon) }
+        let message = try await Self.failure(starting: daemon)
+        #expect(message == "acpxd failed to start: exited with code 3 before binding its socket: stderr:\n--on-demand")
+    }
+
     /// One ended by a signal has no exit code: `null`, then the signal's name.
     @Test func aDaemonKilledWhileStartingIsReportedWithItsSignal() async throws {
         let daemon = try Self.daemon("echo boom >&2\nkill -9 $$")

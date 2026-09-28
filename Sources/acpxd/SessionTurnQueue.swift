@@ -63,6 +63,11 @@ actor SessionTurnQueue {
         running.contains(sessionId)
     }
 
+    /// Whether no turn or control holds a session's slot, or waits for one.
+    var isIdle: Bool {
+        running.isEmpty && waiters.isEmpty
+    }
+
     /// Release the slot for `sessionId`, handing it straight to the next queued
     /// waiter (if any) so ownership passes without a gap another caller could win.
     func release(_ sessionId: String) {

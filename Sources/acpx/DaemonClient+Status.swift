@@ -48,7 +48,7 @@ extension DaemonClient {
         do {
             let status = try await ACPXDaemon.Client(proxy: proxy).sessionStatus(sessionId: sessionId)
             return status.live ? .held(pid: status.pid) : .notHeld
-        } catch MCPServerProxyError.toolError, is DecodingError {
+        } catch MCPServerProxyError.toolError, MCPServerProxyError.toolErrorWithMeta, is DecodingError {
             return .unknown
         } catch {
             return .unreachable
