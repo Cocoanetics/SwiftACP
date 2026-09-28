@@ -128,19 +128,33 @@ extension DaemonToolsTests {
     /// A command the agent waits on after answering does not hold the turn: waiting for
     /// its exit is not a request the prompt owns, so the turn ends once its updates go
     /// quiet, as acpx's does (#130). The wait is answered when the command is done, and
-    /// what the agent says then comes after the turn's end.
+    /// what the agent says then comes after the turn's end. The agent is slow to ask, as
+    /// under load: the turn looks for its requests only once it has.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCommandWaitedOnAfterTheAnswerDoesNotHoldTheTurn() async throws {
         let directory = try Self.scratchDirectory()
         let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
         defer { try? FileManager.default.removeItem(at: directory) }
-        let command = try Self.holdingMock(release, log: log, "MOCK_HOLD_TERMINAL_AFTER_ANSWER=1")
+        let command = try Self.holdingMock(
+            release, log: log, "MOCK_HOLD_TERMINAL_AFTER_ANSWER=1 MOCK_TERMINAL_WAIT_DELAY=1")
         try await withIsolatedStore {
             try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 300, timeoutMilliseconds: 5000)) {
                 // Nothing releases the command: it ends as the daemon lets the agent go.
                 try await Self.withDaemon { daemon in
                     let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
                     let client = CallingClient()
+                    let (asked, ask) = AsyncStream<Void>.makeStream()
+                    client.observe { log in
+                        if (try? log.decoded(InboundRequest.self))?.method == "terminal/wait_for_exit" { ask.yield() }
+                    }
+                    // Once the updates first go quiet, the turn looks for requests only when the
+                    // agent has asked for the command's exit, a second after starting it: the
+                    // question is out while the turn still runs.
+                    let once = OnceFlag()
+                    await daemon.setAfterUpdateDrain { _ in
+                        guard once.claim() else { return }
+                        for await _ in asked { break }
+                    }
                     // The turn ends while the command still runs. A turn that waited for its
                     // exit would not return.
                     try await prompt(daemon, id, text: "hi", client: client)
