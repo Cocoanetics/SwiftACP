@@ -90,13 +90,11 @@ final class WindowsPipeReader {
     }
 
     /// What `pipe` holds as the process exits, all it wrote before then, and no more: a background
-    /// child may never stop writing. A read under way has what came since the last look; anything
-    /// written before the exit completed it by now.
+    /// child may never stop writing. The exit's signal does not order a read under way, whose
+    /// completion may not have reached this thread yet: it is settled first, taking what it got, or
+    /// cancelled if nothing came (#278 review).
     private func drain(_ pipe: OverlappedPipe) {
-        if pipe.isPending {
-            guard WaitForSingleObject(pipe.event, 0) == Self.signalled else { return }
-            deliver(pipe.harvest(), from: pipe)
-        }
+        if pipe.isPending { deliver(pipe.settle(), from: pipe) }
         var remaining = pipe.available()
         while remaining > 0, pipe.isOpen {
             var outcome = pipe.begin(limit: remaining)
@@ -164,10 +162,20 @@ private final class OverlappedPipe {
         return result(waiting: waiting)
     }
 
+    /// The read under way, done now: cancelled and waited for. What it had already got, it keeps,
+    /// as a read that is complete cannot be cancelled; one that got nothing gives nothing.
+    func settle() -> Outcome {
+        CancelIoEx(handle, overlapped)
+        isPending = false
+        return result(waiting: true)
+    }
+
     private func result(waiting: Bool) -> Outcome {
         var count: DWORD = 0
-        // It fails at the pipe's end (`ERROR_BROKEN_PIPE`), or once cancelled.
-        guard GetOverlappedResult(handle, overlapped, &count, waiting) else { return .end }
+        guard GetOverlappedResult(handle, overlapped, &count, waiting) else {
+            // Cancelled, it got nothing; otherwise it failed at the pipe's end (`ERROR_BROKEN_PIPE`).
+            return GetLastError() == DWORD(ERROR_OPERATION_ABORTED) ? .data([]) : .end
+        }
         return .data(Array(UnsafeRawBufferPointer(rebasing: buffer[0..<Int(count)])))
     }
 

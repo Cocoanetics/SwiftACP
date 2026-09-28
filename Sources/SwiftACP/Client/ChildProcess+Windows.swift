@@ -216,6 +216,9 @@ package final class ChildProcess: @unchecked Sendable {
 
     // MARK: - Descendants
 
+    /// Whether the process runs in a job of its own, which holds everything it starts.
+    var hasJob: Bool { job != nil }
+
     /// The ids of the processes of its job still running, the process's own included.
     func jobProcessIds() -> [DWORD] {
         guard let job else { return [] }

@@ -12,10 +12,12 @@ final class ProcessDescendants: @unchecked Sendable {
         self.process = process
     }
 
-    /// The job holds them all, so there is nothing to look for: always a look that worked.
+    /// The job holds them all, so there is nothing to look for. Without one, the look fails, as
+    /// acpx's does when it cannot read the process table: the agent's descendants cannot be
+    /// verified, and are left, the transport noting it (#278 review).
     @discardableResult
     func capture(rootIsRunning: Bool) -> Bool {
-        true
+        process.hasJob
     }
 
     /// Each of the job's processes but the agent, ended: on Windows Node's `kill` terminates a
