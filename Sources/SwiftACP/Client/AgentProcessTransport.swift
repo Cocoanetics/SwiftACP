@@ -1,4 +1,4 @@
-#if os(macOS) || os(Linux)
+#if os(macOS) || os(Linux) || os(Windows)
 import Foundation
 import JSONFoundation
 import JSONRPCPeer
@@ -12,7 +12,7 @@ import Musl
 #endif
 
 /// An agent's stdio, spoken as acpx's client speaks it, on a process started here
-/// (``ChildProcess``) so that how the agent ends is known — acpx's
+/// (``ChildProcess``, on Windows too, #272) so that how the agent ends is known — acpx's
 /// `attachAgentLifecycleObservers`:
 ///
 /// - its stdout is read by acpx's rules (``AgentOutputReader``); a line too long fails
@@ -74,7 +74,11 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         (inbound, inboundContinuation) = AsyncThrowingStream.makeStream()
         (eventStream, events) = AsyncStream.makeStream()
         writer = MessageWriter(process: process, tap: tap)
+        #if os(Windows)
+        descendants = ProcessDescendants(process: process)
+        #else
         descendants = ProcessDescendants(root: process.pid, ownProcessGroup: false)
+        #endif
         exitLookedAt = reapsLate ? DispatchSemaphore(value: 0) : nil
     }
 
@@ -135,7 +139,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
             onClose: { [self] output in
                 if output == .stdout { stdoutClosed() }
             },
-            onExit: { [self] status in exited(status) },
+            onExitStatus: { [self] status in exited(status) },
             beforeReaping: exitLookedAt.map { lookedAt in { @Sendable in lookedAt.wait() } })
     }
 
@@ -317,8 +321,7 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
 
     /// The process exited and was reaped, after all it wrote was read. acpx's `exit`
     /// observer: the end is recorded, and the agent's leftovers are retired.
-    private func exited(_ status: Int32?) {
-        let exit = ChildProcess.exitStatus(status)
+    private func exited(_ exit: TerminalExitStatus) {
         lock.withLock { exitStatus = exit }
         recordDisconnect(.processExit)
         wakeExitWaiters()
@@ -376,9 +379,9 @@ final class AgentProcessTransport: JSONRPCMessageTransport, @unchecked Sendable 
         captureDescendants()
         writer.finish()
         settleHeldEnd(quitOnStdinEnd: await exits(within: remaining(atMost: quirks.closeAfterStdinEnd)))
-        if await !signalAgentAndDescendants(SIGTERM, waiting: remaining(atMost: .milliseconds(1500))) {
+        if await !signalAgentAndDescendants(ProcessSignal.terminate, waiting: remaining(atMost: .milliseconds(1500))) {
             tap.log("agent processes did not exit after SIGTERM; forcing SIGKILL")
-            _ = await signalAgentAndDescendants(SIGKILL, waiting: remaining(atMost: .milliseconds(1000)))
+            _ = await signalAgentAndDescendants(ProcessSignal.kill, waiting: remaining(atMost: .milliseconds(1000)))
         }
         descendantsLock.withLock { descendants.retire() }
         process.stopReading()
