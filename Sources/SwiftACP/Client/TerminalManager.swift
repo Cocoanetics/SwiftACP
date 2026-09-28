@@ -142,6 +142,11 @@ public actor TerminalManager: ACPTerminalHandler {
         }
     }
 
+    /// The process ids of the commands still running: for a test to see them end.
+    var runningProcessIds: [pid_t] {
+        terminals.values.filter(\.isRunning).map(\.process.pid)
+    }
+
     // MARK: - Starting
 
     /// acpx's `spawnChildProcess`: the command as given, then — with no `args`, not

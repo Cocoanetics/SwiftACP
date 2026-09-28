@@ -70,12 +70,13 @@ HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
 # the client open past its answer, until a test creates the path. (Files, not FIFOs: a
 # test creates one without blocking, so no step of it waits where cancelling cannot reach.)
 HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
-# The terminal's command. It ends once the path exists — or once its directory is gone, or
-# after two minutes: a test that creates the path and at once removes its directory can do
-# both between two looks, and a test that crashes never creates it. The command outlives
-# the test's process, so it would otherwise loop for good, starting 50 `sleep`s a second.
-HOLD_TERMINAL_LOOP = ('i=0; while [ ! -e "$1" ] && [ -d "${1%/*}" ] && [ "$i" -lt 6000 ]; '
-                      'do sleep 0.02; i=$((i + 1)); done')
+# The terminal's command. It ends once the path exists, or is ended with the agent when its
+# test lets the daemon go. Short of both, it ends once the path's directory is gone, or the
+# process that started it (the test's) is, or after two minutes: it leads a process group
+# of its own, so it outlives the test's process, reparented to launchd, and would otherwise
+# loop for good, starting 50 `sleep`s a second.
+HOLD_TERMINAL_LOOP = ('i=0; while [ ! -e "$1" ] && [ -d "${1%/*}" ] && kill -0 "$PPID" 2>/dev/null '
+                      '&& [ "$i" -lt 6000 ]; do sleep 0.02; i=$((i + 1)); done')
 
 # A path, with MOCK_HOLD_TERMINAL. Once the prompt is answered, the agent waits for it to
 # exist, then asks a permission question; answered, it creates MOCK_HOLD_TERMINAL itself.
@@ -90,8 +91,16 @@ HOLD_AFTER_ANSWER = bool(os.environ.get("MOCK_HOLD_TERMINAL_AFTER_ANSWER"))
 REACT_AFTER_GATE = os.environ.get("MOCK_REACT_AFTER_GATE")
 
 
+# The process that started the agent: its client. Waiting for a path, the agent reads
+# nothing and would not see the client go, so it looks for itself: it would otherwise wait
+# for good once its test's process had died.
+STARTED_BY = os.getppid()
+
+
 def wait_for(path):
     while not os.path.exists(path):
+        if os.getppid() != STARTED_BY:
+            os._exit(0)
         time.sleep(0.02)
 
 # Each process names its sessions after itself, so a replacement session is
