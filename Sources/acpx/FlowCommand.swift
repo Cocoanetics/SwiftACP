@@ -144,7 +144,8 @@ enum FlowCommand {
             if truthy(payload["currentNode"]) { lines.append("currentNode: \(text(payload["currentNode"]))") }
             if truthy(payload["statusDetail"]) { lines.append("statusDetail: \(text(payload["statusDetail"]))") }
             if truthy(payload["waitingOn"]) { lines.append("waitingOn: \(text(payload["waitingOn"]))") }
-            lines.append((payload["outputs"] ?? .object([WireJSON.Member]())).stringified(indent: 2))
+            // `${JSON.stringify(outputs, null, 2)}`: `undefined` when a `toJSON` of it gives nothing.
+            lines.append(payload["outputs"]?.stringified(indent: 2) ?? "undefined")
             Console.out(lines.map { $0 + "\n" }.joined())
         }
     }

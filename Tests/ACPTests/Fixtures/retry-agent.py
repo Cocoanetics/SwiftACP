@@ -5,6 +5,7 @@
 - `hang-init`, `hang-new`, `hang-prompt`: never answers `initialize`, `session/new` or
   `session/prompt`. `hang-model` and `hang-effort` never answer the
   `session/set_config_option` for the `model` or `effort` option it advertises.
+  `hang-load` advertises `session/load` and never answers it.
 - `fail-once`: its first prompt fails with ACP's internal error (-32603, details
   `model overloaded`), as a model API's hiccup does; later prompts answer. `fail-always`
   fails every prompt that way.
@@ -49,8 +50,8 @@ one is named.
 mode, so a later launch can behave differently. Otherwise a prompt answers `hello`.
 Each prompt appends a line to the file `RETRY_AGENT_ATTEMPTS` names, and the agent
 writes its pid to `RETRY_AGENT_PID` on start. `RETRY_AGENT_READY` names a FIFO it
-writes a byte to as each prompt arrives, before doing anything with it — and, in
-`hang-init` and `hang-new`, as `initialize` or `session/new` does.
+writes a byte to as each prompt arrives, before doing anything with it — and, in the
+other `hang-` modes, as the request it never answers does.
 
 `RETRY_AGENT_CAN_CLOSE` makes it advertise `session/close`; `RETRY_AGENT_CLOSED` names a
 file it writes the session's id to when asked to close it.
@@ -198,6 +199,8 @@ for line in sys.stdin:
             signal_ready()
             time.sleep(60)
         capabilities = {"sessionCapabilities": {"close": {}}} if os.environ.get("RETRY_AGENT_CAN_CLOSE") else {}
+        if MODE == "hang-load":
+            capabilities["loadSession"] = True
         send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": capabilities}})
     elif method == "session/new":
         if MODE == "hang-new":
@@ -207,6 +210,10 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "retry-session", "configOptions": OPTIONS}})
         if MODE == "die-after-new":
             os._exit(3)
+    elif method == "session/load" and MODE == "hang-load":
+        signal_ready()
+        time.sleep(60)
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"configOptions": OPTIONS}})
     elif method == "session/set_mode" and os.environ.get("RETRY_AGENT_SET_MODE_GATE"):
         if os.environ.get("RETRY_AGENT_SET_MODE_SENT"):
             with open(os.environ["RETRY_AGENT_SET_MODE_SENT"], "w") as sent:
@@ -236,6 +243,7 @@ for line in sys.stdin:
         os._exit(3)
     elif method == "session/set_config_option":
         if MODE == "hang-%s" % params.get("configId"):
+            signal_ready()
             time.sleep(60)
         if os.environ.get("RETRY_AGENT_ACK_CONFIG"):
             send({"jsonrpc": "2.0", "id": req_id, "result": {}})

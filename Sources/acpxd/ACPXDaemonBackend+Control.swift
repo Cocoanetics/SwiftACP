@@ -35,11 +35,21 @@ extension ACPXDaemonBackend {
     /// (``ControlDeadline``): when it passes, what the control connects or runs on is put
     /// down, as acpx's owner closes its client (`runIdleControlWithRecord`), and the
     /// control fails as `TIMEOUT` — its owner still holding the session.
+    ///
+    /// An agent a direct control starts starts over the caller's `environment`, as acpx's
+    /// direct control starts its client in the CLI's process; an owner's, over the one the
+    /// owner was started with (#222). Under `verbose`, what that agent writes to stderr goes to
+    /// the caller, with acpx's own lines — its client's log, whether the saved agent still runs,
+    /// each preference put back — as acpx's direct control writes them in the CLI's process. An
+    /// owner's control shows none: acpx's owner runs it, and its stderr is not the CLI's (#221).
+    /// So with what the agent is offered and how it signs in: a direct control's by its `client`,
+    /// as acpx builds its client from the control's `--no-fs`, `--no-terminal` and
+    /// `--auth-policy`; an owner's, as the prompt that started the owner asked (#246).
     func withSessionTurn<T: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?,
-        _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
-    ) async throws -> (value: T, resumed: Bool) {
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
+        client: ClientOptions = ClientOptions(), _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
+    ) async throws -> ControlOutcome<T> {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
@@ -63,32 +73,40 @@ extension ACPXDaemonBackend {
         }
         defer { deadline?.settle() }
         let step = direct ? timeout : nil
+        let stderr = direct && verbose ? AgentStderrRelay() : nil
+        let connecting = direct ? client : owners[recordId]?.client ?? ClientOptions()
         do {
-            return try await control(
-                current, direct: direct, replacing: replacing, deadline: deadline, step: step,
-                settings: CallerSettings(
-                    handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step),
-                body)
+            return try await relayingStderr(stderr, logger: recordId) {
+                try await control(
+                    current, direct: direct, replacing: replacing, deadline: deadline, step: step,
+                    settings: CallerSettings(
+                        handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
+                        capabilities: .acpx(connecting), authPolicy: connecting.authPolicy, stderr: stderr,
+                        environment: direct ? environment : owners[recordId]?.environment),
+                    body)
+            }
         } catch {
             if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }
             throw AgentFailure.shown(error)
         }
     }
 
-    /// The control once it has the session: connected, `body` run, the record saved.
+    /// The control once it has the session: connected, `body` run, the record saved. One run
+    /// without an owner says why the session could not be taken back when a new session replaced
+    /// it, as acpx's direct control returns `loadError`; an owner's says nothing of it.
     private func control<T: Sendable>(
         _ current: SessionRecord, direct: Bool, replacing: ReconnectReplay.Replacing, deadline: ControlDeadline?,
         step: Int?, settings: CallerSettings, _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
-    ) async throws -> (value: T, resumed: Bool) {
+    ) async throws -> ControlOutcome<T> {
         let recordId = current.acpxRecordId
         // What connecting changes — a reconnect may move the record to a new session — goes
         // into the record the control goes on with, as acpx's control goes on with the
         // record it connected: the block a reconnect built anew keeps the places it holds
         // for members still unset, which reading it back would lose.
         let changes = RecordChanges()
-        let entry: Live, resumed: Bool
+        let connected: Connected
         do {
-            (entry, resumed) = try await connect(
+            connected = try await connect(
                 recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
                 mcpServers: current.acpx?.mcpServers, control: true, settings: settings,
                 replacing: replacing, onRecordChange: { changes.add($0) })
@@ -111,9 +129,10 @@ extension ACPXDaemonBackend {
             }
             throw error
         }
-        var connected = current
-        changes.apply(to: &connected)
-        var record = connected
+        let entry = connected.entry
+        var reconnected = current
+        changes.apply(to: &reconnected)
+        var record = reconnected
         let result: T
         var answeredLate = false
         do {
@@ -134,7 +153,7 @@ extension ACPXDaemonBackend {
             // An agent whose connection is gone is ended first, as a turn's is: it can be
             // running still, and its pid would be kept.
             if direct || ACPAgentConnection.endedTheConnection(error) { await letGo(entry, of: recordId) }
-            var saved = answeredLate ? record : connected
+            var saved = answeredLate ? record : reconnected
             if !direct { saved.lastUsedAt = nowISO() }
             saved.applyLifecycle(entry.agent.lifecycle)
             do {
@@ -154,7 +173,8 @@ extension ACPXDaemonBackend {
         } catch {
             log.warning("session record write failed after control op: \(error)")
         }
-        return (result, resumed)
+        return ControlOutcome(
+            value: result, resumed: connected.resumed, owned: !direct, loadError: direct ? connected.loadError : nil)
     }
 
     /// An owned control's deadline passed: what the control connects or runs on is put down.

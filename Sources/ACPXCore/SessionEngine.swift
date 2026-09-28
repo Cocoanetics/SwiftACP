@@ -26,8 +26,14 @@ public enum SessionEngine {
     ///     for the request that takes a session back.
     ///   - resumeSessionId: an ACP session to take back in place of a new one — acpx's
     ///     `--resume-session`. The record is written under its id.
+    ///   - timeoutMilliseconds: acpx's `--timeout`: the agent's start, the request that gets
+    ///     the session and the model's selection each get this long, as acpx's
+    ///     `createSessionRecordWithClient` times them (``TimeoutError``). `nil` or not
+    ///     positive: no deadline.
     ///   - onStderr: shown what the agent writes to stderr, from its start
     ///     (``RawWireTap/onStderr(_:)``).
+    ///   - onLog: told what the client notes of the agent, from its spawn — acpx's
+    ///     `AcpClient.log` (``RawWireTap/onLog(_:)``).
     public static func createSession(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -43,11 +49,13 @@ public enum SessionEngine {
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
+        timeoutMilliseconds: Int? = nil,
         handlers: ACPClientHandlers? = nil,
         baseEnvironment: [String: String]? = nil,
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
         // The record is written once the agent is gone: one written while it still runs would
@@ -58,9 +66,10 @@ public enum SessionEngine {
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
             mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
-            writesRecord: false, handlers: handlers, baseEnvironment: baseEnvironment,
+            timeoutMilliseconds: timeoutMilliseconds, writesRecord: false, handlers: handlers,
+            baseEnvironment: baseEnvironment,
             terminalOutputCeiling: terminalOutputCeiling, inheritStderr: inheritStderr, onStderr: onStderr,
-            onModelWarning: onModelWarning)
+            onLog: onLog, onModelWarning: onModelWarning)
         beforeClosing?(held.record.acpxRecordId)
         var record = held.record
         let handle = held.agent
@@ -90,13 +99,14 @@ public enum SessionEngine {
     /// acpx's `createSessionWithClient`: ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:inheritStderr:onModelWarning:)``
     /// up to the record, which is written with the agent still running
     /// (`createSessionRecordWithClient`) — and the agent kept, on the session, for the
-    /// caller to use and close. With `recordsCapabilities` false, what `capabilities`
-    /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
-    /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
+    /// caller to use and close. What `capabilities` withholds is the creating agent's alone, as
+    /// acpx's `sessions new --no-fs` withholds it from its client: the record keeps none of it
+    /// (#246). `handlers`, when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
     /// false, the record is returned unwritten, for a caller that writes it once it keeps the
-    /// session — acpxd, where the id the agent gives may be another session's. The agent starts
-    /// over `baseEnvironment` when given — its caller's own — else this process's, and caps its
-    /// terminals by `terminalOutputCeiling`.
+    /// session — acpxd, where the id the agent gives may be another session's. The agent, and
+    /// the commands it runs through the client's terminals, start over `baseEnvironment` when
+    /// given — its caller's own — else this process's; its terminals are capped by
+    /// `terminalOutputCeiling`.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -112,30 +122,36 @@ public enum SessionEngine {
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
-        recordsCapabilities: Bool = true,
+        timeoutMilliseconds: Int? = nil,
         writesRecord: Bool = true,
         handlers: ACPClientHandlers? = nil,
         baseEnvironment: [String: String]? = nil,
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> HeldSession {
         // Validate the session's own servers before paying for a spawn.
         let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
             ?? mcpServers
-        let handle = try await ACPAgent.launch(
-            agent: agentCommand, argv: agentArgv, cwd: cwd,
-            handlers: handlers ?? .standard(permission: permission, rules: permissionRules), capabilities: capabilities,
-            environment: AgentEnvironment.forAgent(
-                authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
-                over: baseEnvironment ?? ProcessInfo.processInfo.environment),
-            authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling, onStderr: onStderr)
+        let handlers = handlers ?? .standard(permission: permission, rules: permissionRules)
+        let environment = AgentEnvironment.forAgent(
+            authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
+            over: baseEnvironment ?? ProcessInfo.processInfo.environment)
+        // Within the timeout, as acpx starts its client: an agent that comes up only past it
+        // is put down.
+        let handle = try await withTimeout(milliseconds: timeoutMilliseconds, {
+            try await ACPAgent.launch(
+                agent: agentCommand, argv: agentArgv, cwd: cwd, handlers: handlers, capabilities: capabilities,
+                environment: environment, authCredentials: authCredentials, authPolicy: authPolicy,
+                inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling,
+                terminalEnvironment: baseEnvironment, onStderr: onStderr, onLog: onLog)
+        }, discardingLate: { await $0.close() })
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,
-                agentCommand: agentCommand, onModelWarning: onModelWarning)
+                agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds, onModelWarning: onModelWarning)
             // Called off, the agent is closed: what it was asked fails with its connection.
             let created: Created = try await withTaskCancellationHandler {
                 if let resumeSessionId { return try await resume(resumeSessionId, on: target) }
@@ -171,11 +187,6 @@ public enum SessionEngine {
             ModelSupport.applyConfigOptions(created.configOptions, to: &acpx)
             ModelSupport.applyInitialModelSelection(application, originalModels: advertised, to: &acpx)
             acpx.mcpServers = sessionMcpServers
-            // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
-            // spawn: the daemon reconnects later and must advertise the same, or the
-            // restriction would silently lapse on the very turns it exists to cover —
-            // unless whoever runs the session says it with each turn, as a flow does.
-            if recordsCapabilities { acpx.clientCapabilities = capabilities.persistedIfRestricted }
             record.acpx = acpx
 
             if writesRecord { try SessionStore.writeRecord(record) }
@@ -194,7 +205,8 @@ public enum SessionEngine {
         public let session: ACPSession
     }
 
-    /// Where a creation gets its session, and the model it asks for.
+    /// Where a creation gets its session, the model it asks for, and how long each request
+    /// may take.
     private struct Target {
         let handle: ACPAgent
         let cwd: String
@@ -202,6 +214,7 @@ public enum SessionEngine {
         let meta: JSONValue?
         let model: String?
         let agentCommand: String
+        let timeoutMilliseconds: Int?
         let onModelWarning: ((String) -> Void)?
     }
 
@@ -220,8 +233,11 @@ public enum SessionEngine {
     /// acpx's `createFreshSessionState`: a new session, with the requested model put on
     /// it through whichever control it advertises; one not advertised fails the creation.
     private static func startSession(on target: Target) async throws -> Created {
-        let response = try await target.handle.connection.newSession(
-            NewSessionRequest(cwd: target.cwd, mcpServers: target.mcpServers, meta: target.meta))
+        let connection = target.handle.connection
+        let request = NewSessionRequest(cwd: target.cwd, mcpServers: target.mcpServers, meta: target.meta)
+        let response = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
+            try await connection.newSession(request)
+        }
         return try await applyingModel(
             to: response.sessionId, meta: response.meta,
             configOptions: ModelSupport.normalizedResponseConfigOptions(response.rawConfigOptions),
@@ -237,11 +253,17 @@ public enum SessionEngine {
         guard capabilities?.sessionCapabilities?.supportsResume == true || capabilities?.loadSession == true else {
             throw SessionResumeUnsupported(agentCommand: target.agentCommand, sessionId: sessionId)
         }
+        let handle = target.handle
+        let cwd = target.cwd
+        let servers = target.mcpServers
+        let meta = target.meta
         do {
-            // Its history is the agent's to replay, and nothing here records it.
-            let session = try await target.handle.reconnectSession(
-                id: sessionId, cwd: target.cwd, mcpServers: target.mcpServers, meta: target.meta,
-                suppressReplayUpdates: true)
+            // Its history is the agent's to replay, and nothing here records it. A timeout is
+            // the resume's failure too, as acpx words it.
+            let session = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
+                try await handle.reconnectSession(
+                    id: sessionId, cwd: cwd, mcpServers: servers, meta: meta, suppressReplayUpdates: true)
+            }
             return try await applyingModel(
                 to: sessionId, meta: session.meta,
                 configOptions: ModelSupport.normalizedResponseConfigOptions(session.rawConfigOptions),
@@ -259,7 +281,8 @@ public enum SessionEngine {
             ?? ModelSupport.modelState(fromLegacyModels: models)
         let application = try await ModelApplication.applyRequestedModel(
             connection: target.handle.connection, sessionId: sessionId, requestedModel: target.model,
-            models: advertised, agentCommand: target.agentCommand, onWarning: target.onModelWarning)
+            models: advertised, agentCommand: target.agentCommand, timeoutMilliseconds: target.timeoutMilliseconds,
+            onWarning: target.onModelWarning)
         return Created(
             sessionId: sessionId, meta: meta, configOptions: configOptions, models: advertised,
             application: application)

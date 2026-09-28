@@ -15,8 +15,12 @@ import SwiftACP
 /// open with a bracket. A structured prompt with a block acpx does not take is a usage
 /// error in acpx's words.
 enum PromptInputResolver {
+    /// - Parameter positionalLabel: what the prompt is passed as, in the message when there is
+    ///   none: `argument`, or `final argument` for `compare` (acpx's `readPromptInput`).
     /// - Returns: the turn's content blocks as written — never empty.
-    static func resolve(words: [String], file: String?, cwd: String) throws -> [WireJSON] {
+    static func resolve(
+        words: [String], file: String?, cwd: String, positionalLabel: String = "argument"
+    ) throws -> [WireJSON] {
         let text = words.joined(separator: " ")
         do {
             if let file {
@@ -30,7 +34,7 @@ enum PromptInputResolver {
             if !joined.isEmpty { return [PromptContent.textBlock(joined)] }
 
             guard isatty(fileno(stdin)) == 0 else {
-                throw InvalidArgumentError("Prompt is required (pass as argument, --file, or pipe via stdin)")
+                throw InvalidArgumentError("Prompt is required (pass as \(positionalLabel), --file, or pipe via stdin)")
             }
             let blocks = try PromptContent.parse(readStdin())
             guard !blocks.isEmpty else { throw InvalidArgumentError("Prompt from stdin is empty") }

@@ -109,6 +109,9 @@ public enum ReconnectReplay {
         public var configOptions: JSONValue?
         public var models: ModelSupport.ModelState?
         public var legacyModelMetadataPresent: Bool
+        /// Why the session could not be taken back, when a new session replaced it: acpx's
+        /// `loadError` (`formatErrorMessage` of the failure). `nil` otherwise.
+        public var loadError: String?
 
         /// - Parameters:
         ///   - configOptions: the reply's `configOptions` as the agent sent them.
@@ -179,17 +182,33 @@ public enum ReconnectReplay {
     /// Put `desired` back on the session `loaded` describes, recording each
     /// acknowledgement in `state`. `original` is the record's state before connecting,
     /// whose model option a control replacing the model may name. Each selection goes
-    /// within `timeoutMilliseconds` (acpx's `--timeout`), when given.
+    /// within `timeoutMilliseconds` (acpx's `--timeout`), when given. Each selection put back
+    /// is told to `onLog`, as acpx notes it under `--verbose` — naming the session the record
+    /// was on before connecting, `previousSessionId` — and so is a replay that fails.
     ///
     /// - Throws: ``SessionReplayError`` for the first selection that failed.
     public static func replay(
         _ desired: Desired, replacing: Replacing?, original: SessionAcpxState?, loaded: Loaded,
         state: inout SessionAcpxState?, connection: ACPAgentConnection, agentCommand: String,
-        timeoutMilliseconds: Int? = nil, onWarning: ((String) -> Void)? = nil
+        timeoutMilliseconds: Int? = nil, onWarning: ((String) -> Void)? = nil,
+        previousSessionId: String? = nil, onLog: (@Sendable (String) -> Void)? = nil
     ) async throws -> Outcome {
         let target = Target(
             connection: connection, sessionId: loaded.sessionId, agentCommand: agentCommand,
-            timeoutMilliseconds: timeoutMilliseconds)
+            timeoutMilliseconds: timeoutMilliseconds, previousSessionId: previousSessionId ?? "undefined", log: onLog)
+        do {
+            return try await replay(desired, replacing: replacing, original: original, loaded: loaded, state: &state,
+                                    on: target, onWarning: onWarning)
+        } catch {
+            onLog?(TurnFailure.message(of: error))
+            throw error
+        }
+    }
+
+    private static func replay(
+        _ desired: Desired, replacing: Replacing?, original: SessionAcpxState?, loaded: Loaded,
+        state: inout SessionAcpxState?, on target: Target, onWarning: ((String) -> Void)?
+    ) async throws -> Outcome {
         let mode = loaded.createdFreshSession ? try await replayMode(desired.modeId, state: state, on: target) : nil
         let models = mode.map(\.models) ?? loaded.models
 
@@ -216,12 +235,15 @@ public enum ReconnectReplay {
         return Outcome(models: finalModels, configOptionsPresent: optionsPresent)
     }
 
-    /// Where the replay goes, and how long each selection may take.
+    /// Where the replay goes, how long each selection may take, and where each is told.
     private struct Target: Sendable {
         let connection: ACPAgentConnection
         let sessionId: String
         let agentCommand: String
         let timeoutMilliseconds: Int?
+        /// The session the record was on before connecting, as the notes name it.
+        let previousSessionId: String
+        let log: (@Sendable (String) -> Void)?
     }
 
     /// What replaying the mode left: acpx's `modeMetadata`.
@@ -260,6 +282,8 @@ public enum ReconnectReplay {
                 \(TurnFailure.message(of: error))
                 """)
         }
+        target.log?("replayed desired mode \(modeId) on fresh ACP session \(target.sessionId) "
+            + "(previous \(target.previousSessionId))")
         return ModeReplay(
             models: ModelSupport.advertisedModelState(state), configOptionsPresent: state?.configOptions != nil)
     }
@@ -284,6 +308,8 @@ public enum ReconnectReplay {
             var acpx = state ?? SessionAcpxState()
             ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
             state = acpx
+            target.log?("replayed desired model \(modelId) on ACP session \(target.sessionId) "
+                + "(previous \(target.previousSessionId))")
             // What the selection left in the record: a reply reporting no options
             // acknowledged the model, and the session still offers it (acpx 0.19.3, #778).
             return ModelReplay(models: ModelSupport.advertisedModelState(acpx), options: response?.rawConfigOptions)
@@ -327,6 +353,8 @@ public enum ReconnectReplay {
                 // left as they were (acpx 0.19.3, #778).
                 accepted = acpx.configOptions
                 replayed = OptionsReplay(models: ModelSupport.advertisedModelState(acpx))
+                target.log?("replayed desired config option \(configId) on ACP session \(target.sessionId) "
+                    + "(previous \(target.previousSessionId))")
             } catch {
                 throw SessionReplayError(.configOption, """
                     Failed to replay saved session config option \(configId) on ACP session \(target.sessionId): \

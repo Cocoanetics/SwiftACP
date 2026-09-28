@@ -87,7 +87,9 @@ extension DaemonToolsTests {
     }
 
     /// A prompt is the session's before it takes the slot, whether it waits for it or not: a
-    /// cancel sent on its way there is its, and it ends unsent (Codex review on #196).
+    /// cancel sent on its way there is its, and it ends unsent (Codex review on #196). One that
+    /// does not wait is acpx's `--no-wait` (#239): its call is over once the line has it, and its
+    /// turn goes on to take the slot after — the test waits for the cancel it meets there.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: [true, false])
     func aPromptIsTheSessionsBeforeItTakesTheSlot(wait: Bool) async throws {
         let directory = try Self.scratchDirectory()
@@ -96,13 +98,17 @@ extension DaemonToolsTests {
             let session = try await retrySession(in: directory)
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let cancelled = Answer()
+            let (answers, answered) = AsyncStream<Void>.makeStream()
             await daemon.turnQueue.setBeforeAcquire { recordId in
                 guard !cancelled.given else { return }
                 cancelled.give((try? await daemon.cancelSession(sessionId: recordId)) == true)
+                answered.yield()
             }
             let reply = try await withTimeout(milliseconds: 10_000) {
                 try await daemon.runPrompt(sessionId: session.id, text: "hi", wait: wait)
             }
+            var answer = answers.makeAsyncIterator()
+            _ = await answer.next()
             await daemon.turnQueue.setBeforeAcquire(nil)
             #expect(cancelled.value == true, "the cancel found the prompt")
             #expect(reply == "")

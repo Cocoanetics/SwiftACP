@@ -7,9 +7,12 @@ import SwiftACP
 // `FlowRunner.swift` to keep each file inside the 500-line limit.
 extension FlowRunner {
     /// acpx's `maybeCompleteCheckpointStep`: a checkpoint that ran leaves the run waiting.
-    func maybeCompleteCheckpointStep(_ step: Step, runDir: URL) throws -> RunResult? {
+    func maybeCompleteCheckpointStep(_ step: Step, runDir: URL) async throws -> RunResult? {
         guard step.result.outcome == .ok, step.node.nodeType == .checkpoint else { return nil }
         setOutput(step)
+        // Written at once, the waiting state holds `outputs` as the flow's code does, the
+        // checkpoint's own among them — a `toJSON` of it included (#206 review).
+        try await refreshLiveValues()
         state["waitingOn"] = step.nodeId
         state["updatedAt"] = nowISO()
         state["status"] = "waiting"
@@ -25,12 +28,13 @@ extension FlowRunner {
         state["updatedAt"] = nowISO()
         state.clearActiveNode()
         state.set("statusDetail", statusDetail)
+        let output = state.keepOutput(step.executed.output, of: step.result.attemptId)
         state.steps.append(.object([
             ("attemptId", .text(step.result.attemptId)), ("nodeId", .text(step.nodeId)),
             ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
             ("startedAt", .text(step.result.startedAt)), ("finishedAt", .text(step.result.finishedAt)),
             ("promptText", step.executed.promptText ?? .null), ("rawText", step.executed.rawText ?? .null),
-            ("output", step.executed.output.json), ("error", step.result.error.map(WireJSON.text)),
+            ("output", output), ("error", step.result.error.map(WireJSON.text)),
             ("session", step.executed.sessionInfo ?? .null), ("agent", step.executed.agentInfo ?? .null),
             ("trace", step.executed.trace?.wire)
         ]))
@@ -39,8 +43,12 @@ extension FlowRunner {
             ("nodeType", .text(step.node.nodeType.rawValue)), ("outcome", .text(step.result.outcome.rawValue)),
             ("durationMs", .number(step.result.durationMs)), ("error", step.result.error.map(WireJSON.text) ?? .null)
         ]
+        // The trace as JSON writes it now: an `outputInline` with nothing for it is left out.
+        let omitted = state.omittedOutputs.contains(step.result.attemptId)
         for member in step.executed.trace?.wire.objectMembers ?? [] {
-            payload.append((String(decoding: member.key, as: UTF16.self), member.value))
+            let key = String(decoding: member.key, as: UTF16.self)
+            if omitted, key == "outputInline" { continue }
+            payload.append((key, member.value))
         }
         try store.writeSnapshot(
             runDir, &state, scope: "node", type: "node_outcome", nodeId: step.nodeId, attemptId: step.result.attemptId,

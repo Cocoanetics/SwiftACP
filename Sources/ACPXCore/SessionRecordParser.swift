@@ -267,7 +267,7 @@ public enum SessionRecordParser {
             "cumulative_token_usage": parsed["cumulative_token_usage"],
             "cumulative_cost": parsed["cumulative_cost"],
             "request_token_usage": parsed["request_token_usage"],
-            // A block that does not read at all may have held restrictions: it fails closed.
+            // A block that does not read at all may have held MCP servers: it fails closed.
             "acpx": parsed["acpx"].map { withOwnFields(withModelIntegers($0), from: raw["acpx"]) }
                 ?? (raw["acpx"] == nil ? nil : unreadableAcpxState)
         ]
@@ -280,14 +280,9 @@ public enum SessionRecordParser {
     }
 
     /// What an `acpx` block that is there but is no object leaves SwiftACP's model with:
-    /// its own restrictions at their tightest — no MCP servers and no client
-    /// capabilities — since the block may have held some. acpx drops such a block.
-    static let unreadableAcpxState = object([
-        ("mcp_servers", .array([])),
-        ("client_capabilities", object([
-            ("read_text_file", .bool(false)), ("write_text_file", .bool(false)), ("terminal", .bool(false))
-        ]))
-    ])
+    /// its own restriction at its tightest — no MCP servers — since the block may have held
+    /// some. acpx drops such a block.
+    static let unreadableAcpxState = object([("mcp_servers", .array([]))])
 
     /// An integer beyond what the model's `Int` holds — acpx takes any finite integral
     /// number — read as the largest one a JavaScript number holds exactly, with its

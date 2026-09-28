@@ -28,16 +28,21 @@ public struct TurnEndedEvent: Codable, Sendable {
     /// between attempts at it. acpx's formatters mark a turn done only at the answer, so
     /// nothing is marked done. `nil` from a daemon that predates it.
     public var unanswered: Bool?
+    /// Why the session could not be taken back when the turn had to connect its agent, and a
+    /// new session replaced it — acpx's `loadError`, which its CLI names under `--verbose`.
+    /// `nil` when nothing replaced it, and from a daemon that predates it.
+    public var loadError: String?
 
     public init(
         stopReason: String, permissions: PermissionStats? = nil, usage: JSONValue? = nil, cost: JSONValue? = nil,
-        unanswered: Bool? = nil
+        unanswered: Bool? = nil, loadError: String? = nil
     ) {
         self.stopReason = stopReason
         self.permissions = permissions
         self.usage = usage
         self.cost = cost
         self.unanswered = unanswered
+        self.loadError = loadError
     }
 }
 

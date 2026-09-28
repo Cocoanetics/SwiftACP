@@ -74,10 +74,20 @@ extension ACPXDaemonBackend {
         ).entry
     }
 
+    /// A session connected for a caller: its agent's entry, whether the session had to be taken
+    /// back (acpx's `resumed`), and why it could not be when a new session replaced it (acpx's
+    /// `loadError`).
+    struct Connected: Sendable {
+        let entry: Live
+        let resumed: Bool
+        let loadError: String?
+    }
+
     /// ``ensure(recordId:agentCommand:cwd:mcpServers:control:settings:replacing:requestedModel:turnOptions:turnAcpx:onRecordChange:onConnectOutput:onConnectWire:)``,
     /// also saying whether the session had to be taken back — acpx's `resumed`: the
     /// agent was launched and `session/load` or `session/resume` got the session back.
-    /// A session already held, or one a new session replaced, was not.
+    /// A session already held, or one a new session replaced, was not — and one a new session
+    /// replaced says why (``Connected``).
     func connect(
         recordId: String, agentCommand: String, cwd rawCwd: String, mcpServers: [McpServerConfig]?,
         control: Bool = false, settings: CallerSettings = CallerSettings(),
@@ -85,26 +95,28 @@ extension ACPXDaemonBackend {
         turnOptions: SessionAcpxState.SessionOptions? = nil, turnAcpx: SessionAcpxState? = nil,
         onRecordChange: RecordChangeHandler? = nil, onConnectOutput: ConnectOutputHandler? = nil,
         onConnectWire: RawWireTap.Observer? = nil
-    ) async throws -> (entry: Live, resumed: Bool) {
+    ) async throws -> Connected {
         guard !stopping else { throw DaemonError.stopping }
         let (handlers, terminalOutputCeiling) = (settings.handlers, settings.terminalOutputCeiling)
         let timeout = settings.timeoutMilliseconds
         let replacing = replacing ?? (requestedModel == nil ? nil : .configOption("model"))
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
+        // For a caller under `--verbose`, whether the agent the record saved still runs, as acpx
+        // notes it first thing as it connects a session — one held here too.
+        if let relay = settings.stderr, let saved = findRecord(recordId) { relay.noteReconnect(of: saved) }
         let held = try await heldAgent(
             recordId, sessionSpecs: sessionSpecs, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
-        if let entry = held.entry { return (entry, false) }
+        if let entry = held.entry { return Connected(entry: entry, resumed: false, loadError: nil) }
         let sameSessionOnly = (control && held.replacedExited) || settings.sameSessionOnly
         let cwd = try resolveCwd(rawCwd)
         // Resolve config for this cwd — or take the caller's, a flow's — so the agent gets the same
         // injected `auth` credentials / auth policy (and config-alias resolution) the CLI applies.
         let config = try Self.config(settings.callerConfig, cwd: cwd, ownMcpServers: sessionSpecs != nil)
         let specs = try sessionSpecs ?? config.mcpServerSpecs()
-        // A session created under `--no-fs` / `--no-terminal` keeps those restrictions:
-        // the record carries them, so every reconnect advertises what the session was
-        // created with rather than the defaults.
+        // What the caller offers — a turn's owner's, a direct turn's or control's own, as acpx
+        // builds each client from its own flags: the record keeps none of it (#246).
         let record = findRecord(recordId)
-        let capabilities = settings.capabilities ?? record?.acpx?.clientCapabilities?.advertised ?? .acpx
+        let capabilities = settings.capabilities ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
         let original = turnAcpx ?? record?.acpx
@@ -117,12 +129,7 @@ extension ACPXDaemonBackend {
         let command = launch.command
         let connectOutput = onConnectOutput.map { _ in ConnectOutputBuffer() }
         let connectTap = Self.both(connectOutput?.observer, onConnectWire)
-        // What connecting shows goes out once it is over, however it went: acpx flushes
-        // its buffer when connecting fails too, so the agent's refusal is on screen.
-        let showConnectOutput = { (fellBack: Bool) in
-            guard let connectOutput, let onConnectOutput else { return }
-            await onConnectOutput(connectOutput.flush(fellBack: fellBack))
-        }
+        let showConnectOutput = Self.showing(connectOutput, to: onConnectOutput)
         // A close past its grace can put it down until it is held.
         let connecting = ConnectingAgent()
         self.connecting[recordId] = connecting
@@ -140,7 +147,8 @@ extension ACPXDaemonBackend {
                             auth: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
                         authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
-                        onRawWire: connectTap, onStderr: settings.stderr?.observer)
+                        terminalEnvironment: settings.environment, onRawWire: connectTap,
+                        onStderr: settings.stderr?.observer, onLog: settings.stderr?.logObserver)
                 }, discardingLate: { await $0.close() })
             }
         } catch {
@@ -160,7 +168,8 @@ extension ACPXDaemonBackend {
             ReconnectReplay.applyLoaded(loaded, to: &state)
             let outcome = try await ReconnectReplay.replay(
                 desired, replacing: replacing, original: original, loaded: loaded, state: &state,
-                connection: handle.connection, agentCommand: command, timeoutMilliseconds: timeout)
+                connection: handle.connection, agentCommand: command, timeoutMilliseconds: timeout,
+                previousSessionId: record?.acpSessionId, onLog: settings.stderr?.logObserver)
             ReconnectReplay.applyReconnectedModelState(
                 outcome.models, configOptionsPresent: outcome.configOptionsPresent,
                 legacyModelMetadataPresent: loaded.legacyModelMetadataPresent,
@@ -190,7 +199,7 @@ extension ACPXDaemonBackend {
             stderr: settings.stderr)
         await showConnectOutput(loaded.createdFreshSession)
         // Taken back unless a new session had to replace it.
-        return (entry, !loaded.createdFreshSession)
+        return Connected(entry: entry, resumed: !loaded.createdFreshSession, loadError: loaded.loadError)
     }
 
     /// Hold the agent connecting has left on `session`, unless the daemon began stopping
@@ -263,7 +272,7 @@ extension ACPXDaemonBackend {
         var terminalOutputCeiling: Int?
         var timeoutMilliseconds: Int?
         var sameSessionOnly = false
-        /// What the agent is offered, when the caller says (a flow's turn); else the record's.
+        /// What the agent is offered, when the caller says; else acpx's own.
         var capabilities: SwiftACP.ClientCapabilities?
         /// How the agent signs in, when the caller says (a flow's turn); else as configured.
         var authPolicy: String?
@@ -273,8 +282,9 @@ extension ACPXDaemonBackend {
         /// Where what the agent writes to stderr goes, when the caller asks (a verbose flow's
         /// turn); else nowhere.
         var stderr: AgentStderrRelay?
-        /// The environment the agent starts over, when the caller brings its own (a flow's
-        /// turn); else the daemon's.
+        /// The environment the agent — and the commands it runs through the client's
+        /// terminals — start over, when the caller brings its own: for a session its owner
+        /// holds, the one the owner was started with (#222); else the daemon's.
         var environment: [String: String]?
 
         /// The environment the agent starts with: the caller's, else the daemon's, with the
@@ -287,6 +297,18 @@ extension ACPXDaemonBackend {
 
     /// Gets what connecting an agent for a turn put on the wire, as acpx shows it.
     typealias ConnectOutputHandler = @Sendable ([WireMessageEvent]) async -> Void
+
+    /// What connecting showed, handed to `handler` once it is over, however it went — with
+    /// whether a new session replaced the old — as acpx flushes its buffer when connecting
+    /// fails too, so the agent's refusal is on screen.
+    private static func showing(
+        _ output: ConnectOutputBuffer?, to handler: ConnectOutputHandler?
+    ) -> (_ fellBack: Bool) async -> Void {
+        { fellBack in
+            guard let output, let handler else { return }
+            await handler(output.flush(fellBack: fellBack))
+        }
+    }
 
     /// One observer that hands each message to `first`, then `second`, of those given.
     private static func both(_ first: RawWireTap.Observer?, _ second: RawWireTap.Observer?) -> RawWireTap.Observer? {
@@ -368,9 +390,11 @@ extension ACPXDaemonBackend {
             let session = try await withTimeout(milliseconds: timeout) {
                 try await handle.newSession(cwd: cwd, mcpServers: specs, meta: meta)
             }
-            return (session, ReconnectReplay.Loaded(
+            var loaded = ReconnectReplay.Loaded(
                 sessionId: session.id, createdFreshSession: true, configOptions: session.rawConfigOptions,
-                models: session.models))
+                models: session.models)
+            loaded.loadError = TurnFailure.message(of: error)
+            return (session, loaded)
         }
     }
 

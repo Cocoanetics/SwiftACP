@@ -357,35 +357,6 @@ extension DaemonToolsTests {
         }
     }
 
-    /// Under `--verbose`, what a flow's agent writes to stderr reaches the caller: as the
-    /// session is made, and as each turn runs — the one that takes the session back too — as
-    /// acpx's client shows it in the flow's process (#219 review). A turn without it gets none.
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aVerboseFlowSessionsAgentStderrReachesTheCaller() async throws {
-        let command = "/usr/bin/env MOCK_STDERR_AT_START=starting MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let creation = CallingClient()
-            let session = Session(id: UUID())
-            await session.setTransport(creation)
-            let id = try await session.work { _ in
-                try await daemon.newSession(
-                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
-                    sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, verbose: true))
-            }
-            #expect(Self.stderr(of: creation) == "starting\n")
-            // The first turn takes the kept agent; the second starts one to take the session back.
-            let (first, second, quiet) = (CallingClient(), CallingClient(), CallingClient())
-            _ = try await directTurn(daemon, id, "stderr one", client: first, verbose: true)
-            _ = try await directTurn(daemon, id, "stderr two", client: second, verbose: true)
-            _ = try await directTurn(daemon, id, "stderr three", client: quiet)
-            #expect(Self.stderr(of: first) == "one\n")
-            #expect(Self.stderr(of: second) == "starting\ntwo\n")
-            #expect(Self.stderr(of: quiet).isEmpty)
-            await daemon.releaseAll()
-        }
-    }
-
     /// A flow's persistent turn sends acpxd each of its options: the CLI calls `runPrompt`
     /// untyped (``DaemonClient/promptArguments(sessionId:content:wait:permissionMode:nonInteractivePermissions:permissionPolicy:terminalOutputCeiling:model:sessionOptions:limits:mode:)``),
     /// and `verbose` was once left out of the call.
@@ -407,10 +378,24 @@ extension DaemonToolsTests {
         #expect(arguments["environment"] == .object(["FLOWVAR": .string("set")]))
     }
 
-    /// What `client` was sent of the agent's stderr (``AgentStderrEvent``).
+    /// What `client` was sent of the agent's own stderr (``AgentStderrEvent``): acpx's
+    /// `[acpx]` lines among it left out (``diagnostics(of:)``).
     static func stderr(of client: CallingClient) -> String {
+        relayedLines(of: client).filter { !$0.hasPrefix("[acpx] ") }.map { $0 + "\n" }.joined()
+    }
+
+    /// acpx's own `[acpx]` lines among what `client` was sent of the agent's stderr (#221), a
+    /// pid written `<PID>` and a timing's milliseconds `<MS>`.
+    static func diagnostics(of client: CallingClient) -> [String] {
+        relayedLines(of: client).filter { $0.hasPrefix("[acpx] ") }.map { line in
+            line.replacingOccurrences(of: #"pid \d+"#, with: "pid <PID>", options: .regularExpression)
+                .replacingOccurrences(of: #"=\d+(\.\d+)?ms$"#, with: "=<MS>ms", options: .regularExpression)
+        }
+    }
+
+    private static func relayedLines(of client: CallingClient) -> [String] {
         let chunks = client.logs.compactMap { try? $0.decoded(AgentStderrEvent.self) }.compactMap(\.bytes)
-        return String(decoding: chunks.reduce(Data(), +), as: UTF8.self)
+        return String(decoding: chunks.reduce(Data(), +), as: UTF8.self).split(separator: "\n").map(String.init)
     }
 
     /// The options' model is kept with a session made for a flow's first turn, with the
@@ -450,7 +435,8 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
                 agentCommand: command, cwd: directory.path, holdAgent: true, fs: false)
-            #expect(SessionStore.loadRecord(id)?.acpx?.clientCapabilities == nil)
+            #expect(try !String(contentsOf: ACPXPaths.sessionRecordPath(id), encoding: .utf8)
+                .contains("client_capabilities"))
             let refused = #"error: "Method not found": fs/read_text_file"#
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)", fs: false) == refused)
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)", fs: false) == refused)

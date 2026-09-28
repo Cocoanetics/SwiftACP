@@ -1,5 +1,6 @@
 import Foundation
 import JSONFoundation
+import SwiftACP
 
 /// A `config_option_update`'s options as acpx's ACP SDK reads them before acpx sees them
 /// (`zConfigOptionUpdate`, `zSessionConfigOption`). A reply's options are not read this way:
@@ -12,6 +13,115 @@ public enum ConfigOptionSchema {
         guard case .object(let members) = update, let reported = members["configOptions"] else { return nil }
         guard case .array(let options) = reported else { return .array([]) }
         return .array(options.compactMap(option))
+    }
+
+    /// `options`, as ``options(of:)`` gave them, in the order the SDK builds them: an option's
+    /// `currentValue`, `options` and `type` — its kind's members — then `id`, `name`,
+    /// `description`, `category` and `_meta`; a select option's `value`, `name`, `description`,
+    /// `_meta`; a group's `group`, `name`, `options`, `_meta` (zod's intersection of the kind and
+    /// the rest, each object built in its shape's order). Each `_meta` — a zod record, which keeps
+    /// what the agent wrote in its order — is in the order of the one in `written`, the update's
+    /// `configOptions` as they came, that it was read from (#243 review): the options the schema
+    /// kept are those entries that fit it, in order, whatever they share with those it left out.
+    public static func ordered(_ options: JSONValue, as written: WireJSON? = nil) -> WireJSON {
+        guard case .array(let items) = options else { return WireJSON(options) }
+        let sources = entries(of: written).filter { option($0.jsonValue) != nil }
+        return .array(items.enumerated().map { index, item in
+            schemaOrdered(item, optionOrder, as: sources.indices.contains(index) ? sources[index] : nil)
+        })
+    }
+
+    /// The items of `list`, when it is one.
+    private static func entries(of list: WireJSON?) -> [WireJSON] {
+        if case .array(let items)? = list { return items }
+        return []
+    }
+
+    /// `current`, the record's options, in the order of `template` — the order they came in. Each
+    /// option takes its counterpart's order all the way down, `_meta` and all: an object's members
+    /// in the counterpart's order, each like the counterpart's own, those it lacks after, sorted.
+    /// An option's counterpart is the one with its `id`, a select option's the one with its
+    /// `value`, a group's the one with its `group` — when exactly one has it — and otherwise the
+    /// one in its place (#243 review). As acpx changes an option in place (a selection's
+    /// `currentValue`), its members keep their places.
+    public static func inOrder(_ current: JSONValue, of template: WireJSON) -> WireJSON {
+        like(current, template, keys: ["id"])
+    }
+
+    private static let optionOrder = [
+        "currentValue", "options", "type", "id", "name", "description", "category", "_meta"
+    ]
+    private static let selectOptionOrder = ["value", "name", "description", "_meta"]
+    private static let groupOrder = ["group", "name", "options", "_meta"]
+
+    /// `value`'s members in `order`, then any others sorted; an option's `options` entries each
+    /// in their own shape's order; its `_meta` in the order of `written`'s, the entry it was read
+    /// from, all the way down.
+    private static func schemaOrdered(_ value: JSONValue, _ order: [String], as written: WireJSON?) -> WireJSON {
+        guard case .object(let members) = value else { return WireJSON(value) }
+        let keys = order.filter { members[$0] != nil } + members.keys.filter { !order.contains($0) }.sorted()
+        return .object(keys.map { key in
+            let member = members[key] ?? .null
+            if key == "_meta" { return WireJSON.Member(key, like(member, written?["_meta"], keys: [])) }
+            guard key == "options", case .array(let entries) = member else {
+                return WireJSON.Member(key, WireJSON(member))
+            }
+            // A select keeps all its entries or none (``selectOptions(_:)``); a group, those that fit.
+            var sources = Self.entries(of: written?["options"])
+            if order == groupOrder { sources = sources.filter { selectOption($0.jsonValue) != nil } }
+            return WireJSON.Member(key, .array(entries.enumerated().map { index, entry in
+                guard case .object(let fields) = entry else { return WireJSON(entry) }
+                let source = sources.indices.contains(index) ? sources[index] : nil
+                return schemaOrdered(entry, fields["group"] != nil ? groupOrder : selectOptionOrder, as: source)
+            }))
+        })
+    }
+
+    /// `value` in the order of `template`, its counterpart: an object's members in the
+    /// counterpart's order, each like the counterpart's own, then those it lacks, sorted; an
+    /// array's items each like the counterpart ``counterpart(of:at:in:keys:)`` finds for it by
+    /// `keys`. An option's or a group's `options` are matched by `value` or `group`.
+    private static func like(_ value: JSONValue, _ template: WireJSON?, keys: [String]) -> WireJSON {
+        switch value {
+        case .object(let members):
+            var order: [String] = []
+            if case .object(let fields)? = template {
+                order = fields.map { String(decoding: $0.key, as: UTF16.self) }
+            }
+            let names = order.filter { members[$0] != nil } + members.keys.filter { !order.contains($0) }.sorted()
+            return .object(names.map { name in
+                let entries = name == "options" ? ["value", "group"] : []
+                return WireJSON.Member(name, like(members[name] ?? .null, template?[name], keys: entries))
+            })
+        case .array(let items):
+            var candidates: [WireJSON] = []
+            if case .array(let list)? = template { candidates = list }
+            return .array(items.enumerated().map { index, item in
+                like(item, counterpart(of: item, at: index, in: candidates, keys: keys), keys: [])
+            })
+        default:
+            return WireJSON(value)
+        }
+    }
+
+    /// `item`'s counterpart among `candidates`, the items of its array's template: the one that
+    /// shares its value under the first of `keys` it has, when exactly one does; none when none
+    /// does — the entry is new; and otherwise the one at its `index`: an entry with no such
+    /// member, or one that repeats another's, has only its place to go by.
+    private static func counterpart(
+        of item: JSONValue, at index: Int, in candidates: [WireJSON], keys: [String]
+    ) -> WireJSON? {
+        let atItsPlace = candidates.indices.contains(index) ? candidates[index] : nil
+        guard case .object(let fields) = item,
+            let key = keys.first(where: { if case .string? = fields[$0] { return true } else { return false } }),
+            case .string(let wanted)? = fields[key]
+        else { return atItsPlace }
+        let sharing = candidates.filter { $0[key]?.stringValue == wanted }
+        switch sharing.count {
+        case 0: return nil
+        case 1: return sharing[0]
+        default: return atItsPlace?[key]?.stringValue == wanted ? atItsPlace : sharing[0]
+        }
     }
 
     /// Whether the SDK refuses `update` outright, for giving no `configOptions`.

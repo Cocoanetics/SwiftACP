@@ -15,28 +15,42 @@ extension ACPXDaemonBackend {
         let apply: @Sendable (Response, inout SessionRecord) -> Value
     }
 
+    /// What a control gave: its value, whether the session had to be taken back first, and
+    /// whether the session's owner ran it (``SessionControlResult/owned``).
+    struct ControlOutcome<Value: Sendable>: Sendable {
+        let value: Value
+        let resumed: Bool
+        let owned: Bool
+        /// Why the session could not be taken back when a new session replaced it (acpx's `loadError`).
+        var loadError: String?
+    }
+
     /// Run a control as acpx's queue owner runs one (`QueueOwnerControlAdmission.run`): on
     /// the prompt's agent while the session runs a prompt
     /// (``control(duringPromptOf:_:timeout:_:)``), and between turns otherwise
-    /// (``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    /// (``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
     func runControl<Response: Sendable, Value: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, _ step: ControlStep<Response, Value>
-    ) async throws -> (value: Value, resumed: Bool) {
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
+        client: ClientOptions = ClientOptions(), _ step: ControlStep<Response, Value>
+    ) async throws -> ControlOutcome<Value> {
         _ = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
         if let record = findRecord(sessionId), let ticket = tickets[record.acpxRecordId], !ticket.sealed {
             // Its failure is said as one between turns is (``AgentFailure/shown(_:)``).
             do {
-                return (try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step), false)
+                let value = try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step)
+                return ControlOutcome(value: value, resumed: false, owned: true)
             } catch {
                 throw AgentFailure.shown(error)
             }
         }
         return try await withSessionTurn(
             sessionId, replacing: replacing, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs) { entry, record, timeout in
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, client: client
+        ) { entry, record, timeout in
             let response = try await step.request(entry, record, timeout)
             return step.apply(response, &record)
         }
@@ -89,8 +103,11 @@ extension ACPXDaemonBackend {
     /// controls from now on wait for the retry's prompt to go out, and run on its agent,
     /// none on the one given up. Returns whether the prompt had gone out, for the turn to
     /// hand them back should it not be retried after all.
-    func handControlsOn(from recordId: String) -> Bool {
-        tickets[recordId]?.unpublish() ?? false
+    ///
+    /// A turn's controls are its own ticket's, never the session's: a direct turn has none,
+    /// and a prompt queued behind it has begun with a ticket of its own (#229 review).
+    func handControlsOn(from turn: Turn) -> Bool {
+        turn.ticket?.unpublish() ?? false
     }
 
     /// Take the note that an attempt's prompt went out, should it not have come by the time
@@ -102,16 +119,17 @@ extension ACPXDaemonBackend {
     /// prompt that was answered would fail as though it had never gone out, and one taken
     /// as the turn moves to a fresh launch would be published while the retry connects,
     /// for no agent to run on.
-    func takePromptNote(of recordId: String, from wrote: WriteMark) {
-        if wrote.takeNote() { tickets[recordId]?.publish() }
+    func takePromptNote(of turn: Turn, from wrote: WriteMark) {
+        if wrote.takeNote() { turn.ticket?.publish() }
     }
 
     /// The prompt's turn is over, as acpx's `seal` says (`onPromptFinalizing`): a control
     /// from now on waits for the session's next turn, and those taken are done before the
-    /// turn's last save.
-    func sealControls(of recordId: String) async {
-        await tickets[recordId]?.seal()?.value
-        await controlsSealed?(recordId)
+    /// turn's last save. A direct turn took none.
+    func sealControls(of turn: Turn) async {
+        guard let ticket = turn.ticket else { return }
+        await ticket.seal()?.value
+        await controlsSealed?(turn.recordId)
     }
 }
 

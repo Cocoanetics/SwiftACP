@@ -50,7 +50,7 @@ extension DaemonClient {
     /// from before it (#162), which lets a session's agent go only by closing the session.
     /// With none running, nothing holds a session, and nothing is lacking.
     static func lacksRelease() async -> Bool {
-        guard let proxy = await tryConnectLive(configure: { _ in }) else { return false }
+        guard let proxy = await tryConnectLive(configure: { _ in })?.proxy else { return false }
         let lacks = await lacksRelease(on: proxy)
         await proxy.disconnect()
         return lacks

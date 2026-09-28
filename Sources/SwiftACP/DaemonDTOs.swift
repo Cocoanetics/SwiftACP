@@ -485,10 +485,16 @@ public struct PromptLimits: Codable, Hashable, Sendable {
     /// session held already keeps the time it was started with. `0` keeps it; omitted
     /// (or negative), five minutes; not past the maximum timer delay.
     public var ttlMs: Int?
+    /// acpx's `queueMaxDepth`: how many prompts may wait for the session behind the one it
+    /// runs, when this turn is the one that starts holding it; a prompt past that is refused,
+    /// as acpx's queue owner refuses one (`QUEUE_OWNER_OVERLOADED`). A session held already
+    /// keeps the depth it was started with. Omitted, 16; at least 1.
+    public var queueMaxDepth: Int?
 
-    public init(timeoutMs: Int? = nil, promptRetries: Int? = nil, ttlMs: Int? = nil) {
+    public init(timeoutMs: Int? = nil, promptRetries: Int? = nil, ttlMs: Int? = nil, queueMaxDepth: Int? = nil) {
         self.timeoutMs = timeoutMs
         self.promptRetries = promptRetries
         self.ttlMs = ttlMs
+        self.queueMaxDepth = queueMaxDepth
     }
 }
