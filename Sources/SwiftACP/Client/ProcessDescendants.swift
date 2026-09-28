@@ -17,6 +17,18 @@ package struct ProcessTableEntry: Sendable, Equatable {
     /// When it started, in ``ProcessTable``'s units. A pid seen again with another
     /// birth is another process.
     package let birth: UInt64
+    /// Whether its exit has begun: Darwin's `P_WEXIT` (`ps`'s state `E`), Linux's
+    /// `PF_EXITING`. It runs nothing more, though it holds its descriptors until its exit
+    /// has closed them, and only then turns zombie.
+    package let exiting: Bool
+
+    package init(pid: pid_t, parentPid: pid_t, groupPid: pid_t, birth: UInt64, exiting: Bool = false) {
+        self.pid = pid
+        self.parentPid = parentPid
+        self.groupPid = groupPid
+        self.birth = birth
+        self.exiting = exiting
+    }
 }
 
 /// The system's process table, read natively where acpx runs `ps` (macOS) or reads
@@ -50,7 +62,8 @@ package enum ProcessTable {
                 table[process.kp_proc.p_pid] = ProcessTableEntry(
                     pid: process.kp_proc.p_pid, parentPid: process.kp_eproc.e_ppid,
                     groupPid: process.kp_eproc.e_pgid,
-                    birth: UInt64(started.tv_sec) * 1_000_000 + UInt64(started.tv_usec))
+                    birth: UInt64(started.tv_sec) * 1_000_000 + UInt64(started.tv_usec),
+                    exiting: process.kp_proc.p_flag & P_WEXIT != 0)
             }
             return table
         }
@@ -71,15 +84,18 @@ package enum ProcessTable {
 
     #if !canImport(Darwin)
     /// `/proc/<pid>/stat`: after the parenthesised command name come the state, the
-    /// parent, the process group, and — nineteen fields on — the start time in clock
-    /// ticks since boot.
+    /// parent and the process group; six and nineteen fields on from the state, the flags
+    /// and the start time in clock ticks since boot.
     static func parseStat(_ stat: String, pid: pid_t) -> ProcessTableEntry? {
         guard let close = stat.lastIndex(of: ")") else { return nil }
         let fields = stat[stat.index(after: close)...].split(separator: " ")
         guard fields.count > 19, fields[0] != "Z", fields[0] != "X",
             let parent = pid_t(fields[1]), let group = pid_t(fields[2]), let started = UInt64(fields[19])
         else { return nil }
-        return ProcessTableEntry(pid: pid, parentPid: parent, groupPid: group, birth: started)
+        let exiting: UInt32 = 0x4  // PF_EXITING
+        return ProcessTableEntry(
+            pid: pid, parentPid: parent, groupPid: group, birth: started,
+            exiting: (UInt32(fields[6]) ?? 0) & exiting != 0)
     }
     #endif
 
