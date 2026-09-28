@@ -154,6 +154,33 @@ import Testing
         #expect(try String(contentsOf: argv, encoding: .utf8) == "[\"--experimental-acp\"]\n")
     }
 
+    /// A launch called off while Gemini's `--version` still runs goes no further: the agent is
+    /// never started (#263 review).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aLaunchCalledOffDuringItsProbeStartsNothing() async throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probing = try FIFOReader.make(name: "probing")
+        let argv = directory.appendingPathComponent("argv.log")
+        let (python, fixture) = try (#require(mockArgv()?.first), #require(mockArgv()?.last))
+        let gemini = directory.appendingPathComponent("gemini").path
+        let script = """
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then printf probing > '\(probing.path.path)'; exec sleep 30; fi
+            MOCK_ARGV_LOG='\(argv.path)' exec '\(python)' '\(fixture)' "$@"
+
+            """
+        try script.write(toFile: gemini, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gemini)
+        let launching = Task {
+            try await ACPAgent.launch(agent: "'\(gemini)' --acp", cwd: directory.path, permission: .approveAll)
+        }
+        _ = await probing.next()
+        launching.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await launching.value }
+        #expect(!FileManager.default.fileExists(atPath: argv.path), "the agent was started")
+    }
+
     /// Qoder is launched with the session's limits on its command line.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func qoderIsLaunchedWithTheSessionsLimits() async throws {

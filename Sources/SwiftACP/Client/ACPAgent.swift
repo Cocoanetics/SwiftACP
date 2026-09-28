@@ -155,6 +155,9 @@ public final class ACPAgent: Sendable {
         rawWire.onLog(onLog)
         rawWire.log("spawning agent: \(spec.executable) \(spec.arguments.joined(separator: " "))")
         try await plan.ensureSupported()
+        // A launch called off while it asked a probe goes no further, as acpx's probe admission
+        // stops a client closed meanwhile: a probe given up says nothing, which is no leave (#263 review).
+        try Task.checkCancellation()
         // A launch path that does not exist is acpx's `AGENT_SPAWN_ENOENT`; established
         // here so the failure names the command instead of surfacing as an opaque
         // subprocess error once the handshake times out.
