@@ -22,8 +22,16 @@ enum SessionsList {
             return ExitCodes.success
         }
         let permissions = try SessionLifecycle.resolvePermissions(flags, config: context.config)
-        switch try fetch(agent, cursor: cursor, filterCwd: filterCwd, flags: flags, config: context.config,
-                         permissions: permissions) {
+        let outcome: Outcome
+        do {
+            outcome = try fetch(
+                agent, cursor: cursor, filterCwd: filterCwd, flags: flags, config: context.config,
+                permissions: permissions)
+        } catch is InterruptedError {
+            // acpx's top level ends an interrupted command `INTERRUPTED`, without a word.
+            return ExitCodes.interrupted
+        }
+        switch outcome {
         case .listed(let result):
             try printAgentSessions(result, format: flags.format)
         case .unsupported where cursor != nil || filterCwd != nil:
@@ -55,43 +63,58 @@ enum SessionsList {
 
     /// acpx's `listAgentSessions`: the agent started within `--timeout` and, when it advertises
     /// `session/list`, asked for its sessions — in `filterCwd` and after `cursor`, when given —
-    /// within `--timeout` too. A signal closes it; the run ends as whichever comes first, its
-    /// own failure or the interrupt (acpx's `withInterrupt`).
+    /// within `--timeout` too; closed before the listing is over, however it ends. A signal closes
+    /// it — or calls off its launch, and closes one that came up then — and the run ends as
+    /// whichever comes first, its own failure or the interrupt (acpx's `withInterrupt`): a request
+    /// still out fails with the agent (``RunInterrupt/putDown(endInterrupted:)``).
     private static func fetch(
         _ agent: AgentInvocation, cursor: String?, filterCwd: String?, flags: GlobalFlags,
         config: ResolvedAcpxConfig, permissions: (policy: PermissionPolicy, rules: PermissionRules?)
     ) throws -> Outcome {
         let answer = ListAnswer()
-        let launched = LaunchedAgent()
+        let interrupt = RunInterrupt()
         return try runBlocking {
             try await Interrupts.withInterrupt({
                 let handle: ACPAgent
                 do {
-                    handle = try await ExecCommand.launchAgent(within: flags.timeoutMs) {
-                        try await ACPAgent.launch(
-                            agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd,
-                            permission: permissions.policy, nonInteractivePermissions: flags.nonInteractivePolicy,
-                            permissionRules: permissions.rules, capabilities: flags.clientCapabilities,
-                            authCredentials: config.auth, authPolicy: flags.authPolicy, inheritStderr: flags.verbose,
-                            onRawWire: { answer.observe(inbound: $0 == .inbound, $1) }, onLog: flags.clientLog)
+                    handle = try await interrupt.launch {
+                        try await ExecCommand.launchAgent(within: flags.timeoutMs) {
+                            try await ACPAgent.launch(
+                                agent: agent.agentCommand, argv: agent.agentArgv, cwd: agent.cwd,
+                                permission: permissions.policy, nonInteractivePermissions: flags.nonInteractivePolicy,
+                                permissionRules: permissions.rules, capabilities: flags.clientCapabilities,
+                                authCredentials: config.auth, authPolicy: flags.authPolicy,
+                                inheritStderr: flags.verbose,
+                                onRawWire: { answer.observe(inbound: $0 == .inbound, $1) }, onLog: flags.clientLog)
+                        }
                     }
                 } catch is AgentLaunchError {
                     return .spawnFailed
                 }
-                launched.set(handle)
-                defer { Task { await handle.close() } }
-                guard truthy(handle.agentCapabilities?.sessionCapabilities?.list) else { return .unsupported }
-                let connection = handle.connection
-                let request = ListSessionsRequest(cwd: filterCwd, cursor: cursor)
-                let decoded = try await withTimeout(milliseconds: flags.timeoutMs) {
-                    try await connection.listSessions(request)
+                do {
+                    let outcome = try await list(on: handle, cursor: cursor, filterCwd: filterCwd, answer: answer,
+                                                 timeoutMs: flags.timeoutMs)
+                    await handle.close()
+                    return outcome
+                } catch {
+                    await handle.close()
+                    throw error
                 }
-                return .listed(result(answer.result ?? WireJSON(decoded), cursor: cursor, cwd: filterCwd))
-            }, onInterrupt: { endInterrupted in
-                await launched.agent?.close()
-                endInterrupted()
-            })
+            }, onInterrupt: { await interrupt.putDown(endInterrupted: $0) })
         }
+    }
+
+    /// The agent's sessions, when it advertises `session/list`.
+    private static func list(
+        on handle: ACPAgent, cursor: String?, filterCwd: String?, answer: ListAnswer, timeoutMs: Int?
+    ) async throws -> Outcome {
+        guard truthy(handle.agentCapabilities?.sessionCapabilities?.list) else { return .unsupported }
+        let connection = handle.connection
+        let request = ListSessionsRequest(cwd: filterCwd, cursor: cursor)
+        let decoded = try await withTimeout(milliseconds: timeoutMs) {
+            try await connection.listSessions(request)
+        }
+        return .listed(result(answer.result ?? WireJSON(decoded), cursor: cursor, cwd: filterCwd))
     }
 
     /// `{_meta, source: "agent", sessions, cursor, cwd, nextCursor}` of the agent's answer, as
@@ -116,18 +139,6 @@ enum SessionsList {
         case .string(let text)?: return !text.isEmpty
         case .array?, .object?: return true
         }
-    }
-}
-
-/// The agent a listing started, for a signal to close.
-private final class LaunchedAgent: @unchecked Sendable {
-    private let lock = NSLock()
-    private var launched: ACPAgent?
-
-    var agent: ACPAgent? { lock.withLock { launched } }
-
-    func set(_ agent: ACPAgent) {
-        lock.withLock { launched = agent }
     }
 }
 
