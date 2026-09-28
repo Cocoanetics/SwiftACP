@@ -15,6 +15,14 @@ extension ACPXDaemonBackend {
         let apply: @Sendable (Response, inout SessionRecord) -> Value
     }
 
+    /// What a control gave: its value, whether the session had to be taken back first, and
+    /// whether the session's owner ran it (``SessionControlResult/owned``).
+    struct ControlOutcome<Value: Sendable>: Sendable {
+        let value: Value
+        let resumed: Bool
+        let owned: Bool
+    }
+
     /// Run a control as acpx's queue owner runs one (`QueueOwnerControlAdmission.run`): on
     /// the prompt's agent while the session runs a prompt
     /// (``control(duringPromptOf:_:timeout:_:)``), and between turns otherwise
@@ -23,14 +31,15 @@ extension ACPXDaemonBackend {
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
         terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
         _ step: ControlStep<Response, Value>
-    ) async throws -> (value: Value, resumed: Bool) {
+    ) async throws -> ControlOutcome<Value> {
         _ = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
         if let record = findRecord(sessionId), let ticket = tickets[record.acpxRecordId], !ticket.sealed {
             // Its failure is said as one between turns is (``AgentFailure/shown(_:)``).
             do {
-                return (try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step), false)
+                let value = try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step)
+                return ControlOutcome(value: value, resumed: false, owned: true)
             } catch {
                 throw AgentFailure.shown(error)
             }

@@ -457,10 +457,13 @@ public actor ACPXDaemon {
     ///   - turnToken: cancel only the turn `runPrompt` was given this token for — and, when it
     ///     has not begun yet, end it as it begins, nothing sent, as acpx's flow runner closes
     ///     the client a stopped direct turn would prompt on. Omitted, whatever turn runs.
-    /// - Returns: `false` if the session isn't currently live.
+    /// - Returns: whether a turn was cancelled — not if the session isn't currently live — and
+    ///   the daemon's pid when the session's owner took the cancel (``SessionCancelResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
-        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId, turnToken: turnToken) }
+    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> SessionCancelResult {
+        try await admitted { [backend] in
+            try await backend.cancelSessionReportingOwner(sessionId: sessionId, turnToken: turnToken)
+        }
     }
 
     /// Let go of a session's live agent without closing the session: the daemon stops

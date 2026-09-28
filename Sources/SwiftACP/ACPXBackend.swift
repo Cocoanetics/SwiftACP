@@ -47,6 +47,8 @@ public protocol ACPXBackend: Sendable {
         limits: PromptLimits?
     ) async throws -> String
     func cancelSession(sessionId: String, turnToken: String?) async throws -> Bool
+    /// ``cancelSession(sessionId:turnToken:)``, saying whether the session's owner took it.
+    func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult
     func callOffCreation(creationToken: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
     func releaseSession(sessionId: String, turnToken: String?) async throws -> Bool
@@ -162,5 +164,10 @@ extension ACPXBackend {
     /// A backend that holds no agents live keeps none it made.
     public func callOffCreation(creationToken: String) async throws -> Bool {
         false
+    }
+
+    /// A backend that holds no sessions as an owner has no owner to take a cancel.
+    public func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult {
+        SessionCancelResult(cancelled: try await cancelSession(sessionId: sessionId, turnToken: turnToken))
     }
 }
