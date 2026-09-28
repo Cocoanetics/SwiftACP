@@ -71,6 +71,7 @@ extension ACPAgentConnection {
         }
         await withCheckedContinuation { continuation in
             loadWaiters[sessionId, default: []].append(continuation)
+            waitingToLoad?(sessionId)
         }
     }
 
