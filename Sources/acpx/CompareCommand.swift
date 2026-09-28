@@ -77,9 +77,8 @@ enum CompareCommand {
         let format = scan.flag("json") ? "json" : flags.format
 
         let promptFile = try resolvePromptFile(file: scan.string("file"), promptFile: scan.string("prompt-file"))
-        let promptTokens = context.levels.reversed().lazy.compactMap(\.separated).first
         let (agents, promptText) = try splitArgs(
-            context.positionals, promptFile: promptFile, promptTokens: promptTokens)
+            context.positionals, promptFile: promptFile, promptTokens: promptTokens(context.levels))
         // The permission mode before the prompt is read, as acpx checks it.
         let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
         let prompt = try PromptInputResolver.contentBlocks(PromptInputResolver.resolve(
@@ -114,6 +113,24 @@ enum CompareCommand {
         }
         return (rows, signal.happened)
     }
+
+    /// acpx's `scanCompareArgs(program.args.slice(1))`: the words after the first `--` among those
+    /// the root hands `compare`, or `nil` without one. A `--` given to `compare` is its own; after a
+    /// `--` given to the root, `compare` gets its words as they are, unparsed, and the first `--`
+    /// among them that is no option's value starts the prompt — while `compare` takes it for an
+    /// agent, as acpx does (#254 review).
+    static func promptTokens(_ levels: [Commander.Level]) -> [String]? {
+        if let own = levels.last?.separated { return own }
+        guard levels.count > 1, var words = levels.first?.separated?.dropFirst() else { return nil }
+        while let word = words.popFirst() {
+            if word == "--" { return Array(words) }
+            if valueOptions.contains(word) { _ = words.popFirst() }
+        }
+        return nil
+    }
+
+    /// `compare`'s options that take a value: acpx's `VALUE_FLAGS`.
+    private static let valueOptions: Set<String> = ["--cwd", "--timeout", "--format", "-f", "--file", "--prompt-file"]
 
     /// acpx's `resolvePromptFile`: `--file` or its alias `--prompt-file`, one of them.
     private static func resolvePromptFile(file: String?, promptFile: String?) throws -> String? {

@@ -32,6 +32,34 @@ import Testing
         #expect(rows.allSatisfy { ($0["final_message"] as? String)?.hasSuffix("You said: hello there") == true })
     }
 
+    /// A `--` given to the root hands `compare` its words as they are: with no other `--` among
+    /// them, the last is the prompt, as acpx scans them (`program.args`, #254 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aRootSeparatorLeavesTheLastWordThePrompt() async throws {
+        let agent = try #require(mockCommand())
+        let run = await withIsolatedStore {
+            Self.run(["--approve-all", "--format", "json", "--", "compare", agent, "hello"])
+        }
+        #expect(run.code == ExitCodes.success)
+        let rows = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [[String: Any]])
+        #expect(rows.count == 1)
+        #expect((rows.first?["final_message"] as? String)?.hasSuffix("You said: hello") == true)
+    }
+
+    /// Among the words a root `--` hands `compare`, the first `--` that is no option's value
+    /// starts the prompt, as in acpx's `scanCompareArgs`; one given to `compare` is its own
+    /// (#254 review).
+    @Test func thePromptStartsAtTheSeparatorCompareGets() throws {
+        let root = CommandTree.acpx(agents: ["codex"])
+        func promptTokens(_ args: [String]) throws -> [String]? {
+            guard case .run(let levels, _) = try Commander.parse(args, root: root) else { return nil }
+            return CompareCommand.promptTokens(levels)
+        }
+        #expect(try promptTokens(["compare", "a", "--", "hi", "--", "there"]) == ["hi", "--", "there"])
+        #expect(try promptTokens(["--", "compare", "a", "b"]) == nil)
+        #expect(try promptTokens(["--", "compare", "a", "--file", "--", "b", "--", "hi", "there"]) == ["hi", "there"])
+    }
+
     /// Two different prompt files are refused, as acpx's `resolvePromptFile` refuses them (#250).
     @Test func compareRefusesTwoPromptFiles() async {
         let run = await withIsolatedStore {
