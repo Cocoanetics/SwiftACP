@@ -24,7 +24,7 @@ enum SessionRecordSerializer {
         }
         let rebuilt = record.acpx?.rebuiltOrders ?? [:]
         let built = withHeldCommands(withHeldConfigOptions(parsed, from: raw), from: raw)
-            .mapping("messages") { $0.mappingItems(MessageOrder.built) }
+            .mapping("messages") { withWireForms($0.mappingItems(MessageOrder.built), of: record.messages) }
             .mapping("request_token_usage") { MessageOrder.requestTokenUsage($0, of: record) }
             .mapping("acpx") { acpx in
                 rebuilt.reduce(acpx) { acpx, map in acpx.mapping(map.key) { MessageOrder.ordered($0, by: map.value) } }
@@ -46,6 +46,37 @@ enum SessionRecordSerializer {
             }
         }
         return Data((document.stringified(indent: 2) + "\n").utf8)
+    }
+
+    /// `messages` with each tool payload the model kept as the agent sent it — a tool use's
+    /// `input`, a result's `output` — in that form, where the encoder sorted its members, as
+    /// acpx writes a payload as the agent sent it (#119). Lined up one for one with the record's
+    /// messages, which they were written from; left as they are when they do not line up.
+    static func withWireForms(_ messages: WireJSON, of recorded: [SessionMessage]) -> WireJSON {
+        guard case .array(var items) = messages, items.count == recorded.count else { return messages }
+        for (index, message) in recorded.enumerated() {
+            guard case .agent(let agent) = message else { continue }
+            items[index] = items[index].mapping("Agent") { entry in
+                entry
+                    .mapping("content") { content in
+                        guard case .array(var blocks) = content, blocks.count == agent.content.count else {
+                            return content
+                        }
+                        for (position, block) in agent.content.enumerated() {
+                            guard case .toolUse(let tool) = block, let wire = tool.inputWire else { continue }
+                            blocks[position] = blocks[position].mapping("ToolUse") { $0.replacing("input", with: wire) }
+                        }
+                        return .array(blocks)
+                    }
+                    .mapping("tool_results") { results in
+                        agent.toolResults.reduce(results) { results, result in
+                            guard let wire = result.value.outputWire else { return results }
+                            return results.mapping(result.key) { $0.replacing("output", with: wire) }
+                        }
+                    }
+            }
+        }
+        return .array(items)
     }
 
     /// `parsed` with the config options the record holds, `raw`'s. acpx writes them as they

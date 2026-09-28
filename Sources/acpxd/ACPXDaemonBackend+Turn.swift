@@ -111,7 +111,7 @@ extension ACPXDaemonBackend {
                 if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
                     fullText += chunk
                 }
-                await persister.apply(note.update)
+                await persister.apply(note.update, raw: note.rawUpdate)
                 let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
                 await clientSession?.sendLogNotification(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
