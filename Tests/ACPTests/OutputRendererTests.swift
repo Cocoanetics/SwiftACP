@@ -255,6 +255,20 @@ struct OutputRendererTests {
         }
     }
 
+    /// Tool ids are told apart by their UTF-16 code units, as JavaScript's `Map` compares strings:
+    /// `"é"` and `"e\u{301}"`, one string to Swift, are two tools, what acpx 0.19.3 printed for
+    /// these updates (#270 review). Compared as bytes, since Swift's `==` would call them equal.
+    @Test func canonicallyEquivalentIDsAreTwoTools() throws {
+        let updates = try [
+            #"{"sessionUpdate":"tool_call","toolCallId":"é","title":"A","status":"pending"}"#,
+            #"{"sessionUpdate":"tool_call_update","toolCallId":"é","status":"in_progress"}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"é","status":"completed"}"#
+        ].map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+        let (text, _) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+        let printed = "[tool] A (pending)\n\n[tool] e\u{301} (running)\n\n[tool] e\u{301} (completed)\n"
+        #expect(Array(text.utf8) == Array(printed.utf8), "\(text)")
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",

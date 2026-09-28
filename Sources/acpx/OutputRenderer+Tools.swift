@@ -15,7 +15,7 @@ extension OutputRenderer {
         locations: [ToolCallLocation]?, rawInput: JSONValue?, rawOutput: JSONValue?,
         content: [ToolCallContent]?, kindIsText: Bool = true, clearing nulled: Set<String> = []
     ) {
-        let key = key ?? .string(id)
+        let key = key ?? .string(Array(id.utf16))
         let state = toolStates[key] ?? {
             let created = ToolRenderState(id: id)
             toolStates[key] = created
@@ -63,7 +63,7 @@ extension OutputRenderer {
         case nil: .undefined
         case .null?: .null
         case .bool(let flag)?: .bool(flag)
-        case .string(let text)?: .string(text)
+        case .string(let text)?: .string(Array(text.utf16))
         case .integer?, .unsignedInteger?, .double?: .number(id)
         case .array?, .object?: .object(UUID())
         }
@@ -162,7 +162,9 @@ extension OutputRenderer {
 /// it (SameValueZero), for an update acpx's SDK refuses can name its tool with any JSON value
 /// (#270 review).
 enum ToolKey: Hashable {
-    case string(String)
+    /// A string, by its UTF-16 code units, as JavaScript compares strings: `"é"` and `"e\u{301}"`,
+    /// one to Swift's `String`, are two tools (#270 review).
+    case string([UInt16])
     case undefined
     case null
     case bool(Bool)
