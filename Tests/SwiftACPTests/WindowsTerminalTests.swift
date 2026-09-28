@@ -90,7 +90,8 @@ struct WindowsTerminalTests {
         let manager = TerminalManager(cwd: NSTemporaryDirectory())
         let id = try await Self.create(
             manager, "cmd.exe", ["/d", "/c", "echo out-marker& echo err-marker 1>&2& exit 23"])
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(exitCode: 23))
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(exitCode: 23))
         let output = try await Self.output(manager, id)
         #expect(Self.lines(output.output) == ["err-marker", "out-marker"])
         #expect(!output.truncated)
@@ -106,8 +107,10 @@ struct WindowsTerminalTests {
     @Test func aCommandLineKeepsWhatItsProgramsPrint() async throws {
         let manager = TerminalManager(cwd: NSTemporaryDirectory())
         let id = try await Self.create(manager, "cmd /d /c echo child-out& cmd /d /c echo child-err 1>&2& exit 23")
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(exitCode: 23))
-        #expect(Self.lines(try await Self.output(manager, id).output) == ["child-err", "child-out"])
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(exitCode: 23))
+        let output = try await Self.output(manager, id).output
+        #expect(Self.lines(output) == ["child-err", "child-out"])
         await manager.shutdown()
     }
 
@@ -128,8 +131,10 @@ struct WindowsTerminalTests {
 
         let manager = TerminalManager(cwd: NSTemporaryDirectory())
         let id = try await Self.create(manager, "run-me", ["a", "b"], env: [path])
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(exitCode: 7))
-        #expect(Self.lines(try await Self.output(manager, id).output) == ["cmd-args a b"])
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(exitCode: 7))
+        let output = try await Self.output(manager, id).output
+        #expect(Self.lines(output) == ["cmd-args a b"])
         await manager.shutdown()
     }
 
@@ -141,7 +146,8 @@ struct WindowsTerminalTests {
         let id = try await Self.create(manager, "cmd.exe", ["/d", "/c", "ping -n 60 127.0.0.1 > \(pipe.path)"])
         _ = await pipe.firstOutput()
         _ = try await manager.killTerminal(KillTerminalRequest(sessionId: "s", terminalId: id))
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(signal: "SIGTERM"))
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(signal: "SIGTERM"))
         _ = await pipe.rest()
         await manager.shutdown()
     }
@@ -155,9 +161,11 @@ struct WindowsTerminalTests {
         let id = try await Self.create(manager, "ping -n 60 127.0.0.1 > \(pipe.path) & echo after")
         _ = await pipe.firstOutput()
         _ = try await manager.killTerminal(KillTerminalRequest(sessionId: "s", terminalId: id))
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(exitCode: 1))
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(exitCode: 1))
         _ = await pipe.rest()
-        #expect(!(try await Self.output(manager, id).output.contains("after")))
+        let output = try await Self.output(manager, id).output
+        #expect(!output.contains("after"), "\(output)")
         await manager.shutdown()
     }
 
@@ -172,7 +180,8 @@ struct WindowsTerminalTests {
         let pipe = try SignalPipe()
         let manager = TerminalManager(cwd: NSTemporaryDirectory())
         let id = try await Self.create(manager, "cmd.exe", ["/d", "/c", "start /b ping -n 60 127.0.0.1 > \(pipe.path)"])
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(exitCode: 0))
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(exitCode: 0))
         _ = await pipe.firstOutput()
         _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: id))
         _ = await pipe.rest()
@@ -181,8 +190,8 @@ struct WindowsTerminalTests {
     }
 
     /// A command that is not found, and does not read as a command line, fails as Node's `spawn`
-    /// says. A `.cmd` that is not there runs through the shell all the same, which says so with
-    /// cmd.exe's code for a command it cannot find.
+    /// says. A `.cmd` that is not there runs through the shell all the same, which names it as a
+    /// command it does not know and exits 1.
     @Test func aCommandThatIsNotThereFailsAsNodeSays() async throws {
         let manager = TerminalManager(cwd: NSTemporaryDirectory())
         let name = "swiftacp-missing-\(UUID().uuidString)"
@@ -190,7 +199,10 @@ struct WindowsTerminalTests {
             _ = try await Self.create(manager, name)
         }
         let id = try await Self.create(manager, name + ".cmd", ["x"])
-        #expect(try await Self.exit(manager, id) == WaitForTerminalExitResponse(exitCode: 9009))
+        let exit = try await Self.exit(manager, id)
+        #expect(exit == WaitForTerminalExitResponse(exitCode: 1))
+        let output = try await Self.output(manager, id).output
+        #expect(output.contains(name + ".cmd"), "\(output)")
         await manager.shutdown()
     }
 }
