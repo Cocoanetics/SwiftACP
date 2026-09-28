@@ -23,7 +23,8 @@ the `model` option) is answered with. `MODEL_AGENT_EXTRA_OPTION` names one more 
 advertise after `effort`, with the values `x` (current) and `y`. During a prompt,
 `MODEL_AGENT_COMMANDS=1` sends an `available_commands_update`, `MODEL_AGENT_MODE_UPDATE`
 a `current_mode_update` to the mode it names, and `MODEL_AGENT_PROMPT_OPTIONS=1` a
-`config_option_update` with its options, before the answer. Replies the ACP schema would
+`config_option_update` with its options, before the answer — any other value of it being the
+update's `configOptions` as written. Replies the ACP schema would
 not take: `MODEL_AGENT_NEW_REPLY` holds a JSON object whose members replace those of the
 `session/new` reply's, and `MODEL_AGENT_LOAD_RESULT` and `MODEL_AGENT_SET_RESULT` the JSON
 `session/load` and `session/set_config_option` answer with instead.
@@ -159,6 +160,12 @@ def main():
                 send({"jsonrpc": "2.0", "method": "session/update", "params": {
                     "sessionId": session_id, "update": {
                         "sessionUpdate": "config_option_update", "configOptions": config_options()}}})
+            elif os.environ.get("MODEL_AGENT_PROMPT_OPTIONS"):
+                # The options as written, members in their order.
+                sys.stdout.write('{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":%s,'
+                                 '"update":{"sessionUpdate":"config_option_update","configOptions":%s}}}\n'
+                                 % (json.dumps(session_id), os.environ["MODEL_AGENT_PROMPT_OPTIONS"]))
+                sys.stdout.flush()
             send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
         elif method == "session/cancel":
             pass

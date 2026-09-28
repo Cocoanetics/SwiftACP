@@ -152,7 +152,7 @@ public enum ConversationModel {
             acpx.availableCommands = commands.compactMap(recordedCommand)
             record.acpx = acpx
         case .other(let kind, let payload):
-            applyOtherUpdate(kind, payload, into: &record)
+            applyOtherUpdate(kind, payload, raw: raw, into: &record)
         case .plan:
             // No handler in acpx either.
             break
@@ -175,7 +175,9 @@ public enum ConversationModel {
     /// The updates decoded as ``SessionUpdate/other(kind:payload:)`` that acpx records:
     /// the conversation's title (`session_info_update`, `applySessionInfoUpdate`) and
     /// the session's config options (`config_option_update`, `applyConfigOptionsModelState`).
-    private static func applyOtherUpdate(_ kind: String, _ payload: JSONValue, into record: inout SessionRecord) {
+    private static func applyOtherUpdate(
+        _ kind: String, _ payload: JSONValue, raw: WireJSON?, into record: inout SessionRecord
+    ) {
         guard case .object(let update) = payload else { return }
         switch kind {
         case "session_info_update":
@@ -190,8 +192,8 @@ public enum ConversationModel {
             guard let options = ConfigOptionSchema.options(of: payload) else { return }
             var acpx = record.acpx ?? SessionAcpxState()
             ModelSupport.applyConfigOptionsModelState(options, to: &acpx)
-            // In the order the SDK built them (#175).
-            acpx.configOptionsOrder = ConfigOptionSchema.ordered(options)
+            // In the order the SDK built them (#175), each `_meta` as the agent wrote it (#243 review).
+            acpx.configOptionsOrder = ConfigOptionSchema.ordered(options, as: raw?["configOptions"])
             record.acpx = acpx
         default:
             break

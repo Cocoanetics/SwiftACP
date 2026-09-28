@@ -33,6 +33,20 @@ import Testing
         #expect(Self.keys(ordered, 2) == ["currentValue", "type", "id", "name"])
     }
 
+    /// An update's `_meta` — a zod record, which keeps the agent's order — is as the agent wrote
+    /// it, all the way down, in an option and in a select option, while the members the schema
+    /// builds are in its order (#243 review).
+    @Test func anUpdatesMetaKeepsTheAgentsOrder() throws {
+        let written = try #require(WireJSON(parsing: #"{"configOptions": [{"_meta": {"z": 1, "a": {"y": 2, "b": 3}}, "#
+            + #""name": "Model", "id": "model", "type": "select", "#
+            + #""options": [{"_meta": {"q": 1, "c": 2}, "name": "One", "value": "m1"}], "currentValue": "m1"}]}"#))
+        let options = try #require(ConfigOptionSchema.options(of: written.jsonValue))
+        let ordered = ConfigOptionSchema.ordered(options, as: written["configOptions"])
+        #expect(ordered.stringified == #"[{"currentValue":"m1","options":[{"value":"m1","name":"One","#
+            + #""_meta":{"q":1,"c":2}}],"type":"select","id":"model","name":"Model","#
+            + #""_meta":{"z":1,"a":{"y":2,"b":3}}}]"#)
+    }
+
     /// Options written in the order they came in keep it though changed in place — a new
     /// selection — each matched by its `id`, a select option by its `value`; one the order does
     /// not know has its members sorted.
@@ -125,6 +139,29 @@ import Testing
             #expect(Self.keys(options, 0) == ["currentValue", "options", "type", "id", "name", "category"])
             #expect(Self.keys(options[0]?["options"], 0) == ["value", "name"])
             await daemon.releaseAll()
+        }
+    }
+
+    /// A turn's `config_option_update` keeps each `_meta` as the agent wrote it, the members the
+    /// schema builds in its order: what acpx 0.19.3 wrote for the same turn (#243 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aTurnsUpdateKeepsTheAgentsMetaOrder() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let agent = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/model-agent.py").path
+        let options = #"[{"_meta":{"z":1,"a":{"y":2,"b":3}},"name":"Model","id":"model","type":"select","#
+            + #""category":"model","options":[{"_meta":{"q":1,"c":2},"name":"M1","value":"m1"},"#
+            + #"{"value":"m2","name":"M2"}],"currentValue":"m1"}]"#
+        let command = "/usr/bin/env 'MODEL_AGENT_PROMPT_OPTIONS=\(options)' MODEL_AGENT_LOAD=1 '\(python)' '\(agent)'"
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "hi")
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified
+                == #"[{"currentValue":"m1","options":[{"value":"m1","name":"M1","_meta":{"q":1,"c":2}},"#
+                + #"{"value":"m2","name":"M2"}],"type":"select","id":"model","name":"Model","category":"model","#
+                + #""_meta":{"z":1,"a":{"y":2,"b":3}}}]"#)
         }
     }
 

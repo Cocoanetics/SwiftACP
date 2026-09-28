@@ -19,10 +19,22 @@ public enum ConfigOptionSchema {
     /// `currentValue`, `options` and `type` — its kind's members — then `id`, `name`,
     /// `description`, `category` and `_meta`; a select option's `value`, `name`, `description`,
     /// `_meta`; a group's `group`, `name`, `options`, `_meta` (zod's intersection of the kind and
-    /// the rest, each object built in its shape's order).
-    public static func ordered(_ options: JSONValue) -> WireJSON {
+    /// the rest, each object built in its shape's order). Each `_meta` — a zod record, which keeps
+    /// what the agent wrote in its order — is in the order of its counterpart in `written`, the
+    /// update's `configOptions` as they came (#243 review): an option matched by its `id`, a select
+    /// option by its `value`, a group by its `group`, as ``inOrder(_:of:)`` matches them.
+    public static func ordered(_ options: JSONValue, as written: WireJSON? = nil) -> WireJSON {
         guard case .array(let items) = options else { return WireJSON(options) }
-        return .array(items.map { schemaOrdered($0, optionOrder) })
+        let candidates = entries(of: written)
+        return .array(items.enumerated().map { index, item in
+            schemaOrdered(item, optionOrder, as: counterpart(of: item, at: index, in: candidates, keys: ["id"]))
+        })
+    }
+
+    /// The items of `list`, when it is one.
+    private static func entries(of list: WireJSON?) -> [WireJSON] {
+        if case .array(let items)? = list { return items }
+        return []
     }
 
     /// `current`, the record's options, in the order of `template` — the order they came in. Each
@@ -43,18 +55,22 @@ public enum ConfigOptionSchema {
     private static let groupOrder = ["group", "name", "options", "_meta"]
 
     /// `value`'s members in `order`, then any others sorted; an option's `options` entries each
-    /// in their own shape's order.
-    private static func schemaOrdered(_ value: JSONValue, _ order: [String]) -> WireJSON {
+    /// in their own shape's order; its `_meta` in the order of `written`'s, its counterpart as it
+    /// came, all the way down.
+    private static func schemaOrdered(_ value: JSONValue, _ order: [String], as written: WireJSON?) -> WireJSON {
         guard case .object(let members) = value else { return WireJSON(value) }
         let keys = order.filter { members[$0] != nil } + members.keys.filter { !order.contains($0) }.sorted()
         return .object(keys.map { key in
             let member = members[key] ?? .null
+            if key == "_meta" { return WireJSON.Member(key, like(member, written?["_meta"], keys: [])) }
             guard key == "options", case .array(let entries) = member else {
                 return WireJSON.Member(key, WireJSON(member))
             }
-            return WireJSON.Member(key, .array(entries.map { entry in
+            let candidates = Self.entries(of: written?["options"])
+            return WireJSON.Member(key, .array(entries.enumerated().map { index, entry in
                 guard case .object(let fields) = entry else { return WireJSON(entry) }
-                return schemaOrdered(entry, fields["group"] != nil ? groupOrder : selectOptionOrder)
+                let counterpart = counterpart(of: entry, at: index, in: candidates, keys: ["value", "group"])
+                return schemaOrdered(entry, fields["group"] != nil ? groupOrder : selectOptionOrder, as: counterpart)
             }))
         })
     }
