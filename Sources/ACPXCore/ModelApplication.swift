@@ -111,7 +111,8 @@ public enum ModelApplication {
             ?? ModelSupport.modelState(fromLegacyModels: session.models)
         control.update { state in
             if let advertised { ModelSupport.applyAdvertisedModelState(advertised, to: &state) }
-            ModelSupport.applyConfigOptionsToState(reported ?? .array([]), to: &state)
+            ModelSupport.applyConfigOptionsToState(
+                reported ?? .array([]), asSent: session.configOptionsAsSent, to: &state)
         }
         let application = try await applyRequestedModel(
             connection: connection, sessionId: session.sessionId, requestedModel: model,

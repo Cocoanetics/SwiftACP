@@ -377,7 +377,7 @@ extension ACPXDaemonBackend {
             }
             return (session, ReconnectReplay.Loaded(
                 sessionId: session.id, createdFreshSession: false, configOptions: session.rawConfigOptions,
-                models: session.models))
+                models: session.models, configOptionsAsSent: session.configOptionsAsSent))
         } catch {
             let record = findRecord(recordId)
             switch ReconnectFallback.outcome(
@@ -392,7 +392,7 @@ extension ACPXDaemonBackend {
             }
             var loaded = ReconnectReplay.Loaded(
                 sessionId: session.id, createdFreshSession: true, configOptions: session.rawConfigOptions,
-                models: session.models)
+                models: session.models, configOptionsAsSent: session.configOptionsAsSent)
             loaded.loadError = TurnFailure.message(of: error)
             return (session, loaded)
         }

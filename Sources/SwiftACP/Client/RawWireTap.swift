@@ -46,10 +46,28 @@ public final class RawWireTap: @unchecked Sendable {
     /// Where the updates not yet taken begin in `updateBodies`.
     private var updateHead = 0
     private var keepsUpdateBodies = false
-    /// Whether the next inbound response's `result` is kept (``keepNextResult()``), and what it was
-    /// once read: `.some(nil)` for a response whose body does not parse here.
-    private var keepsNextResult = false
-    private var nextResult: WireJSON??
+    /// The requests out whose answers are kept as written (``resultsKept``), by id: their method,
+    /// and the session their `params` name.
+    private var awaitedResults: [JSONRPCID: ResultKey] = [:]
+    /// Those answers' `result`s as the agent wrote them, until taken (``takeResult(of:sessionId:)``):
+    /// the latest for each method and session.
+    private var keptResults: [ResultKey: WireJSON] = [:]
+
+    /// A kept answer's method, and its session: the one its request named, or for `session/new`
+    /// the one it names itself.
+    private struct ResultKey: Hashable {
+        let method: String
+        let sessionId: String?
+    }
+
+    /// The answers acpx records as the agent wrote them (#119): `initialize`'s capabilities, and the
+    /// config options that a session's opening, or an option set on it, reports.
+    static let resultsKept: Set<String> = [
+        "initialize", "session/new", "session/load", "session/resume", "session/set_config_option"
+    ]
+    /// The longest outbound body looked at for a request whose answer is kept: those requests are
+    /// small, where a prompt, or a file read's answer, can be large.
+    private static let awaitedRequestLimit = 64 * 1024
 
     public init(_ observer: Observer? = nil) {
         self.observer = observer
@@ -113,7 +131,9 @@ public final class RawWireTap: @unchecked Sendable {
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
         if direction == .inbound {
             keepIfUpdate(body)
-            keepIfResult(body)
+            keepIfAwaited(body)
+        } else {
+            awaitIfKept(body)
         }
         lock.lock()
         let current = self.observer
@@ -153,39 +173,51 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { updateBodies.append(contentsOf: kept) }
     }
 
-    /// Keep the `result` of the next response to come in, as the agent wrote it — the answer to the
-    /// request about to go out, when it is the only one out: `initialize`'s, whose agent
-    /// capabilities acpx records member for member (#119).
-    func keepNextResult() {
-        lock.withLock {
-            keepsNextResult = true
-            nextResult = nil
-        }
+    /// The `result` of the agent's latest answer to `method` for `sessionId` — `nil` for
+    /// `initialize` — as the agent wrote it, when it is one the tap keeps (``resultsKept``);
+    /// taken, it is gone. A request is seen on its way out before its answer can come in, so the
+    /// answer to a request just sent is here by the time the peer hands it on (#119).
+    func takeResult(of method: String, sessionId: String?) -> WireJSON? {
+        lock.withLock { keptResults.removeValue(forKey: ResultKey(method: method, sessionId: sessionId)) }
     }
 
-    /// The `result` kept since ``keepNextResult()``, once its response has come; the tap keeps no
-    /// more after it is taken.
-    func takeNextResult() -> WireJSON? {
-        lock.withLock {
-            defer {
-                keepsNextResult = false
-                nextResult = nil
+    /// Note each request in `body` whose answer is kept, by its id.
+    private func awaitIfKept(_ body: Data) {
+        guard body.count <= Self.awaitedRequestLimit,
+            let messages = try? JSONRPCMessage.decodeMessages(from: body) else { return }
+        for case .request(let request) in messages where Self.resultsKept.contains(request.method) {
+            var sessionId: String?
+            if case .object(let params)? = request.params, case .string(let named)? = params["sessionId"] {
+                sessionId = named
             }
-            return nextResult ?? nil
+            let key = ResultKey(method: request.method, sessionId: sessionId)
+            lock.withLock { awaitedResults[request.id] = key }
         }
     }
 
-    /// The first response in `body`, decoded as the transports decode it, kept as written.
-    private func keepIfResult(_ body: Data) {
-        guard lock.withLock({ keepsNextResult && nextResult == nil }),
-            let messages = try? JSONRPCMessage.decodeMessages(from: body),
-            let index = messages.firstIndex(where: { if case .response = $0 { true } else { false } })
-        else { return }
+    /// Keep the `result` of each answer in `body` to a request ``awaitIfKept(_:)`` noted, as the
+    /// agent wrote it — `body` decoded as the transports decode it, a batch's answers each in
+    /// turn. An error answer only ends the wait.
+    private func keepIfAwaited(_ body: Data) {
+        guard lock.withLock({ !awaitedResults.isEmpty }),
+            let messages = try? JSONRPCMessage.decodeMessages(from: body) else { return }
         let parsed = WireJSON(parsing: body)
         let written: [WireJSON?] = if case .array(let items)? = parsed { items } else { [parsed] }
-        let result = written.count == messages.count ? written[index]?["result"] : nil
-        lock.withLock {
-            if keepsNextResult, nextResult == nil { nextResult = .some(result) }
+        let paired = written.count == messages.count ? written : Array(repeating: nil, count: messages.count)
+        for (message, wire) in zip(messages, paired) {
+            switch message {
+            case .response(let response):
+                guard var key = lock.withLock({ awaitedResults.removeValue(forKey: response.id) }),
+                    let result = wire?["result"] else { continue }
+                if key.method == "session/new", let named = result["sessionId"]?.stringValue {
+                    key = ResultKey(method: key.method, sessionId: named)
+                }
+                lock.withLock { keptResults[key] = result }
+            case .errorResponse(let response):
+                if let id = response.id { _ = lock.withLock { awaitedResults.removeValue(forKey: id) } }
+            default:
+                continue
+            }
         }
     }
 

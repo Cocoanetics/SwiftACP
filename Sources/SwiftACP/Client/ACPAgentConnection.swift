@@ -68,7 +68,7 @@ public actor ACPAgentConnection {
     /// The `cwd` of each `session/new` still waiting for its answer.
     var sessionRootsBeingCreated: [UUID: String] = [:]
     /// Told each time a session is open (``setSessionOpenedObserver(_:)``).
-    private var sessionOpened: (@Sendable () -> Void)?
+    var sessionOpened: (@Sendable () -> Void)?
 
     /// Sessions with a `session/prompt` in flight.
     var promptingSessionIds: Set<SessionId> = []
@@ -279,12 +279,11 @@ public actor ACPAgentConnection {
         clientInfo: Implementation? = nil
     ) async throws -> InitializeResponse {
         advertisedCapabilities = capabilities
-        rawUpdates?.keepNextResult()
         let response: InitializeResponse = try await send(
             "initialize",
             InitializeRequest(clientCapabilities: capabilities, clientInfo: clientInfo))
         initializeResult = response
-        agentCapabilitiesAsSent = rawUpdates?.takeNextResult()?["agentCapabilities"]
+        agentCapabilitiesAsSent = rawUpdates?.takeResult(of: "initialize", sessionId: nil)?["agentCapabilities"]
         return response
     }
 
@@ -305,7 +304,7 @@ public actor ACPAgentConnection {
         let creation = UUID()
         sessionRootsBeingCreated[creation] = request.cwd
         defer { sessionRootsBeingCreated[creation] = nil }
-        let response: NewSessionResponse
+        var response: NewSessionResponse
         if let limit = sessionCreateLimit {
             // Claude's adapter, as acpx's `createSession` caps it (#248).
             do {
@@ -316,6 +315,7 @@ public actor ACPAgentConnection {
         } else {
             response = try await send("session/new", request)
         }
+        response.configOptionsAsSent = configOptionsAsSent(answering: "session/new", in: response.sessionId)
         sessionRoots[response.sessionId] = request.cwd
         sessionOpened?()
         return response
@@ -335,34 +335,6 @@ public actor ACPAgentConnection {
         if let root = sessionRoots[sessionId] { return root }
         let creating = Set(sessionRootsBeingCreated.values)
         return creating.count == 1 ? creating.first : nil
-    }
-
-    /// The root is registered *before* the request is sent: this actor is reentrant at
-    /// the `await`, and an agent handling `session/load` may issue `fs/*` for the very
-    /// session being loaded. Registering afterwards would refuse those as an unknown
-    /// session. A failed load restores whatever was there before.
-    public func loadSession(_ request: LoadSessionRequest) async throws -> LoadSessionResponse {
-        let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
-        do {
-            let response: LoadSessionResponse = try await send("session/load", request)
-            sessionOpened?()
-            return response
-        } catch {
-            sessionRoots[request.sessionId] = previous
-            throw error
-        }
-    }
-
-    public func resumeSession(_ request: ResumeSessionRequest) async throws -> ResumeSessionResponse {
-        let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
-        do {
-            let response: ResumeSessionResponse = try await send("session/resume", request)
-            sessionOpened?()
-            return response
-        } catch {
-            sessionRoots[request.sessionId] = previous
-            throw error
-        }
     }
 
     public func prompt(_ request: PromptRequest) async throws -> PromptResponse {

@@ -167,17 +167,34 @@ import Testing
         #expect(tap.takeUpdateBody() == nil)
     }
 
-    /// Once armed, the tap keeps the `result` of the next response to come in, as the agent wrote
-    /// it — in a batch too — and none before it was armed, or after it was taken (#119).
-    @Test func theNextResultIsKeptAsWritten() {
+    /// The tap keeps the `result` of the agent's answer to a request acpx records the answer of as
+    /// written — paired to it by id, from a batch too — for its method and the session it names,
+    /// until taken; `session/new` names its session in its answer. Nothing else is kept: the answer
+    /// to another method, an error, or an answer no request asked for (#119).
+    @Test func answersAreKeptAsWrittenForTheirRequests() {
         let tap = RawWireTap()
-        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":7,"result":{"early":true}}"#.utf8))
-        tap.keepNextResult()
-        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#.utf8))
-        let batch = #"[{"jsonrpc":"2.0","method":"x"},{"jsonrpc":"2.0","id":1,"result":{"zeta":1,"alpha":2}}]"#
-        tap.observe(.inbound, Data(batch.utf8))
-        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":2,"result":{"later":true}}"#.utf8))
-        #expect(tap.takeNextResult()?.stringified == #"{"zeta":1,"alpha":2}"#)
-        #expect(tap.takeNextResult() == nil)
+        func out(_ line: String) { tap.observe(.outbound, Data(line.utf8)) }
+        func into(_ line: String) { tap.observe(.inbound, Data(line.utf8)) }
+        into(#"{"jsonrpc":"2.0","id":1,"result":{"early":true}}"#)
+        out(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+        out(#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s"}}"#)
+        out(#"{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/"}}"#)
+        out(#"{"jsonrpc":"2.0","id":4,"method":"session/set_config_option","params":{"sessionId":"s"}}"#)
+        out(#"{"jsonrpc":"2.0","id":5,"method":"session/load","params":{"sessionId":"t"}}"#)
+        into(#"[{"jsonrpc":"2.0","method":"x"},{"jsonrpc":"2.0","id":1,"result":{"zeta":1,"alpha":2}}]"#)
+        into(#"{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}"#)
+        into(#"{"jsonrpc":"2.0","id":3,"result":{"sessionId":"n","configOptions":[{"type":"select","id":"m"}]}}"#)
+        into(#"{"jsonrpc":"2.0","id":4,"result":{"configOptions":[{"z":1,"a":2}]}}"#)
+        into(#"{"jsonrpc":"2.0","id":5,"error":{"code":-32603,"message":"no"}}"#)
+        into(#"{"jsonrpc":"2.0","id":5,"result":{"late":true}}"#)
+
+        #expect(tap.takeResult(of: "initialize", sessionId: nil)?.stringified == #"{"zeta":1,"alpha":2}"#)
+        #expect(tap.takeResult(of: "initialize", sessionId: nil) == nil)
+        #expect(tap.takeResult(of: "session/prompt", sessionId: "s") == nil)
+        #expect(tap.takeResult(of: "session/new", sessionId: "n")?["configOptions"]?.stringified
+            == #"[{"type":"select","id":"m"}]"#)
+        #expect(tap.takeResult(of: "session/set_config_option", sessionId: "s")?.stringified
+            == #"{"configOptions":[{"z":1,"a":2}]}"#)
+        #expect(tap.takeResult(of: "session/load", sessionId: "t") == nil)
     }
 }
