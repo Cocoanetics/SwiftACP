@@ -2519,6 +2519,128 @@
       }
     }
   ],
+  "installed": [
+    {
+      "name": "an npm shim on PATH",
+      "command": "gemini",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd"
+    },
+    {
+      "name": "an exe on PATH",
+      "command": "codex",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\tools",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [
+        "C:\\tools\\codex.exe"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": "C:\\tools\\codex.exe"
+    },
+    {
+      "name": "a directory named like a command",
+      "command": "codex",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [],
+      "directories": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.exe"
+      ],
+      "processDirectory": "C:\\work",
+      "expected": null
+    },
+    {
+      "name": "a relative PATH entry",
+      "command": "codex",
+      "env": {
+        "Path": "bin",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [
+        "C:\\work\\bin\\codex.exe"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": "C:\\work\\bin\\codex.exe"
+    },
+    {
+      "name": "a relative command",
+      "command": "tools\\codex",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [
+        "C:\\work\\tools\\codex.exe"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": "C:\\work\\tools\\codex.exe"
+    },
+    {
+      "name": "an absolute command",
+      "command": "C:/tools/codex.exe",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [
+        "C:\\tools\\codex.exe"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": "C:\\tools\\codex.exe"
+    },
+    {
+      "name": "nothing found",
+      "command": "codex",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "files": [],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": null
+    },
+    {
+      "name": "no PATH",
+      "command": "gemini",
+      "env": {
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe"
+      },
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\gemini.ps1"
+      ],
+      "directories": [],
+      "processDirectory": "C:\\work",
+      "expected": null
+    }
+  ],
   "paths": {
     "normalize": [
       {

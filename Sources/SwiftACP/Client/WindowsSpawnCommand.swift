@@ -73,6 +73,18 @@ extension WindowsSpawnCommand {
         return nil
     }
 
+    /// acpx's `resolveInstalledExecutable` on `win32`: the file `command` resolves to, found as
+    /// ``resolve(_:environment:cwd:fileSystem:)`` finds it with no directory for a relative path,
+    /// then made absolute against `processDirectory` (Node's `process.cwd()`). A directory is none.
+    static func installedExecutable(
+        _ command: String, environment: [String: String], fileSystem: FileSystem, processDirectory: String
+    ) -> String? {
+        guard let resolved = resolve(command, environment: environment, cwd: nil, fileSystem: fileSystem),
+              fileSystem.isFile(resolved)
+        else { return nil }
+        return WindowsPath.resolve([resolved], processDirectory: processDirectory)
+    }
+
     /// acpx's `commandCandidates`: `command` as it is if it has an extension, else with each of
     /// `PATHEXT`'s.
     private static func candidates(for command: String, environment: [String: String]) -> [String] {

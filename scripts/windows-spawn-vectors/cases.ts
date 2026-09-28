@@ -3,7 +3,12 @@
 // file system, and Node's `path.win32` itself for the path helpers they use. Run by generate.sh.
 import nodePath from "node:path";
 import { fakeFs } from "./fake-fs.ts";
-import { buildAgentSpawnCommand, resolveWindowsCommand } from "./spawn-command-options.ts";
+import { buildAgentSpawnCommand, resolveInstalledExecutable, resolveWindowsCommand } from "./spawn-command-options.ts";
+
+// As on Windows: `resolveInstalledExecutable` asks `process.platform`, and a relative path is
+// taken from `process.cwd()`.
+Object.defineProperty(process, "platform", { value: "win32" });
+process.cwd = () => "C:\\work";
 
 const win = nodePath.win32;
 const npm = "C:\\Users\\me\\AppData\\Roaming\\npm";
@@ -142,6 +147,41 @@ const spawnResults = spawns.map((spawn) => {
   };
 });
 
+type Installed = {
+  name: string;
+  command: string;
+  env?: Record<string, string>;
+  files?: string[];
+  directories?: string[];
+};
+
+// `resolveInstalledExecutable`: `process.env`, with no directory for a relative path, then made
+// absolute against `process.cwd()`.
+const installs: Installed[] = [
+  { name: "an npm shim on PATH", command: "gemini", files: npmShim },
+  { name: "an exe on PATH", command: "codex", env: { ...base, Path: `${npm};C:\\tools` }, files: ["C:\\tools\\codex.exe"] },
+  { name: "a directory named like a command", command: "codex", files: [], directories: [`${npm}\\codex.exe`] },
+  { name: "a relative PATH entry", command: "codex", env: { ...base, Path: "bin" }, files: ["C:\\work\\bin\\codex.exe"] },
+  { name: "a relative command", command: "tools\\codex", files: ["C:\\work\\tools\\codex.exe"] },
+  { name: "an absolute command", command: "C:/tools/codex.exe", files: ["C:\\tools\\codex.exe"] },
+  { name: "nothing found", command: "codex", files: [] },
+  { name: "no PATH", command: "gemini", env: { ComSpec: base.ComSpec }, files: npmShim },
+];
+const installedResults = installs.map((install) => {
+  const env = install.env ?? base;
+  fakeFs.set(install.files ?? [], install.directories ?? []);
+  process.env = env;
+  return {
+    name: install.name,
+    command: install.command,
+    env,
+    files: install.files ?? [],
+    directories: install.directories ?? [],
+    processDirectory: process.cwd(),
+    expected: resolveInstalledExecutable(install.command) ?? null,
+  };
+});
+
 const normalize = [
   "C:\\a\\b", "C:/a/b", "C:\\a\\..\\b", "C:\\a\\.\\b\\", "C:\\..", "C:", "C:a\\b", "\\a\\b",
   "//server/share/x", "\\\\server\\share", "a\\b\\..\\..\\..", ".\\a", "", "a//b", "C:\\a\\\\b",
@@ -174,6 +214,7 @@ const extname = [
 console.log(JSON.stringify({
   generatedBy: `acpx ${process.env.ACPX_TAG ?? "v0.19.3"} src/spawn-command-options.ts, path.win32, Node ${process.version}`,
   spawns: spawnResults,
+  installed: installedResults,
   paths: {
     normalize: normalize.map((input) => ({ input, output: win.normalize(input) })),
     resolve: resolve.map(([cwd, input]) => ({ cwd, input, output: win.resolve(cwd, input) })),

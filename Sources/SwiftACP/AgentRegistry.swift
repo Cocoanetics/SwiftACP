@@ -187,11 +187,20 @@ public enum AgentRegistry {
         resolveCodex: (_ searchPath: String?) -> String? = { which("codex", in: $0) }
     ) -> [String: String]? {
         let resolved = environment ?? ProcessInfo.processInfo.environment
-        guard resolved["CODEX_PATH"] == nil else { return environment }
-        guard let codex = resolveCodex(resolved["PATH"]) else { return environment }
+        guard variable("CODEX_PATH", in: resolved) == nil else { return environment }
+        guard let codex = resolveCodex(variable("PATH", in: resolved)) else { return environment }
         var augmented = resolved
         augmented["CODEX_PATH"] = codex
         return augmented
+    }
+
+    /// A variable of `environment`: on Windows, where their names have no case, in any case.
+    private static func variable(_ name: String, in environment: [String: String]) -> String? {
+        #if os(Windows)
+        WindowsSpawnCommand.value(of: name, in: environment)
+        #else
+        environment[name]
+        #endif
     }
 
     /// A command line acpx refuses to split (its `Invalid --agent command: …`).
@@ -269,7 +278,20 @@ public enum AgentRegistry {
     /// `searchPath` defaults to this process's `PATH`; pass the `PATH` of the
     /// environment a child will actually run with when they can differ (e.g. the
     /// codex lookup searches the spawned agent's `PATH`, not the parent's).
+    ///
+    /// On Windows it is acpx's `resolveInstalledExecutable` there: `PATH` and `PATHEXT` read in
+    /// any case, each extension tried in each directory, the file found made absolute (#272).
     public static func which(_ command: String, in searchPath: String? = nil) -> String? {
+        #if os(Windows)
+        var environment = ProcessInfo.processInfo.environment
+        if let searchPath {
+            environment = environment.filter { $0.key.uppercased() != "PATH" }
+            environment["PATH"] = searchPath
+        }
+        return WindowsSpawnCommand.installedExecutable(
+            command, environment: environment, fileSystem: .local,
+            processDirectory: FileManager.default.currentDirectoryPath)
+        #else
         let path = searchPath ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         for directory in path.split(separator: ":") {
             let candidate = "\(directory)/\(command)"
@@ -278,5 +300,6 @@ public enum AgentRegistry {
             }
         }
         return nil
+        #endif
     }
 }
