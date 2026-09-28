@@ -16,10 +16,12 @@ extension DaemonToolsTests {
         let ready: URL
         let modeSent: URL
         let gate: URL
+        /// Where the agent notes seeing the gate and writing its answer (#283).
+        var answered: URL { gate.deletingLastPathComponent().appendingPathComponent("answered") }
 
         var environment: String {
             "RETRY_AGENT_READY='\(ready.path)' RETRY_AGENT_SET_MODE_GATE='\(gate.path)' "
-                + "RETRY_AGENT_SET_MODE_SENT='\(modeSent.path)' "
+                + "RETRY_AGENT_SET_MODE_SENT='\(modeSent.path)' RETRY_AGENT_SET_MODE_ANSWERED='\(answered.path)' "
         }
 
         func openGate() {
@@ -54,6 +56,20 @@ extension DaemonToolsTests {
         return (idle, prompt)
     }
 
+    /// The idle control's end, once its gate is open. Should it not come in 10 s, as it once did
+    /// not on CI (#283), the failure says how far the agent got: whether it saw the gate, and
+    /// whether it wrote its answer, past which the daemon did not deliver it.
+    private func idleEnds(_ idle: Task<SessionControlResult, Error>, _ agent: GatedModeAgent) async throws {
+        do {
+            _ = try await withTimeout(milliseconds: 10_000) { try await idle.value }
+        } catch let timeout as TimeoutError {
+            let notes = (try? String(contentsOf: agent.answered, encoding: .utf8)) ?? ""
+            let noted = notes.split(separator: "\n").joined(separator: ", ")
+            Issue.record("The idle control did not end. The agent noted: \(noted.isEmpty ? "nothing" : noted) (#283)")
+            throw timeout
+        }
+    }
+
     /// How many prompts the session's journal holds.
     private func promptsJournaled(_ id: String) throws -> Int {
         try String(contentsOf: ACPXPaths.sessionStreamPath(id), encoding: .utf8)
@@ -86,7 +102,7 @@ extension DaemonToolsTests {
 
             // The idle control ends, the prompt goes out, and the control runs as it runs on.
             agent.openGate()
-            _ = try await withTimeout(milliseconds: 10_000) { try await idle.value }
+            try await idleEnds(idle, agent)
             try await signalled(agent.ready)
             let result = try await withTimeout(milliseconds: 10_000) { try await control.value }
             #expect(!result.resumed)
@@ -132,7 +148,7 @@ extension DaemonToolsTests {
             try await nextEvent(taken)
 
             agent.openGate()
-            _ = try await withTimeout(milliseconds: 10_000) { try await idle.value }
+            try await idleEnds(idle, agent)
             #expect(try await withTimeout(milliseconds: 10_000) { try await prompt.value } == "")
             await #expect(throws: PromptEndedBeforeControls.self) {
                 _ = try await withTimeout(milliseconds: 10_000) { try await control.value }
