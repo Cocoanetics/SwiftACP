@@ -47,6 +47,22 @@ import Testing
             + #""_meta":{"z":1,"a":{"y":2,"b":3}}}]"#)
     }
 
+    /// An entry the schema leaves out lends no order: each kept takes its `_meta`'s from the entry
+    /// it was read from, though one left out before it shares its `id` — or, in a group, its
+    /// `value` (#243 review).
+    @Test func entriesLeftOutLendNoOrder() throws {
+        let written = try #require(WireJSON(parsing: #"{"configOptions": ["#
+            + #"{"id": "model", "name": "Left out", "type": "select", "_meta": {"b": 1, "a": 2}}, "#
+            + #"{"id": "model", "name": "Model", "type": "select", "currentValue": "x", "_meta": {"z": 1, "y": 2}, "#
+            + #""options": [{"group": "g", "name": "G", "options": [{"value": "x", "_meta": {"d": 1, "c": 2}}, "#
+            + #"{"value": "x", "name": "X", "_meta": {"w": 1, "v": 2}}]}]}]}"#))
+        let options = try #require(ConfigOptionSchema.options(of: written.jsonValue))
+        let ordered = ConfigOptionSchema.ordered(options, as: written["configOptions"])
+        #expect(ordered.stringified == #"[{"currentValue":"x","options":[{"group":"g","name":"G","options":["#
+            + #"{"value":"x","name":"X","_meta":{"w":1,"v":2}}]}],"type":"select","id":"model","name":"Model","#
+            + #""_meta":{"z":1,"y":2}}]"#)
+    }
+
     /// Options written in the order they came in keep it though changed in place — a new
     /// selection — each matched by its `id`, a select option by its `value`; one the order does
     /// not know has its members sorted.

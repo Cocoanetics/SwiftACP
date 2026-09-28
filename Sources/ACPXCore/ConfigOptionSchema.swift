@@ -20,14 +20,14 @@ public enum ConfigOptionSchema {
     /// `description`, `category` and `_meta`; a select option's `value`, `name`, `description`,
     /// `_meta`; a group's `group`, `name`, `options`, `_meta` (zod's intersection of the kind and
     /// the rest, each object built in its shape's order). Each `_meta` — a zod record, which keeps
-    /// what the agent wrote in its order — is in the order of its counterpart in `written`, the
-    /// update's `configOptions` as they came (#243 review): an option matched by its `id`, a select
-    /// option by its `value`, a group by its `group`, as ``inOrder(_:of:)`` matches them.
+    /// what the agent wrote in its order — is in the order of the one in `written`, the update's
+    /// `configOptions` as they came, that it was read from (#243 review): the options the schema
+    /// kept are those entries that fit it, in order, whatever they share with those it left out.
     public static func ordered(_ options: JSONValue, as written: WireJSON? = nil) -> WireJSON {
         guard case .array(let items) = options else { return WireJSON(options) }
-        let candidates = entries(of: written)
+        let sources = entries(of: written).filter { option($0.jsonValue) != nil }
         return .array(items.enumerated().map { index, item in
-            schemaOrdered(item, optionOrder, as: counterpart(of: item, at: index, in: candidates, keys: ["id"]))
+            schemaOrdered(item, optionOrder, as: sources.indices.contains(index) ? sources[index] : nil)
         })
     }
 
@@ -55,8 +55,8 @@ public enum ConfigOptionSchema {
     private static let groupOrder = ["group", "name", "options", "_meta"]
 
     /// `value`'s members in `order`, then any others sorted; an option's `options` entries each
-    /// in their own shape's order; its `_meta` in the order of `written`'s, its counterpart as it
-    /// came, all the way down.
+    /// in their own shape's order; its `_meta` in the order of `written`'s, the entry it was read
+    /// from, all the way down.
     private static func schemaOrdered(_ value: JSONValue, _ order: [String], as written: WireJSON?) -> WireJSON {
         guard case .object(let members) = value else { return WireJSON(value) }
         let keys = order.filter { members[$0] != nil } + members.keys.filter { !order.contains($0) }.sorted()
@@ -66,11 +66,13 @@ public enum ConfigOptionSchema {
             guard key == "options", case .array(let entries) = member else {
                 return WireJSON.Member(key, WireJSON(member))
             }
-            let candidates = Self.entries(of: written?["options"])
+            // A select keeps all its entries or none (``selectOptions(_:)``); a group, those that fit.
+            var sources = Self.entries(of: written?["options"])
+            if order == groupOrder { sources = sources.filter { selectOption($0.jsonValue) != nil } }
             return WireJSON.Member(key, .array(entries.enumerated().map { index, entry in
                 guard case .object(let fields) = entry else { return WireJSON(entry) }
-                let counterpart = counterpart(of: entry, at: index, in: candidates, keys: ["value", "group"])
-                return schemaOrdered(entry, fields["group"] != nil ? groupOrder : selectOptionOrder, as: counterpart)
+                let source = sources.indices.contains(index) ? sources[index] : nil
+                return schemaOrdered(entry, fields["group"] != nil ? groupOrder : selectOptionOrder, as: source)
             }))
         })
     }
