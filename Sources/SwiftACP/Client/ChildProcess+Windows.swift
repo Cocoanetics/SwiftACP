@@ -89,7 +89,7 @@ package final class ChildProcess: @unchecked Sendable {
 
     /// Start `spawn` as it is: what acpx's `buildAgentSpawnCommand`, or Node's own shell for a
     /// terminal's command, made of the command.
-    package static func spawn(
+    static func spawn(
         _ spawn: WindowsSpawnCommand, cwd: String, environment: [String: String]?, input: Bool = false
     ) throws -> ChildProcess {
         // Node refuses a string with a NUL (`ERR_INVALID_ARG_VALUE`), and so does this.

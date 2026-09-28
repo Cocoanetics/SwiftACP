@@ -173,13 +173,15 @@ public actor TerminalManager: ACPTerminalHandler {
             command: request.command, arguments: request.args ?? [], environment: lookup, cwd: cwd,
             fileSystem: .local, shell: WindowsSpawnCommand.value(of: "COMSPEC", in: parent))
         do {
-            return (try ChildProcess.spawn(direct, cwd: cwd, environment: environment), false)
+            let process = try ChildProcess.spawn(direct, cwd: cwd, environment: environment)
+            return (process, false)
         } catch let error as ChildProcess.SpawnError {
             guard request.args == nil, error.code == ENOENT,
                   let line = WindowsSpawnCommand.terminalFallback(request.command, cwd: cwd, fileSystem: .local)
             else { throw TerminalError.spawnFailed(command: direct.command, code: error.name) }
             do {
-                return (try ChildProcess.spawn(line, cwd: cwd, environment: environment), true)
+                let process = try ChildProcess.spawn(line, cwd: cwd, environment: environment)
+                return (process, true)
             } catch let error as ChildProcess.SpawnError {
                 throw TerminalError.spawnFailed(command: line.command, code: error.name)
             }
@@ -298,9 +300,9 @@ public actor TerminalManager: ACPTerminalHandler {
     /// `/f`, which a console program outlasts; the grace; then `taskkill /t /f` whether or not it
     /// went, as acpx cannot see what the shell started.
     private func killTree(_ terminal: ManagedTerminal) async throws {
-        await Self.taskkill(terminal, force: false)
+        await taskkill(terminal, force: false)
         _ = await cleanedUp(terminal)
-        await Self.taskkill(terminal, force: true)
+        await taskkill(terminal, force: true)
         guard await cleanedUp(terminal) else { throw TerminalError.cleanupUnfinished }
     }
 
@@ -309,7 +311,7 @@ public actor TerminalManager: ACPTerminalHandler {
     /// each descendant it saw. As acpx's `execFile`, it runs in this process's directory, where it
     /// is looked for first. Each run is bounded by acpx's `PROCESS_HELPER_TIMEOUT_MS`, and a
     /// failure is ignored.
-    private static func taskkill(_ terminal: ManagedTerminal, force: Bool) async {
+    private func taskkill(_ terminal: ManagedTerminal, force: Bool) async {
         let pids = terminal.isRunning
             ? [terminal.process.pid]
             : (terminal.process.jobProcessIds() ?? []).map { Int32(bitPattern: $0) }
