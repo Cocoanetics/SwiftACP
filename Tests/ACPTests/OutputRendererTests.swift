@@ -200,9 +200,11 @@ struct OutputRendererTests {
             #"{"sessionUpdate":"tool_call","title":"S","status":["completed"]}"#,
             #"{"sessionUpdate":"tool_call","toolCallId":"x2","status":["failed"]}"#,
             #"{"sessionUpdate":"tool_call","toolCallId":"x3","status":["pending"]}"#,
-            #"{"sessionUpdate":"tool_call","toolCallId":"x4","status":"completed","kind":["read"]}"#
+            #"{"sessionUpdate":"tool_call","toolCallId":"x4","status":"completed","kind":["read"]}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"z1","status":"completed","kind":"\u0000read"}"#
         ].map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
         let (text, _) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+        // A string kind is kept as sent, whatever its first character.
         #expect(text == """
             [tool] S (running)
 
@@ -213,7 +215,23 @@ struct OutputRendererTests {
             [tool] x4 (completed)
               kind: read
 
+            [tool] z1 (completed)
+              kind: \u{0}read
+
             """)
+    }
+
+    /// A kind that is no string names no kind: under `--suppress-reads` its output is shown, where
+    /// the kind `read` hides it. acpx itself throws on such a kind there (its `kind.trim()` is no
+    /// function), so this is SwiftACP's own choice, and does not end the output.
+    @Test func aKindThatIsNoStringIsNoRead() throws {
+        let updates = try [
+            #"{"sessionUpdate":"tool_call","toolCallId":"r1","status":"completed","kind":"read","rawOutput":"one"}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"r2","status":"completed","kind":["read"],"rawOutput":"two"}"#
+        ].map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+        let (text, _) = Self.capture(.text, suppressReads: true) { renderer in updates.forEach { renderer.render($0) } }
+        #expect(!text.contains("one"))
+        #expect(text.contains("two"))
     }
 
     @Test func otherOperationsRenderAsClientLines() {

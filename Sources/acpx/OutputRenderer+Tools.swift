@@ -13,7 +13,7 @@ extension OutputRenderer {
     func renderTool(
         id: String, key: ToolKey? = nil, title: String?, status: ToolCallStatus?, kind: ToolKind?,
         locations: [ToolCallLocation]?, rawInput: JSONValue?, rawOutput: JSONValue?,
-        content: [ToolCallContent]?, clearing nulled: Set<String> = []
+        content: [ToolCallContent]?, kindIsText: Bool = true, clearing nulled: Set<String> = []
     ) {
         let key = key ?? .string(id)
         let state = toolStates[key] ?? {
@@ -26,7 +26,10 @@ extension OutputRenderer {
         // and each other member that was sent — `null` clearing it.
         if let title, !title.javaScriptTrimmed.isEmpty { state.title = title }
         if status != nil || nulled.contains("status") { state.status = status }
-        if kind != nil || nulled.contains("kind") { state.kind = kind }
+        if kind != nil || nulled.contains("kind") {
+            state.kind = kind
+            state.kindIsText = kindIsText
+        }
         if locations != nil || nulled.contains("locations") { state.locations = locations }
         if rawInput != nil || nulled.contains("rawInput") { state.rawInput = rawInput }
         if rawOutput != nil || nulled.contains("rawOutput") { state.rawOutput = rawOutput }
@@ -64,15 +67,25 @@ extension OutputRenderer {
         case .integer?, .unsignedInteger?, .double?: .number(id)
         case .array?, .object?: .object(UUID())
         }
-        let nulled = Set(members.filter { $0.value == .null }.map(\.key))
+        var nulled = Set(members.filter { $0.value == .null }.map(\.key))
         let title: String? = if case .string(let text)? = members["title"] { text } else { nil }
+        // A status that is no string is none of the statuses, as acpx's strict comparisons find
+        // none: the tool runs, as with none at all (#270 review). `["completed"]` is no finished tool.
+        var status: ToolCallStatus?
+        switch members["status"] {
+        case .string(let text)?: status = ToolCallStatus(rawValue: text)
+        case .some: nulled.insert("status")
+        case nil: break
+        }
+        // A kind that is no string shows as its text, but is no kind that text names (#270 review).
+        let kind = members["kind"].flatMap { $0 == .null ? nil : ToolKind(rawValue: Self.javaScriptText($0)) }
+        let kindIsText: Bool = if case .string? = members["kind"] { true } else { false }
         renderTool(
-            id: id, key: key, title: title,
-            status: members["status"].flatMap(Self.openText).map(ToolCallStatus.init(rawValue:)),
-            kind: members["kind"].flatMap(Self.openText).map(ToolKind.init(rawValue:)),
+            id: id, key: key, title: title, status: status, kind: kind,
             locations: members["locations"].flatMap { Self.entries($0, as: ToolCallLocation.self) },
             rawInput: members["rawInput"], rawOutput: members["rawOutput"],
-            content: members["content"].flatMap { Self.entries($0, as: ToolCallContent.self) }, clearing: nulled)
+            content: members["content"].flatMap { Self.entries($0, as: ToolCallContent.self) },
+            kindIsText: kindIsText, clearing: nulled)
     }
 
     /// A list member's entries that read as `T`, each on its own — as the ACP schema reads a tool's
@@ -85,26 +98,6 @@ extension OutputRenderer {
         case .array(let items): return items.compactMap { try? $0.decoded(T.self) }
         default: return []
         }
-    }
-
-    /// A status or kind member as the tool's state keeps it: a string as it is, `null` as none, and
-    /// any other value as JavaScript keeps it — its text marked apart (``notText``), so that it is
-    /// never the status or kind that text names, as acpx's strict comparisons never find it so
-    /// (#270 review). `["completed"]` is no completed tool.
-    private static func openText(_ value: JSONValue) -> String? {
-        switch value {
-        case .null: return nil
-        case .string(let text): return text
-        default: return notText + javaScriptText(value)
-        }
-    }
-
-    /// Marks the text of a status or kind that was no string (``openText(_:)``).
-    private static let notText = "\u{0}"
-
-    /// A kind as JavaScript shows it, whether or not it was a string.
-    static func shownKind(_ kind: ToolKind) -> String {
-        kind.rawValue.hasPrefix(notText) ? String(kind.rawValue.dropFirst()) : kind.rawValue
     }
 
     /// `value` as JavaScript's `String()` shows it.
@@ -136,7 +129,7 @@ extension OutputRenderer {
         let title = state.title ?? state.id
         let label = state.status == .failed ? "failed" : "completed"
         writeLine("\(bold("[tool]")) \(title) (\(colorStatus(label, state.status)))")
-        if let kind = state.kind { writeLine("  kind: \(Self.shownKind(kind))") }
+        if let kind = state.kind { writeLine("  kind: \(kind.rawValue)") }
         if let input = ToolText.summarizeInput(state.rawInput) { writeLine("  input: \(input)") }
         if let files = ToolText.formatLocations(state.locations) { writeLine("  files: \(files)") }
         if let output = renderedToolOutput(state) {
@@ -146,7 +139,7 @@ extension OutputRenderer {
     }
 
     func renderedToolOutput(_ state: ToolRenderState) -> String? {
-        if options.suppressReads, ToolText.isReadLike(title: state.title, kind: state.kind) {
+        if options.suppressReads, ToolText.isReadLike(title: state.title, kind: state.kindIsText ? state.kind : nil) {
             return SUPPRESSED_READ_OUTPUT
         }
         return ToolText.summarizeOutput(rawOutput: state.rawOutput, content: state.content)
@@ -185,6 +178,8 @@ final class ToolRenderState {
     var title: String?
     var status: ToolCallStatus?
     var kind: ToolKind?
+    /// Whether ``kind`` came as a string: one that did not shows as its text, but names no kind.
+    var kindIsText = true
     var locations: [ToolCallLocation]?
     var rawInput: JSONValue?
     var rawOutput: JSONValue?
