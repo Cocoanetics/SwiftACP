@@ -262,11 +262,12 @@ private final class FlowShellRun: @unchecked Sendable {
         let result: FlowShellResult? = lock.withLock {
             guard !settled else { return nil }
             settled = true
+            let stopped = termination.resultIsIn()
             let exit = ChildProcess.exitStatus(status)
             return FlowShellResult(
                 command: spec.command ?? "", args: args, cwd: cwd, stdout: capture.stdout, stderr: capture.stderr,
                 exitCode: exit.exitCode, signal: exit.signal, durationMs: Double(FlowShellClock.nowMs() - startMs),
-                timedOut: mode == .node ? termination.cancelled : termination.timedOut)
+                timedOut: mode == .node ? stopped.cancelled : stopped.timedOut)
         }
         if let result { first.settle(.success(result)) }
     }
@@ -294,6 +295,9 @@ final class FlowShellTermination: @unchecked Sendable {
     /// For tests: how long after its deadline the command's timer fires, as on a machine too
     /// busy to run it on time.
     @TaskLocal static var timerIsLateBy: Duration = .zero
+    /// For tests: the task awaiting the command's result gets to ``dispose()`` only this long
+    /// past the command's deadline, as on a pool too busy to resume it before the timer fires.
+    @TaskLocal static var disposeIsLateBy: Duration?
 
     /// Where deadlines fire.
     private static let deadlines = DispatchQueue(label: "acpx.flow.shell.deadline")
@@ -412,6 +416,17 @@ final class FlowShellTermination: @unchecked Sendable {
         return task
     }
 
+    /// The command's result is in: its deadline goes at once, as acpx's goes before its timer
+    /// can fire — `dispose` runs in the microtasks that follow the result, and here it waits for
+    /// the cooperative pool while the deadline fires on a queue of its own (#220 review). A stop
+    /// begun before stays under way. Returns whether one was, and whether for the deadline.
+    func resultIsIn() -> (cancelled: Bool, timedOut: Bool) {
+        lock.withLock {
+            clearDeadline()
+            return (cancelledFlag, timedOutFlag)
+        }
+    }
+
     /// acpx's `clearDeadline`. Called under the lock.
     private func clearDeadline() {
         deadline?.cancel()
@@ -439,6 +454,7 @@ final class FlowShellTermination: @unchecked Sendable {
     /// acpx's `dispose`: no deadline any more, the stop under way waited for, and — kept
     /// by no one — let go.
     func dispose() async throws {
+        if let late = Self.disposeIsLateBy, let deadlineAt { try? await Task.sleep(until: deadlineAt + late) }
         let task: Task<Void, Error>? = lock.withLock {
             clearDeadline()
             return stopping

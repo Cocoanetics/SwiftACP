@@ -109,6 +109,27 @@ struct FlowShellProcessTests {
         }
     }
 
+    /// A command that exits before its deadline keeps what it left running in its group, though
+    /// the task awaiting its result gets to dispose of it only past the deadline — on a busy
+    /// pool — as acpx's deadline goes with the result, before its timer can fire (#220 review).
+    @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
+    func aCommandDoneBeforeItsDeadlineKeepsWhatItLeftRunning() async throws {
+        let fifo = try FIFOReader.make(name: "left running")
+        let descendant = "require('node:fs').writeFileSync(\(fifo.jsPath),String(process.pid));setInterval(()=>{},1000)"
+        let wrapper = "require('node:child_process').spawn(process.execPath,"
+            + "['-e',\(WireJSON.text(descendant).stringified)],{stdio:'ignore'}).unref()"
+        let running = Task {
+            try await FlowShellTermination.$disposeIsLateBy.withValue(.milliseconds(300)) {
+                try await self.runAction(self.nodeSpec(wrapper, [("timeoutMs", .number(3000))]))
+            }
+        }
+        let pid = try #require(pid_t(await fifo.next()))
+        defer { if isAlive(pid) { kill(pid, SIGKILL) } }
+        let result = try await running.value
+        #expect(!result.timedOut)
+        #expect(isAlive(pid), "descendant \(pid) was stopped with a command done in time")
+    }
+
     /// acpx: "runShellAction rejects commands terminated by signal".
     @Test func aCommandEndedBySignalFails() async throws {
         let error = await #expect(throws: FlowShellError.self) {
