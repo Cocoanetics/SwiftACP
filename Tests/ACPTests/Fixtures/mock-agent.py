@@ -367,7 +367,15 @@ def main():
         if method is None and str(req_id).startswith("mock-"):
             continue
 
-        if method == "initialize":
+        if method == "initialize" and os.environ.get("MOCK_CAPABILITIES_FILE"):
+            # MOCK_CAPABILITIES_FILE=<path>: the agent capabilities to answer `initialize` with, as
+            # the file writes them — member order and all.
+            with open(os.environ["MOCK_CAPABILITIES_FILE"], encoding="utf-8") as written:
+                capabilities = written.read().strip()
+            sys.stdout.write('{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":%s,'
+                             '"authMethods":[]}}\n' % (json.dumps(req_id), capabilities))
+            sys.stdout.flush()
+        elif method == "initialize":
             respond(req_id, {
                 "protocolVersion": 1,
                 "agentInfo": {"name": "mock-agent", "version": "0.1.0"},

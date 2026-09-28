@@ -163,7 +163,12 @@ extension ACPXDaemonBackend {
             }
             throw error
         }
-        if direct { await letGo(entry, of: recordId) }
+        if direct {
+            await letGo(entry, of: recordId)
+            // What the agent connected for it answered `initialize` with, as acpx's direct control
+            // records it (`withConnectedSession`, #119). An owner's control leaves it be.
+            await record.applyInitialize(of: entry.agent)
+        }
         record.applyLifecycle(entry.agent.lifecycle)
         record.lastUsedAt = nowISO()
         do {

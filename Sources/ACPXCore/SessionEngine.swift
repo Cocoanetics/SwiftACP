@@ -170,12 +170,7 @@ public enum SessionEngine {
             record.agentSessionId = AgentSessionId.extract(from: created.meta)
             record.agentArgv = agentArgv
             record.closed = false
-            record.protocolVersion = handle.initializeResult.protocolVersion
-            record.agentCapabilities = handle.initializeResult.agentCapabilities.flatMap { caps in
-                (try? JSONEncoder().encode(caps)).flatMap {
-                    try? JSONDecoder().decode(JSONValue.self, from: $0)
-                }
-            }
+            await record.applyInitialize(of: handle)
             record.title = nil
             // The agent as it runs: its pid and when it started.
             record.applyLifecycle(handle.lifecycle)

@@ -40,6 +40,9 @@ public actor ACPAgentConnection {
     /// only when the matching capability is on, so an agent that calls one anyway gets
     /// method-not-found rather than the operation (`--no-fs`, `--no-terminal`).
     public private(set) var advertisedCapabilities: ClientCapabilities?
+    /// The agent's capabilities as its `initialize` answer wrote them — every member, in its order,
+    /// as acpx records them (#119); `nil` without a wire tap to read them from, or without any.
+    public private(set) var agentCapabilitiesAsSent: WireJSON?
 
     /// How far an agent's `fs/*` requests may reach. Confined to each session's own
     /// working directory by default; an embedder that mediates filesystem access itself
@@ -274,10 +277,12 @@ public actor ACPAgentConnection {
         clientInfo: Implementation? = nil
     ) async throws -> InitializeResponse {
         advertisedCapabilities = capabilities
+        rawUpdates?.keepNextResult()
         let response: InitializeResponse = try await send(
             "initialize",
             InitializeRequest(clientCapabilities: capabilities, clientInfo: clientInfo))
         initializeResult = response
+        agentCapabilitiesAsSent = rawUpdates?.takeNextResult()?["agentCapabilities"]
         return response
     }
 

@@ -65,6 +65,10 @@ public struct SessionRecord: Codable, Sendable {
     public var lastAgentDisconnectReason: String?
     public var protocolVersion: Int?
     public var agentCapabilities: JSONValue?
+    /// ``agentCapabilities`` as the agent's `initialize` answer wrote them, for the record to be
+    /// written with them so (#119); `nil` when they were read from the file, or not seen as sent.
+    /// Never written.
+    public var agentCapabilitiesAsSent: WireJSON?
     /// The conversation's title: `null` on disk until the agent names one, as acpx's
     /// `createSessionConversation` starts it.
     public var title: String? {

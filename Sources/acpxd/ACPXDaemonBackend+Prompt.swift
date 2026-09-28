@@ -353,6 +353,7 @@ extension ACPXDaemonBackend {
             // A direct turn's agent is let go with it, as acpx closes its client.
             if turn.direct { await letGoOfDirectAgent(recordId, persister: persister) }
             await persister.applyLifecycle(entry.agent.lifecycle)
+            await persister.applyInitialize(of: entry.agent)
             // Final checkpoint: stamp timestamps and flush the completed turn —
             // including any messages still buffered for the event log.
             await persister.finish()
