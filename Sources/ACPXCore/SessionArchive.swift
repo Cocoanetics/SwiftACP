@@ -77,11 +77,9 @@ public enum SessionArchive {
     /// The record as acpx writes it (`serializeSessionRecordForArchive`), its `cwd` as the
     /// archive has it and its event log's active file named alone.
     ///
-    /// Of SwiftACP's own fields, which acpx does not know, the session's restrictions
-    /// (`client_capabilities`) go with it — imported, a session made under `--no-fs` must
-    /// not get the filesystem back — but not its MCP servers (`mcp_servers`): their
-    /// commands, environment and headers are this machine's, and may hold credentials an
-    /// archive must not carry. acpx's archive never has them either. Nor does the
+    /// Of SwiftACP's own fields, which acpx does not know, its MCP servers (`mcp_servers`)
+    /// do not go: their commands, environment and headers are this machine's, and may hold
+    /// credentials an archive must not carry. acpx's archive never has them either. Nor does the
     /// environment the session's agent starts with (`session_options.env`) go: it is
     /// this machine's too, and may hold credentials.
     private static func state(of record: SessionRecord, cwd: String) throws -> WireJSON {

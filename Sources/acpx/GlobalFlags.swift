@@ -313,6 +313,13 @@ extension GlobalFlags {
         return capabilities
     }
 
+    /// What acpxd builds a client for this invocation with (``ClientOptions``): `--no-fs`,
+    /// `--no-terminal` and `--auth-policy`, as acpx's `sessionConnectionOptions` gives them to the
+    /// owner a prompt starts and to a control's own client (#246).
+    var clientOptions: ClientOptions {
+        ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy)
+    }
+
     /// Under `--verbose`, where what the client notes of an agent this process starts goes —
     /// acpx's `AcpClient.log`: onto stderr, as `[acpx] <line>`. `nil` otherwise.
     var clientLog: RawWireTap.LogObserver? {

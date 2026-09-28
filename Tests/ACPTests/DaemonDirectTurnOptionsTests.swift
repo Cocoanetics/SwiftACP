@@ -435,7 +435,8 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
                 agentCommand: command, cwd: directory.path, holdAgent: true, fs: false)
-            #expect(SessionStore.loadRecord(id)?.acpx?.clientCapabilities == nil)
+            #expect(try !String(contentsOf: ACPXPaths.sessionRecordPath(id), encoding: .utf8)
+                .contains("client_capabilities"))
             let refused = #"error: "Method not found": fs/read_text_file"#
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)", fs: false) == refused)
             #expect(try await directTurn(daemon, id, "fs-read \(file.path)", fs: false) == refused)

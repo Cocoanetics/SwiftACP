@@ -93,9 +93,9 @@ public enum SessionEngine {
     /// acpx's `createSessionWithClient`: ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:inheritStderr:onModelWarning:)``
     /// up to the record, which is written with the agent still running
     /// (`createSessionRecordWithClient`) — and the agent kept, on the session, for the
-    /// caller to use and close. With `recordsCapabilities` false, what `capabilities`
-    /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
-    /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
+    /// caller to use and close. What `capabilities` withholds is the creating agent's alone, as
+    /// acpx's `sessions new --no-fs` withholds it from its client: the record keeps none of it
+    /// (#246). `handlers`, when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
     /// false, the record is returned unwritten, for a caller that writes it once it keeps the
     /// session — acpxd, where the id the agent gives may be another session's. The agent, and
     /// the commands it runs through the client's terminals, start over `baseEnvironment` when
@@ -116,7 +116,6 @@ public enum SessionEngine {
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
-        recordsCapabilities: Bool = true,
         writesRecord: Bool = true,
         handlers: ACPClientHandlers? = nil,
         baseEnvironment: [String: String]? = nil,
@@ -177,11 +176,6 @@ public enum SessionEngine {
             ModelSupport.applyConfigOptions(created.configOptions, to: &acpx)
             ModelSupport.applyInitialModelSelection(application, originalModels: advertised, to: &acpx)
             acpx.mcpServers = sessionMcpServers
-            // What `--no-fs` / `--no-terminal` withheld has to outlive this ephemeral
-            // spawn: the daemon reconnects later and must advertise the same, or the
-            // restriction would silently lapse on the very turns it exists to cover —
-            // unless whoever runs the session says it with each turn, as a flow does.
-            if recordsCapabilities { acpx.clientCapabilities = capabilities.persistedIfRestricted }
             record.acpx = acpx
 
             if writesRecord { try SessionStore.writeRecord(record) }

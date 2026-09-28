@@ -64,7 +64,7 @@ enum PromptCommand {
                     limits: PromptLimits(
                         timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs,
                         queueMaxDepth: context.config.queueMaxDepth),
-                    renderer: renderer, requestId: requestId)
+                    client: flags.clientOptions, renderer: renderer, requestId: requestId)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {

@@ -26,15 +26,16 @@ public protocol ACPXBackend: Sendable {
     ) async throws -> Bool
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?, environment: [String: String]?, verbose: Bool
+        timeoutMs: Int?, environment: [String: String]?, verbose: Bool, client: ClientOptions
     ) async throws -> SessionControlResult
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]?, verbose: Bool
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]?, verbose: Bool,
+        client: ClientOptions
     ) async throws -> SessionControlResult
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?, environment: [String: String]?, verbose: Bool
+        timeoutMs: Int?, environment: [String: String]?, verbose: Bool, client: ClientOptions
     ) async throws -> SessionControlResult
     func closeSession(sessionId: String) async throws -> Bool
     func pruneSessions(
@@ -67,6 +68,23 @@ public struct CallerConfig: Codable, Sendable, Equatable {
     public init(auth: [String: String], mcpServers: [McpServerConfig]) {
         self.auth = auth
         self.mcpServers = mcpServers
+    }
+}
+
+/// What an agent's client is built with beside its permissions, as acpx's CLI gives it to the
+/// queue owner it starts and to a control it runs itself (`sessionConnectionOptions`): whether it
+/// offers the filesystem methods and the terminal (`fs`, `terminal`: `false` for acpx's `--no-fs`
+/// and `--no-terminal`; `nil`, acpx's own), and how its agent signs in (`authPolicy`, acpx's
+/// `--auth-policy`; `nil`, as the session's config says).
+public struct ClientOptions: Codable, Sendable, Equatable {
+    public var fs: Bool?
+    public var terminal: Bool?
+    public var authPolicy: String?
+
+    public init(fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil) {
+        self.fs = fs
+        self.terminal = terminal
+        self.authPolicy = authPolicy
     }
 }
 
@@ -116,9 +134,10 @@ public struct SessionCreationMode: Sendable {
 /// How a turn runs, beside what it sends: whether its whole exchange is streamed back
 /// (``ACPXDaemon``'s `runPrompt` `streamWire`), whether it runs as acpx's
 /// `sendSessionDirect` runs a flow's persistent turn (`direct`), whether an agent it
-/// connects is offered the filesystem methods (`fs`, acpx's `--no-fs`; `nil`, as the
-/// session was created), how that agent signs in (`authPolicy`, acpx's `--auth-policy`;
-/// `nil`, as configured), the caller's name for the turn, which a cancel can give before it
+/// connects is offered the filesystem methods and the terminal (`fs`, `terminal`: acpx's
+/// `--no-fs` and `--no-terminal`; `nil`, acpx's own), how that agent signs in (`authPolicy`,
+/// acpx's `--auth-policy`; `nil`, as configured) — for a queued turn, as the prompt that
+/// started its session's owner asked (#246) — the caller's name for the turn, which a cancel can give before it
 /// begins (`turnToken`), the config that agent is started with (`callerConfig`; `nil`, the one
 /// where the session works), whether what the agent writes to stderr is streamed to the
 /// caller (`verbose`, acpx's `--verbose`), the environment that agent starts over
@@ -130,6 +149,7 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool
     public var fs: Bool?
+    public var terminal: Bool?
     public var authPolicy: String?
     public var turnToken: String?
     public var callerConfig: CallerConfig?
@@ -138,13 +158,14 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var requestId: String?
 
     public init(
-        streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, authPolicy: String? = nil,
-        turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false,
+        streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, terminal: Bool? = nil,
+        authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false,
         environment: [String: String]? = nil, requestId: String? = nil
     ) {
         self.streamWire = streamWire
         self.direct = direct
         self.fs = fs
+        self.terminal = terminal
         self.authPolicy = authPolicy
         self.turnToken = turnToken
         self.callerConfig = callerConfig
