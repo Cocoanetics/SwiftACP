@@ -1,5 +1,6 @@
 #if os(Windows)
 import Foundation
+import ucrt
 import WinSDK
 
 /// A child process acpx would start with Node's `spawn` on Windows (#272): an agent, as

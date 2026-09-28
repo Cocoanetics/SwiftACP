@@ -1,6 +1,9 @@
 import Foundation
 import JSONFoundation
 import JSONRPCWire
+#if canImport(ucrt)
+import ucrt
+#endif
 
 #if os(macOS) || os(Linux) || os(Windows)
 import JSONRPCSubprocess

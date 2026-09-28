@@ -1,5 +1,6 @@
 #if os(Windows)
 import Foundation
+import ucrt
 import WinSDK
 
 /// A process started as libuv's `uv_spawn` starts one for Node's `spawn` on Windows: the program
