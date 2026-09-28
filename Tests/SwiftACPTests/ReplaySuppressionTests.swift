@@ -12,10 +12,13 @@ import Testing
 struct ReplaySuppressionTests {
     /// Replays two updates for `session/load` before answering; then, when `trickle` is
     /// set, keeps sending one every `trickle`, `trickleCount` times — an agent still
-    /// replaying after its answer. A prompt answers with one `after` chunk.
+    /// replaying after its answer. With `afterAnswer`, it sends as many `.` as each count the
+    /// test hands it, when it hands it: a replay that goes on at the test's word, not a clock's.
+    /// A prompt answers with one `after` chunk.
     struct ReplayingAgent: ACPAgentHandler {
         var trickle: Duration?
         var trickleCount = 0
+        var afterAnswer: AsyncStream<Int>?
         /// Told each time a `session/load` reaches the agent.
         var onLoad: (@Sendable () -> Void)?
         /// Refuse `session/load` after replaying the history.
@@ -38,6 +41,14 @@ struct ReplaySuppressionTests {
             await session.update(.userMessageChunk(.text("earlier question")))
             await session.sendText("earlier answer")
             if refusesLoad { throw JSONRPCErrorBody(code: -32603, message: "Internal error") }
+            if let afterAnswer {
+                // Unstructured on purpose, as the trickle is: the updates go on after this returns.
+                Task {
+                    for await count in afterAnswer {
+                        for _ in 0..<count { await session.sendText(".") }
+                    }
+                }
+            }
             if let trickle {
                 // Unstructured on purpose: the updates have to go on after this returns,
                 // as a replay the agent has not finished does. Bounded by `trickleCount`.
@@ -70,12 +81,18 @@ struct ReplaySuppressionTests {
     }
 
     /// The text of every agent message chunk `stream` delivers until the subscription
-    /// ends.
-    private func texts(_ stream: AsyncStream<SessionNotification>) async -> [String] {
+    /// ends, each handed to `each` too as it comes.
+    private func texts(
+        _ stream: AsyncStream<SessionNotification>, each: AsyncStream<String>.Continuation? = nil
+    ) async -> [String] {
         var texts: [String] = []
         for await note in stream {
-            if case .agentMessageChunk(let block) = note.update, let text = block.text { texts.append(text) }
+            if case .agentMessageChunk(let block) = note.update, let text = block.text {
+                texts.append(text)
+                each?.yield(text)
+            }
         }
+        each?.finish()
         return texts
     }
 
@@ -112,19 +129,41 @@ struct ReplaySuppressionTests {
         await client.close()
     }
 
-    /// The drain lasts until the replay has stopped: every update the agent sent after
-    /// answering has arrived by the time it returns.
-    @Test func theDrainWaitsForAReplayThatGoesOnAfterTheAnswer() async throws {
-        let (client, server) = try await connect(ReplayingAgent(trickle: .milliseconds(5), trickleCount: 10))
+    /// The drain lasts until the replay has stopped: it ends no sooner than its idle window
+    /// after the last update the agent sent after answering, and every one of them has been
+    /// delivered by then. The agent goes on once the client has its answer, when the test says,
+    /// while an update in hand holds the drain: however late the agent's side gets to run, and
+    /// however long it pauses, nothing has to happen within the idle window.
+    @Test(.timeLimit(.minutes(1)))
+    func theDrainWaitsForAReplayThatGoesOnAfterTheAnswer() async throws {
+        let (counts, replay) = AsyncStream<Int>.makeStream()
+        let (client, server) = try await connect(ReplayingAgent(afterAnswer: counts))
         defer { server.cancel() }
         let (subscription, stream) = await client.makeSubscription()
-        let delivered = Task { await texts(stream) }
+        let (seen, sees) = AsyncStream<String>.makeStream()
+        let delivered = Task { await texts(stream, each: sees) }
 
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
-        try await client.waitForSessionUpdateDrain(
-            sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 10_000)
+        client.sessionUpdates.arrived("replay-session")
+        let drained = Task {
+            try await client.waitForSessionUpdateDrain(
+                sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 50_000)
+            return DispatchTime.now().uptimeNanoseconds
+        }
+        replay.yield(10)
+        var dots = 0
+        for await text in seen where text == "." {
+            dots += 1
+            if dots == 10 { break }
+        }
+        let lastArrival = try #require(client.sessionUpdates.state(of: "replay-session").lastArrival)
+        client.sessionUpdates.finished("replay-session")
+        let ended = try await drained.value
+        replay.finish()
         await client.endSubscription(subscription)
 
+        // Quiet for the whole idle window after the replay's last update, not merely nothing in hand.
+        #expect(ended >= lastArrival + 500 * 1_000_000)
         #expect(await delivered.value == ["earlier answer"] + Array(repeating: ".", count: 10))
         await client.close()
     }
@@ -144,18 +183,21 @@ struct ReplaySuppressionTests {
     }
 
     /// Keeping one session's replay back leaves the connection's other sessions alone:
-    /// their updates are delivered, and do not hold up the first one's drain.
-    @Test func suppressionAndTheDrainKeepToTheirSession() async throws {
-        let (client, server) = try await connect(ReplayingAgent(trickle: .milliseconds(5), trickleCount: 400))
+    /// their updates are delivered, and do not hold up the first one's drain — not even one
+    /// read and not yet handled, which would hold its own session's for as long as it is not.
+    @Test(.timeLimit(.minutes(1)))
+    func suppressionAndTheDrainKeepToTheirSession() async throws {
+        let (client, server) = try await connect(ReplayingAgent())
         defer { server.cancel() }
         let (subscription, stream) = await client.makeSubscription()
         let delivered = Task { await texts(stream) }
 
         await client.beginSuppressingReplay(of: "quiet-session")
-        // Another session replays, then keeps sending updates.
+        // Another session replays, then has an update in hand for as long as the drain lasts.
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "busy-session", cwd: "/"))
-        try await client.waitForSessionUpdateDrain(
-            sessionId: "quiet-session", idleMilliseconds: 100, timeoutMilliseconds: 400)
+        client.sessionUpdates.arrived("busy-session")
+        try await client.waitForSessionUpdateDrain(sessionId: "quiet-session", idleMilliseconds: 100)
+        client.sessionUpdates.finished("busy-session")
         await client.endSuppressingReplay(of: "quiet-session")
         await client.endSubscription(subscription)
 
