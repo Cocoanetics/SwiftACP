@@ -72,6 +72,30 @@ import Testing
         #expect(next["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
     }
 
+    /// A long batch is handed on in order, each update its own body, however the takes interleave
+    /// with bodies kept later: the taken ones are dropped in bulk, never shifted one by one
+    /// (#242 review).
+    @Test func aLongBatchIsHandedOnInOrder() throws {
+        let tap = RawWireTap()
+        tap.keepUpdateBodies()
+        func batch(_ calls: Range<Int>) -> Data {
+            let updates = calls.map {
+                #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
+                    + #"{"sessionUpdate":"tool_call","toolCallId":"t\#($0)"}}}"#
+            }
+            return Data("[\(updates.joined(separator: ","))]".utf8)
+        }
+        func taken() -> String? {
+            tap.takeUpdateBody(sessionId: "s", kind: "tool_call")?["update"]?["toolCallId"]?.stringValue
+        }
+        tap.observe(.inbound, batch(0..<5_000))
+        let first = (0..<3_000).map { _ in taken() }
+        tap.observe(.inbound, batch(5_000..<5_010))
+        let rest = (3_000..<5_010).map { _ in taken() }
+        #expect(first + rest == (0..<5_010).map { Optional("t\($0)") })
+        #expect(taken() == nil)
+    }
+
     /// A tap no connection took the bodies of keeps none.
     @Test func aTapKeepsNoneUnlessAsked() {
         let tap = RawWireTap()

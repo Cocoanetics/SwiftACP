@@ -43,6 +43,8 @@ public final class RawWireTap: @unchecked Sendable {
     /// connection takes them (``keepUpdateBodies()``, ``takeUpdateBody(sessionId:kind:)``).
     /// `nil` for an update without `params`, which its handler takes all the same (#242 review).
     private var updateBodies: [WireJSON?] = []
+    /// Where the updates not yet taken begin in `updateBodies`.
+    private var updateHead = 0
     private var keepsUpdateBodies = false
 
     public init(_ observer: Observer? = nil) {
@@ -153,8 +155,17 @@ public final class RawWireTap: @unchecked Sendable {
     /// the peer as a notification — and goes, so that the next is the next's.
     func takeUpdateBody(sessionId: String?, kind: String?) -> WireJSON? {
         lock.withLock {
-            while !updateBodies.isEmpty {
-                let params = updateBodies.removeFirst()
+            // The taken ones go once they are at least half of those kept: each is moved at most
+            // once more, however long the batch it came in (#242 review).
+            defer {
+                if updateHead * 2 >= updateBodies.count {
+                    updateBodies.removeFirst(updateHead)
+                    updateHead = 0
+                }
+            }
+            while updateHead < updateBodies.count {
+                let params = updateBodies[updateHead]
+                updateHead += 1
                 // One without `params` is taken by the handler of an update without them, which
                 // asks with no session and no kind.
                 if params?["sessionId"]?.stringValue == sessionId,
