@@ -78,6 +78,10 @@ import Testing
         capabilities.meta = AgentLaunchCompat.devinCapabilitiesMeta
         #expect(try JSONValue(encoding: capabilities)["_meta"]
             == .object(["cognition.ai/requestDiagnostics": .bool(true)]))
+        // A caller's own `_meta` is kept, Devin's key set in it (#263 review).
+        #expect(AgentLaunchCompat.devinMeta(merging: .object(["x.example/feature": .bool(true)]))
+            == .object(["x.example/feature": .bool(true), "cognition.ai/requestDiagnostics": .bool(true)]))
+        #expect(AgentLaunchCompat.devinMeta(merging: nil) == AgentLaunchCompat.devinCapabilitiesMeta)
         let info = AgentLaunchCompat.devinClientInfo(environment:)
         #expect(info([:]) == Implementation(name: "windsurf", version: "1.110.1"))
         #expect(info(["ACPX_DEVIN_WINDSURF_VERSION": "9.9.9"]).version == "9.9.9")

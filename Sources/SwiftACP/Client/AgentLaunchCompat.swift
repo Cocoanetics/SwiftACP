@@ -62,7 +62,7 @@ enum AgentLaunchCompat {
             self.capabilities = capabilities
             if isDevin(spec.executable, spec.arguments) {
                 self.clientInfo = devinClientInfo(environment: callerEnvironment)
-                self.capabilities.meta = devinCapabilitiesMeta
+                self.capabilities.meta = devinMeta(merging: capabilities.meta)
             }
             copilot = isCopilot(spec.executable, spec.arguments)
             command = spec.executable
@@ -190,6 +190,14 @@ enum AgentLaunchCompat {
 
     /// What a client says it answers for Devin (`resolveClientCapabilities`).
     static let devinCapabilitiesMeta: JSONValue = .object(["cognition.ai/requestDiagnostics": .bool(true)])
+
+    /// The client's own `_meta`, when it is an object, with Devin's key set in it — acpx's
+    /// client has none of its own to keep, but a caller's is theirs to say (#263 review).
+    static func devinMeta(merging meta: JSONValue?) -> JSONValue {
+        guard case .object(var members)? = meta else { return devinCapabilitiesMeta }
+        members["cognition.ai/requestDiagnostics"] = .bool(true)
+        return .object(members)
+    }
 
     /// The request Devin asks a client that says it answers it; acpx answers `{}`.
     static let devinDiagnosticsMethod = "_cognition.ai/request_diagnostics"
