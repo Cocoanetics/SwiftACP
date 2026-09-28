@@ -19,6 +19,8 @@ actor StopReasonBox {
     private(set) var cost: JSONValue?
     /// Whether the turn ended with no answer to its prompt (``TurnEndedEvent/unanswered``).
     private(set) var unanswered = false
+    /// Why the session could not be taken back, when a new one replaced it (``TurnEndedEvent/loadError``).
+    private(set) var loadError: String?
     /// Whether the turn's end came: its outcome, as acpx's CLI has it in the owner's `result`.
     private(set) var ended = false
     func set(_ ended: TurnEndedEvent) {
@@ -28,6 +30,7 @@ actor StopReasonBox {
         usage = ended.usage
         cost = ended.cost
         unanswered = ended.unanswered ?? false
+        loadError = ended.loadError
     }
 
     func fail(_ event: TurnFailedEvent) {
@@ -54,6 +57,8 @@ struct DaemonTurn {
     var unanswered = false
     /// The pid of the acpxd that ran the turn (``DaemonClient/ConnectedDaemon``).
     var ownerPid: Int32?
+    /// Why the session could not be taken back, when a new one replaced it (``TurnEndedEvent/loadError``).
+    var loadError: String?
 }
 
 /// Renders streamed session updates that arrive from the daemon as MCP log
@@ -228,7 +233,8 @@ enum DaemonClient {
         // result resumed this call; default defensively if it somehow wasn't.
         return DaemonTurn(
             stopReason: await stopReason.value ?? .endTurn, permissions: await stopReason.permissions,
-            usage: await stopReason.usage, cost: await stopReason.cost, unanswered: await stopReason.unanswered)
+            usage: await stopReason.usage, cost: await stopReason.cost, unanswered: await stopReason.unanswered,
+            loadError: await stopReason.loadError)
     }
 
     /// Set a session's mode on the live agent via the daemon (which persists it). What
@@ -304,6 +310,13 @@ enum DaemonClient {
                     terminal: client.terminal, authPolicy: client.authPolicy)
             }
         }
+    }
+
+    /// Under `--verbose`, acpx's line for a prompt or a control whose session had to start over:
+    /// it could not be taken back, and a new session replaced it — `loadError` says why.
+    static func noteFallback(_ loadError: String?, verbose: Bool) {
+        guard verbose, let loadError else { return }
+        Console.errLine("[acpx] session reconnect failed, started fresh session: \(loadError)")
     }
 
     /// A control the daemon ran under `timeoutMs`: one it failed as the timeout is the

@@ -340,7 +340,8 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, client: client, step)
-        return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
+        return SessionControlResult(
+            resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned), loadError: outcome.loadError)
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -394,7 +395,8 @@ actor ACPXDaemonBackend: ACPXBackend {
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, client: client, step)
         return SessionControlResult(
-            resumed: outcome.resumed, rawConfigOptions: outcome.value, ownerPid: Self.pid(ifOwned: outcome.owned))
+            resumed: outcome.resumed, rawConfigOptions: outcome.value, ownerPid: Self.pid(ifOwned: outcome.owned),
+            loadError: outcome.loadError)
     }
 
     /// Set a session's model on the live agent (reconnecting if needed) through the
@@ -439,7 +441,8 @@ actor ACPXDaemonBackend: ACPXBackend {
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
             terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
             verbose: verbose, client: client, step)
-        return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
+        return SessionControlResult(
+            resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned), loadError: outcome.loadError)
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:

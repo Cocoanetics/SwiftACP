@@ -76,7 +76,7 @@ extension ACPXDaemonBackend {
         let stderr = direct && verbose ? AgentStderrRelay() : nil
         let connecting = direct ? client : owners[recordId]?.client ?? ClientOptions()
         do {
-            let (value, resumed) = try await relayingStderr(stderr, logger: recordId) {
+            return try await relayingStderr(stderr, logger: recordId) {
                 try await control(
                     current, direct: direct, replacing: replacing, deadline: deadline, step: step,
                     settings: CallerSettings(
@@ -85,27 +85,28 @@ extension ACPXDaemonBackend {
                         environment: direct ? environment : owners[recordId]?.environment),
                     body)
             }
-            return ControlOutcome(value: value, resumed: resumed, owned: !direct)
         } catch {
             if let timeout, deadline?.hasPassed == true { throw TimeoutError(milliseconds: timeout) }
             throw AgentFailure.shown(error)
         }
     }
 
-    /// The control once it has the session: connected, `body` run, the record saved.
+    /// The control once it has the session: connected, `body` run, the record saved. One run
+    /// without an owner says why the session could not be taken back when a new session replaced
+    /// it, as acpx's direct control returns `loadError`; an owner's says nothing of it.
     private func control<T: Sendable>(
         _ current: SessionRecord, direct: Bool, replacing: ReconnectReplay.Replacing, deadline: ControlDeadline?,
         step: Int?, settings: CallerSettings, _ body: (Live, inout SessionRecord, _ timeout: Int?) async throws -> T
-    ) async throws -> (value: T, resumed: Bool) {
+    ) async throws -> ControlOutcome<T> {
         let recordId = current.acpxRecordId
         // What connecting changes — a reconnect may move the record to a new session — goes
         // into the record the control goes on with, as acpx's control goes on with the
         // record it connected: the block a reconnect built anew keeps the places it holds
         // for members still unset, which reading it back would lose.
         let changes = RecordChanges()
-        let entry: Live, resumed: Bool
+        let connected: Connected
         do {
-            (entry, resumed) = try await connect(
+            connected = try await connect(
                 recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
                 mcpServers: current.acpx?.mcpServers, control: true, settings: settings,
                 replacing: replacing, onRecordChange: { changes.add($0) })
@@ -128,9 +129,10 @@ extension ACPXDaemonBackend {
             }
             throw error
         }
-        var connected = current
-        changes.apply(to: &connected)
-        var record = connected
+        let entry = connected.entry
+        var reconnected = current
+        changes.apply(to: &reconnected)
+        var record = reconnected
         let result: T
         var answeredLate = false
         do {
@@ -151,7 +153,7 @@ extension ACPXDaemonBackend {
             // An agent whose connection is gone is ended first, as a turn's is: it can be
             // running still, and its pid would be kept.
             if direct || ACPAgentConnection.endedTheConnection(error) { await letGo(entry, of: recordId) }
-            var saved = answeredLate ? record : connected
+            var saved = answeredLate ? record : reconnected
             if !direct { saved.lastUsedAt = nowISO() }
             saved.applyLifecycle(entry.agent.lifecycle)
             do {
@@ -171,7 +173,8 @@ extension ACPXDaemonBackend {
         } catch {
             log.warning("session record write failed after control op: \(error)")
         }
-        return (result, resumed)
+        return ControlOutcome(
+            value: result, resumed: connected.resumed, owned: !direct, loadError: direct ? connected.loadError : nil)
     }
 
     /// An owned control's deadline passed: what the control connects or runs on is put down.

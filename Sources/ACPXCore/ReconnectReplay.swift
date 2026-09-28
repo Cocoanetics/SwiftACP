@@ -109,6 +109,9 @@ public enum ReconnectReplay {
         public var configOptions: JSONValue?
         public var models: ModelSupport.ModelState?
         public var legacyModelMetadataPresent: Bool
+        /// Why the session could not be taken back, when a new session replaced it: acpx's
+        /// `loadError` (`formatErrorMessage` of the failure). `nil` otherwise.
+        public var loadError: String?
 
         /// - Parameters:
         ///   - configOptions: the reply's `configOptions` as the agent sent them.
