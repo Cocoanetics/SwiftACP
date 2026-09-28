@@ -14,15 +14,15 @@ index c1ee418..07c9562 100644
      /// Whether any of the job's processes but the agent still runs.
      var hasTrackedProcesses: Bool {
 diff --git a/Sources/SwiftACP/Client/TerminalManager.swift b/Sources/SwiftACP/Client/TerminalManager.swift
-index bd25453..789d531 100644
+index 6565a02..e30ad20 100644
 --- a/Sources/SwiftACP/Client/TerminalManager.swift
 +++ b/Sources/SwiftACP/Client/TerminalManager.swift
-@@ -300,7 +300,7 @@ public actor TerminalManager: ACPTerminalHandler {
+@@ -302,7 +302,7 @@ public actor TerminalManager: ACPTerminalHandler {
      private func killTree(_ terminal: ManagedTerminal) async throws {
-         await Self.taskkill(terminal, force: false)
+         await taskkill(terminal, force: false)
          _ = await cleanedUp(terminal)
--        await Self.taskkill(terminal, force: true)
-+        await Self.taskkill(terminal, force: false)
+-        await taskkill(terminal, force: true)
++        await taskkill(terminal, force: false)
          guard await cleanedUp(terminal) else { throw TerminalError.cleanupUnfinished }
      }
  
