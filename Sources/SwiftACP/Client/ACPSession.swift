@@ -19,6 +19,9 @@ public struct ACPSession: Sendable {
     /// That reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
     /// it had none, and ``JSONValue/null`` when it was `null`.
     public let rawConfigOptions: JSONValue?
+    /// That `configOptions` as the agent wrote it — member order and all — when a wire tap read
+    /// the reply, for it to be recorded so (#119).
+    public let configOptionsAsSent: WireJSON?
     /// The legacy `models` block that reply advertised, when it had one — as sent,
     /// ``JSONValue/null`` included.
     public let models: JSONValue?
@@ -37,7 +40,7 @@ public struct ACPSession: Sendable {
 
     public init(
         id: SessionId, agent: ACPAgent, modes: SessionModeState?, meta: JSONValue?, rawConfigOptions: JSONValue?,
-        models: JSONValue?
+        models: JSONValue?, configOptionsAsSent: WireJSON? = nil
     ) {
         self.id = id
         self.agent = agent
@@ -45,6 +48,7 @@ public struct ACPSession: Sendable {
         self.meta = meta
         self.rawConfigOptions = rawConfigOptions
         self.models = models
+        self.configOptionsAsSent = configOptionsAsSent
     }
 
     /// A stream of this session's updates only. Subscribe before prompting.

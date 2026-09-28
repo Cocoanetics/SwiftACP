@@ -16,7 +16,7 @@ extension ACPAgentConnection {
     public func setConfigOption(_ request: SetSessionConfigOptionRequest) async throws
         -> SetSessionConfigOptionResponse {
         try await answeringItsRequests(in: request.sessionId) {
-            try await send("session/set_config_option", request)
+            try await sendKeepingConfigOptions("session/set_config_option", request)
         }
     }
 

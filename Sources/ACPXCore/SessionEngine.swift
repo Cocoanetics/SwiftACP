@@ -179,7 +179,7 @@ public enum SessionEngine {
             // block, then the options the session reported, then the model it was asked for.
             var acpx = SessionAcpxState()
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
-            ModelSupport.applyConfigOptions(created.configOptions, to: &acpx)
+            ModelSupport.applyConfigOptions(created.configOptions, asSent: created.configOptionsAsSent, to: &acpx)
             ModelSupport.applyInitialModelSelection(application, originalModels: advertised, to: &acpx)
             acpx.mcpServers = sessionMcpServers
             record.acpx = acpx
@@ -220,6 +220,8 @@ public enum SessionEngine {
         let meta: JSONValue?
         /// As acpx takes them (``ModelSupport/normalizedResponseConfigOptions(_:)``).
         let configOptions: JSONValue?
+        /// As the agent wrote them, when a wire tap read the reply (#119).
+        let configOptionsAsSent: WireJSON?
         /// The models it advertises.
         let models: ModelSupport.ModelState?
         let application: ModelApplication.Application
@@ -236,7 +238,7 @@ public enum SessionEngine {
         return try await applyingModel(
             to: response.sessionId, meta: response.meta,
             configOptions: ModelSupport.normalizedResponseConfigOptions(response.rawConfigOptions),
-            models: response.models, on: target)
+            asSent: response.configOptionsAsSent, models: response.models, on: target)
     }
 
     /// acpx's `resumeSessionRecordWithClient`: the session taken back with `session/resume`
@@ -262,7 +264,7 @@ public enum SessionEngine {
             return try await applyingModel(
                 to: sessionId, meta: session.meta,
                 configOptions: ModelSupport.normalizedResponseConfigOptions(session.rawConfigOptions),
-                models: session.models,
+                asSent: session.configOptionsAsSent, models: session.models,
                 on: target)
         } catch {
             throw SessionResumeError(sessionId: sessionId, underlying: error)
@@ -270,7 +272,8 @@ public enum SessionEngine {
     }
 
     private static func applyingModel(
-        to sessionId: String, meta: JSONValue?, configOptions: JSONValue?, models: JSONValue?, on target: Target
+        to sessionId: String, meta: JSONValue?, configOptions: JSONValue?, asSent: WireJSON?, models: JSONValue?,
+        on target: Target
     ) async throws -> Created {
         let advertised = ModelSupport.modelState(fromConfigOptions: configOptions)
             ?? ModelSupport.modelState(fromLegacyModels: models)
@@ -279,8 +282,8 @@ public enum SessionEngine {
             models: advertised, agentCommand: target.agentCommand, timeoutMilliseconds: target.timeoutMilliseconds,
             onWarning: target.onModelWarning)
         return Created(
-            sessionId: sessionId, meta: meta, configOptions: configOptions, models: advertised,
-            application: application)
+            sessionId: sessionId, meta: meta, configOptions: configOptions, configOptionsAsSent: asSent,
+            models: advertised, application: application)
     }
 }
 

@@ -68,7 +68,7 @@ public actor ACPAgentConnection {
     /// The `cwd` of each `session/new` still waiting for its answer.
     var sessionRootsBeingCreated: [UUID: String] = [:]
     /// Told each time a session is open (``setSessionOpenedObserver(_:)``).
-    private var sessionOpened: (@Sendable () -> Void)?
+    var sessionOpened: (@Sendable () -> Void)?
 
     /// Sessions with a `session/prompt` in flight.
     var promptingSessionIds: Set<SessionId> = []
@@ -220,7 +220,13 @@ public actor ACPAgentConnection {
         let wire = (
             requests: inboundRequests, ownership: requestOwnership, ordered: wireOrderedEvents, sinks: eventSinks,
             updates: sessionUpdates, observer: wireObserver)
-        await rpc.setWireLog { [wire] direction, message in
+        await rpc.setWireLog { [wire, rawUpdates] direction, message in
+            // A request whose answer is kept as the agent writes it goes out under its token, on the
+            // sending task: from here on the request is known by its id (#119).
+            if direction == .outbound, case .request(let request) = message, let answer = KeptAnswer.current {
+                answer.sent(request.id)
+                rawUpdates?.awaitAnswer(to: request.id)
+            }
             if direction == .inbound, case .request(let request) = message,
                 RequestOwnership.ownedMethods.contains(request.method),
                 let sessionId = InboundRequestLedger.sessionId(of: request.params) {
@@ -279,12 +285,11 @@ public actor ACPAgentConnection {
         clientInfo: Implementation? = nil
     ) async throws -> InitializeResponse {
         advertisedCapabilities = capabilities
-        rawUpdates?.keepNextResult()
-        let response: InitializeResponse = try await send(
+        let (response, written): (InitializeResponse, WireJSON?) = try await sendKeepingAnswer(
             "initialize",
             InitializeRequest(clientCapabilities: capabilities, clientInfo: clientInfo))
         initializeResult = response
-        agentCapabilitiesAsSent = rawUpdates?.takeNextResult()?["agentCapabilities"]
+        agentCapabilitiesAsSent = written?["agentCapabilities"]
         return response
     }
 
@@ -309,12 +314,14 @@ public actor ACPAgentConnection {
         if let limit = sessionCreateLimit {
             // Claude's adapter, as acpx's `createSession` caps it (#248).
             do {
-                response = try await AgentLaunchCompat.within(limit) { try await self.send("session/new", request) }
+                response = try await AgentLaunchCompat.within(limit) {
+                    try await self.sendKeepingConfigOptions("session/new", request)
+                }
             } catch is AgentLaunchCompat.StartupTimedOut {
                 throw ClaudeAcpSessionCreateTimeoutError()
             }
         } else {
-            response = try await send("session/new", request)
+            response = try await sendKeepingConfigOptions("session/new", request)
         }
         sessionRoots[response.sessionId] = request.cwd
         sessionOpened?()
@@ -335,34 +342,6 @@ public actor ACPAgentConnection {
         if let root = sessionRoots[sessionId] { return root }
         let creating = Set(sessionRootsBeingCreated.values)
         return creating.count == 1 ? creating.first : nil
-    }
-
-    /// The root is registered *before* the request is sent: this actor is reentrant at
-    /// the `await`, and an agent handling `session/load` may issue `fs/*` for the very
-    /// session being loaded. Registering afterwards would refuse those as an unknown
-    /// session. A failed load restores whatever was there before.
-    public func loadSession(_ request: LoadSessionRequest) async throws -> LoadSessionResponse {
-        let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
-        do {
-            let response: LoadSessionResponse = try await send("session/load", request)
-            sessionOpened?()
-            return response
-        } catch {
-            sessionRoots[request.sessionId] = previous
-            throw error
-        }
-    }
-
-    public func resumeSession(_ request: ResumeSessionRequest) async throws -> ResumeSessionResponse {
-        let previous = sessionRoots.updateValue(request.cwd, forKey: request.sessionId)
-        do {
-            let response: ResumeSessionResponse = try await send("session/resume", request)
-            sessionOpened?()
-            return response
-        } catch {
-            sessionRoots[request.sessionId] = previous
-            throw error
-        }
     }
 
     public func prompt(_ request: PromptRequest) async throws -> PromptResponse {

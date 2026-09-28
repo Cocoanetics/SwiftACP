@@ -181,6 +181,101 @@ import Testing
         }
     }
 
+    /// Options as an agent may write them: out of any schema's order, with a member no schema
+    /// names, and a `_meta` out of order.
+    static let optionsAsSent = #"[{"zeta":1,"type":"select","currentValue":"m1","id":"model","name":"Model","#
+        + #""options":[{"name":"M1","value":"m1","_meta":{"b":1,"a":2}},{"value":"m2","name":"M2"}],"#
+        + #""category":"model"}]"#
+
+    /// `model-agent.py`, with `environment` its own.
+    static func modelAgent(_ environment: String) throws -> String {
+        let python = try #require(AgentRegistry.which("python3"))
+        let agent = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/model-agent.py").path
+        return "/usr/bin/env \(environment) '\(python)' '\(agent)'"
+    }
+
+    /// A reply's options are recorded as the agent sent them, as acpx records them — `session/new`'s
+    /// here (#119).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aNewSessionsReplyKeepsItsOptionsAsSent() async throws {
+        let command = try Self.modelAgent("'MODEL_AGENT_NEW_REPLY={\"configOptions\":\(Self.optionsAsSent)}'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified == Self.optionsAsSent)
+        }
+    }
+
+    /// So are those of the `session/load` a turn takes its session back with.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aLoadsReplyKeepsItsOptionsAsSent() async throws {
+        let command = try Self.modelAgent(
+            "MODEL_AGENT_LOAD=1 'MODEL_AGENT_LOAD_RESULT={\"configOptions\":\(Self.optionsAsSent)}'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "hi")
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified == Self.optionsAsSent)
+        }
+    }
+
+    /// Or of the `session/resume` it takes it back with, from an agent that advertises one.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aResumesReplyKeepsItsOptionsAsSent() async throws {
+        let command = try Self.modelAgent(
+            "MODEL_AGENT_RESUME=1 'MODEL_AGENT_RESUME_RESULT={\"configOptions\":\(Self.optionsAsSent)}'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "hi")
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified == Self.optionsAsSent)
+        }
+    }
+
+    /// However large the request — a `_meta` past 64 KiB here — its reply's options are kept as
+    /// sent (#268 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aLargeRequestsReplyKeepsItsOptionsAsSent() async throws {
+        let command = try Self.modelAgent("'MODEL_AGENT_NEW_REPLY={\"configOptions\":\(Self.optionsAsSent)}'")
+        let agent = try await ACPAgent.launch(agent: command, cwd: NSTemporaryDirectory(), permission: .approveAll)
+        let padding = JSONValue.string(String(repeating: "x", count: 100_000))
+        let session = try await agent.newSession(meta: .object(["padding": padding]))
+        await agent.close()
+        #expect(session.configOptionsAsSent?.stringified == Self.optionsAsSent)
+    }
+
+    /// Options that are no list are kept as sent too — an object's members in the agent's order
+    /// (#268 review).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aReplysOptionsObjectKeepsItsOrder() async throws {
+        let options = #"{"z":1,"a":{"y":2,"b":3}}"#
+        let command = try Self.modelAgent("'MODEL_AGENT_NEW_REPLY={\"configOptions\":\(options)}'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified == options)
+        }
+    }
+
+    /// And those a `session/set_config_option` reply reports.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aSetOptionsReplyKeepsItsOptionsAsSent() async throws {
+        let command = try Self.modelAgent(
+            "MODEL_AGENT_LOAD=1 'MODEL_AGENT_SET_RESULT={\"configOptions\":\(Self.optionsAsSent)}'")
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            _ = try await daemon.setConfigOption(sessionId: id, configId: "effort", value: "high")
+            await daemon.releaseAll()
+            #expect(try Self.writtenOptions(id).stringified == Self.optionsAsSent)
+        }
+    }
+
     /// The record's `acpx.config_options` as written.
     static func writtenOptions(_ id: String) throws -> WireJSON {
         let record = try #require(WireJSON(parsing: try Data(contentsOf: ACPXPaths.sessionRecordPath(id))))

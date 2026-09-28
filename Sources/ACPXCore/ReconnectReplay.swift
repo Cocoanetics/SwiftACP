@@ -107,6 +107,8 @@ public enum ReconnectReplay {
         /// The reply's `configOptions` as acpx takes them
         /// (``ModelSupport/normalizedResponseConfigOptions(_:)``): `nil` when it had none.
         public var configOptions: JSONValue?
+        /// Those `configOptions` as the agent wrote them, when a wire tap read the reply (#119).
+        public var configOptionsAsSent: WireJSON?
         public var models: ModelSupport.ModelState?
         public var legacyModelMetadataPresent: Bool
         /// Why the session could not be taken back, when a new session replaced it: acpx's
@@ -116,10 +118,15 @@ public enum ReconnectReplay {
         /// - Parameters:
         ///   - configOptions: the reply's `configOptions` as the agent sent them.
         ///   - models: the reply's `models` as the agent sent them, `null` included.
-        public init(sessionId: String, createdFreshSession: Bool, configOptions: JSONValue?, models: JSONValue?) {
+        ///   - configOptionsAsSent: `configOptions` as the agent wrote them, when that is known.
+        public init(
+            sessionId: String, createdFreshSession: Bool, configOptions: JSONValue?, models: JSONValue?,
+            configOptionsAsSent: WireJSON? = nil
+        ) {
             self.sessionId = sessionId
             self.createdFreshSession = createdFreshSession
             self.configOptions = ModelSupport.normalizedResponseConfigOptions(configOptions)
+            self.configOptionsAsSent = configOptionsAsSent
             self.models = ModelSupport.modelState(fromConfigOptions: self.configOptions)
                 ?? ModelSupport.modelState(fromLegacyModels: models)
             legacyModelMetadataPresent = models != nil
@@ -140,7 +147,7 @@ public enum ReconnectReplay {
         if let configOptions = loaded.configOptions, configOptions.isTruthyInJavaScript {
             // On the block built anew — a clone, or a new block when there was none.
             var acpx = state?.cloned() ?? SessionAcpxState()
-            ModelSupport.applyConfigOptionsModelState(configOptions, to: &acpx)
+            ModelSupport.applyConfigOptionsModelState(configOptions, asSent: loaded.configOptionsAsSent, to: &acpx)
             state = acpx
         }
         applyReconnectedModelState(

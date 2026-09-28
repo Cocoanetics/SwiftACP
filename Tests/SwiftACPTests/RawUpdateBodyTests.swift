@@ -167,17 +167,30 @@ import Testing
         #expect(tap.takeUpdateBody() == nil)
     }
 
-    /// Once armed, the tap keeps the `result` of the next response to come in, as the agent wrote
-    /// it — in a batch too — and none before it was armed, or after it was taken (#119).
-    @Test func theNextResultIsKeptAsWritten() {
+    /// The tap keeps the `result` of the agent's answer to each request it was told to await, as
+    /// the agent wrote it — by the request's id, from a batch too — until taken: two answers for
+    /// the same method and session are two (#268 review). Nothing else is kept: an answer no
+    /// request awaited, an error answer, or one already taken (#119).
+    @Test func answersAreKeptAsWrittenByTheirRequestsID() {
         let tap = RawWireTap()
-        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":7,"result":{"early":true}}"#.utf8))
-        tap.keepNextResult()
-        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#.utf8))
-        let batch = #"[{"jsonrpc":"2.0","method":"x"},{"jsonrpc":"2.0","id":1,"result":{"zeta":1,"alpha":2}}]"#
-        tap.observe(.inbound, Data(batch.utf8))
-        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":2,"result":{"later":true}}"#.utf8))
-        #expect(tap.takeNextResult()?.stringified == #"{"zeta":1,"alpha":2}"#)
-        #expect(tap.takeNextResult() == nil)
+        func into(_ line: String) { tap.observe(.inbound, Data(line.utf8)) }
+        into(#"{"jsonrpc":"2.0","id":1,"result":{"early":true}}"#)
+        for id in 1...4 { tap.awaitAnswer(to: .integer(id)) }
+        tap.awaitAnswer(to: .string("s"))
+        into(#"[{"jsonrpc":"2.0","method":"x"},{"jsonrpc":"2.0","id":1,"result":{"zeta":1,"alpha":2}}]"#)
+        into(#"{"jsonrpc":"2.0","id":3,"result":{"configOptions":[{"z":1,"a":2}]}}"#)
+        into(#"{"jsonrpc":"2.0","id":2,"result":{"configOptions":[{"y":1,"b":2}]}}"#)
+        into(#"{"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"no"}}"#)
+        into(#"{"jsonrpc":"2.0","id":4,"result":{"late":true}}"#)
+        into(#"{"jsonrpc":"2.0","id":5,"result":{"unasked":true}}"#)
+        into(#"{"jsonrpc":"2.0","id":"s","result":{"b":1,"a":2}}"#)
+
+        #expect(tap.takeAnswer(to: .integer(1))?.stringified == #"{"zeta":1,"alpha":2}"#)
+        #expect(tap.takeAnswer(to: .integer(1)) == nil)
+        #expect(tap.takeAnswer(to: .integer(2))?.stringified == #"{"configOptions":[{"y":1,"b":2}]}"#)
+        #expect(tap.takeAnswer(to: .integer(3))?.stringified == #"{"configOptions":[{"z":1,"a":2}]}"#)
+        #expect(tap.takeAnswer(to: .integer(4)) == nil)
+        #expect(tap.takeAnswer(to: .integer(5)) == nil)
+        #expect(tap.takeAnswer(to: .string("s"))?.stringified == #"{"b":1,"a":2}"#)
     }
 }

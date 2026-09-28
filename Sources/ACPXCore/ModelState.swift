@@ -96,16 +96,20 @@ public enum ModelSupport {
     /// it reported any, on the block built anew (a clone) — with the model state they carry.
     /// What it reported is taken as it is, but not when JavaScript reads it as false
     /// (`if (!configOptions) return`): `null`, `false`, `0` or `""`.
-    public static func applyConfigOptions(_ configOptions: JSONValue?, to state: inout SessionAcpxState) {
+    public static func applyConfigOptions(
+        _ configOptions: JSONValue?, asSent: WireJSON? = nil, to state: inout SessionAcpxState
+    ) {
         guard let configOptions, configOptions.isTruthyInJavaScript else { return }
-        applyConfigOptionsToState(configOptions, to: &state)
+        applyConfigOptionsToState(configOptions, asSent: asSent, to: &state)
     }
 
     /// acpx's `applyConfigOptionsToState`: the config options a session reported, whatever
     /// they are, on the block built anew (a clone) — with the model state they carry.
-    public static func applyConfigOptionsToState(_ configOptions: JSONValue, to state: inout SessionAcpxState) {
+    public static func applyConfigOptionsToState(
+        _ configOptions: JSONValue, asSent: WireJSON? = nil, to state: inout SessionAcpxState
+    ) {
         state = state.cloned()
-        applyConfigOptionsModelState(configOptions, to: &state)
+        applyConfigOptionsModelState(configOptions, asSent: asSent, to: &state)
     }
 
     /// acpx's `normalizeResponseConfigOptions`: a reply's `configOptions` as acpx takes
@@ -219,7 +223,7 @@ public enum ModelSupport {
     ) {
         state = state.cloned()
         guard let reported = response?.rawConfigOptions else { return }
-        applyConfigOptionsModelState(reported, to: &state)
+        applyConfigOptionsModelState(reported, asSent: response?.configOptionsAsSent, to: &state)
         guard let desired = state.desiredConfigOptions else { return }
         var kept: [String: String] = [:]
         var order: [String] = []
@@ -250,14 +254,18 @@ public enum ModelSupport {
     /// acpx's `applyConfigOptionsModelState`: the config options the agent reported
     /// replace the record's, as it reported them, with the model state they carry. When
     /// they carry none — what it reported is no list, say — a legacy model control is
-    /// kept, and any other model state is cleared.
-    public static func applyConfigOptionsModelState(_ configOptions: JSONValue, to state: inout SessionAcpxState) {
+    /// kept, and any other model state is cleared. A reply's options, `asSent` as the agent
+    /// wrote them, keep its order when the record is written, as acpx records them (#119).
+    public static func applyConfigOptionsModelState(
+        _ configOptions: JSONValue, asSent: WireJSON? = nil, to state: inout SessionAcpxState
+    ) {
         let preservesLegacyControl = state.modelControl == "legacy_set_model"
             || (state.modelControl == nil && modelState(fromConfigOptions: state.configOptions) == nil
                 && state.availableModels != nil)
         state.configOptions = configOptions
-        // Whatever order these came in, the one they replace is not theirs.
-        state.configOptionsOrder = nil
+        // The order they were sent in, when it is known — an object's members too (#268 review);
+        // the one they replace is not theirs.
+        state.configOptionsOrder = asSent
         if let models = modelState(fromConfigOptions: configOptions) {
             applyAdvertisedModelState(models, to: &state)
         } else if preservesLegacyControl {
@@ -277,7 +285,7 @@ public enum ModelSupport {
         _ application: ModelApplication.Application, originalModels: ModelState?, to state: inout SessionAcpxState
     ) {
         let replied = application.response?.rawConfigOptions
-        applyConfigOptions(replied, to: &state)
+        applyConfigOptions(replied, asSent: application.response?.configOptionsAsSent, to: &state)
         if let models = replied != nil ? modelState(fromConfigOptions: replied) : originalModels {
             applyAdvertisedModelState(models, to: &state)
         }

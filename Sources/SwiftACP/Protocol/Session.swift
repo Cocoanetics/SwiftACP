@@ -43,6 +43,9 @@ public struct NewSessionResponse: Codable, Sendable {
     /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
     /// the reply has none, and ``JSONValue/null`` when it is `null`.
     public var rawConfigOptions: JSONValue?
+    /// That `configOptions` as the agent wrote it — member order and all — when a wire tap read
+    /// the reply, for it to be recorded so (#119). Never encoded.
+    public var configOptionsAsSent: WireJSON?
     /// Legacy model advertisement (`{ currentModelId, availableModels }`), used
     /// by agents like Codex that don't expose models as config options — as the agent
     /// sent it, ``JSONValue/null`` included.
@@ -111,6 +114,9 @@ public struct LoadSessionResponse: Codable, Sendable {
     /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
     /// the reply has none, and ``JSONValue/null`` when it is `null`.
     public var rawConfigOptions: JSONValue?
+    /// That `configOptions` as the agent wrote it — member order and all — when a wire tap read
+    /// the reply, for it to be recorded so (#119). Never encoded.
+    public var configOptionsAsSent: WireJSON?
     /// Legacy model advertisement (`{ currentModelId, availableModels }`), used
     /// by agents like Codex that don't expose models as config options — as the agent
     /// sent it, ``JSONValue/null`` included.
@@ -359,6 +365,9 @@ public struct SetSessionConfigOptionResponse: Codable, Sendable {
     /// the reply has none — it only acknowledges — and ``JSONValue/null`` when it is
     /// `null`.
     public var rawConfigOptions: JSONValue?
+    /// That `configOptions` as the agent wrote it — member order and all — when a wire tap read
+    /// the reply, for it to be recorded so (#119). Never encoded.
+    public var configOptionsAsSent: WireJSON?
 
     public init(configOptions: [JSONValue]? = nil) {
         self.rawConfigOptions = configOptions.map(JSONValue.array)

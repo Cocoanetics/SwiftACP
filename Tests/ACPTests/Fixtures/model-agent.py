@@ -13,7 +13,8 @@ options, a `models` block, and `session/set_model` as the only model control.
 and `m2`; the current one stays `m1`. `MODEL_AGENT_MODELS_FILE` names a file holding
 that list instead, read at launch, so a test can change what a later launch offers.
 `MODEL_AGENT_LOAD=1` makes it take sessions back with `session/load`, answering with
-what `session/new` would. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
+what `session/new` would; `MODEL_AGENT_RESUME=1` advertises `session/resume` too, answered
+the same way, or with the JSON `MODEL_AGENT_RESUME_RESULT` holds. `session/set_mode` is accepted. `MODEL_AGENT_EXIT_ON_MODEL`
 names a file: while it exists, the next model request removes it and the agent exits
 without answering. `MODEL_AGENT_EMPTY_REPLIES=1` answers `session/set_config_option` with
 `{}`, reporting no options back. `MODEL_AGENT_ANNOUNCE_MODEL` names a model the first
@@ -35,6 +36,7 @@ import sys
 
 LEGACY = os.environ.get("MODEL_AGENT_LEGACY") == "1"
 LOAD = os.environ.get("MODEL_AGENT_LOAD") == "1"
+RESUME = os.environ.get("MODEL_AGENT_RESUME") == "1"
 CURRENT = {"model": "m1", "effort": "low"}
 MODELS_FILE = os.environ.get("MODEL_AGENT_MODELS_FILE")
 if MODELS_FILE and os.path.exists(MODELS_FILE):
@@ -111,13 +113,16 @@ def main():
             send({"jsonrpc": "2.0", "id": req_id, "result": {
                 "protocolVersion": 1,
                 "agentInfo": {"name": "model-agent", "version": "0.1.0"},
-                "agentCapabilities": {"loadSession": LOAD,
-                                      "promptCapabilities": {"image": False, "audio": False}},
+                "agentCapabilities": dict({"loadSession": LOAD,
+                                           "promptCapabilities": {"image": False, "audio": False}},
+                                          **({"sessionCapabilities": {"resume": {}}} if RESUME else {})),
                 "authMethods": []}})
         elif method == "session/load" and "MODEL_AGENT_LOAD_RESULT" in os.environ:
             send({"jsonrpc": "2.0", "id": req_id, "result": json.loads(os.environ["MODEL_AGENT_LOAD_RESULT"])})
-        elif method in ("session/new", "session/load"):
-            result = {} if method == "session/load" else {"sessionId": "model-session-1"}
+        elif method == "session/resume" and "MODEL_AGENT_RESUME_RESULT" in os.environ:
+            send({"jsonrpc": "2.0", "id": req_id, "result": json.loads(os.environ["MODEL_AGENT_RESUME_RESULT"])})
+        elif method in ("session/new", "session/load", "session/resume"):
+            result = {} if method != "session/new" else {"sessionId": "model-session-1"}
             if LEGACY:
                 result["models"] = legacy_models()
             else:
