@@ -309,8 +309,8 @@ public actor TerminalManager: ACPTerminalHandler {
     /// acpx's `killWindowsProcessTree`: `taskkill /pid <pid> /t`, `/f` when `force`. It is run on
     /// the shell while it runs, and once the shell is gone on each process it left, as acpx does on
     /// each descendant it saw. As acpx's `execFile`, it runs in this process's directory, where it
-    /// is looked for first. Each run is bounded by acpx's `PROCESS_HELPER_TIMEOUT_MS`, and a
-    /// failure is ignored.
+    /// is looked for first. Each run is bounded by acpx's `PROCESS_HELPER_TIMEOUT_MS`: past it, the
+    /// helper is killed and no longer read, as `runTimedExecFile` does. A failure is ignored.
     private func taskkill(_ terminal: ManagedTerminal, force: Bool) async {
         let pids = terminal.isRunning
             ? [terminal.process.pid]
@@ -327,7 +327,10 @@ public actor TerminalManager: ACPTerminalHandler {
                     if first.claim() { continuation.resume() }
                 })
                 DispatchQueue.global().asyncAfter(deadline: .now() + 8) {
-                    if first.claim() { continuation.resume() }
+                    guard first.claim() else { return }
+                    killer.send(ProcessSignal.kill)
+                    killer.stopReading()
+                    continuation.resume()
                 }
             }
         }
