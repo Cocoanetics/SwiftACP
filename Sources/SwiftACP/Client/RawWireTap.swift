@@ -23,6 +23,8 @@ public final class RawWireTap: @unchecked Sendable {
     public enum Delivery: Sendable {
         /// It is being written: from here on, the agent may have it.
         case writing
+        /// It was written whole: the agent has it, unless it goes before reading it.
+        case written
         /// Writing it failed: the agent does not have it.
         case failed
     }
@@ -123,7 +125,7 @@ public final class RawWireTap: @unchecked Sendable {
 /// A framing that shows every message body to a ``RawWireTap`` as it passes: an
 /// outbound body just before it is written, an inbound one as soon as it is complete —
 /// before it is decoded. A request is therefore always seen before its response. The
-/// write itself happens out of its sight, so an outbound body counts as being written
+/// write itself happens out of its sight, so an outbound body counts as written
 /// (``RawWireTap/onDelivery(_:)``) once it is framed, and never as failed.
 public struct TappedFraming<Base: MessageFraming>: MessageFraming {
     private var base: Base
@@ -137,6 +139,7 @@ public struct TappedFraming<Base: MessageFraming>: MessageFraming {
     public func frame(_ body: Data) -> Data {
         tap.observe(.outbound, body)
         tap.delivery(body, .writing)
+        tap.delivery(body, .written)
         return base.frame(body)
     }
 

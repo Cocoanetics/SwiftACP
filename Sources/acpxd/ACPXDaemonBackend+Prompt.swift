@@ -451,11 +451,16 @@ extension ACPXDaemonBackend {
         }
         entry.agent.rawWire.onDelivery { [self] body, delivery in
             guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
-            guard delivery == .writing else { return wrote.unmark() }
+            switch delivery {
+            case .writing: break
+            case .failed: return wrote.unmark()
+            case .written:
+                // From here on no fresh launch takes the attempt over: what it held back goes
+                // out, and the rest streams, as acpx's does (#198). Not before: a write that
+                // fails sends the attempt to one, its messages unseen (#236 review).
+                return wireFeed.promptWritten()
+            }
             wrote.mark(noting: true)
-            // From here on no fresh launch takes the attempt over: what it held back goes out,
-            // and the rest streams, as acpx's does (#198).
-            wireFeed.promptWriting()
             let note: @Sendable () async -> Void = {
                 await self.promptWritten(
                     recordId: recordId, turn: turnId, to: connection, sessionId: sessionId, note: wrote)

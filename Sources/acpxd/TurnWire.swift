@@ -41,8 +41,8 @@ final class TurnErrorWatch: @unchecked Sendable {
 /// agent's error responses, which it shows as errors: those wait for ``finish()``, so the
 /// updates before them, which reach the client another way, are out first.
 ///
-/// An attempt a fresh launch may retry is `provisional` until its prompt starts to be
-/// written (``promptWriting()``), or the agent answers it with anything but an error — an
+/// An attempt a fresh launch may retry is `provisional` until its prompt is written to the
+/// agent whole (``promptWritten()``), or the agent answers it with anything but an error — an
 /// update, a request of its own, a result (``agentAnswered``). Until then, JSON output holds
 /// all of its messages back — the `--model` it asks for first, say — and a retried attempt's
 /// are dropped by ``finish(showingHeld:)``: a retried attempt did not happen, as far as the
@@ -65,8 +65,8 @@ final class TurnWireFeed: @unchecked Sendable {
     /// JSON output's messages of a provisional attempt no fresh launch is ruled out for yet.
     private var pending: [WireMessageEvent] = []
     private var answered = false
-    /// Whether the attempt can no longer be retried: its prompt began to be written, or the
-    /// agent answered it.
+    /// Whether the attempt can no longer be retried: its prompt was written whole, or the agent
+    /// answered it.
     private var released = false
 
     init(streamWire: Bool, provisional: Bool = false, logger: String, to clientSession: Session?) {
@@ -113,9 +113,9 @@ final class TurnWireFeed: @unchecked Sendable {
         }
     }
 
-    /// The attempt's prompt began to be written: no fresh launch takes the attempt over from
-    /// here on, so what was held goes out, and the rest streams.
-    func promptWriting() {
+    /// The attempt's prompt was written whole: no fresh launch takes the attempt over from here
+    /// on, so what was held goes out, and the rest streams.
+    func promptWritten() {
         lock.withLock { release() }
     }
 
