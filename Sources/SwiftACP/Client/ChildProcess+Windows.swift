@@ -216,28 +216,35 @@ package final class ChildProcess: @unchecked Sendable {
 
     // MARK: - Descendants
 
-    /// Whether the process runs in a job of its own, which holds everything it starts.
-    var hasJob: Bool { job != nil }
-
-    /// The ids of the processes of its job still running, the process's own included.
-    func jobProcessIds() -> [DWORD] {
-        guard let job else { return [] }
-        let capacity = 4096
+    /// The ids of the processes of its job still running, the process's own included; `nil` without
+    /// a job, or when it cannot be read. A list longer than the buffer is asked for again, with room
+    /// for as many as the job says it holds (#278 review).
+    func jobProcessIds() -> [DWORD]? {
+        guard let job else { return nil }
         let header = MemoryLayout<JOBOBJECT_BASIC_PROCESS_ID_LIST>.offset(of: \.ProcessIdList) ?? 8
-        let size = header + MemoryLayout<ULONG_PTR>.stride * capacity
-        let memory = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: MemoryLayout<ULONG_PTR>.alignment)
-        defer { memory.deallocate() }
-        guard QueryInformationJobObject(job, JobObjectBasicProcessIdList, memory, DWORD(size), nil) else { return [] }
-        let list = memory.assumingMemoryBound(to: JOBOBJECT_BASIC_PROCESS_ID_LIST.self).pointee
-        let count = Int(list.NumberOfProcessIdsInList)
-        let ids = memory.advanced(by: header).assumingMemoryBound(to: ULONG_PTR.self)
-        return (0..<min(count, capacity)).map { DWORD(truncatingIfNeeded: ids[$0]) }
+        var capacity = 256
+        while true {
+            let size = header + MemoryLayout<ULONG_PTR>.stride * capacity
+            let memory = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: MemoryLayout<ULONG_PTR>.alignment)
+            defer { memory.deallocate() }
+            memory.initializeMemory(as: UInt8.self, repeating: 0, count: size)
+            let read = QueryInformationJobObject(job, JobObjectBasicProcessIdList, memory, DWORD(size), nil)
+            let list = memory.assumingMemoryBound(to: JOBOBJECT_BASIC_PROCESS_ID_LIST.self).pointee
+            if read {
+                let ids = memory.advanced(by: header).assumingMemoryBound(to: ULONG_PTR.self)
+                let count = min(Int(list.NumberOfProcessIdsInList), capacity)
+                return (0..<count).map { DWORD(truncatingIfNeeded: ids[$0]) }
+            }
+            guard GetLastError() == DWORD(ERROR_MORE_DATA) else { return nil }
+            // Processes can join while it looks: room for more than it said.
+            capacity = max(capacity * 2, Int(list.NumberOfAssignedProcesses) + 64)
+        }
     }
 
     /// End each process of its job but the process itself.
     func terminateDescendants() {
         let own = DWORD(bitPattern: pid)
-        for id in jobProcessIds() where id != own {
+        for id in jobProcessIds() ?? [] where id != own {
             guard let descendant = OpenProcess(DWORD(PROCESS_TERMINATE), false, id) else { continue }
             TerminateProcess(descendant, 1)
             CloseHandle(descendant)

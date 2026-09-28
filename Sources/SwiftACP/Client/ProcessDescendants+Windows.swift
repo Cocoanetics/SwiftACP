@@ -12,12 +12,12 @@ final class ProcessDescendants: @unchecked Sendable {
         self.process = process
     }
 
-    /// The job holds them all, so there is nothing to look for. Without one, the look fails, as
-    /// acpx's does when it cannot read the process table: the agent's descendants cannot be
-    /// verified, and are left, the transport noting it (#278 review).
+    /// The job holds them all, so the look is whether it can be read. Without one, or when it cannot
+    /// be, the look fails, as acpx's does when it cannot read the process table: the agent's
+    /// descendants cannot be verified, and are left, the transport noting it (#278 review).
     @discardableResult
     func capture(rootIsRunning: Bool) -> Bool {
-        process.hasJob
+        process.jobProcessIds() != nil
     }
 
     /// Each of the job's processes but the agent, ended: on Windows Node's `kill` terminates a
@@ -29,7 +29,7 @@ final class ProcessDescendants: @unchecked Sendable {
     /// Whether any of the job's processes but the agent still runs.
     var hasTrackedProcesses: Bool {
         let own = DWORD(bitPattern: process.pid)
-        return process.jobProcessIds().contains { $0 != own }
+        return (process.jobProcessIds() ?? []).contains { $0 != own }
     }
 
     /// Nothing to let go of: the job goes with the process.
