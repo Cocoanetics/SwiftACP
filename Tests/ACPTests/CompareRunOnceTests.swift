@@ -162,20 +162,26 @@ import Testing
     /// A signal that comes once `compare` admitted an agent, but before the agent's run
     /// listens for one, still puts that run down: Node dispatches none between the two,
     /// so acpx's run always hears it.
+    ///
+    /// The run blocks on its thread as a CLI command does (`runBlocking`), so it is given a
+    /// thread of its own, as the CLI tests give theirs: blocking a thread of the task pool, it
+    /// leaves the pool one short, and a pool of one with none for the task it waits on (#283).
     @Test(.timeLimit(.minutes(1)))
-    func aSignalBeforeTheRunListensStillPutsItDown() {
-        let source = Interrupts.Source()
-        let (rows, interrupted) = Interrupts.$source.withValue(source) {
-            CompareCommand.runAgents(["agent"]) { name in
-                source.fire()
-                let ran = (try? runBlocking {
-                    try await Interrupts.withInterrupt({
-                        try await Task.sleep(nanoseconds: 5_000_000_000)
-                        return "ran on"
-                    }, onInterrupt: { $0() })
-                }) ?? "put down"
-                return CompareCommand.Row(
-                    agent: name, status: "ok", stopReason: nil, wallMs: 0, finalMessage: ran, error: nil)
+    func aSignalBeforeTheRunListensStillPutsItDown() async {
+        let (rows, interrupted) = await onThreadOfItsOwn {
+            let source = Interrupts.Source()
+            return Interrupts.$source.withValue(source) {
+                CompareCommand.runAgents(["agent"]) { name in
+                    source.fire()
+                    let ran = (try? runBlocking {
+                        try await Interrupts.withInterrupt({
+                            try await Task.sleep(nanoseconds: 5_000_000_000)
+                            return "ran on"
+                        }, onInterrupt: { $0() })
+                    }) ?? "put down"
+                    return CompareCommand.Row(
+                        agent: name, status: "ok", stopReason: nil, wallMs: 0, finalMessage: ran, error: nil)
+                }
             }
         }
         #expect(interrupted)
