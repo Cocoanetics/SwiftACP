@@ -14,10 +14,25 @@ import Testing
 extension DaemonToolsTests {
     /// The mock agent, holding a terminal of the turn open past its answer until `release`
     /// exists, logging the `session/*` requests it gets to `log`, and started with `options`.
-    private static func holdingMock(_ release: URL, log: URL, _ options: String = "") throws -> String {
+    static func holdingMock(_ release: URL, log: URL, _ options: String = "") throws -> String {
         let command = try #require(mockCommand())
         return "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_HOLD_TERMINAL='\(release.path)' MOCK_REQUEST_LOG='\(log.path)' "
             + "\(options) \(command)"
+    }
+
+    /// `body` on a daemon that lets its agents go once `body` is over, however it ends, as
+    /// acpxd does when it stops: each agent ends — a mock waiting for a file too — and the
+    /// commands it still runs with it, such as the mock's held terminal. None outlives the test.
+    static func withDaemon<T>(_ body: (ACPXDaemonBackend) async throws -> T) async throws -> T {
+        let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+        do {
+            let result = try await body(daemon)
+            await daemon.releaseAll()
+            return result
+        } catch {
+            await daemon.releaseAll()
+            throw error
+        }
     }
 
     /// Create `file`, which the mock agent waits for.
@@ -26,7 +41,7 @@ extension DaemonToolsTests {
     }
 
     /// A stream that yields each time `client` is told a prompt was answered.
-    private static func answers(to client: CallingClient) -> AsyncStream<Void> {
+    static func answers(to client: CallingClient) -> AsyncStream<Void> {
         let (answers, answered) = AsyncStream<Void>.makeStream()
         client.observe { log in
             if (try? log.decoded(TurnAnsweredEvent.self)) != nil { answered.yield() }
@@ -46,70 +61,67 @@ extension DaemonToolsTests {
         let late = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_LATE_CHUNK=late MOCK_REQUEST_LOG='\(log.path)' \(command)"
         try await withIsolatedStore {
             try await TurnReplyDrain.$current.withValue(.acpx) {
-                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-                let id = try await daemon.newSession(agentCommand: late, cwd: NSTemporaryDirectory())
-                let client = CallingClient()
-                let (lateSeen, seen) = AsyncStream<Void>.makeStream()
-                client.observe { log in
-                    guard let note = try? log.decoded(SessionNotification.self),
-                          case .agentMessageChunk(let block) = note.update, block.text == "late"
-                    else { return }
-                    seen.yield()
+                try await Self.withDaemon { daemon in
+                    let id = try await daemon.newSession(agentCommand: late, cwd: NSTemporaryDirectory())
+                    let client = CallingClient()
+                    let (lateSeen, seen) = AsyncStream<Void>.makeStream()
+                    client.observe { log in
+                        guard let note = try? log.decoded(SessionNotification.self),
+                              case .agentMessageChunk(let block) = note.update, block.text == "late"
+                        else { return }
+                        seen.yield()
+                    }
+                    let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
+                    for await _ in lateSeen { break }
+                    #expect(try await daemon.cancelSession(sessionId: id))
+                    try await turn.value
+                    let requests = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+                    #expect(!requests.contains("session/cancel"))
+                    let answered = client.logs.firstIndex { (try? $0.decoded(TurnAnsweredEvent.self)) != nil }
+                    let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
+                    let lateLog = client.logs.firstIndex { log in
+                        guard let note = try? log.decoded(SessionNotification.self),
+                              case .agentMessageChunk(let block) = note.update else { return false }
+                        return block.text == "late"
+                    }
+                    #expect(try #require(answered) < #require(lateLog))
+                    #expect(try #require(lateLog) < #require(ended))
+                    let record = try #require(SessionStore.loadRecord(id))
+                    let agentText = record.messages.compactMap { message -> String? in
+                        guard case .agent(let agent) = message else { return nil }
+                        return agent.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined()
+                    }.joined()
+                    #expect(agentText.hasSuffix("late"))
                 }
-                let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
-                for await _ in lateSeen { break }
-                #expect(try await daemon.cancelSession(sessionId: id))
-                try await turn.value
-                let requests = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
-                #expect(!requests.contains("session/cancel"))
-                let answered = client.logs.firstIndex { (try? $0.decoded(TurnAnsweredEvent.self)) != nil }
-                let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
-                let lateLog = client.logs.firstIndex { log in
-                    guard let note = try? log.decoded(SessionNotification.self),
-                          case .agentMessageChunk(let block) = note.update else { return false }
-                    return block.text == "late"
-                }
-                #expect(try #require(answered) < #require(lateLog))
-                #expect(try #require(lateLog) < #require(ended))
-                let record = try #require(SessionStore.loadRecord(id))
-                let agentText = record.messages.compactMap { message -> String? in
-                    guard case .agent(let agent) = message else { return nil }
-                    return agent.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined()
-                }.joined()
-                #expect(agentText.hasSuffix("late"))
             }
         }
     }
 
     /// A cancel from the moment the client learns the prompt was answered has nothing to
-    /// send — though the turn still waits on a request the agent left open — as acpx's
-    /// owner finds no active prompt once the answer is in. The cancel is taken, and the
-    /// turn ends as it was answered.
+    /// send — though the agent still waits for a command it asked the client to run — as
+    /// acpx's owner finds no active prompt once the answer is in. The cancel is taken, and
+    /// the turn ends as it was answered.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCancelAfterTheAnswerSendsNothing() async throws {
         let directory = try Self.scratchDirectory()
         let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
-        // However the test ends, the agent's terminal does, and with it the turn.
-        defer {
-            Self.create(release)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let command = try Self.holdingMock(release, log: log)
         try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            let client = CallingClient()
-            let answers = Self.answers(to: client)
-            let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
-            for await _ in answers { break }
+            // Nothing releases the command: it ends as the daemon lets the agent go.
+            try await Self.withDaemon { daemon in
+                let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+                let client = CallingClient()
+                let answers = Self.answers(to: client)
+                let turn = Task { try await prompt(daemon, id, text: "hi", client: client) }
+                for await _ in answers { break }
 
-            #expect(try await daemon.cancelSession(sessionId: id))
-            // The terminal ends — and with it the turn — once its file is there.
-            Self.create(release)
-            try await turn.value
+                #expect(try await daemon.cancelSession(sessionId: id))
+                try await turn.value
 
-            #expect(!Self.requests(log).contains("session/cancel"))
-            #expect(Self.stopReason(client) == "end_turn")
+                #expect(!Self.requests(log).contains("session/cancel"))
+                #expect(Self.stopReason(client) == "end_turn")
+            }
         }
     }
 
@@ -121,27 +133,25 @@ extension DaemonToolsTests {
     func aCommandWaitedOnAfterTheAnswerDoesNotHoldTheTurn() async throws {
         let directory = try Self.scratchDirectory()
         let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
-        defer {
-            Self.create(release)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let command = try Self.holdingMock(release, log: log, "MOCK_HOLD_TERMINAL_AFTER_ANSWER=1")
         try await withIsolatedStore {
             try await TurnReplyDrain.$current.withValue(ReplyDrain(idleMilliseconds: 300, timeoutMilliseconds: 5000)) {
-                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-                let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-                let client = CallingClient()
-                // The turn ends while the command still runs: nothing releases it before.
-                // A turn that waited for its exit would not return.
-                try await prompt(daemon, id, text: "hi", client: client)
-                let requests = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
-                Self.create(release)
+                // Nothing releases the command: it ends as the daemon lets the agent go.
+                try await Self.withDaemon { daemon in
+                    let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+                    let client = CallingClient()
+                    // The turn ends while the command still runs. A turn that waited for its
+                    // exit would not return.
+                    try await prompt(daemon, id, text: "hi", client: client)
+                    let requests = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
 
-                #expect(client.logs.contains { (try? $0.decoded(TurnEndedEvent.self)) != nil })
-                // The agent had asked for the command's exit before the turn ended.
-                #expect(client.logs.contains { log in
-                    (try? log.decoded(InboundRequest.self))?.method == "terminal/wait_for_exit"
-                }, "\(requests)")
+                    #expect(client.logs.contains { (try? $0.decoded(TurnEndedEvent.self)) != nil })
+                    // The agent had asked for the command's exit before the turn ended.
+                    #expect(client.logs.contains { log in
+                        (try? log.decoded(InboundRequest.self))?.method == "terminal/wait_for_exit"
+                    }, "\(requests)")
+                }
             }
         }
     }
@@ -153,44 +163,42 @@ extension DaemonToolsTests {
     func aRequestAnsweredBeforeTheTurnLooksStillKeepsIt() async throws {
         let directory = try Self.scratchDirectory()
         let (log, gate) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("gate"))
-        defer {
-            Self.create(gate)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let command = try #require(mockCommand())
         let mock = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' "
             + "MOCK_REACT_AFTER_GATE='\(gate.path)' \(command)"
         try await withIsolatedStore {
             try await TurnReplyDrain.$current.withValue(.acpx) {
-                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-                let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
-                let client = CallingClient()
-                let (asked, ask) = AsyncStream<Void>.makeStream()
-                client.observe { log in
-                    if let request = try? log.decoded(InboundRequest.self),
-                       request.method == "session/request_permission", request.failure == nil { ask.yield() }
-                }
-                let once = OnceFlag()
-                // Once the updates first go quiet: the agent asks, and the turn looks only
-                // once the question is answered — before the answer can reach the agent.
-                await daemon.setAfterUpdateDrain { recordId in
-                    guard once.claim() else { return }
-                    Self.create(gate)
-                    for await _ in asked { break }
-                    if let (connection, sessionId) = await daemon.agentConnection(for: recordId) {
-                        await connection.waitForRequestsAnswered(sessionId: sessionId)
+                try await Self.withDaemon { daemon in
+                    let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
+                    let client = CallingClient()
+                    let (asked, ask) = AsyncStream<Void>.makeStream()
+                    client.observe { log in
+                        if let request = try? log.decoded(InboundRequest.self),
+                           request.method == "session/request_permission", request.failure == nil { ask.yield() }
                     }
-                }
+                    let once = OnceFlag()
+                    // Once the updates first go quiet: the agent asks, and the turn looks only
+                    // once the question is answered — before the answer can reach the agent.
+                    await daemon.setAfterUpdateDrain { recordId in
+                        guard once.claim() else { return }
+                        Self.create(gate)
+                        for await _ in asked { break }
+                        if let (connection, sessionId) = await daemon.agentConnection(for: recordId) {
+                            await connection.waitForRequestsAnswered(sessionId: sessionId)
+                        }
+                    }
 
-                try await prompt(daemon, id, text: "hi", client: client)
+                    try await prompt(daemon, id, text: "hi", client: client)
 
-                let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
-                let reaction = client.logs.firstIndex { log in
-                    guard let note = try? log.decoded(SessionNotification.self),
-                          case .agentMessageChunk(let block) = note.update else { return false }
-                    return block.text == "reaction"
+                    let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
+                    let reaction = client.logs.firstIndex { log in
+                        guard let note = try? log.decoded(SessionNotification.self),
+                              case .agentMessageChunk(let block) = note.update else { return false }
+                        return block.text == "reaction"
+                    }
+                    #expect(try #require(reaction) < #require(ended))
                 }
-                #expect(try #require(reaction) < #require(ended))
             }
         }
     }
@@ -203,45 +211,43 @@ extension DaemonToolsTests {
     func aRequestOpenPastTheFirstQuietKeepsTheTurn() async throws {
         let directory = try Self.scratchDirectory()
         let (log, gate) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("gate"))
-        defer {
-            Self.create(gate)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let command = try #require(mockCommand())
         let mock = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' "
             + "MOCK_REACT_AFTER_GATE='\(gate.path)' \(command)"
         try await withIsolatedStore {
             try await TurnReplyDrain.$current.withValue(.acpx) {
-                let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-                let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
-                let client = CallingClient()
-                let (asked, ask) = AsyncStream<Void>.makeStream()
-                client.observe { log in
-                    if let request = try? log.decoded(InboundRequest.self),
-                       request.method == "session/request_permission", request.failure == nil { ask.yield() }
-                }
-                // Past the answer, and before the turn looks: the agent asks, and the turn
-                // looks once the question has come. The question is served only once the
-                // turn waits for it.
-                await daemon.setBeforeReplyDrain { recordId in
-                    let (released, release) = AsyncStream<Void>.makeStream()
-                    if let (connection, _) = await daemon.agentConnection(for: recordId) {
-                        await connection.setBeforeServingRequest { for await _ in released { break } }
-                        await connection.setOnRequestWait { _ in release.finish() }
+                try await Self.withDaemon { daemon in
+                    let id = try await daemon.newSession(agentCommand: mock, cwd: NSTemporaryDirectory())
+                    let client = CallingClient()
+                    let (asked, ask) = AsyncStream<Void>.makeStream()
+                    client.observe { log in
+                        if let request = try? log.decoded(InboundRequest.self),
+                           request.method == "session/request_permission", request.failure == nil { ask.yield() }
                     }
-                    Self.create(gate)
-                    for await _ in asked { break }
-                }
+                    // Past the answer, and before the turn looks: the agent asks, and the turn
+                    // looks once the question has come. The question is served only once the
+                    // turn waits for it.
+                    await daemon.setBeforeReplyDrain { recordId in
+                        let (released, release) = AsyncStream<Void>.makeStream()
+                        if let (connection, _) = await daemon.agentConnection(for: recordId) {
+                            await connection.setBeforeServingRequest { for await _ in released { break } }
+                            await connection.setOnRequestWait { _ in release.finish() }
+                        }
+                        Self.create(gate)
+                        for await _ in asked { break }
+                    }
 
-                try await prompt(daemon, id, text: "hi", client: client)
+                    try await prompt(daemon, id, text: "hi", client: client)
 
-                let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
-                let reaction = client.logs.firstIndex { log in
-                    guard let note = try? log.decoded(SessionNotification.self),
-                          case .agentMessageChunk(let block) = note.update else { return false }
-                    return block.text == "reaction"
+                    let ended = client.logs.firstIndex { (try? $0.decoded(TurnEndedEvent.self)) != nil }
+                    let reaction = client.logs.firstIndex { log in
+                        guard let note = try? log.decoded(SessionNotification.self),
+                              case .agentMessageChunk(let block) = note.update else { return false }
+                        return block.text == "reaction"
+                    }
+                    #expect(try #require(reaction) < #require(ended))
                 }
-                #expect(try #require(reaction) < #require(ended))
             }
         }
     }
@@ -272,35 +278,32 @@ extension DaemonToolsTests {
         let directory = try Self.scratchDirectory()
         let (log, release) = (directory.appendingPathComponent("requests.log"), directory.appendingPathComponent("r"))
         let gate = directory.appendingPathComponent("gate")
-        defer {
-            Self.create(gate)
-            Self.create(release)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        defer { try? FileManager.default.removeItem(at: directory) }
         let command = try Self.holdingMock(release, log: log, "MOCK_ASK_AFTER_ANSWER='\(gate.path)'")
         try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            let client = CallingClient()
-            let (asked, ask) = AsyncStream<Void>.makeStream()
-            client.observe { log in
-                if let request = try? log.decoded(InboundRequest.self),
-                   request.method == "session/request_permission", request.failure == nil { ask.yield() }
-            }
-            let once = OnceFlag()
-            // Once the updates first go quiet, past the answer: the agent asks, and the turn
-            // looks only once the question has come.
-            await daemon.setAfterUpdateDrain { _ in
-                guard once.claim() else { return }
-                Self.create(gate)
-                for await _ in asked { break }
-            }
+            try await Self.withDaemon { daemon in
+                let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+                let client = CallingClient()
+                let (asked, ask) = AsyncStream<Void>.makeStream()
+                client.observe { log in
+                    if let request = try? log.decoded(InboundRequest.self),
+                       request.method == "session/request_permission", request.failure == nil { ask.yield() }
+                }
+                let once = OnceFlag()
+                // Once the updates first go quiet, past the answer: the agent asks, and the turn
+                // looks only once the question has come.
+                await daemon.setAfterUpdateDrain { _ in
+                    guard once.claim() else { return }
+                    Self.create(gate)
+                    for await _ in asked { break }
+                }
 
-            try await prompt(daemon, id, text: "hi", client: client)
+                try await prompt(daemon, id, text: "hi", client: client)
 
-            let ended = try #require(client.logs.lazy.compactMap { try? $0.decoded(TurnEndedEvent.self) }.first)
-            #expect(ended.permissions?.requested == 1)
-            #expect(ended.permissions?.approved == 1)
+                let ended = try #require(client.logs.lazy.compactMap { try? $0.decoded(TurnEndedEvent.self) }.first)
+                #expect(ended.permissions?.requested == 1)
+                #expect(ended.permissions?.approved == 1)
+            }
         }
     }
 }
