@@ -191,12 +191,8 @@ enum SessionsCommand {
             return (record.closedAt ?? record.lastUsedAt) < cutoff
         }
 
-        var bytesFreed = 0
-        if !dryRun {
-            for record in candidates {
-                bytesFreed += SessionStore.deleteRecord(record.acpxRecordId, includeHistory: includeHistory)
-            }
-        }
+        let bytesFreed =
+            dryRun ? 0 : SessionStore.deleteRecords(candidates.map(\.acpxRecordId), includeHistory: includeHistory)
         printPruneResult(candidates, bytesFreed: bytesFreed, dryRun: dryRun, format: flags.format)
         return ExitCodes.success
     }

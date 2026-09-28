@@ -104,23 +104,43 @@ public enum SessionStore {
         }
     }
 
-    public static func deleteRecord(_ recordId: String, includeHistory: Bool) -> Int {
-        var freed = 0
-        let fm = FileManager.default
-        let recordURL = ACPXPaths.sessionRecordPath(recordId)
-        if let size = (try? fm.attributesOfItem(atPath: recordURL.path)[.size]) as? Int { freed += size }
-        try? fm.removeItem(at: recordURL)
-        if includeHistory {
-            let active = ACPXPaths.sessionStreamPath(recordId)
-            if let size = (try? fm.attributesOfItem(atPath: active.path)[.size]) as? Int { freed += size }
-            try? fm.removeItem(at: active)
-            for segment in 1 ... DEFAULT_EVENT_MAX_SEGMENTS {
-                let url = ACPXPaths.sessionStreamSegmentPath(recordId, segment: segment)
-                if let size = (try? fm.attributesOfItem(atPath: url.path)[.size]) as? Int { freed += size }
-                try? fm.removeItem(at: url)
+    /// Remove `recordIds`' files as acpx's prune removes them (`pruneSessionFiles`): each record,
+    /// and with `includeHistory` every stream file of it (``isSessionStreamFile(_:of:)``) the
+    /// sessions directory held when it was read, once, before any went. Returns the bytes they
+    /// held as `stat` reads them — a link's target — counted whether or not they could go.
+    public static func deleteRecords(_ recordIds: [String], includeHistory: Bool) -> Int {
+        let directory = ACPXPaths.sessionsDir
+        let entries = includeHistory ? (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [] : []
+        return recordIds.reduce(0) { freed, recordId in
+            let safeId = ACPXPaths.safeSessionId(recordId)
+            let history = entries.filter { isSessionStreamFile($0, of: safeId) }.map {
+                directory.appendingPathComponent($0).path
             }
+            let paths = [ACPXPaths.sessionRecordPath(recordId).path] + history
+            return paths.reduce(freed) { $0 + unlinkCountingBytes($1) }
         }
-        return freed
+    }
+
+    /// acpx's `isSessionStreamFile`: `name` is the session's active stream, its lock, or a
+    /// segment — `<safeId>.stream.<digits>.ndjson`, however many rotation has kept — compared
+    /// as written, not by Unicode equivalence.
+    static func isSessionStreamFile(_ name: String, of safeId: String) -> Bool {
+        let (name, prefix) = (Array(name.utf8), Array("\(safeId).stream.".utf8))
+        guard name.starts(with: prefix) else { return false }
+        let rest = name.dropFirst(prefix.count)
+        if rest.elementsEqual("ndjson".utf8) || rest.elementsEqual("lock".utf8) { return true }
+        let suffix = ".ndjson".utf8
+        guard rest.count > suffix.count, rest.suffix(suffix.count).elementsEqual(suffix) else { return false }
+        return rest.dropLast(suffix.count).allSatisfy { (0x30...0x39).contains($0) }
+    }
+
+    /// acpx's `unlinkCountingBytes`: `path` unlinked — a directory is not — and the bytes
+    /// `stat` gave for it first, none when there was nothing to read.
+    private static func unlinkCountingBytes(_ path: String) -> Int {
+        var status = stat()
+        let bytes = stat(path, &status) == 0 ? Int(status.st_size) : 0
+        _ = unlink(path)
+        return bytes
     }
 
     // MARK: Discovery
