@@ -122,9 +122,10 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock { keepsUpdateBodies = true }
     }
 
-    /// Keep `body`'s `params` when it is a `session/update` notification.
+    /// Keep `body`'s `params` when it is a `session/update` notification — parsed, as the peer
+    /// reads it, whatever its spelling: `"session\/update"` is the same method (#242 review).
     private func keepIfUpdate(_ body: Data) {
-        guard lock.withLock({ keepsUpdateBodies }), body.range(of: Data("session/update".utf8)) != nil,
+        guard lock.withLock({ keepsUpdateBodies }),
             let message = WireJSON(parsing: body), message["method"]?.stringValue == "session/update",
             !message.hasMember("id"), let params = message["params"]
         else { return }
