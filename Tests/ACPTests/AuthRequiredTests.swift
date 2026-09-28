@@ -8,7 +8,7 @@ import Testing
 /// A failure that needs credentials is reported as acpx 0.19.1 reports it (#132): by its
 /// own message, with the `AUTH_REQUIRED` detail code, and a hint naming the `auth` keys to
 /// add. Expected lines are acpx's for the same agents.
-struct AuthRequiredTests {
+@Suite(.serialized, .agentLane) struct AuthRequiredTests {
     static let policyMessage = "agent advertised auth methods [probe-login] but no matching credentials found"
     static let policyHint =
         "hint: run `acpx config show` to locate the active config, then add `auth.probe-login` and retry."
@@ -121,12 +121,8 @@ struct AuthRequiredTests {
         let agent = (environment.isEmpty ? "" : "/usr/bin/env " + environment.joined(separator: " ") + " ") + command
         return await withIsolatedStore {
             let capture = Console.Capture()
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) {
-                        runCommandLine(["--agent", agent] + arguments)
-                    })
-                }.start()
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) { runCommandLine(["--agent", agent] + arguments) }
             }
             return Ran(out: capture.out, err: capture.err, code: code)
         }

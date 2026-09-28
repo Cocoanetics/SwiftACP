@@ -7,10 +7,7 @@ import Testing
 
 /// Prompt content blocks on `runPrompt`: what reaches the agent on the wire, what
 /// the daemon refuses before it gets there, and what lands in the persisted record.
-///
-/// Serialized for the same reason as ``DaemonToolsTests`` — these redirect the
-/// process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct PromptBlocksTests {
+@Suite(.serialized, .agentLane) struct PromptBlocksTests {
     /// A 2×2 red PNG — small, but a real one, so `Data(base64Encoded:)` and the mock
     /// agent's own decode both have something valid to chew on.
     static let pngBase64 = """

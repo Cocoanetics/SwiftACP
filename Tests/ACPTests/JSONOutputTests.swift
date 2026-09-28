@@ -7,9 +7,7 @@ import Testing
 /// The CLI's JSON documents are acpx's: its keys in its order, printed as
 /// `JSON.stringify` prints them (#66). The expected text was printed by npm acpx 0.19.1
 /// for the same config, with its paths shown as `<home>` and `<cwd>`.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct JSONOutputTests {
+struct JSONOutputTests {
     private static let expectedText = """
         {
           "defaultAgent": "zeta",

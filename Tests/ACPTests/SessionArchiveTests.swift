@@ -8,9 +8,7 @@ import Testing
 /// archive acpx writes of a record, the record acpx makes of that archive, and every
 /// archive acpx refuses, in its words. The fixture is npm acpx 0.19.1's: the record
 /// exported, its archive imported into another home, and each refused variant's message.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct SessionArchiveTests {
+struct SessionArchiveTests {
     struct Fixture: Decodable {
         struct Refusal: Decodable {
             let name: String

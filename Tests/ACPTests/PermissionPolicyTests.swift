@@ -8,7 +8,7 @@ import Testing
 /// `--permission-policy` / `--policy` as acpx reads and shows it (#97): inline JSON or a
 /// file, refused with acpx's words as a usage error, and an escalation printed as a
 /// `[permission]` notice with its details. Lines are acpx 0.19.1's.
-@Suite struct PermissionPolicyTests {
+@Suite(.serialized, .agentLane) struct PermissionPolicyTests {
     private enum Loaded: Equatable {
         case success(PermissionRules?)
         case failure(String)
@@ -71,10 +71,12 @@ import Testing
             try SessionStore.writeRecord(existing)
 
             let capture = Console.Capture()
-            let code = Console.$capture.withValue(capture) {
-                runCommandLine([
-                    "--cwd", cwd, "--agent", "some-agent", "--permission-policy", "{bad", "sessions", command
-                ])
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    runCommandLine([
+                        "--cwd", cwd, "--agent", "some-agent", "--permission-policy", "{bad", "sessions", command
+                    ])
+                }
             }
             #expect(code == ExitCodes.usage)
             #expect(capture.err.contains("Invalid permission policy: "))
@@ -134,8 +136,8 @@ import Testing
         let command = "/usr/bin/env \(environment) '\(python)' '\(fixture.path)'"
         return try await withIsolatedStore {
             let capture = Console.Capture()
-            let code = Console.$capture.withValue(capture) {
-                runCommandLine(flags + ["--agent", command, "exec", "go"])
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) { runCommandLine(flags + ["--agent", command, "exec", "go"]) }
             }
             return Ran(code: code, out: capture.out, err: capture.err)
         }

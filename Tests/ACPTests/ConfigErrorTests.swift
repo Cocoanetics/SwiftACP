@@ -6,9 +6,7 @@ import Testing
 /// in V8's words, a non-object file, or the first invalid field in acpx's resolve order —
 /// with the same message. Every case in the fixture was run through npm acpx 0.19.1
 /// (`acpx config show`), its message recorded with the paths as `<global>`/`<project>`.
-///
-/// Serialized because the tests redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct ConfigErrorTests {
+struct ConfigErrorTests {
     private struct Case: Decodable {
         let global: String?
         let project: String?

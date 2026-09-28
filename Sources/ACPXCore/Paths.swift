@@ -13,15 +13,29 @@ public enum ACPXPaths {
         return URL(fileURLWithPath: resolve(home, base: FileManager.default.currentDirectoryPath), isDirectory: true)
     }
 
-    /// The acpx state directory. Defaults to `~/.acpx`; redirectable via the
+    /// The acpx state directory: the current task's (``taskBaseDir``), else the
+    /// process's (``processBaseDir``). The on-disk layout below is unchanged — only its
+    /// root moves.
+    public static var baseDir: URL { taskBaseDir ?? processBaseDir }
+
+    /// A state directory for the current task and the tasks it starts, in place of the
+    /// process's: each test binds a fresh one, so tests with stores of their own run side
+    /// by side. A thread starts without it, as without any task local, until bound there.
+    @TaskLocal static var taskBaseDir: URL?
+
+    /// The process's state directory. Defaults to `~/.acpx`; redirectable via the
     /// `ACPX_HOME` environment variable (so the daemon can run against an isolated
-    /// store) and settable directly in tests. The on-disk layout below is
-    /// unchanged — only its root moves.
-    ///
-    /// `nonisolated(unsafe)`: production code never mutates this — it is initialized
-    /// once (from `ACPX_HOME` / `~/.acpx`) before any concurrent use and is read-only
-    /// after. Only tests reassign it, serialized process-wide via `withIsolatedStore`.
-    public nonisolated(unsafe) static var baseDir: URL = defaultBaseDir()
+    /// store). Production code never changes it; tests point it, once, where nothing can
+    /// be, so that a read outside every test's own store finds nothing rather than the
+    /// real one.
+    static var processBaseDir: URL {
+        get { processBaseDirLock.withLock { processBaseDirValue } }
+        set { processBaseDirLock.withLock { processBaseDirValue = newValue } }
+    }
+
+    private static let processBaseDirLock = NSLock()
+    /// `nonisolated(unsafe)`: `processBaseDirLock` guards every access.
+    private nonisolated(unsafe) static var processBaseDirValue = defaultBaseDir()
 
     private static func defaultBaseDir() -> URL {
         if let override = ProcessInfo.processInfo.environment["ACPX_HOME"],

@@ -8,7 +8,7 @@ import Testing
 /// `exec` bounds each step by `--timeout` and sends a failed prompt again under
 /// `--prompt-retries`, as acpx 0.19.1's `runOnce` does (#106). Each expected output is
 /// what acpx printed for the same agent (`Fixtures/retry-agent.py`).
-struct ExecTimeoutRetryTests {
+@Suite(.serialized, .agentLane) struct ExecTimeoutRetryTests {
     struct Run {
         var out: String
         var err: String
@@ -20,9 +20,12 @@ struct ExecTimeoutRetryTests {
     }
 
     /// Run `exec` against the fixture agent in `mode`: `options` go before `exec`,
-    /// `execOptions` after it.
+    /// `execOptions` after it. What the agent does during a pause before a retry waits for
+    /// the pause to begin (``ExecCommand/pauseBegins``). When `timingOut`, the deadlines
+    /// waiting as the agent gets the request it holds pass then (``DeadlineSource``).
     private func exec(
-        _ mode: String, _ options: [String], execOptions: [String] = [], format: String = "text"
+        _ mode: String, _ options: [String], execOptions: [String] = [], format: String = "text",
+        timingOut: Bool = false
     ) async throws -> Run {
         let python = try #require(AgentRegistry.which("python3"))
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -33,18 +36,29 @@ struct ExecTimeoutRetryTests {
         try "notes\n".write(to: dir.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
         let attempts = dir.appendingPathComponent("attempts")
         let pidFile = dir.appendingPathComponent("pid")
+        let ready = dir.appendingPathComponent("ready")
+        let pause = dir.appendingPathComponent("pause")
+        let deadlines = DeadlineSource()
+        let watch = timingOut ? try ExecInterruptTests.whenWritten(to: ready) { deadlines.fire() } : nil
+        defer { watch?.cancel() }
+        let pauseBegins: @Sendable () -> Void = {
+            _ = FileManager.default.createFile(atPath: pause.path, contents: nil)
+        }
         let agent = "/usr/bin/env RETRY_AGENT_MODE=\(mode) RETRY_AGENT_ATTEMPTS='\(attempts.path)' "
-            + "RETRY_AGENT_PID='\(pidFile.path)' '\(python)' '\(fixture.path)'"
+            + "RETRY_AGENT_PID='\(pidFile.path)' RETRY_AGENT_PAUSE='\(pause.path)' "
+            + (timingOut ? "RETRY_AGENT_READY='\(ready.path)' " : "") + "'\(python)' '\(fixture.path)'"
         let arguments = ["--format", format, "--cwd", dir.path, "--agent", agent] + options
             + ["exec"] + execOptions + ["hi"]
         return await withIsolatedStore {
             let capture = Console.Capture()
             // `exec` blocks its thread until it is done, as the CLI does; a thread of its own
             // keeps that off the tasks' pool, which other tests go on sharing.
-            let code: Int32 = await withCheckedContinuation { continuation in
-                Thread {
-                    continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-                }.start()
+            let code = await onThreadOfItsOwn {
+                Console.$capture.withValue(capture) {
+                    DeadlineSource.$current.withValue(timingOut ? deadlines : nil) {
+                        ExecCommand.$pauseBegins.withValue(pauseBegins) { runCommandLine(arguments) }
+                    }
+                }
             }
             let prompts = (try? String(contentsOf: attempts, encoding: .utf8))?.split(separator: "\n").count ?? 0
             let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0) }
@@ -74,8 +88,10 @@ struct ExecTimeoutRetryTests {
     /// Each step — starting the agent, `session/new`, the model, each config option, the
     /// prompt — has `--timeout` to itself, and one that runs over fails the run as
     /// `TIMEOUT` (exit 3). The agent is put down by the time `exec` returns, as acpx closes
-    /// the client it started — even when it never finished starting.
-    @Test(.enabled(if: mockPythonAvailable), arguments: [
+    /// the client it started — even when it never finished starting. The timeout bounds
+    /// the agent's launch too, so it is as long as the test may take; the held step's
+    /// deadline passes as the agent gets its request.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: [
         Step(mode: "hang-init", lastLine: "[client] initialize (running)"),
         Step(mode: "hang-new", lastLine: "[client] session/new (running)"),
         Step(mode: "hang-model", options: ["--model", "b"], lastLine: "[client] session/set_config_option (running)"),
@@ -84,31 +100,31 @@ struct ExecTimeoutRetryTests {
         Step(mode: "hang-prompt", lastLine: "[client] session/new (running)")
     ])
     func aStepThatRunsOverTimesOut(step: Step) async throws {
-        // Long enough for every step before the held one, on a busy machine too.
-        let run = try await exec(step.mode, ["--timeout", "2"] + step.options, execOptions: step.execOptions)
+        let run = try await exec(
+            step.mode, ["--timeout", "60"] + step.options, execOptions: step.execOptions, timingOut: true)
         let mode = step.mode, lastLine = step.lastLine + "\n"
         #expect(run.code == 3)
-        #expect(run.err == "Timed out after 2000ms\n\(Self.timeoutHint)\n")
+        #expect(run.err == "Timed out after 60000ms\n\(Self.timeoutHint)\n")
         #expect(run.out.hasSuffix(lastLine), "\(run.out)")
         #expect(run.attempts == (mode == "hang-prompt" ? 1 : 0))
         #expect(!isRunning(run.pid), "the agent outlived exec")
     }
 
     /// A timeout is reported in each format as acpx reports it, and never retried.
-    @Test(.enabled(if: mockPythonAvailable))
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aTimeoutIsReportedInEachFormatAndNotRetried() async throws {
-        let options = ["--timeout", "2", "--prompt-retries", "2"]
-        let json = try await exec("hang-prompt", options, format: "json")
+        let options = ["--timeout", "60", "--prompt-retries", "2"]
+        let json = try await exec("hang-prompt", options, format: "json", timingOut: true)
         #expect(json.code == 3)
         #expect(json.out.hasSuffix(#"""
-            {"jsonrpc":"2.0","id":null,"error":{"code":-32070,"message":"Timed out after 2000ms",\#
+            {"jsonrpc":"2.0","id":null,"error":{"code":-32070,"message":"Timed out after 60000ms",\#
             "data":{"acpxCode":"TIMEOUT","origin":"cli","sessionId":"unknown"}}}
 
             """#))
         #expect(json.err.isEmpty)
-        let quiet = try await exec("hang-prompt", options, format: "quiet")
+        let quiet = try await exec("hang-prompt", options, format: "quiet", timingOut: true)
         #expect(quiet.code == 3)
-        #expect(quiet.err == "[acpx] error: TIMEOUT Timed out after 2000ms\n")
+        #expect(quiet.err == "[acpx] error: TIMEOUT Timed out after 60000ms\n")
         #expect(quiet.attempts == 1)
     }
 

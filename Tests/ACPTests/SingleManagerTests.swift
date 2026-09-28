@@ -11,10 +11,7 @@ import Testing
 /// The single-manager guarantees: the `acpxd` boot lock keeps exactly one daemon
 /// alive, and the daemon serializes turns per session so concurrent CLI/MCP callers
 /// can't collide on one session or clobber its persisted history.
-///
-/// Serialized because the store/lock tests redirect the process-wide
-/// ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct SingleManagerTests {
+@Suite(.serialized, .agentLane) struct SingleManagerTests {
     // MARK: - DaemonLock (singleton boot lock)
 
     @Test func acquireSucceedsAndBlocksASecondLiveHolder() async throws {

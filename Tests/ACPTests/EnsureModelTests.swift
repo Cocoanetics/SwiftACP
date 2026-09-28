@@ -9,7 +9,7 @@ import Testing
 /// `sessions ensure --model` puts the model on the session it keeps, as acpx's
 /// `ensureSessionWithOwnership` does (`setSessionModel`), and fails when the session cannot
 /// take it. Each output is what acpx printed for the same steps on `model-agent.py`.
-@Suite(.serialized) struct EnsureModelTests {
+@Suite(.serialized, .agentLane) struct EnsureModelTests {
     struct Run {
         var code: Int32
         var out: String
@@ -19,14 +19,12 @@ import Testing
     /// `acpx --approve-all --agent <agent> --cwd <cwd> <args>`, with `daemon` the one running.
     private static func acpx(_ args: [String], agent: String, cwd: URL, daemon: MCPServerConfig? = nil) async -> Run {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
         return Run(code: code, out: capture.out, err: capture.err)
     }

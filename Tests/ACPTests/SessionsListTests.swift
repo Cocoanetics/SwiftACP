@@ -8,7 +8,7 @@ import Testing
 /// `handleSessionsList` does, and prints its answer as it came — else, with `--local`, or when
 /// the agent cannot be spawned, the local records (#244). Each expected output is what acpx
 /// printed for the same answer.
-@Suite(.serialized) struct SessionsListTests {
+@Suite(.serialized, .agentLane) struct SessionsListTests {
     struct Run {
         var code: Int32
         var out: String
@@ -30,10 +30,8 @@ import Testing
         let arguments = ["--approve-all", "--cwd", dir.path, "--agent", command] + args
         let capture = Console.Capture()
         // The command blocks its thread until it is done, as the CLI does: a thread of its own.
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: Console.$capture.withValue(capture) { runCommandLine(arguments) })
-            }.start()
+        let code: Int32 = await onThreadOfItsOwn {
+            Console.$capture.withValue(capture) { runCommandLine(arguments) }
         }
         let requests = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
         let listed = requests.split(separator: "\n").compactMap { line -> String? in
@@ -147,13 +145,10 @@ import Testing
             + (interrupting ? "RETRY_AGENT_READY='\(ready.path)' " : "") + "'\(python)' '\(fixture.path)'"
         let arguments = ["--approve-all", "--cwd", dir.path, "--agent", agent, "sessions"]
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                let code = Console.$capture.withValue(capture) {
-                    Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(arguments) }
-                }
-                continuation.resume(returning: code)
-            }.start()
+        let code: Int32 = await onThreadOfItsOwn {
+            Console.$capture.withValue(capture) {
+                Interrupts.$source.withValue(interrupting ? source : nil) { runCommandLine(arguments) }
+            }
         }
         let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0) }
         return Stopped(code: code, err: capture.err, pid: pid)

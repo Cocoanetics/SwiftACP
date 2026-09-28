@@ -66,7 +66,8 @@ import Testing
         try await withIsolatedStore {
             try SessionStore.writeRecord(
                 Self.record("stray", agentCommand: "/bin/sleep 30", cwd: directory.path, pid: pid))
-            let run = CLIParityTests.run(["--agent", "/bin/sleep 30", "--cwd", directory.path, "sessions", "close"])
+            let run = await CLIParityTests.run(
+                ["--agent", "/bin/sleep 30", "--cwd", directory.path, "sessions", "close"])
             #expect(run.code == ExitCodes.success, "\(run.err)")
             #expect(!StrayAgent.isAlive(pid))
             let record = try #require(SessionStore.loadRecord("stray"))
@@ -107,7 +108,7 @@ import Testing
         try await withIsolatedStore {
             let agent = "/opt/agents/codex-acp --acp"
             try SessionStore.writeRecord(Self.record("other", agentCommand: agent, cwd: directory.path, pid: pid))
-            let run = CLIParityTests.run(["--agent", agent, "--cwd", directory.path, "sessions", "close"])
+            let run = await CLIParityTests.run(["--agent", agent, "--cwd", directory.path, "sessions", "close"])
             #expect(run.code == ExitCodes.success, "\(run.err)")
             #expect(StrayAgent.isAlive(pid))
             #expect(try #require(SessionStore.loadRecord("other")).closed == true)

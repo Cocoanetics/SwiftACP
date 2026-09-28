@@ -11,7 +11,7 @@ import Testing
 /// running owner (#232): a prompt, which acpxd always takes as acpx's owner does, and a cancel or
 /// a control while acpxd holds the session as an owner. None when no owner holds it, nor without
 /// `--verbose`. The pid is acpxd's — here the test's own, which a stand-in daemon runs in.
-@Suite(.serialized) struct OwnerLinesTests {
+@Suite(.serialized, .agentLane) struct OwnerLinesTests {
     struct Run {
         var code: Int32
         var out: String
@@ -147,14 +147,12 @@ import Testing
         _ args: [String], agent: String, cwd: URL, daemon: MCPServerConfig? = nil
     ) async -> Run {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code: Int32 = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
         }
         return Run(code: code, out: capture.out, err: capture.err, merged: capture.merged)
     }

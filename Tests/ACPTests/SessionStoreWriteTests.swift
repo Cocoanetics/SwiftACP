@@ -5,9 +5,7 @@ import Testing
 /// How records reach disk: privately, atomically, and without a temp name that a long
 /// session id can push past the filesystem's component limit. Ports acpx's storage
 /// hardening (0.13.0, 0.13.1, 0.16.0 — issue #24).
-///
-/// Serialized because these redirect the process-wide ``ACPXPaths/baseDir``.
-@Suite(.serialized) struct SessionStoreWriteTests {
+struct SessionStoreWriteTests {
     private func record(id: String) -> SessionRecord {
         let now = nowISO()
         return SessionRecord(

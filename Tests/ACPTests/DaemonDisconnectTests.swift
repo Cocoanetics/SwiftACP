@@ -19,14 +19,12 @@ import Testing
     /// `acpx --approve-all --agent stand-in --cwd <cwd> <args>`, with `daemon` the one running.
     private static func acpx(_ args: [String], cwd: URL, daemon: DroppingDaemon) async -> Run {
         let capture = Console.Capture()
-        let code: Int32 = await withCheckedContinuation { continuation in
-            Thread {
-                continuation.resume(returning: DaemonClient.$standIn.withValue(daemon.config) {
-                    Console.$capture.withValue(capture) {
-                        runCommandLine(["--approve-all", "--agent", "stand-in", "--cwd", cwd.path] + args)
-                    }
-                })
-            }.start()
+        let code = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon.config) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", "stand-in", "--cwd", cwd.path] + args)
+                }
+            }
         }
         return Run(code: code, out: capture.out, err: capture.err)
     }
