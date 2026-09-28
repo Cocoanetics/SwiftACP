@@ -40,8 +40,8 @@ public final class RawWireTap: @unchecked Sendable {
     /// `suppressReplaySessionUpdateMessages`, kept per session.
     private var replaySuppressed: [String: Int] = [:]
     /// The `params` of each inbound `session/update` read and not yet handled, in order, once a
-    /// connection takes them (``keepUpdateBodies()``, ``takeUpdateBody(sessionId:kind:)``).
-    /// `nil` for an update without `params`, which its handler takes all the same (#242 review).
+    /// connection takes them (``keepUpdateBodies()``, ``takeUpdateBody()``): one entry for each,
+    /// `nil` for one without `params` or whose body does not parse here (#242 review).
     private var updateBodies: [WireJSON?] = []
     /// Where the updates not yet taken begin in `updateBodies`.
     private var updateHead = 0
@@ -131,16 +131,18 @@ public final class RawWireTap: @unchecked Sendable {
     /// (`JSONRPCMessage.decodeMessages`), a batch's messages each in turn. A body the peer does not
     /// take — one that only parses as JSON — is never kept, and neither is its method's spelling
     /// in the way: `"session\/update"` is the same method (#242 review).
+    ///
+    /// The peer hands each of those updates to the connection, in order, and the connection takes
+    /// one entry for each (``takeUpdateBody()``). So each gets one — without its `params` when the
+    /// body does not parse here as the peer read it — and the next update's entry is its own.
     private func keepIfUpdate(_ body: Data) {
         guard lock.withLock({ keepsUpdateBodies }),
-            let messages = try? JSONRPCMessage.decodeMessages(from: body), messages.contains(where: Self.isUpdate),
-            let parsed = WireJSON(parsing: body)
+            let messages = try? JSONRPCMessage.decodeMessages(from: body), messages.contains(where: Self.isUpdate)
         else { return }
-        let written: [WireJSON] = if case .array(let items) = parsed { items } else { [parsed] }
-        guard written.count == messages.count else { return }
-        // One entry for each update — none of its `params` when it has none — so that the handler
-        // of each takes its own.
-        let kept: [WireJSON?] = zip(messages, written).filter { Self.isUpdate($0.0) }.map { $0.1["params"] }
+        let parsed = WireJSON(parsing: body)
+        let written: [WireJSON?] = if case .array(let items)? = parsed { items } else { [parsed] }
+        let paired = written.count == messages.count ? written : Array(repeating: nil, count: messages.count)
+        let kept: [WireJSON?] = zip(messages, paired).filter { Self.isUpdate($0.0) }.map { $0.1?["params"] }
         lock.withLock { updateBodies.append(contentsOf: kept) }
     }
 
@@ -150,30 +152,22 @@ public final class RawWireTap: @unchecked Sendable {
         return notification.method == "session/update"
     }
 
-    /// The `params` of the update being handled — `sessionId`'s, of `kind` — as the agent wrote
-    /// them: the oldest kept. One that is not it was never handled — its message did not reach
-    /// the peer as a notification — and goes, so that the next is the next's.
-    func takeUpdateBody(sessionId: String?, kind: String?) -> WireJSON? {
+    /// The `params` of the update being handled, as the agent wrote them: the oldest entry kept,
+    /// which is its own. It is taken as it is, never matched against the update as decoded: a
+    /// member written twice is the last one in the agent's words, as acpx reads them, and the
+    /// first as Foundation decodes the update (#242 review).
+    func takeUpdateBody() -> WireJSON? {
         lock.withLock {
+            guard updateHead < updateBodies.count else { return nil }
+            let params = updateBodies[updateHead]
+            updateHead += 1
             // The taken ones go once they are at least half of those kept: each is moved at most
             // once more, however long the batch it came in (#242 review).
-            defer {
-                if updateHead * 2 >= updateBodies.count {
-                    updateBodies.removeFirst(updateHead)
-                    updateHead = 0
-                }
+            if updateHead * 2 >= updateBodies.count {
+                updateBodies.removeFirst(updateHead)
+                updateHead = 0
             }
-            while updateHead < updateBodies.count {
-                let params = updateBodies[updateHead]
-                updateHead += 1
-                // One without `params` is taken by the handler of an update without them, which
-                // asks with no session and no kind.
-                if params?["sessionId"]?.stringValue == sessionId,
-                    params?["update"]?["sessionUpdate"]?.stringValue == kind {
-                    return params
-                }
-            }
-            return nil
+            return params
         }
     }
 

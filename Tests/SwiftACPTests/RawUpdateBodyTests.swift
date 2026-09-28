@@ -1,4 +1,5 @@
 import Foundation
+import JSONFoundation
 @testable import SwiftACP
 import Testing
 
@@ -16,24 +17,59 @@ import Testing
         tap.observe(.inbound, Data(escaped.utf8))
         tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":1,"result":{}}"#.utf8))
         tap.observe(.inbound, Data(plain.utf8))
-        let first = try #require(tap.takeUpdateBody(sessionId: "s", kind: "tool_call"))
+        let first = try #require(tap.takeUpdateBody())
         #expect(first["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") != nil)
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") == nil)
+        #expect(tap.takeUpdateBody() != nil)
+        #expect(tap.takeUpdateBody() == nil)
     }
 
-    /// A kept body that is not the update being handled — never handled as one — is dropped,
-    /// so the next update gets its own.
-    @Test func aBodyNeverHandledIsDropped() throws {
+    /// Each update the peer hands on takes its own body, in order, as it is: never matched against
+    /// the update as decoded, which takes a member written twice as its first, where the body — as
+    /// acpx reads it — has the last. So the next update's body stays the next's (#242 review).
+    @Test func eachUpdateTakesItsOwnBodyAsItIs() throws {
         let tap = RawWireTap()
         tap.keepUpdateBodies()
-        for (session, kind) in [("other", "plan"), ("s", "tool_call")] {
-            let body = #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"\#(session)","#
-                + #""update":{"sessionUpdate":"\#(kind)"}}}"#
+        let batch = #"[{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","sessionId":"other","#
+            + #""update":{"sessionUpdate":"tool_call","toolCallId":"t","rawInput":{"z":1,"a":2}}}},"#
+            + #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
+            + #"{"sessionUpdate":"tool_call","toolCallId":"t","rawInput":{"second":true}}}}]"#
+        tap.observe(.inbound, Data(batch.utf8))
+        let first = try #require(tap.takeUpdateBody())
+        #expect(first["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
+        #expect(first["sessionId"]?.stringValue == "other")
+        #expect(tap.takeUpdateBody()?["update"]?["rawInput"]?.stringified == #"{"second":true}"#)
+        #expect(tap.takeUpdateBody() == nil)
+    }
+
+    /// At the connection, each update the agent sends carries its own body — one with a member
+    /// written twice too, and the update after it — as the transport reads each and the peer
+    /// hands it on (#242 review).
+    @Test(.timeLimit(.minutes(1)))
+    func eachUpdateCarriesItsOwnBodyAtTheConnection() async throws {
+        let (clientEnd, agentEnd) = LoopbackTransport.pair()
+        let tap = RawWireTap()
+        let connection = ACPAgentConnection(transport: clientEnd, rawUpdates: tap)
+        await connection.start()
+        let (subscription, stream) = await connection.makeEventSubscription()
+        let bodies = [
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","sessionId":"other","#
+                + #""update":{"sessionUpdate":"tool_call","toolCallId":"t","title":"Read","rawInput":{"z":1,"a":2}}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
+                + #"{"sessionUpdate":"tool_call","toolCallId":"t","title":"Read","rawInput":{"second":true}}}}"#
+        ]
+        // As a transport reads each: the tap sees the body, then the peer gets what it decodes to.
+        for body in bodies {
             tap.observe(.inbound, Data(body.utf8))
+            for message in try JSONRPCMessage.decodeMessages(from: Data(body.utf8)) { try agentEnd.send(message) }
         }
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "tool_call")?["sessionId"]?.stringValue == "s")
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "tool_call") == nil)
+        var raw: [String?] = []
+        for await event in stream {
+            guard case .update(let note) = event else { continue }
+            raw.append(note.rawUpdate?["rawInput"]?.stringified)
+            if raw.count == 2 { break }
+        }
+        await connection.endSubscription(subscription)
+        #expect(raw == [#"{"z":1,"a":2}"#, #"{"second":true}"#])
     }
 
     /// A body the peer does not take as a notification is never kept, though it parses as JSON
@@ -52,10 +88,10 @@ import Testing
             + #"{"sessionUpdate":"plan"}}}]"#
         tap.observe(.inbound, Data(rejected.utf8))
         tap.observe(.inbound, Data(batch.utf8))
-        let first = try #require(tap.takeUpdateBody(sessionId: "s", kind: "tool_call"))
+        let first = try #require(tap.takeUpdateBody())
         #expect(first["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") != nil)
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") == nil)
+        #expect(tap.takeUpdateBody() != nil)
+        #expect(tap.takeUpdateBody() == nil)
     }
 
     /// An update without `params` keeps an entry of its own, which its handler — asking with no
@@ -67,8 +103,8 @@ import Testing
             + #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
             + #"{"sessionUpdate":"tool_call","toolCallId":"t","rawInput":{"z":1,"a":2}}}}]"#
         tap.observe(.inbound, Data(batch.utf8))
-        #expect(tap.takeUpdateBody(sessionId: nil, kind: nil) == nil)
-        let next = try #require(tap.takeUpdateBody(sessionId: "s", kind: "tool_call"))
+        #expect(tap.takeUpdateBody() == nil)
+        let next = try #require(tap.takeUpdateBody())
         #expect(next["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
     }
 
@@ -86,7 +122,7 @@ import Testing
             return Data("[\(updates.joined(separator: ","))]".utf8)
         }
         func taken() -> String? {
-            tap.takeUpdateBody(sessionId: "s", kind: "tool_call")?["update"]?["toolCallId"]?.stringValue
+            tap.takeUpdateBody()?["update"]?["toolCallId"]?.stringValue
         }
         tap.observe(.inbound, batch(0..<5_000))
         let first = (0..<3_000).map { _ in taken() }
@@ -102,6 +138,6 @@ import Testing
         let body = #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
             + #"{"sessionUpdate":"plan"}}}"#
         tap.observe(.inbound, Data(body.utf8))
-        #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") == nil)
+        #expect(tap.takeUpdateBody() == nil)
     }
 }
