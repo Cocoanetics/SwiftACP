@@ -31,6 +31,71 @@ struct IdleExitTests {
     }
 }
 
+/// The daemon decides whether it stops in one step with taking calls (Codex review on #289).
+extension IdleExitTests {
+    /// Once it stops, it takes no call: each is refused as acpx's owner refuses one once it shuts
+    /// down, and none is counted.
+    @Test func aDaemonThatStoppedTakesNoMoreCalls() async throws {
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
+            #expect(await daemon.stopTakingCallsIfIdle { true })
+            let refusal = await #expect(throws: DescribedToolFailure.self) { _ = try await daemon.listSessions() }
+            #expect(refusal?.failure == StoppedTakingCalls.failure)
+            #expect(refusal?.localizedDescription == "Queue owner is shutting down")
+            #expect(await daemon.callsInFlight == 0)
+            #expect(await !daemon.stopTakingCallsIfIdle { true })
+        }
+    }
+
+    /// A daemon serving a call does not stop, whatever the backend says.
+    @Test func aDaemonServingACallDoesNotStop() async throws {
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
+            let stopped = try await daemon.serving { await daemon.stopTakingCallsIfIdle { true } }
+            #expect(!stopped)
+            #expect(try await daemon.listSessions().isEmpty)
+        }
+    }
+
+    /// A call that comes while the daemon decides waits for the answer: served should it go on,
+    /// refused once it stops — never run under a daemon that has let its lock go.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func aCallWhileTheDaemonDecidesWaitsForTheAnswer(stops: Bool) async throws {
+        try await withIsolatedStore {
+            let daemon = ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))
+            let (waits, waiting) = AsyncStream<Void>.makeStream()
+            await daemon.observeWaits { waiting.yield() }
+            let call = CallBox()
+            let stopped = await daemon.stopTakingCallsIfIdle {
+                call.start { try await daemon.listSessions() }
+                var waited = waits.makeAsyncIterator()
+                _ = await waited.next()
+                return stops
+            }
+            #expect(stopped == stops)
+            let result = try #require(await call.result())
+            switch result {
+            case .success(let sessions): #expect(!stops && sessions.isEmpty)
+            case .failure(let error): #expect(stops && error.localizedDescription == "Queue owner is shutting down")
+            }
+        }
+    }
+}
+
+/// A call started inside a daemon's decision, and how it ended.
+private final class CallBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<[SessionSummary], Error>?
+
+    func start(_ body: @escaping @Sendable () async throws -> [SessionSummary]) {
+        lock.withLock { task = Task { try await body() } }
+    }
+
+    func result() async -> Result<[SessionSummary], Error>? {
+        await lock.withLock { task }?.result
+    }
+}
+
 /// Stops asked for: the first is refused, as by a daemon that found work meanwhile.
 private actor StopAsks {
     private(set) var count = 0

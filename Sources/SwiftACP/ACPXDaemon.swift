@@ -37,9 +37,8 @@ import SwiftMCP
 @MCPServer(name: "acpx")
 public actor ACPXDaemon {
     let backend: any ACPXBackend
-    /// How many tool calls it is serving: each from its start until its work is over, however
-    /// its client fares meanwhile (``serving(_:)``).
-    public internal(set) var callsInFlight = 0
+    /// The calls it serves, and whether it takes more (``CallGate``).
+    var calls = CallGate()
 
     public init(backend: any ACPXBackend) {
         self.backend = backend
@@ -173,8 +172,8 @@ public actor ACPXDaemon {
     ///   (e.g. `claude`) matches sessions created with either that name or its
     ///   expanded launch command. Blank / omitted = every session.
     @MCPTool(readOnlyHint: true, idempotentHint: true)
-    func listSessions(agentCommand: String? = nil) async -> [SessionSummary] {
-        await serving { await backend.listSessions(agentCommand: agentCommand) }
+    func listSessions(agentCommand: String? = nil) async throws -> [SessionSummary] {
+        try await described { await backend.listSessions(agentCommand: agentCommand) }
     }
 
     /// Show one persisted session's details — mirrors the CLI's `sessions show`.
@@ -328,8 +327,8 @@ public actor ACPXDaemon {
     func pruneSessions(
         agentCommand: String? = nil, olderThanDays: Int? = nil,
         includeHistory: Bool = false, dryRun: Bool = false
-    ) async -> PruneResult {
-        await serving {
+    ) async throws -> PruneResult {
+        try await described {
             await backend.pruneSessions(
                 agentCommand: agentCommand, olderThanDays: olderThanDays, includeHistory: includeHistory,
                 dryRun: dryRun)
@@ -460,8 +459,8 @@ public actor ACPXDaemon {
     ///
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     @MCPTool(readOnlyHint: true, idempotentHint: true)
-    func sessionStatus(sessionId: String) async -> LiveSessionStatus {
-        await serving { await backend.sessionStatus(sessionId: sessionId) }
+    func sessionStatus(sessionId: String) async throws -> LiveSessionStatus {
+        try await described { await backend.sessionStatus(sessionId: sessionId) }
     }
 
     /// Cancel an in-flight prompt for a session.
