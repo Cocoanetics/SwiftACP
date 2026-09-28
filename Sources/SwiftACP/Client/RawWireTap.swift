@@ -46,6 +46,10 @@ public final class RawWireTap: @unchecked Sendable {
     /// Where the updates not yet taken begin in `updateBodies`.
     private var updateHead = 0
     private var keepsUpdateBodies = false
+    /// Whether the next inbound response's `result` is kept (``keepNextResult()``), and what it was
+    /// once read: `.some(nil)` for a response whose body does not parse here.
+    private var keepsNextResult = false
+    private var nextResult: WireJSON??
 
     public init(_ observer: Observer? = nil) {
         self.observer = observer
@@ -107,7 +111,10 @@ public final class RawWireTap: @unchecked Sendable {
     }
 
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
-        if direction == .inbound { keepIfUpdate(body) }
+        if direction == .inbound {
+            keepIfUpdate(body)
+            keepIfResult(body)
+        }
         lock.lock()
         let current = self.observer
         let suppressed = replaySuppressed
@@ -144,6 +151,42 @@ public final class RawWireTap: @unchecked Sendable {
         let paired = written.count == messages.count ? written : Array(repeating: nil, count: messages.count)
         let kept: [WireJSON?] = zip(messages, paired).filter { Self.isUpdate($0.0) }.map { $0.1?["params"] }
         lock.withLock { updateBodies.append(contentsOf: kept) }
+    }
+
+    /// Keep the `result` of the next response to come in, as the agent wrote it — the answer to the
+    /// request about to go out, when it is the only one out: `initialize`'s, whose agent
+    /// capabilities acpx records member for member (#119).
+    func keepNextResult() {
+        lock.withLock {
+            keepsNextResult = true
+            nextResult = nil
+        }
+    }
+
+    /// The `result` kept since ``keepNextResult()``, once its response has come; the tap keeps no
+    /// more after it is taken.
+    func takeNextResult() -> WireJSON? {
+        lock.withLock {
+            defer {
+                keepsNextResult = false
+                nextResult = nil
+            }
+            return nextResult ?? nil
+        }
+    }
+
+    /// The first response in `body`, decoded as the transports decode it, kept as written.
+    private func keepIfResult(_ body: Data) {
+        guard lock.withLock({ keepsNextResult && nextResult == nil }),
+            let messages = try? JSONRPCMessage.decodeMessages(from: body),
+            let index = messages.firstIndex(where: { if case .response = $0 { true } else { false } })
+        else { return }
+        let parsed = WireJSON(parsing: body)
+        let written: [WireJSON?] = if case .array(let items)? = parsed { items } else { [parsed] }
+        let result = written.count == messages.count ? written[index]?["result"] : nil
+        lock.withLock {
+            if keepsNextResult, nextResult == nil { nextResult = .some(result) }
+        }
     }
 
     /// Whether `message` is a `session/update` notification.

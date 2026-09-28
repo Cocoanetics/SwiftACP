@@ -166,4 +166,18 @@ import Testing
         tap.observe(.inbound, Data(body.utf8))
         #expect(tap.takeUpdateBody() == nil)
     }
+
+    /// Once armed, the tap keeps the `result` of the next response to come in, as the agent wrote
+    /// it — in a batch too — and none before it was armed, or after it was taken (#119).
+    @Test func theNextResultIsKeptAsWritten() {
+        let tap = RawWireTap()
+        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":7,"result":{"early":true}}"#.utf8))
+        tap.keepNextResult()
+        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#.utf8))
+        let batch = #"[{"jsonrpc":"2.0","method":"x"},{"jsonrpc":"2.0","id":1,"result":{"zeta":1,"alpha":2}}]"#
+        tap.observe(.inbound, Data(batch.utf8))
+        tap.observe(.inbound, Data(#"{"jsonrpc":"2.0","id":2,"result":{"later":true}}"#.utf8))
+        #expect(tap.takeNextResult()?.stringified == #"{"zeta":1,"alpha":2}"#)
+        #expect(tap.takeNextResult() == nil)
+    }
 }

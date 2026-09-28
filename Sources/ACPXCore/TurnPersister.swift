@@ -156,6 +156,15 @@ public actor TurnPersister {
         dirty = true
     }
 
+    /// What the agent's `initialize` answered, as acpx writes it after a turn that succeeds
+    /// (`savePromptSuccess`): its protocol version and capabilities, as sent (#119) — saved with the
+    /// next write.
+    public func applyInitialize(of agent: ACPAgent) async {
+        let sent = await agent.connection.agentCapabilitiesAsSent
+        record.applyInitialize(agent.initializeResult, capabilitiesAsSent: sent)
+        dirty = true
+    }
+
     /// Final flush: stamp `last_used_at` / `last_prompt_at` and write immediately.
     public func finish() {
         timer?.cancel()

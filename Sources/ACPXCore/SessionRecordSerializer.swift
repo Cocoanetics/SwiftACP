@@ -49,6 +49,11 @@ enum SessionRecordSerializer {
                 }
             }
         }
+        // The agent's capabilities as its `initialize` answer wrote them, when they were seen so —
+        // whatever order a file read before held them in (#119).
+        if let sent = record.agentCapabilitiesAsSent {
+            document = document.mapping("agent_capabilities") { _ in sent }
+        }
         return Data((document.stringified(indent: 2) + "\n").utf8)
     }
 
