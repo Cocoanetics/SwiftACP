@@ -94,6 +94,12 @@ public enum ModelApplication {
     /// the agent announces meanwhile reaches `control` through its
     /// ``ControlState/observe(_:_:)``, when the caller hands it the connection's messages.
     ///
+    /// The controls start from what `control` holds already: acpx main's
+    /// `initializeControlState` (openclaw/acpx#794). The options the session's own updates
+    /// announced once `session/new` had answered come before the answer's options. The
+    /// answer's models are seeded only while no such update made the model a config option.
+    /// The requested model is then checked against what that leaves, not the answer alone.
+    ///
     /// Each request goes within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     public static func applySessionControls(
         connection: ACPAgentConnection,
@@ -109,15 +115,11 @@ public enum ModelApplication {
         let reported = ModelSupport.normalizedResponseConfigOptions(session.rawConfigOptions)
         let advertised = ModelSupport.modelState(fromConfigOptions: reported)
             ?? ModelSupport.modelState(fromLegacyModels: session.models)
-        control.update { state in
-            if let advertised { ModelSupport.applyAdvertisedModelState(advertised, to: &state) }
-            ModelSupport.applyConfigOptionsToState(
-                reported ?? .array([]), asSent: session.configOptionsAsSent, to: &state)
-        }
+        control.initialize(answered: reported, asSent: session.configOptionsAsSent, models: advertised)
         let application = try await applyRequestedModel(
             connection: connection, sessionId: session.sessionId, requestedModel: model,
-            models: advertised, agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds,
-            onWarning: onWarning)
+            models: ModelSupport.advertisedModelState(control.state), agentCommand: agentCommand,
+            timeoutMilliseconds: timeoutMilliseconds, onWarning: onWarning)
         if application.applied, let modelId = application.modelId {
             control.update { ModelSupport.applyModelSelection(modelId, response: application.response, to: &$0) }
         }
@@ -137,10 +139,22 @@ public enum ModelApplication {
 
     /// acpx's `controlState` in `runOnce`: what a run's session advertises, as a record's
     /// `acpx` keeps it, with each selection folded in as its reply comes, and each
-    /// `config_option_update` the agent sends as it arrives.
+    /// `config_option_update` for the run's own session as it arrives.
     public final class ControlState: @unchecked Sendable {
         private let lock = NSLock()
         private var current = SessionAcpxState()
+        /// The run's `session/new`, whose answer names its session.
+        private var creation: JSONRPCID?
+        /// The session named in that answer: acpx's `loadedSessionId`. Only its updates count,
+        /// and only once the answer has come (`hasReusableSession`, openclaw/acpx#794).
+        private var session: String?
+        /// Whether one of those updates made the model a config option: acpx's
+        /// `sawOwnedModelConfig`, which keeps the answer's legacy models from coming back.
+        private var sawOwnedModelConfig = false
+        /// The `config_option_update`s seen since the answer, whatever session they name, and a
+        /// test's waits for a number of them.
+        private var updatesSeen = 0
+        private var waiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
         public init() {}
 
@@ -150,17 +164,75 @@ public enum ModelApplication {
             lock.withLock { change(&current) }
         }
 
-        /// A message crossing the wire: an agent's `config_option_update` replaces the
-        /// options, as acpx's `onSessionUpdate` does, with the options its ACP SDK hands on
-        /// (``ConfigOptionSchema``). Handed each message in order before it is handled, a
-        /// selection's reply builds on what the agent announced before it.
+        /// acpx main's `initializeControlState` (openclaw/acpx#794), in one step, so that no update
+        /// comes between: the options an update of the session announced once it was answered,
+        /// or else those `answered` (as they were sent); and the answer's `models` first,
+        /// unless such an update made the model a config option.
+        func initialize(answered options: JSONValue?, asSent: WireJSON?, models: ModelSupport.ModelState?) {
+            lock.withLock {
+                let announced = current.configOptions
+                if let models, !sawOwnedModelConfig { ModelSupport.applyAdvertisedModelState(models, to: &current) }
+                ModelSupport.applyConfigOptionsToState(
+                    announced ?? options ?? .array([]), asSent: announced != nil ? current.configOptionsOrder : asSent,
+                    to: &current)
+            }
+        }
+
+        /// A message crossing the wire, handed over in order before it is handled. The run's
+        /// `session/new` and its answer name its session; an agent's `config_option_update` for
+        /// that session then replaces the options, as acpx's `onSessionUpdate` does, with the
+        /// options its ACP SDK hands on (``ConfigOptionSchema``). One that comes before the
+        /// answer, or names another session, changes nothing, as acpx main ignores it
+        /// (openclaw/acpx#794). A selection's reply builds on what came before it.
         public func observe(_ direction: JSONRPCPeer.WireDirection, _ message: JSONRPCMessage) {
-            guard direction == .inbound, case .notification(let note) = message, note.method == "session/update",
-                  case .object(let params)? = note.params, case .string? = params["sessionId"],
-                  let announced = params["update"], announced["sessionUpdate"] == .string("config_option_update"),
-                  let options = ConfigOptionSchema.options(of: announced)
+            switch (direction, message) {
+            case (.outbound, .request(let request)) where request.method == "session/new":
+                lock.withLock { creation = request.id }
+            case (.inbound, .response(let response)):
+                lock.withLock {
+                    guard session == nil, response.id == creation, case .object(let result)? = response.result,
+                          case .string(let id)? = result["sessionId"]
+                    else { return }
+                    session = id
+                }
+            case (.inbound, .notification(let note)):
+                observeUpdate(note)
+            default:
+                return
+            }
+        }
+
+        private func observeUpdate(_ note: JSONRPCMessage.JSONRPCNotificationData) {
+            guard note.method == "session/update", case .object(let params)? = note.params,
+                  case .string(let sessionId)? = params["sessionId"], let announced = params["update"],
+                  announced["sessionUpdate"] == .string("config_option_update")
             else { return }
-            update { ModelSupport.applyConfigOptionsToState(options, to: &$0) }
+            let reached: [CheckedContinuation<Void, Never>] = lock.withLock {
+                guard let session else { return [] }
+                if sessionId == session, let options = ConfigOptionSchema.options(of: announced) {
+                    ModelSupport.applyConfigOptionsToState(options, to: &current)
+                    if current.modelControl == "config_option" { sawOwnedModelConfig = true }
+                }
+                updatesSeen += 1
+                let ready = waiters.filter { $0.count <= updatesSeen }
+                waiters.removeAll { $0.count <= updatesSeen }
+                return ready.map(\.continuation)
+            }
+            reached.forEach { $0.resume() }
+        }
+
+        /// For a test: once `count` `config_option_update`s have been seen since `session/new`
+        /// answered, whatever session they name, as acpx's test holds a run until the updates
+        /// sent during its session's creation have come.
+        public func updatesSeen(_ count: Int) async {
+            await withCheckedContinuation { continuation in
+                let ready = lock.withLock {
+                    guard updatesSeen < count else { return true }
+                    waiters.append((count, continuation))
+                    return false
+                }
+                if ready { continuation.resume() }
+            }
         }
     }
 

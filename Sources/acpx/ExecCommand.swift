@@ -123,6 +123,11 @@ enum ExecCommand {
         return permissionExitCode(run.permissions, quiet: flags.format == "quiet")
     }
 
+    /// Given the run's controls once `session/new` has answered, in tests: holding the run
+    /// there until what the agent sent after its answer has come, as acpx's test holds a
+    /// session's creation (openclaw/acpx#794).
+    @TaskLocal static var sessionAnswered: (@Sendable (ModelApplication.ControlState) async -> Void)?
+
     /// The run's session, as acpx's `runOnce` opens it: `session/new` with the
     /// invocation's session options (`meta`), then its model and config options — each
     /// within `timeoutMs`. A warning about them goes to stderr, unless `quiet`.
@@ -136,6 +141,7 @@ enum ExecCommand {
         let response = try await withTimeout(milliseconds: timeoutMs) {
             try await connection.newSession(request)
         }
+        await sessionAnswered?(control)
         try await ModelApplication.applySessionControls(
             connection: connection, session: response, model: model, configOptions: configOptions,
             agentCommand: agent.agentCommand, timeoutMilliseconds: timeoutMs, control: control,
