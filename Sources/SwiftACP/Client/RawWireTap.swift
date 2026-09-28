@@ -41,7 +41,8 @@ public final class RawWireTap: @unchecked Sendable {
     private var replaySuppressed: [String: Int] = [:]
     /// The `params` of each inbound `session/update` read and not yet handled, in order, once a
     /// connection takes them (``keepUpdateBodies()``, ``takeUpdateBody(sessionId:kind:)``).
-    private var updateBodies: [WireJSON] = []
+    /// `nil` for an update without `params`, which its handler takes all the same (#242 review).
+    private var updateBodies: [WireJSON?] = []
     private var keepsUpdateBodies = false
 
     public init(_ observer: Observer? = nil) {
@@ -135,7 +136,9 @@ public final class RawWireTap: @unchecked Sendable {
         else { return }
         let written: [WireJSON] = if case .array(let items) = parsed { items } else { [parsed] }
         guard written.count == messages.count else { return }
-        let kept = zip(messages, written).compactMap { message, form in Self.isUpdate(message) ? form["params"] : nil }
+        // One entry for each update — none of its `params` when it has none — so that the handler
+        // of each takes its own.
+        let kept: [WireJSON?] = zip(messages, written).filter { Self.isUpdate($0.0) }.map { $0.1["params"] }
         lock.withLock { updateBodies.append(contentsOf: kept) }
     }
 
@@ -152,8 +155,10 @@ public final class RawWireTap: @unchecked Sendable {
         lock.withLock {
             while !updateBodies.isEmpty {
                 let params = updateBodies.removeFirst()
-                if params["sessionId"]?.stringValue == sessionId,
-                    params["update"]?["sessionUpdate"]?.stringValue == kind {
+                // One without `params` is taken by the handler of an update without them, which
+                // asks with no session and no kind.
+                if params?["sessionId"]?.stringValue == sessionId,
+                    params?["update"]?["sessionUpdate"]?.stringValue == kind {
                     return params
                 }
             }

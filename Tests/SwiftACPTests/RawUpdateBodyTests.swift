@@ -58,6 +58,20 @@ import Testing
         #expect(tap.takeUpdateBody(sessionId: "s", kind: "plan") == nil)
     }
 
+    /// An update without `params` keeps an entry of its own, which its handler — asking with no
+    /// session and no kind — takes, so the update after it gets its own body (#242 review).
+    @Test func anUpdateWithoutParamsKeepsItsPlace() throws {
+        let tap = RawWireTap()
+        tap.keepUpdateBodies()
+        let batch = #"[{"jsonrpc":"2.0","method":"session/update"},"#
+            + #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":"#
+            + #"{"sessionUpdate":"tool_call","toolCallId":"t","rawInput":{"z":1,"a":2}}}}]"#
+        tap.observe(.inbound, Data(batch.utf8))
+        #expect(tap.takeUpdateBody(sessionId: nil, kind: nil) == nil)
+        let next = try #require(tap.takeUpdateBody(sessionId: "s", kind: "tool_call"))
+        #expect(next["update"]?["rawInput"]?.stringified == #"{"z":1,"a":2}"#)
+    }
+
     /// A tap no connection took the bodies of keeps none.
     @Test func aTapKeepsNoneUnlessAsked() {
         let tap = RawWireTap()
