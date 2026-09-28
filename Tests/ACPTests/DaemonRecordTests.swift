@@ -30,6 +30,28 @@ extension DaemonToolsTests {
         }
     }
 
+    /// The same two turns with the agent's objects written as its code lists them, its tools'
+    /// input and output out of sorted order, leave the record acpx 0.19.3 left for them
+    /// (`acpx-turn-record-as-written.json`): each payload as the agent sent it — `input` and
+    /// `output`, and `raw_input` and the result's text, `JSON.stringify` of them (#119).
+    @Test(.enabled(if: mockPythonAvailable))
+    func payloadsKeepTheOrderTheAgentSentThemIn() async throws {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures")
+        let acpx = try Data(contentsOf: fixtures.appendingPathComponent("acpx-turn-record-as-written.json"))
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let agent = fixtures.appendingPathComponent("record-agent.py").path
+            let command = "/usr/bin/env RECORD_AGENT_AS_WRITTEN=1 '\(python)' '\(agent)'"
+            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let blocks: [PromptBlock] = [.text("Look at this"), .resourceLink(uri: "file:///tmp/a.txt", name: "a.txt")]
+            try await prompt(daemon, id, text: "", blocks: blocks, client: CallingClient())
+            try await prompt(daemon, id, text: "Again", client: CallingClient())
+            let written = try Data(contentsOf: ACPXPaths.sessionRecordPath(id))
+            #expect(try Self.comparable(written) == Self.comparable(acpx))
+        }
+    }
+
     /// `record`'s text, with what differs from run to run as placeholders.
     private static func comparable(_ record: Data) throws -> String {
         var json = try #require(WireJSON(parsing: record))

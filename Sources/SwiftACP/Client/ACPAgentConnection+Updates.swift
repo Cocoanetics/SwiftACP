@@ -16,13 +16,24 @@ extension ACPAgentConnection {
         guard method == "session/update" else { return }
         let sessionId = InboundRequestLedger.sessionId(of: params)
         defer { if let sessionId { sessionUpdates.finished(sessionId) } }
+        // Its body is taken whatever becomes of it, so that the next update's is the next's.
+        let raw = rawUpdates?.takeUpdateBody(sessionId: sessionId, kind: Self.updateKind(of: params))
         await beforeHandlingUpdate?()
-        guard let params, let notification = try? params.decoded(SessionNotification.self) else { return }
+        guard let params, var notification = try? params.decoded(SessionNotification.self) else { return }
+        notification.rawUpdate = raw?["update"]
         if replaySuppressed[notification.sessionId] != nil { return }
         for sink in updateSinks.values {
             sink.yield(notification)
         }
         eventSinks.yield(.update(notification))
+    }
+
+    /// A `session/update`'s `update.sessionUpdate`.
+    static func updateKind(of params: JSONValue?) -> String? {
+        guard case .object(let members)? = params, case .object(let update)? = members["update"],
+            case .string(let kind)? = update["sessionUpdate"]
+        else { return nil }
+        return kind
     }
 
     /// `session/load` as acpx's `loadSessionWithOptions` sends it: the request, then the

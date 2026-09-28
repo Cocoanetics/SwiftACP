@@ -3,16 +3,20 @@
 two chunks, two tool calls — their ids out of sorted order, one completing and one
 failing — a reply, and usage, more with each turn.
 
-Every object it sends lists its members sorted, the order SwiftACP keeps an agent's
-payloads in, so the record acpx writes for its turns is the one SwiftACP should write
-(`acpx-turn-record.json`).
+Every object it sends lists its members sorted (`acpx-turn-record.json`). With
+RECORD_AGENT_AS_WRITTEN set, it writes them as its code lists them, and its tools' input and
+output out of sorted order, which acpx records as the agent sent them
+(`acpx-turn-record-as-written.json`, #119).
 """
 import json
+import os
 import sys
+
+AS_WRITTEN = bool(os.environ.get("RECORD_AGENT_AS_WRITTEN"))
 
 
 def send(obj):
-    sys.stdout.write(json.dumps(obj, sort_keys=True) + "\n")
+    sys.stdout.write(json.dumps(obj, sort_keys=not AS_WRITTEN) + "\n")
     sys.stdout.flush()
 
 
@@ -42,11 +46,11 @@ def main():
             update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Let me "}})
             update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "think."}})
             update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "zz-2", "title": "Read notes", "kind": "read",
-                                "status": "pending", "rawInput": {"alpha": 2, "path": "/tmp/n", "zeta": 1}})
+                                "status": "pending", "rawInput": {"path": "/tmp/n", "zeta": 1, "alpha": 2}})
             update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "aa-1", "title": "Run ls",
                                 "kind": "execute", "status": "in_progress", "rawInput": {"command": "ls"}})
             update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "aa-1", "status": "completed",
-                                "rawOutput": {"code": 0, "stdout": "x"}})
+                                "rawOutput": {"stdout": "x", "code": 0}})
             update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "zz-2", "status": "failed",
                                 "rawOutput": "no such file"})
             update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done."}})

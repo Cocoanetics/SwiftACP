@@ -253,6 +253,9 @@ public struct SessionToolUse: Codable, Sendable {
     // `string | null | absent` — acpx persists it present-but-null for tool uses,
     // so distinguish present-null from absent to round-trip without data loss.
     public var thoughtSignature: Nullable<String>?
+    /// `input` as the agent sent it, members in its order, which the record is written with
+    /// (#119); `nil` for input read back, or not an object or array. Never encoded.
+    public var inputWire: WireJSON?
 
     enum CodingKeys: String, CodingKey {
         case id, name, input, rawInput, isInputComplete, thoughtSignature
@@ -301,6 +304,13 @@ public struct SessionToolResult: Codable, Sendable {
     public var isError: Bool
     public var content: JSONValue
     public var output: JSONValue?
+    /// `output` as the agent sent it, members in its order, which the record is written with
+    /// (#119); `nil` for output read back, or not an object or array. Never encoded.
+    public var outputWire: WireJSON?
+
+    enum CodingKeys: String, CodingKey {
+        case toolUseId, toolName, isError, content, output
+    }
 }
 
 // MARK: - Token usage / cost / acpx state

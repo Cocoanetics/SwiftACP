@@ -38,6 +38,10 @@ public final class RawWireTap: @unchecked Sendable {
     /// `session/load` is replaying history — with how many loads asked. acpx's
     /// `suppressReplaySessionUpdateMessages`, kept per session.
     private var replaySuppressed: [String: Int] = [:]
+    /// The `params` of each inbound `session/update` read and not yet handled, in order, once a
+    /// connection takes them (``keepUpdateBodies()``, ``takeUpdateBody(sessionId:kind:)``).
+    private var updateBodies: [WireJSON] = []
+    private var keepsUpdateBodies = false
 
     public init(_ observer: Observer? = nil) {
         self.observer = observer
@@ -99,6 +103,7 @@ public final class RawWireTap: @unchecked Sendable {
     }
 
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+        if direction == .inbound { keepIfUpdate(body) }
         lock.lock()
         let current = self.observer
         let suppressed = replaySuppressed
@@ -109,6 +114,37 @@ public final class RawWireTap: @unchecked Sendable {
             return
         }
         observer(direction, body)
+    }
+
+    /// Keep the bodies of inbound `session/update`s from now on, for the connection that handles
+    /// them to take each as it does (#119).
+    func keepUpdateBodies() {
+        lock.withLock { keepsUpdateBodies = true }
+    }
+
+    /// Keep `body`'s `params` when it is a `session/update` notification.
+    private func keepIfUpdate(_ body: Data) {
+        guard lock.withLock({ keepsUpdateBodies }), body.range(of: Data("session/update".utf8)) != nil,
+            let message = WireJSON(parsing: body), message["method"]?.stringValue == "session/update",
+            !message.hasMember("id"), let params = message["params"]
+        else { return }
+        lock.withLock { updateBodies.append(params) }
+    }
+
+    /// The `params` of the update being handled — `sessionId`'s, of `kind` — as the agent wrote
+    /// them: the oldest kept. One that is not it was never handled — its message did not reach
+    /// the peer as a notification — and goes, so that the next is the next's.
+    func takeUpdateBody(sessionId: String?, kind: String?) -> WireJSON? {
+        lock.withLock {
+            while !updateBodies.isEmpty {
+                let params = updateBodies.removeFirst()
+                if params["sessionId"]?.stringValue == sessionId,
+                    params["update"]?["sessionUpdate"]?.stringValue == kind {
+                    return params
+                }
+            }
+            return nil
+        }
     }
 
     /// The session of a `session/update` notification — acpx's
