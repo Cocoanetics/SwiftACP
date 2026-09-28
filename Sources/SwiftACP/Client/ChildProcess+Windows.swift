@@ -16,6 +16,12 @@ package final class ChildProcess: @unchecked Sendable {
     /// Why a process could not be started, or written to: an errno, named as Node names it.
     package struct SpawnError: Error, Equatable, Sendable {
         package let code: Int32
+
+        /// The errno's name, as Node's error code gives it.
+        package var name: String {
+            [ENOENT: "ENOENT", EACCES: "EACCES", EPERM: "EPERM", EINVAL: "EINVAL", ENOMEM: "ENOMEM",
+             EMFILE: "EMFILE", EPIPE: "EPIPE", EBADF: "EBADF", EIO: "EIO"][code] ?? "UNKNOWN"
+        }
     }
 
     /// One of the process's output pipes.
@@ -75,12 +81,21 @@ package final class ChildProcess: @unchecked Sendable {
         command: String, arguments: [String], cwd: String, environment: [String: String]?,
         input: Bool = false, newSession: Bool = true
     ) throws -> ChildProcess {
-        // Node refuses a string with a NUL (`ERR_INVALID_ARG_VALUE`), and so does this.
         let variables = environment ?? ProcessInfo.processInfo.environment
-        let strings = [command, cwd] + arguments + variables.flatMap { [$0.key, $0.value] }
-        guard !strings.contains(where: { $0.contains("\0") }) else { throw SpawnError(code: EINVAL) }
         let spawn = WindowsSpawnCommand(
             command: command, arguments: arguments, environment: variables, cwd: cwd, fileSystem: .local)
+        return try Self.spawn(spawn, cwd: cwd, environment: environment, input: input)
+    }
+
+    /// Start `spawn` as it is: what acpx's `buildAgentSpawnCommand`, or Node's own shell for a
+    /// terminal's command, made of the command.
+    package static func spawn(
+        _ spawn: WindowsSpawnCommand, cwd: String, environment: [String: String]?, input: Bool = false
+    ) throws -> ChildProcess {
+        // Node refuses a string with a NUL (`ERR_INVALID_ARG_VALUE`), and so does this.
+        let variables = environment ?? ProcessInfo.processInfo.environment
+        let strings = [spawn.command, cwd] + spawn.arguments + variables.flatMap { [$0.key, $0.value] }
+        guard !strings.contains(where: { $0.contains("\0") }) else { throw SpawnError(code: EINVAL) }
         var security = WindowsLaunch.inheritable()
         var opened: [HANDLE] = []
         func kept(_ handle: HANDLE) -> HANDLE {

@@ -32,6 +32,9 @@ final class ProcessDescendants: @unchecked Sendable {
         return (process.jobProcessIds() ?? []).contains { $0 != own }
     }
 
+    /// Nothing to note: the job keeps what the process started past its exit.
+    func rootExited() {}
+
     /// Nothing to let go of: the job goes with the process.
     func retire() {}
 }

@@ -1,15 +1,20 @@
 // Test vectors for SwiftACP's port of acpx's Windows command resolution (#265): acpx's own
 // `buildAgentSpawnCommand` and `resolveWindowsCommand`, run with `path.win32` and a fake Windows
-// file system, and Node's `path.win32` itself for the path helpers they use. Run by generate.sh.
+// file system, and Node's `path.win32` itself for the path helpers they use; and for its terminals
+// (#272), acpx's terminal launch and Node's own `spawn`. Run by generate.sh.
+import { ChildProcess, spawn } from "node:child_process";
 import nodePath from "node:path";
 import { fakeFs } from "./fake-fs.ts";
 import { buildAgentSpawnCommand, resolveInstalledExecutable, resolveWindowsCommand } from "./spawn-command-options.ts";
 import { resolveClaudeCodeExecutable } from "./agent-command.ts";
+import { buildTerminalFallbackSpawnCommand, buildTerminalSpawnOptions } from "./terminal-manager.ts";
 
 // As on Windows: `resolveInstalledExecutable` asks `process.platform`, and a relative path is
 // taken from `process.cwd()`.
 Object.defineProperty(process, "platform", { value: "win32" });
 process.cwd = () => "C:\\work";
+// Read before the terminals' cases stand a Windows environment in for `process.env`.
+const tag = process.env.ACPX_TAG ?? "v0.19.3";
 
 const win = nodePath.win32;
 const npm = "C:\\Users\\me\\AppData\\Roaming\\npm";
@@ -267,6 +272,225 @@ const claudeResults = claudes.map((claude) => {
   };
 });
 
+type Terminal = {
+  name: string;
+  command: string;
+  args?: string[];
+  parent?: Record<string, string>;
+  request?: { name: string; value: string }[];
+  cwd?: string;
+  files?: string[];
+  directories?: string[];
+};
+
+const tools = "C:\\tools";
+const terminals: Terminal[] = [
+  { name: "a program on PATH", command: "where", args: ["node"], files: [`${sys}\\where.exe`] },
+  { name: "an npm shim, with arguments", command: "gemini", args: ["--version"], files: npmShim },
+  { name: "an npm shim, no arguments", command: "gemini", files: npmShim },
+  { name: "an empty argument", command: "gemini", args: ["", "x", ""], files: npmShim },
+  {
+    name: "arguments joined as they are",
+    command: "gemini",
+    args: ["-p", 'say "hi" & exit', "a\\b\\"],
+    files: npmShim,
+  },
+  {
+    name: "a bat on PATH",
+    command: "build",
+    args: ["release"],
+    parent: { ...base, Path: `${tools};${sys}` },
+    files: [`${tools}\\build.bat`],
+  },
+  {
+    name: "a cmd by a relative path",
+    command: ".\\scripts\\setup.cmd",
+    args: ["x"],
+    cwd: "C:\\proj",
+    files: ["C:\\proj\\scripts\\setup.cmd"],
+  },
+  {
+    name: "a cmd named in full, with a space",
+    command: "C:\\Program Files\\tool\\run.cmd",
+    args: ["a b"],
+    files: ["C:\\Program Files\\tool\\run.cmd"],
+  },
+  { name: "a cmd that is not there", command: "missing.cmd", args: ["x"] },
+  { name: "an upper-case extension", command: "C:\\tools\\RUN.CMD", files: ["C:\\tools\\RUN.CMD"] },
+  {
+    name: "an exe before a cmd",
+    command: "gemini",
+    args: ["x"],
+    files: [`${npm}\\gemini.exe`, `${npm}\\gemini.cmd`],
+  },
+  { name: "no ComSpec", command: "gemini", args: ["x"], parent: { Path: base.Path }, files: npmShim },
+  { name: "an empty ComSpec", command: "gemini", args: ["x"], parent: { ...base, ComSpec: "" }, files: npmShim },
+  {
+    name: "COMSPEC in upper case",
+    command: "gemini",
+    args: ["x"],
+    parent: { Path: base.Path, COMSPEC: "D:\\cmd.exe" },
+    files: npmShim,
+  },
+  {
+    name: "another shell",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, ComSpec: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" },
+    files: npmShim,
+  },
+  {
+    name: "a ComSpec with forward slashes",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, ComSpec: "C:/WINDOWS/system32/cmd.exe" },
+    files: npmShim,
+  },
+  {
+    name: "CMD.EXE in upper case",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, ComSpec: "C:\\WINDOWS\\SYSTEM32\\CMD.EXE" },
+    files: npmShim,
+  },
+  { name: "a bare cmd", command: "gemini", args: ["x"], parent: { ...base, ComSpec: "cmd" }, files: npmShim },
+  {
+    name: "a ComSpec with a line break",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, ComSpec: "C:\\a\nb\\cmd.exe" },
+    files: npmShim,
+  },
+  {
+    name: "cmd.exe after a slash",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, ComSpec: "C:\\WINDOWS/cmd.exe" },
+    files: npmShim,
+  },
+  {
+    name: "the request's Path",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, Path: sys },
+    request: [{ name: "Path", value: tools }],
+    files: [`${tools}\\gemini.cmd`],
+  },
+  {
+    name: "the request's PATH, not looked at beside the client's Path",
+    command: "gemini",
+    args: ["x"],
+    parent: { ...base, Path: sys },
+    request: [{ name: "PATH", value: tools }],
+    files: [`${tools}\\gemini.cmd`],
+  },
+  {
+    name: "the request's PATH, with none of the client's",
+    command: "gemini",
+    args: ["x"],
+    parent: { ComSpec: base.ComSpec, PATHEXT: pathext },
+    request: [{ name: "PATH", value: tools }],
+    files: [`${tools}\\gemini.cmd`],
+  },
+  {
+    name: "the request's first PATH",
+    command: "gemini",
+    args: ["x"],
+    parent: { ComSpec: base.ComSpec, PATHEXT: pathext },
+    request: [
+      { name: "PATH", value: "C:\\a" },
+      { name: "path", value: tools },
+    ],
+    files: [`${tools}\\gemini.cmd`],
+  },
+  {
+    name: "the request's PATH set twice",
+    command: "gemini",
+    args: ["x"],
+    parent: { ComSpec: base.ComSpec, PATHEXT: pathext },
+    request: [
+      { name: "PATH", value: "C:\\a" },
+      { name: "path", value: "C:\\b" },
+      { name: "PATH", value: tools },
+    ],
+    files: [`${tools}\\gemini.cmd`],
+  },
+  {
+    name: "the request's PATHEXT",
+    command: "gemini",
+    args: ["x"],
+    request: [{ name: "PATHEXT", value: ".EXE" }],
+    files: npmShim,
+  },
+  // The fallback, for a command that was not found.
+  { name: "a line", command: "echo hi" },
+  { name: "a pipe", command: "dir|more" },
+  { name: "an ampersand", command: "a&b" },
+  { name: "a word", command: "nothere" },
+  { name: "a backslash is no syntax", command: "C:\\nothere\\x" },
+  { name: "a percent is none", command: "%COMSPEC%" },
+  { name: "a caret is none", command: "a^b" },
+  { name: "a carriage return", command: "x\r" },
+  { name: "a tab", command: "echo\thi" },
+  { name: "a no-break space", command: "echo\u00a0hi" },
+  { name: "a line separator", command: "echo\u2028hi" },
+  { name: "an ideographic space", command: "echo\u3000hi" },
+  { name: "a zero-width space is none", command: "echo\u200bhi" },
+  {
+    name: "a path that is there",
+    command: "C:\\Program Files\\app\\run.exe",
+    files: ["C:\\Program Files\\app\\run.exe"],
+  },
+  { name: "a path that is not there", command: "C:\\Program Files\\app\\missing.exe" },
+  { name: "a relative path that is there", command: "tools\\run me", cwd: "C:\\proj", files: ["C:\\proj\\tools\\run me"] },
+  { name: "a relative path, forward slashes", command: "tools/run me", cwd: "C:\\proj", files: ["C:\\proj\\tools\\run me"] },
+  { name: "a relative directory", command: "tools\\run me", cwd: "proj", files: ["C:\\work\\proj\\tools\\run me"] },
+  { name: "a directory that is there", command: "C:\\my dir", directories: ["C:\\my dir"] },
+];
+// Node's `spawn`, up to the native one: the file and arguments it starts, after its shell.
+let started: { file: string; args: string[]; windowsVerbatimArguments: boolean } | undefined;
+ChildProcess.prototype.spawn = function (options) {
+  started = options;
+  return 0;
+};
+process.noDeprecation = true;
+// A Windows `process.env`: a name found in any case.
+const windowsEnv = (variables: Record<string, string>) =>
+  new Proxy(variables, {
+    get(target, key) {
+      if (typeof key !== "string" || key in target) return Reflect.get(target, key);
+      const name = Object.keys(target).find((entry) => entry.toUpperCase() === key.toUpperCase());
+      return name === undefined ? undefined : target[name];
+    },
+  });
+const terminalResults = terminals.map((terminal) => {
+  const parent = terminal.parent ?? base;
+  const cwd = terminal.cwd ?? "C:\\work";
+  fakeFs.set(terminal.files ?? [], terminal.directories ?? []);
+  process.env = windowsEnv({ ...parent });
+  started = undefined;
+  spawn(terminal.command, terminal.args ?? [], buildTerminalSpawnOptions(terminal.command, cwd, terminal.request, "win32"));
+  if (!started) throw new Error(`nothing started for ${terminal.name}`);
+  const fallback = buildTerminalFallbackSpawnCommand(terminal.command, cwd, "win32");
+  return {
+    name: terminal.name,
+    command: terminal.command,
+    ...(terminal.args ? { args: terminal.args } : {}),
+    parent,
+    request: terminal.request ?? [],
+    cwd,
+    files: terminal.files ?? [],
+    directories: terminal.directories ?? [],
+    processDirectory: process.cwd(),
+    expected: {
+      command: started.file,
+      args: started.args.slice(1),
+      windowsVerbatimArguments: started.windowsVerbatimArguments,
+      fallback: fallback ? { command: fallback.command, args: fallback.args } : null,
+    },
+  };
+});
+
 const dirname = [
   "C:\\a\\b.cmd", "C:\\a\\", "C:\\a", "C:\\", "C:", "C:x", "\\\\srv\\sh\\x.cmd", "\\\\srv\\sh", "\\\\srv\\sh\\",
   "/a/b", "a", "", "\\", "a\\\\b\\\\", "C:\\a\\\\\\b", "\\\\srv", "C:a\\b",
@@ -302,10 +526,11 @@ const extname = [
 ];
 
 console.log(JSON.stringify({
-  generatedBy: `acpx ${process.env.ACPX_TAG ?? "v0.19.3"} src/spawn-command-options.ts, path.win32, Node ${process.version}`,
+  generatedBy: `acpx ${tag} src/spawn-command-options.ts and src/acp/terminal-manager.ts, path.win32, Node ${process.version}`,
   spawns: spawnResults,
   installed: installedResults,
   claudeExecutable: claudeResults,
+  terminals: terminalResults,
   paths: {
     normalize: normalize.map((input) => ({ input, output: win.normalize(input) })),
     resolve: resolve.map(([cwd, input]) => ({ cwd, input, output: win.resolve(cwd, input) })),

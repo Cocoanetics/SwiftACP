@@ -222,6 +222,73 @@ extension WindowsSpawnCommand {
         text.unicodeScalars.split(separator: separator, omittingEmptySubsequences: false).map { String($0) }
     }
 
+    // MARK: - Terminals
+
+    /// A terminal's command on Windows, as acpx starts it (`buildTerminalSpawnCommand`,
+    /// `buildTerminalSpawnOptions`): as it is, unless it names a `.cmd` or `.bat`, which acpx gives
+    /// Node's `shell: true` (`buildSpawnCommandOptions`). Node then runs `shell`, its own
+    /// `%COMSPEC%` (cmd.exe without one), as `/d /s /c "<command> <arguments>"`, the words joined by
+    /// spaces and passed as they are; a shell that is not cmd.exe gets `-c` and the line (#272).
+    static func terminal(
+        command: String, arguments: [String], environment: [String: String], cwd: String,
+        fileSystem: FileSystem, shell: String?
+    ) -> WindowsSpawnCommand {
+        let resolved = resolve(command, environment: environment, cwd: cwd, fileSystem: fileSystem) ?? command
+        let extensionName = WindowsPath.extname(resolved).lowercased()
+        guard extensionName == ".cmd" || extensionName == ".bat" else {
+            return WindowsSpawnCommand(command: command, arguments: arguments)
+        }
+        let file = shell.flatMap { $0.isEmpty ? nil : $0 } ?? "cmd.exe"
+        let line = ([command] + arguments).joined(separator: " ")
+        guard isCmd(file) else { return WindowsSpawnCommand(command: file, arguments: ["-c", line]) }
+        return WindowsSpawnCommand(command: file, arguments: ["/d", "/s", "/c", "\"\(line)\""], verbatimArguments: true)
+    }
+
+    /// Node's `/^(?:.*\\)?cmd(?:\.exe)?$/i`: cmd.exe, by the name after the last backslash, with no
+    /// line break before it (a slash is no separator here).
+    private static func isCmd(_ shell: String) -> Bool {
+        let parts = shell.unicodeScalars.split(separator: "\\", omittingEmptySubsequences: false)
+        guard let name = parts.last, ["cmd", "cmd.exe"].contains(String(name).lowercased()) else { return false }
+        return !parts.dropLast().joined().contains { ["\n", "\r", "\u{2028}", "\u{2029}"].contains($0) }
+    }
+
+    /// acpx's `buildTerminalFallbackSpawnCommand` on `win32`, for a command that was not found: the
+    /// line through `cmd.exe /d /s /c`, unless it is a path that is there, or has none of
+    /// `hasWindowsShellSyntax`'s characters and no whitespace. A relative `cwd` is taken from
+    /// `processDirectory`, as Node's `path.resolve` takes it from `process.cwd()`.
+    static func terminalFallback(
+        _ command: String, cwd: String, fileSystem: FileSystem,
+        processDirectory: String = FileManager.default.currentDirectoryPath
+    ) -> WindowsSpawnCommand? {
+        if command.utf16.contains(where: WindowsPath.isSeparator) {
+            let path = WindowsPath.isAbsolute(command)
+                ? command : WindowsPath.resolve([cwd, command], processDirectory: processDirectory)
+            if fileSystem.exists(path) { return nil }
+        }
+        let readsAsLine = command.unicodeScalars.contains {
+            windowsShellSyntax.contains($0) || TerminalOutputLimit.isJavaScriptWhitespace($0)
+        }
+        return readsAsLine ? WindowsSpawnCommand(command: "cmd.exe", arguments: ["/d", "/s", "/c", command]) : nil
+    }
+
+    /// acpx's `hasWindowsShellSyntax`: `[|&;<>()>$\`*?[\]{}'"\r\n]`, a backslash not among them.
+    private static let windowsShellSyntax = Set("|&;<>()$`*?[]{}'\"\r\n".unicodeScalars)
+
+    /// acpx's `toEnvObject` as its Windows lookups (`readWindowsEnvValue`) read it: `variables` laid
+    /// over `parent` in turn. A name that differs only in case from one before it is a variable of its
+    /// own, after that one, where a lookup, which takes the first, never finds it.
+    static func lookupEnvironment(
+        _ variables: [(name: String, value: String)], over parent: [String: String]
+    ) -> [String: String] {
+        var merged = parent
+        var names = Set(parent.keys.map { $0.uppercased() })
+        for variable in variables {
+            guard merged[variable.name] != nil || names.insert(variable.name.uppercased()).inserted else { continue }
+            merged[variable.name] = variable.value
+        }
+        return merged
+    }
+
     // MARK: - cmd.exe
 
     /// `CMD_META_CHAR_RE`: what cmd.exe reads specially, each escaped with a caret.

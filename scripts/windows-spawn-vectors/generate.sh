@@ -1,7 +1,7 @@
 #!/bin/sh
 # Regenerates Tests/SwiftACPTests/Fixtures/acpx-windows-spawn.json from acpx's own Windows command
-# resolution (src/spawn-command-options.ts), run with Node's path.win32 and a fake Windows file
-# system (#265).
+# resolution (src/spawn-command-options.ts) and terminal launch (src/acp/terminal-manager.ts), run
+# with Node's path.win32 and a fake Windows file system (#265, #272).
 #   ACPX_CHECKOUT  an acpx clone (required)
 #   ACPX_TAG       the tag to take the resolution from (default: v0.19.3)
 #   NODE           the node to run it with; 23.6 or later runs the TypeScript as it is
@@ -26,5 +26,24 @@ git -C "$ACPX_CHECKOUT" show "$ACPX_TAG:src/acp/agent-command.ts" \
 import { readWindowsEnvValue, resolveWindowsExecutablePath } from "./spawn-command-options.ts";' \
     > "$work/agent-command.ts"
 grep -q 'resolveWindowsExecutablePath("claude"' "$work/agent-command.ts"
+# A terminal's launch, from terminal-manager.ts: its spawn options, with the resolution above, and
+# its shell fallback, with path.win32 and the fake file system (#272).
+git -C "$ACPX_CHECKOUT" show "$ACPX_TAG:src/acp/terminal-manager.ts" \
+    | awk '/^function toEnvObject/,/^}/
+           /^export function buildTerminalSpawnOptions/,/^}/
+           /^function buildTerminalFallbackSpawnCommand/,/^}/
+           /^function hasShellSyntax/,/^}/
+           /^function hasWindowsShellSyntax/,/^}/
+           /^function commandPathExists/,/^}/' \
+    | sed -e 's#^function buildTerminalFallbackSpawnCommand#export function buildTerminalFallbackSpawnCommand#' \
+          -e '1i\
+import nodePath from "node:path"; const path = nodePath.win32;\
+import { fakeFs as fs } from "./fake-fs.ts";\
+import { buildSpawnCommandOptions, buildTerminalShellSpawnCommand } from "./spawn-command-options.ts";' \
+    > "$work/terminal-manager.ts"
+for name in 'export function buildTerminalSpawnOptions' 'function toEnvObject' \
+    'export function buildTerminalFallbackSpawnCommand' 'function hasWindowsShellSyntax' 'function commandPathExists'; do
+    grep -q "^$name" "$work/terminal-manager.ts"
+done
 cp "$here/fake-fs.ts" "$here/cases.ts" "$work/"
 "${NODE:-node}" "$work/cases.ts" > "$repo/Tests/SwiftACPTests/Fixtures/acpx-windows-spawn.json"
