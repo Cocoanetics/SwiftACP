@@ -8,7 +8,7 @@ import Testing
 
 /// A session's record keeps the agent's capabilities as its `initialize` answer wrote them —
 /// every member, in its order — as acpx records them when it creates the session, and again after
-/// each turn that succeeds (`savePromptSuccess`, #119).
+/// each turn that succeeds (`savePromptSuccess`) and each control it runs directly (#119).
 @Suite(.serialized, .agentLane) struct AgentCapabilitiesRecordTests {
     static let created = #"{"zeta":1,"promptCapabilities":{"image":true,"audio":false},"loadSession":true,"#
         + #""_meta":{"b":1,"a":2}}"#
@@ -58,6 +58,26 @@ import Testing
             _ = try await session.work { _ in
                 try await daemon.runPrompt(sessionId: record.acpxRecordId, text: "hi")
             }
+            await daemon.releaseAll()
+            #expect(try Self.written(record.acpxRecordId) == Self.later)
+        }
+    }
+
+    /// So does a control on a session no owner holds, with what the agent connected for it
+    /// answered, as acpx's direct control records it (`withConnectedSession`).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aDirectControlTakesTheCapabilitiesItWasAnswered() async throws {
+        let directory = try DaemonToolsTests.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capabilities = directory.appendingPathComponent("capabilities.json")
+        try Self.created.write(to: capabilities, atomically: true, encoding: .utf8)
+        try await withIsolatedStore {
+            let record = try await SessionEngine.createSession(
+                agentCommand: Self.agent(capabilities: capabilities), cwd: directory.path, name: nil,
+                permission: .approveAll, authCredentials: [:], authPolicy: "skip")
+            try Self.later.write(to: capabilities, atomically: true, encoding: .utf8)
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            _ = try await daemon.setMode(sessionId: record.acpxRecordId, modeId: "plan")
             await daemon.releaseAll()
             #expect(try Self.written(record.acpxRecordId) == Self.later)
         }
