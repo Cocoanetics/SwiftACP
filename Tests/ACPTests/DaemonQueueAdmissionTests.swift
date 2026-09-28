@@ -81,9 +81,9 @@ extension DaemonToolsTests {
     }
 
     /// `--no-wait` prints acpx's queued result — `[queued] <requestId>`, `prompt_queued` in JSON,
-    /// nothing when quiet — once the session's owner has the prompt, and exits 0; the turn is
-    /// recorded as it runs on. Under `--verbose`, the owner's line comes first, as acpx writes it
-    /// once the owner answers `accepted`.
+    /// nothing when quiet — once the session's owner has the prompt, here behind a turn the agent
+    /// holds, and exits 0; each is recorded as it runs on. Under `--verbose`, the owner's line
+    /// comes first, as acpx writes it once the owner answers `accepted`.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func noWaitPrintsAcpxsQueuedResult() async throws {
         let agent = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
@@ -108,6 +108,11 @@ extension DaemonToolsTests {
             let id = await acpx(["--format", "quiet", "sessions", "new"]).out
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let pid = ProcessInfo.processInfo.processIdentifier
+            // A turn the agent holds until it is cancelled has the session first.
+            let (goes, goingOut) = AsyncStream<Void>.makeStream()
+            await backend.setPromptGoingOut { _ in goingOut.yield() }
+            let held = Task { await acpx(["--format", "quiet", "prompt", "hold turn"]) }
+            try await nextEvent(goes)
 
             let text = await acpx(["--verbose", "prompt", "--no-wait", "first"])
             #expect(text.code == 0)
@@ -122,10 +127,12 @@ extension DaemonToolsTests {
             #expect(quiet.code == 0)
             #expect(quiet.out.isEmpty)
 
+            #expect(await acpx(["cancel"]).code == 0)
+            _ = await held.value
             // A prompt that waits comes after them: once it is over, so are they.
             #expect(await acpx(["--format", "quiet", "prompt", "after"]).code == 0)
             let asked = try await backend.sessionHistory(sessionId: id).filter { $0.role == "user" }
-            #expect(asked.map(\.textPreview) == ["first", "second", "third", "after"])
+            #expect(asked.map(\.textPreview) == ["hold turn", "first", "second", "third", "after"])
             await backend.releaseAll()
         }
     }
