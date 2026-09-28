@@ -194,6 +194,8 @@ private final class FlowShellRun: @unchecked Sendable {
     private var status: Int32?
     private var hasExited = false
     private var closedStreams = 0
+    /// For tests: how long the exit takes to be taken in past its first step (``FlowShellTermination/exitIsTakenInLateBy``).
+    private let exitIsTakenInLateBy = FlowShellTermination.exitIsTakenInLateBy
 
     init(
         spec: FlowShellExecution, args: [WireJSON], cwd: String, startMs: Int64, mode: FlowShellProcess.Mode,
@@ -240,25 +242,33 @@ private final class FlowShellRun: @unchecked Sendable {
         checkClosed()
     }
 
+    /// A shell action's result is its exit: the deadline goes first, as the exit is taken in, in
+    /// one step with whether a stop had begun — acpx takes both in one callback, which its timer
+    /// cannot come between (#220 review).
     func exited(_ status: Int32?) {
+        let stopped = mode == .node ? termination.resultIsIn() : nil
+        if let late = exitIsTakenInLateBy { Thread.sleep(forTimeInterval: Double(late / .milliseconds(1)) / 1000) }
         lock.withLock {
             hasExited = true
             self.status = status
         }
-        if mode == .node { settle() }
+        if let stopped { settle(stopped) }
         checkClosed()
     }
 
-    /// Node's `close`: exited, and both pipes at their end.
+    /// Node's `close`: exited, and both pipes at their end — `runShell`'s result, its deadline
+    /// gone as it is taken in.
     private func checkClosed() {
         let closedNow: Bool = lock.withLock { hasExited && closedStreams == 2 && !closed.hasHappened }
         guard closedNow else { return }
+        let stopped = mode == .command ? termination.resultIsIn() : nil
         closed.fire()
         termination.handleClose()
-        if mode == .command { settle() }
+        if let stopped { settle(stopped) }
     }
 
-    private func settle() {
+    /// The result, with whether the command was stopped — and for its deadline — as it was taken in.
+    private func settle(_ stopped: (cancelled: Bool, timedOut: Bool)) {
         let result: FlowShellResult? = lock.withLock {
             guard !settled else { return nil }
             settled = true
@@ -266,7 +276,7 @@ private final class FlowShellRun: @unchecked Sendable {
             return FlowShellResult(
                 command: spec.command ?? "", args: args, cwd: cwd, stdout: capture.stdout, stderr: capture.stderr,
                 exitCode: exit.exitCode, signal: exit.signal, durationMs: Double(FlowShellClock.nowMs() - startMs),
-                timedOut: mode == .node ? termination.cancelled : termination.timedOut)
+                timedOut: mode == .node ? stopped.cancelled : stopped.timedOut)
         }
         if let result { first.settle(.success(result)) }
     }
@@ -274,131 +284,6 @@ private final class FlowShellRun: @unchecked Sendable {
     private func fail(_ error: Error) {
         lock.withLock { settled = true }
         first.settle(.failure(error))
-    }
-}
-
-/// acpx's `createShellTermination`: what stops a command's tree — at its deadline, when
-/// its attempt is cancelled, or for an owner — once, then lets it go. While an owner keeps
-/// it, a command that closed with processes left in its group stays kept until they are
-/// gone, so an interrupt still reaches them.
-final class FlowShellTermination: @unchecked Sendable {
-    private let child: ChildProcess
-    private let closed: FlowShellEvent
-    private let onCleanupFailure: @Sendable (Error) -> Void
-    private let lock = NSLock()
-    private var stopping: Task<Void, Error>?
-    private var timedOutFlag = false
-    private var cancelledFlag = false
-    private var released = false
-    private var deadline: Task<Void, Never>?
-    private var monitor: Task<Void, Never>?
-    private var unregister: (@Sendable () -> Void)?
-    private var removeAbortListener: (() -> Void)?
-    private var hasOwner = false
-
-    init(
-        child: ChildProcess, closed: FlowShellEvent, timeoutMs: Double?, control: FlowShellControl,
-        onCleanupFailure: @escaping @Sendable (Error) -> Void
-    ) {
-        self.child = child
-        self.closed = closed
-        self.onCleanupFailure = onCleanupFailure
-        if let attempt = control.attempt {
-            let listening = attempt.addAbortListener { [self] _ in
-                Task { try? await self.cancel(attempt.terminationSignal) }
-            }
-            if let listening {
-                removeAbortListener = listening
-            } else {
-                Task { try? await self.cancel(attempt.terminationSignal) }
-            }
-        }
-        if let delay = timeoutMs.flatMap(FlowTimer.duration(milliseconds:)) {
-            deadline = Task { [self] in
-                try? await Task.sleep(for: delay)
-                guard !Task.isCancelled else { return }
-                lock.withLock { timedOutFlag = true }
-                try? await cancel("SIGTERM")
-            }
-        }
-        if let registerOwner = control.registerOwner {
-            hasOwner = true
-            unregister = registerOwner(FlowShellOwner(
-                cancel: { [self] signal in try await cancel(signal) }, release: { [self] in release() }))
-        }
-    }
-
-    var timedOut: Bool { lock.withLock { timedOutFlag } }
-    var cancelled: Bool { lock.withLock { cancelledFlag } }
-
-    /// Stop the tree with `signal`, or wait for the stop under way.
-    func cancel(_ signal: String) async throws {
-        let task: Task<Void, Error>? = lock.withLock {
-            if let stopping { return stopping }
-            guard !released else { return nil }
-            deadline?.cancel()
-            cancelledFlag = true
-            let number = FlowShellSignals.number(signal)
-            let (pid, closed, onCleanupFailure) = (child.pid, self.closed, self.onCleanupFailure)
-            let task = Task { [self] in
-                defer { release() }
-                do {
-                    try await FlowShellTree.stop(pid, signal: number, closed: closed)
-                } catch {
-                    onCleanupFailure(error)
-                    throw error
-                }
-            }
-            stopping = task
-            return task
-        }
-        try await task?.value
-    }
-
-    /// The command closed: kept by an owner, it stays kept while its group has processes.
-    func handleClose() {
-        let start: Bool = lock.withLock { hasOwner && !released && stopping == nil }
-        guard start else { return }
-        let pid = child.pid
-        let watching = Task { [self] in
-            while !Task.isCancelled {
-                let idle = lock.withLock { stopping == nil }
-                if idle, !FlowShellTree.hasProcesses(pid) {
-                    release()
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-        }
-        lock.withLock { monitor = watching }
-    }
-
-    /// acpx's `dispose`: no deadline any more, the stop under way waited for, and — kept
-    /// by no one — let go.
-    func dispose() async throws {
-        let task: Task<Void, Error>? = lock.withLock {
-            deadline?.cancel()
-            return stopping
-        }
-        defer { if !hasOwner { release() } }
-        try await task?.value
-    }
-
-    /// acpx's `release`.
-    func release() {
-        let (listening, unregistering): ((() -> Void)?, (@Sendable () -> Void)?) = lock.withLock {
-            guard !released else { return (nil, nil) }
-            released = true
-            deadline?.cancel()
-            monitor?.cancel()
-            defer {
-                removeAbortListener = nil
-                unregister = nil
-            }
-            return (removeAbortListener, unregister)
-        }
-        listening?()
-        unregistering?()
     }
 }
 

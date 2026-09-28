@@ -69,11 +69,12 @@ extension DaemonClient {
         defer { startup.stopCapture() }
         // Wait for the freshly-spawned daemon to come up and record its port, as acpx
         // waits for its queue owner: one that ended unsuccessfully meanwhile failed to
-        // start, and waiting on is pointless. One that lost the singleton race exits
-        // cleanly, so we still resolve to the one running manager.
+        // start, and waiting on is pointless — its end cuts the wait under way short, so
+        // the report need not wait for the poll to come round. One that lost the
+        // singleton race exits cleanly, so we still resolve to the one running manager.
         // Called off, it stops waiting (a flow's stop, #219 review).
         for _ in 0 ..< 60 {
-            try await Task.sleep(nanoseconds: 150_000_000)
+            try await startup.pause(for: .milliseconds(150))
             if let daemon = await tryConnect(holder: liveHolder(), configure: configure) {
                 return daemon
             }

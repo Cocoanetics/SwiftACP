@@ -79,12 +79,16 @@ final class FlowDeadlines: @unchecked Sendable {
 final class FlowAttempt: @unchecked Sendable {
     /// The source a test passes attempts' deadlines from, as well as by their time.
     @TaskLocal static var deadlines: FlowDeadlines?
+    /// For tests: an attempt's timer never fires, as on a busy machine whose cooperative
+    /// pool runs it only after the step is over; only ``checkDeadline()`` times it out.
+    @TaskLocal static var timerIsLate = false
     let nodeId: String
     let attemptId: String
     let startedAt: String
 
     private let timeoutMs: Double?
-    private let deadline: ContinuousClock.Instant?
+    /// When the attempt times out, if it has a deadline.
+    let deadline: ContinuousClock.Instant?
     private let lock = NSLock()
     private var accepting = true
     private var finished = false
@@ -109,7 +113,7 @@ final class FlowAttempt: @unchecked Sendable {
             self.timeoutMs = nil
             deadline = nil
         }
-        if let timeoutMs = self.timeoutMs, let delay {
+        if let timeoutMs = self.timeoutMs, let delay, !Self.timerIsLate {
             timer = Task { [weak self] in
                 try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { return }
@@ -290,7 +294,7 @@ final class FlowAttempt: @unchecked Sendable {
     }
 
     /// acpx's `checkDeadline`: past it, the attempt is timed out.
-    private func checkDeadline() {
+    func checkDeadline() {
         guard let deadline, let timeoutMs, ContinuousClock.now >= deadline else { return }
         cancel(FlowTimeoutError(timeoutMs: timeoutMs))
     }

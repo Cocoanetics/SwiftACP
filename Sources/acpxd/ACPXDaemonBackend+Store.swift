@@ -100,9 +100,10 @@ extension ACPXDaemonBackend {
                 // Terminate any live agent before removing its record.
                 forgetOwner(record.acpxRecordId)
                 await evict(record.acpxRecordId)
-                bytesFreed += SessionStore.deleteRecord(
-                    record.acpxRecordId, includeHistory: includeHistory)
             }
+            // The files go once no agent of theirs is left to write them, as acpx's prune removes
+            // them: the sessions directory read once.
+            bytesFreed = SessionStore.deleteRecords(candidates.map(\.acpxRecordId), includeHistory: includeHistory)
         }
         return PruneResult(
             count: candidates.count, bytesFreed: bytesFreed, dryRun: dryRun,

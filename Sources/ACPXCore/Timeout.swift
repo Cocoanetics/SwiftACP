@@ -149,13 +149,15 @@ private final class OnceStarted<T: Sendable>: @unchecked Sendable {
 }
 
 /// The first of an operation's result and its deadline, handed to whoever waits for it.
-private final class DeadlineRace<T: Sendable>: @unchecked Sendable {
+package final class DeadlineRace<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var settled: Result<T, Error>?
     private var waiter: CheckedContinuation<T, Error>?
 
+    package init() {}
+
     /// Settle the race with `result`, unless it is settled already.
-    func settle(_ result: Result<T, Error>) {
+    package func settle(_ result: Result<T, Error>) {
         let waiter: CheckedContinuation<T, Error>? = lock.withLock {
             guard settled == nil else { return nil }
             settled = result
@@ -165,7 +167,7 @@ private final class DeadlineRace<T: Sendable>: @unchecked Sendable {
         waiter?.resume(with: result)
     }
 
-    func outcome() async throws -> T {
+    package func outcome() async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             let result: Result<T, Error>? = lock.withLock {
                 if let settled { return settled }
