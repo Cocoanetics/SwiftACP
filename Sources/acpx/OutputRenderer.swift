@@ -43,7 +43,7 @@ final class OutputRenderer: @unchecked Sendable {
     private let useColor: Bool
 
     // Text-mode state
-    private var toolStates: [String: ToolRenderState] = [:]
+    var toolStates: [String: ToolRenderState] = [:]
     private var thoughtBuffer = ""
     private var wroteAny = false
     private var atLineStart = true
@@ -329,89 +329,11 @@ final class OutputRenderer: @unchecked Sendable {
             for entry in entries {
                 writeLine("  - [\(entry.status?.rawValue ?? "pending")] \(entry.content)")
             }
+        case .other(let kind, let payload) where kind == "tool_call" || kind == "tool_call_update":
+            renderRefusedTool(payload)
         case .availableCommandsUpdate, .currentModeUpdate, .usageUpdate, .other:
             break
         }
-    }
-
-    // MARK: Tool state machine (mirrors renderToolUpdate)
-
-    private func renderTool(
-        id: String, title: String?, status: ToolCallStatus?, kind: ToolKind?,
-        locations: [ToolCallLocation]?, rawInput: JSONValue?, rawOutput: JSONValue?,
-        content: [ToolCallContent]?, clearing nulled: Set<String> = []
-    ) {
-        let state = toolStates[id] ?? {
-            let created = ToolRenderState(id: id)
-            toolStates[id] = created
-            return created
-        }()
-
-        // acpx's `mergeToolTitle` / `mergeToolPayloadState`: a title that is not blank,
-        // and each other member that was sent — `null` clearing it.
-        if let title, !title.javaScriptTrimmed.isEmpty { state.title = title }
-        if status != nil || nulled.contains("status") { state.status = status }
-        if kind != nil || nulled.contains("kind") { state.kind = kind }
-        if locations != nil || nulled.contains("locations") { state.locations = locations }
-        if rawInput != nil || nulled.contains("rawInput") { state.rawInput = rawInput }
-        if rawOutput != nil || nulled.contains("rawOutput") { state.rawOutput = rawOutput }
-        if content != nil || nulled.contains("content") { state.content = content }
-
-        let isFinal = state.status == .completed || state.status == .failed
-        if isFinal {
-            let signature = toolSignature(state)
-            if signature != state.finalSignature {
-                state.finalSignature = signature
-                renderFinalToolState(state)
-            }
-            return
-        }
-
-        if state.startedPrinted { return }
-        state.startedPrinted = true
-        renderStartingToolState(state)
-    }
-
-    private func renderStartingToolState(_ state: ToolRenderState) {
-        beginSection()
-        let title = state.title ?? state.id
-        let label = state.status == .pending ? "pending" : "running"
-        writeLine("\(bold("[tool]")) \(title) (\(colorStatus(label, state.status)))")
-        if let input = ToolText.summarizeInput(state.rawInput) { writeLine("  input: \(input)") }
-        if let files = ToolText.formatLocations(state.locations) { writeLine("  files: \(files)") }
-    }
-
-    private func renderFinalToolState(_ state: ToolRenderState) {
-        beginSection()
-        let title = state.title ?? state.id
-        let label = state.status == .failed ? "failed" : "completed"
-        writeLine("\(bold("[tool]")) \(title) (\(colorStatus(label, state.status)))")
-        if let kind = state.kind { writeLine("  kind: \(kind.rawValue)") }
-        if let input = ToolText.summarizeInput(state.rawInput) { writeLine("  input: \(input)") }
-        if let files = ToolText.formatLocations(state.locations) { writeLine("  files: \(files)") }
-        if let output = renderedToolOutput(state) {
-            writeLine("  output:")
-            writeLine(indentBlock(limitOutputBlock(output), "    "))
-        }
-    }
-
-    private func renderedToolOutput(_ state: ToolRenderState) -> String? {
-        if options.suppressReads, ToolText.isReadLike(title: state.title, kind: state.kind) {
-            return SUPPRESSED_READ_OUTPUT
-        }
-        return ToolText.summarizeOutput(rawOutput: state.rawOutput, content: state.content)
-    }
-
-    private func toolSignature(_ state: ToolRenderState) -> String {
-        let parts: [String] = [
-            state.title ?? "",
-            state.status?.rawValue ?? "",
-            state.kind?.rawValue ?? "",
-            ToolText.summarizeInput(state.rawInput) ?? "",
-            ToolText.formatLocations(state.locations) ?? "",
-            renderedToolOutput(state) ?? ""
-        ]
-        return parts.joined(separator: "\u{1F}")
     }
 
     // MARK: Thought buffering
@@ -444,10 +366,10 @@ final class OutputRenderer: @unchecked Sendable {
         atLineStart = chunk.hasSuffix("\n")
     }
 
-    private func writeLine(_ line: String) { write(line + "\n") }
+    func writeLine(_ line: String) { write(line + "\n") }
 
     /// Separate a new non-assistant section with a blank line.
-    private func beginSection() {
+    func beginSection() {
         if !atLineStart { write("\n") }
         if wroteAny { write("\n") }
     }
@@ -457,9 +379,9 @@ final class OutputRenderer: @unchecked Sendable {
     private func ansi(_ text: String, _ code: String) -> String {
         useColor ? "\u{001B}[\(code)m\(text)\u{001B}[0m" : text
     }
-    private func bold(_ text: String) -> String { ansi(text, "1") }
+    func bold(_ text: String) -> String { ansi(text, "1") }
     private func dim(_ text: String) -> String { ansi(text, "2") }
-    private func colorStatus(_ text: String, _ status: ToolCallStatus?) -> String {
+    func colorStatus(_ text: String, _ status: ToolCallStatus?) -> String {
         switch status {
         case .some(.completed): return ansi(text, "32")
         case .some(.failed): return ansi(text, "31")
@@ -473,20 +395,6 @@ final class OutputRenderer: @unchecked Sendable {
         default: return ansi(status.rawValue, "33")
         }
     }
-}
-
-private final class ToolRenderState {
-    let id: String
-    var title: String?
-    var status: ToolCallStatus?
-    var kind: ToolKind?
-    var locations: [ToolCallLocation]?
-    var rawInput: JSONValue?
-    var rawOutput: JSONValue?
-    var content: [ToolCallContent]?
-    var startedPrinted = false
-    var finalSignature: String?
-    init(id: String) { self.id = id }
 }
 
 // MARK: - JSON line (for --json)

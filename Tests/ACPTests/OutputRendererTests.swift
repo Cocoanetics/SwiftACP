@@ -104,6 +104,35 @@ struct OutputRendererTests {
         #expect(resourceOnly == "\n")
     }
 
+    /// A tool update acpx's ACP SDK refuses — without the `toolCallId` or `title` its schema
+    /// requires — is shown all the same, as acpx's formatter shows the wire message as it came:
+    /// what acpx 0.19.3 printed for these updates (#175). Without a `toolCallId` the tool is
+    /// `undefined`, one state for every such update; a numeric id is not its text's tool.
+    @Test func toolUpdatesTheSDKRefusesAreShownAsAcpxShowsThem() throws {
+        let updates = try [
+            #"{"sessionUpdate":"tool_call","title":"Read","status":"pending"}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":"t1","status":"in_progress"}"#,
+            #"{"sessionUpdate":"tool_call_update","status":"completed","rawInput":{"path":"/x"}}"#,
+            #"{"sessionUpdate":"tool_call","toolCallId":5,"status":"pending"}"#,
+            #"{"sessionUpdate":"tool_call_update","toolCallId":"5","title":"Five","status":"in_progress"}"#
+        ].map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+        let (text, err) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+        #expect(text == """
+            [tool] Read (pending)
+
+            [tool] t1 (running)
+
+            [tool] Read (completed)
+              input: /x
+
+            [tool] 5 (pending)
+
+            [tool] Five (running)
+
+            """)
+        #expect(err.isEmpty)
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",

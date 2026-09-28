@@ -72,10 +72,15 @@ public enum SessionUpdate: Codable, Sendable {
             self = .agentThoughtChunk(try container.decode(ContentBlock.self, forKey: .content))
         case "user_message_chunk":
             self = .userMessageChunk(try container.decode(ContentBlock.self, forKey: .content))
+        // A tool update the ACP SDK refuses — one without a member its schema requires — still
+        // reaches acpx's formatter, which shows the wire message as it came: it comes as `.other`,
+        // which acpx records as nothing (#175).
         case "tool_call":
-            self = .toolCall(try ToolCall(from: decoder))
+            self = (try? ToolCall(from: decoder)).map(Self.toolCall)
+                ?? .other(kind: kind, payload: try JSONValue(from: decoder))
         case "tool_call_update":
-            self = .toolCallUpdate(try ToolCallUpdate(from: decoder))
+            self = (try? ToolCallUpdate(from: decoder)).map(Self.toolCallUpdate)
+                ?? .other(kind: kind, payload: try JSONValue(from: decoder))
         case "plan":
             // As the ACP SDK reads them (`zPlan`, `zAvailableCommandsUpdate`): refused
             // without the list, empty when it is no list, and without the entries that
