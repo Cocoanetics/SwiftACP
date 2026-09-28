@@ -32,6 +32,11 @@ public struct SessionAcpxState: Codable, Sendable {
     /// JavaScript objects, built by insertion (``ModelSupport``). A map not here keeps the
     /// order it was read with. Never written.
     var rebuiltOrders: [String: [String]] = [:]
+    /// The order `config_options` came in, which it is written in (``ConfigOptionSchema/inOrder(_:of:)``):
+    /// the SDK's, for options a `config_option_update` gave, and the order they were read with,
+    /// for options read back — which an option acpx changes in place keeps. `nil` for those
+    /// whose order is not known. Never written.
+    var configOptionsOrder: WireJSON?
     /// The places of acpx's members in its object, by their names in the record: those
     /// its parser gave a read block, in its order (``parseOrder()``), or those a new block
     /// was given — each since set in a place of its own, last, unless it had one, and
