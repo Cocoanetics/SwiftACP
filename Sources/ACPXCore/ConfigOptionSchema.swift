@@ -1,5 +1,6 @@
 import Foundation
 import JSONFoundation
+import SwiftACP
 
 /// A `config_option_update`'s options as acpx's ACP SDK reads them before acpx sees them
 /// (`zConfigOptionUpdate`, `zSessionConfigOption`). A reply's options are not read this way:
@@ -12,6 +13,78 @@ public enum ConfigOptionSchema {
         guard case .object(let members) = update, let reported = members["configOptions"] else { return nil }
         guard case .array(let options) = reported else { return .array([]) }
         return .array(options.compactMap(option))
+    }
+
+    /// `options`, as ``options(of:)`` gave them, in the order the SDK builds them: an option's
+    /// `currentValue`, `options` and `type` — its kind's members — then `id`, `name`,
+    /// `description`, `category` and `_meta`; a select option's `value`, `name`, `description`,
+    /// `_meta`; a group's `group`, `name`, `options`, `_meta` (zod's intersection of the kind and
+    /// the rest, each object built in its shape's order).
+    public static func ordered(_ options: JSONValue) -> WireJSON {
+        guard case .array(let items) = options else { return WireJSON(options) }
+        return .array(items.map { inOrder($0, optionOrder) })
+    }
+
+    /// `current`, the record's options, in the order of `template` — the order they came in —
+    /// matching each option by its `id`, a select option by its `value` and a group by its
+    /// `group`: an object's members in its match's order, those its match lacks after, sorted.
+    /// As acpx changes an option in place (a selection's `currentValue`), its members keep
+    /// their places.
+    public static func inOrder(_ current: JSONValue, of template: WireJSON) -> WireJSON {
+        guard case .array(let items) = current else { return WireJSON(current) }
+        return .array(items.map { item in
+            reordered(item, like: match(item, in: template, by: "id"), entries: "options")
+        })
+    }
+
+    private static let optionOrder = [
+        "currentValue", "options", "type", "id", "name", "description", "category", "_meta"
+    ]
+    private static let selectOptionOrder = ["value", "name", "description", "_meta"]
+    private static let groupOrder = ["group", "name", "options", "_meta"]
+
+    /// `value`'s members in `order`, then any others sorted; an option's `options` entries each
+    /// in their own shape's order.
+    private static func inOrder(_ value: JSONValue, _ order: [String]) -> WireJSON {
+        guard case .object(let members) = value else { return WireJSON(value) }
+        let keys = order.filter { members[$0] != nil } + members.keys.filter { !order.contains($0) }.sorted()
+        return .object(keys.map { key in
+            let member = members[key] ?? .null
+            guard key == "options", case .array(let entries) = member else {
+                return WireJSON.Member(key, WireJSON(member))
+            }
+            return WireJSON.Member(key, .array(entries.map { entry in
+                guard case .object(let fields) = entry else { return WireJSON(entry) }
+                return fields["group"] != nil ? inOrder(entry, groupOrder) : inOrder(entry, selectOptionOrder)
+            }))
+        })
+    }
+
+    /// `value` in `template`'s members' order, its `entries` — an option's or a group's
+    /// `options` — each matched by their `value` or `group`.
+    private static func reordered(_ value: JSONValue, like template: WireJSON?, entries: String) -> WireJSON {
+        guard case .object(let members) = value else { return WireJSON(value) }
+        var order: [String] = []
+        if case .object(let fields)? = template { order = fields.map { String(decoding: $0.key, as: UTF16.self) } }
+        let keys = order.filter { members[$0] != nil } + members.keys.filter { !order.contains($0) }.sorted()
+        return .object(keys.map { key in
+            let member = members[key] ?? .null
+            guard key == entries, case .array(let items) = member else { return WireJSON.Member(key, WireJSON(member)) }
+            let matches = template?[entries]
+            return WireJSON.Member(key, .array(items.map { item in
+                guard case .object(let fields) = item else { return WireJSON(item) }
+                let key = fields["group"] != nil ? "group" : "value"
+                return reordered(item, like: match(item, in: matches, by: key), entries: "options")
+            }))
+        })
+    }
+
+    /// The object in `list` whose `key` is `item`'s.
+    private static func match(_ item: JSONValue, in list: WireJSON?, by key: String) -> WireJSON? {
+        guard case .object(let fields) = item, case .string(let wanted)? = fields[key],
+              case .array(let candidates)? = list
+        else { return nil }
+        return candidates.first { $0[key]?.stringValue == wanted }
     }
 
     /// Whether the SDK refuses `update` outright, for giving no `configOptions`.

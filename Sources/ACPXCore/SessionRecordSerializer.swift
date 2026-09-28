@@ -38,10 +38,14 @@ enum SessionRecordSerializer {
         }
         if let acpx = record.acpx {
             // The block's members in the places acpx's object gives them (``SessionAcpxState/slots``),
-            // SwiftACP's own after; `session_options` as acpx always builds it.
+            // SwiftACP's own after; `session_options` as acpx always builds it; `config_options` in
+            // the order they came in, when that is known.
             document = document.mapping("acpx") { block in
                 MessageOrder.ordered(block, by: acpx.slots).mapping("session_options") {
                     MessageOrder.ordered($0, by: ["model", "allowed_tools", "max_turns", "system_prompt", "env"])
+                }.mapping("config_options") { held in
+                    guard let order = acpx.configOptionsOrder, let options = acpx.configOptions else { return held }
+                    return ConfigOptionSchema.inOrder(options, of: order)
                 }
             }
         }

@@ -189,6 +189,8 @@ public enum ConversationModel {
             guard let options = ConfigOptionSchema.options(of: payload) else { return }
             var acpx = record.acpx ?? SessionAcpxState()
             ModelSupport.applyConfigOptionsModelState(options, to: &acpx)
+            // In the order the SDK built them (#175).
+            acpx.configOptionsOrder = ConfigOptionSchema.ordered(options)
             record.acpx = acpx
         default:
             break
