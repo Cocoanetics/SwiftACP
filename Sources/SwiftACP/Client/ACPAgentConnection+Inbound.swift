@@ -7,14 +7,14 @@ import JSONFoundation
 // Split from `ACPAgentConnection.swift` to keep that file inside the 500-line limit;
 // the members this reaches are internal rather than private so both halves can.
 extension ACPAgentConnection {
-    /// Route one inbound request, reporting its refusal, if the client refuses it, on the
+    /// Route the inbound request `id`, reporting its refusal, if the client refuses it, on the
     /// event stream. Its arrival was reported as it was read (``WireOrderedEvents``).
     func serveIncomingRequest(
-        method: String, params: JSONValue?
+        id: JSONRPCID, method: String, params: JSONValue?
     ) async -> Result<JSONValue, JSONRPCErrorBody> {
         await beforeServingRequest?()
         let sessionId = decodedSessionId(params)
-        let result = await servingUnlessCancelled(method, params, sessionId: sessionId)
+        let result = await servingUnlessCancelled(id, method, params, sessionId: sessionId)
         if case .failure(let error) = result {
             publish(.inboundRequest(InboundRequest(
                 method: method, sessionId: sessionId, failure: InboundRequest.summary(of: error))))

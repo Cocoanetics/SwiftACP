@@ -14,20 +14,14 @@ import JSONRPCPeer
 /// cancelled without being served (``isAnswered(_:)``).
 ///
 /// Fed from the peer's wire hook, which runs inline as each message is read or written;
-/// asked from where a request is served. A request is claimed there by its method and
-/// params, which is all its handler is given: two alike can only swap owners, and alike
-/// they are served alike.
+/// asked from where a request is served. A request is claimed there by its JSON-RPC id,
+/// which its handler is given as the ACP SDK hands each handler its own request (#138):
+/// two alike, read for different prompts, keep their own however their handlers start.
 final class RequestOwnership: @unchecked Sendable {
     /// The agent's requests acpx binds to its prompt in flight.
     static let ownedMethods: Set<String> = [
         "session/request_permission", "fs/read_text_file", "fs/write_text_file", "terminal/create"
     ]
-
-    private struct Unclaimed {
-        let method: String
-        let params: JSONValue?
-        let owner: JSONRPCID?
-    }
 
     private let lock = NSLock()
     /// Each session's prompt in flight on the wire, by its request id.
@@ -35,8 +29,9 @@ final class RequestOwnership: @unchecked Sendable {
     /// The sessions of the prompts in flight. The peer never reuses a request id, so a
     /// prompt no longer here was answered.
     private var sessions: [JSONRPCID: SessionId] = [:]
-    /// Owned requests read and not yet served, in the order they were read.
-    private var unclaimed: [Unclaimed] = []
+    /// Each owned request read and not yet served, by its id: the prompt that owns it, if
+    /// one was in flight when it was read.
+    private var unclaimed: [JSONRPCID: JSONRPCID?] = [:]
     /// What serves each prompt's owned requests, by request, stopped once its answer is
     /// read.
     private var serving: [JSONRPCID: [UUID: Task<Void, Never>]] = [:]
@@ -57,8 +52,7 @@ final class RequestOwnership: @unchecked Sendable {
         case (.inbound, .request(let request)) where Self.ownedMethods.contains(request.method):
             let sessionId = InboundRequestLedger.sessionId(of: request.params)
             lock.withLock {
-                let owner = sessionId.flatMap { inFlight[$0] }
-                unclaimed.append(Unclaimed(method: request.method, params: request.params, owner: owner))
+                unclaimed[request.id] = .some(sessionId.flatMap { inFlight[$0] })
             }
         default:
             break
@@ -96,14 +90,10 @@ final class RequestOwnership: @unchecked Sendable {
         }
     }
 
-    /// The prompt the request about to be served belongs to — the first one read with
-    /// this method and params — or `nil` if none was in flight when it was read.
-    func claim(_ method: String, _ params: JSONValue?) -> JSONRPCID? {
-        lock.withLock {
-            guard let index = unclaimed.firstIndex(where: { $0.method == method && $0.params == params })
-            else { return nil }
-            return unclaimed.remove(at: index).owner
-        }
+    /// The prompt the request `id` about to be served belongs to, or `nil` if none was in
+    /// flight when it was read.
+    func claim(_ id: JSONRPCID) -> JSONRPCID? {
+        lock.withLock { unclaimed.removeValue(forKey: id) ?? nil }
     }
 
     /// Whether `prompt`, which was in flight when a request it owns was read, has been
