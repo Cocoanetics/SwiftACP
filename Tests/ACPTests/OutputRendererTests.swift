@@ -234,6 +234,27 @@ struct OutputRendererTests {
         #expect(text.contains("two"))
     }
 
+    /// A tool call's member sent as `null` clears what an earlier update of the tool set, as acpx's
+    /// formatter merges it — the status, and a kind or input — where one left out leaves it: what
+    /// acpx 0.19.3 printed for these updates (#270 review).
+    @Test func aToolCallsNullMembersClearWhatCameBefore() throws {
+        let cases: [(updates: [String], printed: String)] = [
+            ([#"{"sessionUpdate":"tool_call","toolCallId":"x","status":"completed"}"#,
+              #"{"sessionUpdate":"tool_call","toolCallId":"x","title":"Again","status":null}"#],
+             "[tool] x (completed)\n\n[tool] Again (running)\n"),
+            ([#"{"sessionUpdate":"tool_call","toolCallId":"y","title":"Y","kind":"read","status":"in_progress","#
+              + #""rawInput":{"path":"/p"}}"#,
+              #"{"sessionUpdate":"tool_call","toolCallId":"y","title":"Y","kind":null,"rawInput":null,"#
+              + #""status":"completed"}"#],
+             "[tool] Y (running)\n  input: /p\n\n[tool] Y (completed)\n")
+        ]
+        for (json, printed) in cases {
+            let updates = try json.map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+            let (text, _) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+            #expect(text == printed, "\(json)")
+        }
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",

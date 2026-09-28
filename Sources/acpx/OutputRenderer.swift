@@ -317,7 +317,7 @@ final class OutputRenderer: @unchecked Sendable {
             renderTool(
                 id: call.toolCallId, title: call.title, status: call.status, kind: call.kind,
                 locations: call.locations, rawInput: call.rawInput, rawOutput: call.rawOutput,
-                content: call.content)
+                content: call.content, clearing: call.nullMembers)
         case .toolCallUpdate(let update):
             renderTool(
                 id: update.toolCallId, title: update.title, status: update.status, kind: update.kind,

@@ -80,6 +80,21 @@ struct SessionUpdateDecodingTests {
         }
     }
 
+    /// A tool call's members sent as `null` are known as such, and go on as `null` — through
+    /// acpxd's relay to the CLI too — as a tool update's do (#270 review).
+    @Test func aToolCallKeepsItsNullMembers() throws {
+        let json = #"{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Run","kind":null,"status":null,"#
+            + #""rawInput":null,"rawOutput":{"a":1}}"#
+        guard case .toolCall(let call) = try decode(json) else { throw POSIXError(.EINVAL) }
+        #expect(call.nullMembers == ["kind", "status", "rawInput"])
+        let relayed = try JSONEncoder().encode(SessionUpdate.toolCall(call))
+        guard case .toolCall(let again) = try JSONDecoder().decode(SessionUpdate.self, from: relayed) else {
+            throw POSIXError(.EINVAL)
+        }
+        #expect(again.nullMembers == ["kind", "status", "rawInput"])
+        #expect(again.rawOutput == .object(["a": .integer(1)]))
+    }
+
     /// An update's member that doesn't fit is left out, as if it were not sent: not taken
     /// as `null`, which clears what an earlier update set.
     @Test func aToolCallUpdatesMembersThatDontFitAreLeftOut() throws {
