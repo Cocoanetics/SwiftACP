@@ -161,28 +161,24 @@ import Testing
         }
     }
 
-    /// An acpxd from before `releaseSession` (#162) lets a session's agent go only by closing
-    /// the session. With one running, the replaced session is closed before the new one is
-    /// created, so that close cannot reach a new session under the same id (Codex review
-    /// on #184).
+    /// A daemon of another version — here one from before `releaseSession` — is not worked
+    /// through (#162): nothing is done, neither the new session made nor the one it would
+    /// replace closed, and the user is told how to restart the daemon.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aDaemonFromBeforeReleaseSessionHasTheReplacedSessionClosedFirst() async throws {
+    func aDaemonOfAnotherVersionHasNothingDone() async throws {
         let directory = try DaemonToolsTests.scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try await withIsolatedStore {
-            Self.touch("same-id", in: directory)
             let agent = try Self.agent(in: directory)
             let first = await Self.sessionsNew(agent, in: directory)
-            let replaced = try #require(SessionStore.loadRecord(first.id))
             let daemon = DaemonBeforeRelease()
 
             let second = await Self.sessionsNew(agent, in: directory, daemon: .stdioHandles(server: daemon))
-            #expect(second.code == 0 && second.id == first.id)
-            // What it closed was the replaced session, before the new one was written in its place.
-            #expect(await daemon.closed.map(\.createdAt) == [replaced.createdAt])
-            let kept = try #require(SessionStore.loadRecord(second.id))
-            #expect(kept.closed != true)
-            #expect(kept.createdAt != replaced.createdAt)
+            #expect(second.code != 0)
+            #expect(second.err.contains("DAEMON_VERSION_MISMATCH acpxd is version 1.0"), "\(second.err)")
+            #expect(await daemon.closed.isEmpty)
+            #expect(try #require(SessionStore.loadRecord(first.id)).closed != true)
+            #expect(SessionStore.listSessions().count == 1)
         }
     }
 
@@ -206,22 +202,6 @@ import Testing
             #expect(try #require(SessionStore.loadRecord(first.id)).closed != true)
         }
     }
-
-    /// The running daemon is told apart by its tools: today's has `releaseSession`, one
-    /// from before it has not, and one that cannot list them is taken for the older.
-    @Test func aDaemonFromBeforeReleaseSessionIsToldApart() async throws {
-        let current = MCPServerProxy(
-            config: .stdioHandles(server: ACPXDaemon(backend: ACPXDaemonBackend(inheritAgentStderr: false))))
-        try await current.connect()
-        let older = MCPServerProxy(config: .stdioHandles(server: DaemonBeforeRelease()))
-        try await older.connect()
-
-        #expect(await DaemonClient.lacksRelease(on: current) == false)
-        #expect(await DaemonClient.lacksRelease(on: older))
-        await current.disconnect()
-        await older.disconnect()
-        #expect(await DaemonClient.lacksRelease(on: current))
-    }
 }
 
 /// An acpxd from before `releaseSession` (#162), as `sessions new` meets one: it closes a
@@ -244,10 +224,13 @@ actor DaemonBeforeRelease {
     }
 }
 
-/// An acpxd whose `releaseSession` fails, noting any session it is asked to close.
+/// An acpxd whose `releaseSession` fails, noting any session it is asked to close. It reports
+/// this CLI's version, which it is worked through as.
 @MCPServer(name: "acpx")
 actor DaemonFailingRelease {
     private(set) var closed: [String] = []
+
+    nonisolated var serverVersion: String { ACPXDaemon.version }
 
     struct Failure: LocalizedError {
         var errorDescription: String? { "the agent would not go" }

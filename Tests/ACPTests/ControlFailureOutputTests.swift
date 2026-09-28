@@ -83,27 +83,6 @@ struct ControlFailureOutputTests {
             + #","sessionId":"unknown"}}}"# + "\n")
     }
 
-    /// A daemon from before failures said more than their message reports a control past its
-    /// `--timeout` by the message alone: still the ``TimeoutError`` it was (Codex review on #288).
-    /// A failure the daemon said more of stays as it said — an owner's detail code and origin too.
-    @Test func aTimeoutSaidByItsMessageAloneIsStillATimeout() async {
-        await #expect(throws: TimeoutError(milliseconds: 300)) {
-            try await DaemonClient.timingOut(after: 300) {
-                throw DaemonClient.controlFailure(MCPServerProxyError.toolError("Timed out after 300ms"))
-            }
-        }
-        await #expect(throws: DaemonClient.DaemonControlFailure.self) {
-            try await DaemonClient.timingOut(after: 300) {
-                throw DaemonClient.controlFailure(MCPServerProxyError.toolError("Timed out after 500ms"))
-            }
-        }
-        let owners = ToolFailure(outputCode: "TIMEOUT", detailCode: "QUEUE_CONTROL_REQUEST_FAILED", origin: "queue")
-        let said = await #expect(throws: DaemonClient.DaemonControlFailure.self) {
-            try await DaemonClient.timingOut(after: 300) { throw Self.fromDaemon("Timed out after 300ms", owners) }
-        }
-        #expect(said?.failure == owners)
-    }
-
     /// A failure the daemon said nothing more of is a runtime failure by its message, as before.
     @Test func aFailureWithoutMetaIsARuntimeFailure() {
         let message = "acpxd is stopping and starts no more agents"

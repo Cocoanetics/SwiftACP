@@ -55,7 +55,7 @@ extension DaemonClient {
         configure: @Sendable (MCPServerProxy) async -> Void = { _ in }
     ) async throws -> ConnectedDaemon {
         if let daemon = await tryConnectLive(configure: configure) {
-            return daemon
+            return try await matching(daemon)
         }
         guard spawnIfNeeded, standIn == nil else { throw DaemonUnavailable("no daemon is running") }
         let startup: DaemonStartup
@@ -76,7 +76,7 @@ extension DaemonClient {
         for _ in 0 ..< 60 {
             try await startup.pause(for: .milliseconds(150))
             if let daemon = await tryConnect(holder: liveHolder(), configure: configure) {
-                return daemon
+                return try await matching(daemon)
             }
             if startup.failed { throw DaemonUnavailable(startupFailure: startup.failureMessage) }
         }
@@ -85,6 +85,28 @@ extension DaemonClient {
             throw DaemonUnavailable(startupFailure: startup.failureMessage)
         }
         throw DaemonUnavailable("it did not become reachable within ~9s of being started")
+    }
+
+    /// `daemon`, when it reports this CLI's version (``ACPXDaemon/version``); otherwise it is let
+    /// go, and ``DaemonVersionMismatch`` thrown — no other daemon is started while it holds the
+    /// lock (#162).
+    static func matching(_ daemon: ConnectedDaemon) async throws -> ConnectedDaemon {
+        let version = await daemon.proxy.serverVersion
+        guard version != ACPXDaemon.version else { return daemon }
+        await daemon.proxy.disconnect()
+        throw DaemonVersionMismatch(
+            daemonVersion: version, pid: daemon.pid == ProcessInfo.processInfo.processIdentifier ? nil : daemon.pid)
+    }
+
+    /// A running daemon, if there is one, is this CLI's own (``matching(_:)``) — or the command
+    /// goes no further: nothing is done before it could not go on.
+    static func requireMatchingDaemon() async throws {
+        do {
+            let proxy = try await connect(spawnIfNeeded: false)
+            await proxy.disconnect()
+        } catch is DaemonUnavailable {
+            return
+        }
     }
 
     /// Try to connect to the running daemon: the stand-in, else the one the lock names.

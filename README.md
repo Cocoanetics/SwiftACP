@@ -128,6 +128,10 @@ held no session and served no call for ten seconds. It holds each session until 
 `--ttl` runs out, as acpx's queue owner exits after its TTL. A daemon started any other way —
 by hand, by launchd, or hosted in an app — runs until it is stopped.
 
+The CLI works only through an `acpxd` of its own version, which the daemon reports in MCP's
+`serverInfo`: SwiftACP's version and a fingerprint of the daemon's tools. With another running —
+one left over from an earlier build, say — the CLI runs nothing and says how to restart it.
+
 The CLI and daemon are built on the library plus SwiftMCP's server side: `acpxd` is
 an `@MCPServer` whose tools the CLI calls over MCP — the same generated
 `ACPXDaemon.Client` an iOS app uses to drive a remote daemon. The extra

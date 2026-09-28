@@ -33,6 +33,30 @@ extension DaemonClient {
         }
     }
 
+    /// The running acpxd reports another version than this CLI's (#162). The CLI works only
+    /// through its own: a daemon of another build would drop, without a word, the arguments it
+    /// does not know. The request is not run, and the user is told how to restart the daemon —
+    /// restarting it here would let its live sessions' agents go under whoever runs them.
+    struct DaemonVersionMismatch: LocalizedError, OutputErrorMeta {
+        /// What the daemon reported, if anything.
+        let daemonVersion: String?
+        /// The daemon's pid, from its lock, when known.
+        let pid: Int32?
+
+        var errorDescription: String? {
+            let daemon = pid.map { "acpxd (pid \($0))" } ?? "acpxd"
+            let stop = pid.map { "`kill \($0)`" } ?? "stopping it"
+            return "\(daemon) is version \(daemonVersion ?? "unknown"), but this acpx is version "
+                + "\(ACPXDaemon.version); the request was not run. Restart the daemon: stop it (\(stop), or quit "
+                + "the app that runs it), and the next command starts this acpx's own. Its sessions are kept."
+        }
+
+        var outputCode: String? { "RUNTIME" }
+        var detailCode: String? { "DAEMON_VERSION_MISMATCH" }
+        var origin: String? { "cli" }
+        var retryable: Bool? { false }
+    }
+
     /// acpxd went away with a request it had: acpx's `QueueConnectionError` for a queue
     /// owner that disconnects once it has acknowledged one, whose outcome is unknown.
     struct OwnerDisconnected: LocalizedError, OutputErrorMeta {

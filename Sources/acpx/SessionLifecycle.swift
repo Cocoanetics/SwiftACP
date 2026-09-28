@@ -20,22 +20,15 @@ enum SessionLifecycle {
         // record is (``createSession(agent:name:flags:config:permissions:resumeSessionId:)``):
         // there is nothing more to close (acpx's `resumesSameRecord`).
         let resumesSameRecord = replaced != nil && replaced?.acpxRecordId == resumeSessionId
-        // A running acpxd from before `releaseSession` (#162) lets a session's agent go only
-        // by closing the session, and a `session/close` sent once the new session exists
-        // would reach that one too, should the agent reuse the id. With one running, the
-        // replaced session is closed first, in the order that daemon was built for.
-        let closeFirst = try replaced != nil && !resumesSameRecord
-            && runBlocking { await DaemonClient.lacksRelease() }
-        if closeFirst, let replaced {
-            _ = try close(replaced)
-            noteSoftClosed(replaced, flags)
-        }
-        // Otherwise the new session first, then the one it replaces closed, as acpx 0.19.3
-        // has it (#778, for our openclaw/acpx#767): a creation that fails leaves that one open.
+        // The daemon that lets the replaced session's agent go is this acpx's own, or nothing is
+        // done (#162).
+        if replaced != nil, !resumesSameRecord { try runBlocking { try await DaemonClient.requireMatchingDaemon() } }
+        // The new session first, then the one it replaces closed, as acpx 0.19.3 has it (#778,
+        // for our openclaw/acpx#767): a creation that fails leaves that one open.
         let record = try createSession(
             agent: agent, name: name, flags: flags, config: context.config, permissions: permissions,
             resumeSessionId: resumeSessionId)
-        if let replaced, !closeFirst {
+        if let replaced {
             if !resumesSameRecord { try retire(replaced, replacedBy: record) }
             noteSoftClosed(replaced, flags)
         }
@@ -209,7 +202,7 @@ enum SessionLifecycle {
     static func close(_ record: SessionRecord) throws -> SessionRecord {
         let recordId = record.acpxRecordId
         let closedByDaemon = try runBlocking {
-            await DaemonClient.closeSession(sessionId: recordId)
+            try await DaemonClient.closeSession(sessionId: recordId)
         }
         StrayAgent.end(namedBy: record)
         if closedByDaemon, let persisted = SessionStore.loadRecord(recordId) {
