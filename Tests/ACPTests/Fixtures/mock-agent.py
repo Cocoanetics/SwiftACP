@@ -70,6 +70,12 @@ HOLD_UNTIL_CANCEL = bool(os.environ.get("MOCK_HOLD_UNTIL_CANCEL"))
 # the client open past its answer, until a test creates the path. (Files, not FIFOs: a
 # test creates one without blocking, so no step of it waits where cancelling cannot reach.)
 HOLD_TERMINAL = os.environ.get("MOCK_HOLD_TERMINAL")
+# The terminal's command. It ends once the path exists — or once its directory is gone, or
+# after two minutes: a test that creates the path and at once removes its directory can do
+# both between two looks, and a test that crashes never creates it. The command outlives
+# the test's process, so it would otherwise loop for good, starting 50 `sleep`s a second.
+HOLD_TERMINAL_LOOP = ('i=0; while [ ! -e "$1" ] && [ -d "${1%/*}" ] && [ "$i" -lt 6000 ]; '
+                      'do sleep 0.02; i=$((i + 1)); done')
 
 # A path, with MOCK_HOLD_TERMINAL. Once the prompt is answered, the agent waits for it to
 # exist, then asks a permission question; answered, it creates MOCK_HOLD_TERMINAL itself.
@@ -158,6 +164,15 @@ def handle_prompt(req_id, params):
             params["content"] = words[2] if len(words) > 2 else ""
         method = "fs/read_text_file" if words[0] == "fs-read" else "fs/write_text_file"
         send({"jsonrpc": "2.0", "id": "mock-fs", "method": method, "params": params})
+        return
+
+    # "terminal-env NAME": the client runs `printf %s "$NAME"` in a terminal the request gives
+    # no `env`, and once it has exited the reply is NAME=<what it printed>: the environment the
+    # client runs the agent's commands in.
+    if words[0] == "terminal-env" and len(words) > 1:
+        pending_fs["terminal"] = {"prompt": req_id, "session": session_id, "name": words[1]}
+        send({"jsonrpc": "2.0", "id": "mock-term-env-create", "method": "terminal/create", "params": {
+            "sessionId": session_id, "command": "/bin/sh", "args": ["-c", 'printf %s "$' + words[1] + '"']}})
         return
 
     # "fail turn": a partial reply, then the agent's error response, with details.
@@ -321,6 +336,26 @@ def main():
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
             respond(prompt_id, {"stopReason": "end_turn"})
             continue
+        if method is None and req_id in ("mock-term-env-create", "mock-term-env-wait", "mock-term-env-output") \
+                and "terminal" in pending_fs:
+            step = pending_fs["terminal"]
+            if req_id == "mock-term-env-create":
+                step["terminal"] = (message.get("result") or {}).get("terminalId")
+                next_step = ("mock-term-env-wait", "terminal/wait_for_exit")
+            elif req_id == "mock-term-env-wait":
+                next_step = ("mock-term-env-output", "terminal/output")
+            else:
+                output = (message.get("result") or {}).get("output", "")
+                pending_fs.pop("terminal")
+                session_update(step["session"], {"sessionUpdate": "agent_message_chunk", "content": {
+                    "type": "text", "text": "%s=%s" % (step["name"], output)}})
+                send({"jsonrpc": "2.0", "id": "mock-term-env-release", "method": "terminal/release", "params": {
+                    "sessionId": step["session"], "terminalId": step["terminal"]}})
+                respond(step["prompt"], {"stopReason": "end_turn"})
+                continue
+            send({"jsonrpc": "2.0", "id": next_step[0], "method": next_step[1], "params": {
+                "sessionId": step["session"], "terminalId": step["terminal"]}})
+            continue
         if method is None and str(req_id).startswith("mock-"):
             continue
 
@@ -426,7 +461,7 @@ def main():
                     time.sleep(0.1)
                 send({"jsonrpc": "2.0", "id": "mock-terminal-create", "method": "terminal/create", "params": {
                     "sessionId": terminal_session, "command": "/bin/sh",
-                    "args": ["-c", 'while [ ! -e "$1" ]; do sleep 0.02; done', "hold", HOLD_TERMINAL]}})
+                    "args": ["-c", HOLD_TERMINAL_LOOP, "hold", HOLD_TERMINAL]}})
                 continue
             handle_prompt(req_id, message.get("params", {}))
             if EXIT_AFTER_PROMPTS and prompts_answered >= EXIT_AFTER_PROMPTS:

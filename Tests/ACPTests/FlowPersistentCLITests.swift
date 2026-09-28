@@ -78,11 +78,16 @@ extension DaemonToolsTests {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
             #expect(await daemon.sessionStatus(sessionId: id).live)
-            // The turn is cancelled from within, as it takes the slot.
-            await daemon.turnQueue.setBeforeAcquire { _ in withUnsafeCurrentTask { $0?.cancel() } }
+            // The turn's caller goes as the turn takes the slot.
+            let (handle, made) = (TaskHandle(), HoldGate())
+            await daemon.turnQueue.setBeforeAcquire { _ in handle.cancel() }
             let turn = Task {
-                try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
+                await made.wait()
+                return try await daemon.runPrompt(
+                    sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
             }
+            handle.set(turn)
+            made.open()
             await #expect(throws: CancellationError.self) { _ = try await turn.value }
             #expect(await !daemon.sessionStatus(sessionId: id).live)
             await daemon.releaseAll()
@@ -369,5 +374,19 @@ extension DaemonToolsTests {
                 continuation.resume()
             }.start()
         }
+    }
+}
+
+/// A task a hook can reach once it is made.
+private final class TaskHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<String, Error>?
+
+    func set(_ task: Task<String, Error>) {
+        lock.withLock { self.task = task }
+    }
+
+    func cancel() {
+        lock.withLock { task }?.cancel()
     }
 }

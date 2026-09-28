@@ -20,7 +20,12 @@ enum ControlCommand {
         // cancel the daemon could not send fails, as acpx's owner reports one.
         var cancelled = false
         if let record {
-            cancelled = try runBlocking { try await DaemonClient.cancelSession(sessionId: record.acpSessionId) }
+            let result = try runBlocking { try await DaemonClient.cancelSession(sessionId: record.acpSessionId) }
+            cancelled = result.cancelled
+            // Under `--verbose`, acpx's line once the session's running owner took the cancel.
+            if flags.verbose, let pid = result.ownerPid {
+                DaemonClient.noteOwner("requested cancel on active owner pid", pid: pid, recordId: record.acpxRecordId)
+            }
         }
         printCancel(sessionId: record?.acpxRecordId ?? "", cancelled: cancelled, format: flags.format)
         return ExitCodes.success
@@ -61,10 +66,14 @@ enum ControlCommand {
             do {
                 return try await DaemonClient.setMode(
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: flags.nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs)
+                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
+                        verbose: flags.verbose)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
+        }
+        if flags.verbose, let pid = result.ownerPid {
+            DaemonClient.noteOwner("requested session/set_mode on owner pid", pid: pid, recordId: record.acpxRecordId)
         }
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
@@ -121,18 +130,25 @@ enum ControlCommand {
                     return try await DaemonClient.setModel(
                         sessionId: sessionId, modelId: value,
                         nonInteractivePermissions: flags.nonInteractivePermissions,
-                        terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs)
+                        terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
+                        verbose: flags.verbose)
                 case .configOption(let configId):
                     return try await DaemonClient.setConfigOption(
                         sessionId: sessionId, configId: configId, value: value,
                         nonInteractivePermissions: flags.nonInteractivePermissions,
-                        terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs)
+                        terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
+                        verbose: flags.verbose)
                 }
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
         }
 
+        if flags.verbose, let pid = result.ownerPid {
+            let said = operation == .model
+                ? "requested a model config update on owner pid" : "requested session/set_config_option on owner pid"
+            DaemonClient.noteOwner(said, pid: pid, recordId: record.acpxRecordId)
+        }
         // The daemon persisted the change; reload the record for output.
         let updated = SessionStore.loadRecord(record.acpxRecordId) ?? record
         switch operation {

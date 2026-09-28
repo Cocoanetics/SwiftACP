@@ -31,6 +31,9 @@ public actor TerminalManager: ACPTerminalHandler {
     public static let defaultKillGrace: TimeInterval = 1.5
 
     private let cwd: String
+    /// The environment a command starts over: the client's own — acpx's client spawns its
+    /// commands in its process — or `nil`, this process's (#222).
+    private let environment: [String: String]?
     private(set) var outputCeiling: Int?
     /// How long `SIGTERM` has before `SIGKILL`.
     public let killGrace: TimeInterval
@@ -47,15 +50,21 @@ public actor TerminalManager: ACPTerminalHandler {
     ///     the request asks for — see ``TerminalOutputLimit/ceiling(environment:)``.
     ///     `nil` is none.
     ///   - killGrace: how long a killed command has to exit before `SIGKILL`.
+    ///   - environment: the environment a command starts over, the request's variables laid
+    ///     over it: its client's, when that is not this process — `nil`, this process's.
     public init(
         cwd: String = FileManager.default.currentDirectoryPath, outputCeiling: Int? = nil,
-        killGrace: TimeInterval = TerminalManager.defaultKillGrace
+        killGrace: TimeInterval = TerminalManager.defaultKillGrace, environment: [String: String]? = nil
     ) {
-        self.init(cwd: cwd, outputCeiling: outputCeiling, killGrace: killGrace, signalGap: 0)
+        self.init(cwd: cwd, outputCeiling: outputCeiling, killGrace: killGrace, signalGap: 0, environment: environment)
     }
 
-    init(cwd: String, outputCeiling: Int? = nil, killGrace: TimeInterval, signalGap: TimeInterval) {
+    init(
+        cwd: String, outputCeiling: Int? = nil, killGrace: TimeInterval, signalGap: TimeInterval,
+        environment: [String: String]? = nil
+    ) {
         self.cwd = cwd
+        self.environment = environment
         self.outputCeiling = outputCeiling
         self.killGrace = max(0, killGrace)
         self.signalGap = signalGap
@@ -79,7 +88,7 @@ public actor TerminalManager: ACPTerminalHandler {
         guard !shutDown else { throw CancellationError() }
         let output = TerminalOutput(
             limit: TerminalOutputLimit.resolve(requested: request.outputByteLimit, ceiling: outputCeiling))
-        let process = try Self.start(request, cwd: request.cwd ?? cwd)
+        let process = try Self.start(request, cwd: request.cwd ?? cwd, over: environment)
         let terminal = ManagedTerminal(process: process, output: output)
         let terminalId = UUID().uuidString.lowercased()
         terminals[terminalId] = terminal
@@ -138,11 +147,13 @@ public actor TerminalManager: ACPTerminalHandler {
     /// acpx's `spawnChildProcess`: the command as given, then — with no `args`, not
     /// found, not an existing path, and shell syntax or whitespace in it — the same
     /// line through `/bin/sh -c`. A failure is Node's `spawn <command> <code>`.
-    private static func start(_ request: CreateTerminalRequest, cwd: String) throws -> ChildProcess {
+    private static func start(
+        _ request: CreateTerminalRequest, cwd: String, over base: [String: String]?
+    ) throws -> ChildProcess {
         // What Node's `spawn` refuses before starting anything — after the approval, as
         // in acpx, so a command that was asked about is refused rather than cut short.
         try NodeSpawnArguments.validate(command: request.command, args: request.args ?? [], cwd: cwd, env: request.env)
-        let environment = Self.environment(request.env)
+        let environment = Self.environment(request.env, over: base)
         do {
             return try ChildProcess.spawn(
                 command: request.command, arguments: request.args ?? [], cwd: cwd, environment: environment)
@@ -173,11 +184,12 @@ public actor TerminalManager: ACPTerminalHandler {
     /// acpx's `hasShellSyntax`: `[|&;<>()$\`*?[\]{}'"\\\r\n]`.
     private static let shellSyntax = Set("|&;<>()$`*?[]{}'\"\\\r\n".unicodeScalars)
 
-    /// acpx's `toEnvObject`: the request's variables over this process's environment,
-    /// or `nil` — inherit it — when the request names none.
-    private static func environment(_ variables: [EnvVariable]?) -> [String: String]? {
-        guard let variables, !variables.isEmpty else { return nil }
-        var merged = ProcessInfo.processInfo.environment
+    /// acpx's `toEnvObject`: the request's variables over the client's environment — `base`,
+    /// else this process's — and when the request names none, the client's as it is (`nil`:
+    /// this process's, inherited).
+    private static func environment(_ variables: [EnvVariable]?, over base: [String: String]?) -> [String: String]? {
+        guard let variables, !variables.isEmpty else { return base }
+        var merged = base ?? ProcessInfo.processInfo.environment
         for variable in variables {
             merged[variable.name] = variable.value
         }

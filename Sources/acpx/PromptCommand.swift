@@ -71,6 +71,11 @@ enum PromptCommand {
         }
         renderer.finish(stopReason: turn.stopReason, answered: !turn.unanswered)
         renderer.promptMetadata(usage: turn.usage.map(WireJSON.init), cost: turn.cost.map(WireJSON.init))
+        // Under `--verbose`, acpx's line once the session's owner — acpxd, started for the prompt
+        // or not — has the turn's result: after its output, and never for a turn that failed.
+        if flags.verbose, let pid = turn.ownerPid {
+            DaemonClient.noteOwner("queued prompt on active owner pid", pid: Int(pid), recordId: record.acpxRecordId)
+        }
         let permissions = turn.permissions ?? PermissionStats()
         if permissions.promptUnavailable { renderer.permissionPromptUnavailable(sessionId: record.acpxRecordId) }
         return permissionExitCode(

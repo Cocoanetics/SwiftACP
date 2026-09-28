@@ -11,16 +11,20 @@ import JSONRPCWire
 /// value; see ``ACPAgentConnection/setWireObserver(_:)`` for the decoded form. The
 /// observer runs on the transport's reader and writer tasks, possibly concurrently, so
 /// it must be thread-safe and fast. Replace it at any time with ``set(_:)``. What the
-/// agent writes to stderr goes to its own observer (``onStderr(_:)``).
+/// agent writes to stderr goes to its own observer (``onStderr(_:)``), and so does what the
+/// client notes of the agent (``onLog(_:)``).
 public final class RawWireTap: @unchecked Sendable {
     public typealias Observer = @Sendable (JSONRPCPeer.WireDirection, Data) -> Void
     public typealias DeliveryObserver = @Sendable (Data, Delivery) -> Void
     public typealias StderrObserver = @Sendable (Data) -> Void
+    public typealias LogObserver = @Sendable (String) -> Void
 
     /// How far an outbound body got on its way to the agent.
     public enum Delivery: Sendable {
         /// It is being written: from here on, the agent may have it.
         case writing
+        /// It was written whole: the agent has it, unless it goes before reading it.
+        case written
         /// Writing it failed: the agent does not have it.
         case failed
     }
@@ -29,6 +33,7 @@ public final class RawWireTap: @unchecked Sendable {
     private var observer: Observer?
     private var deliveryObserver: DeliveryObserver?
     private var stderrObserver: StderrObserver?
+    private var logObserver: LogObserver?
     /// Sessions whose `session/update` notifications are not shown — their
     /// `session/load` is replaying history — with how many loads asked. acpx's
     /// `suppressReplaySessionUpdateMessages`, kept per session.
@@ -60,6 +65,20 @@ public final class RawWireTap: @unchecked Sendable {
 
     func stderr(_ bytes: Data) {
         lock.withLock { stderrObserver }?(bytes)
+    }
+
+    /// Tell `observer` of each line the client notes of the agent — acpx's `AcpClient.log`,
+    /// which writes `[acpx] <line>` to its stderr under `--verbose`: the command it spawns,
+    /// how it signs in, the protocol version `initialize` settles, a cancel it could not send,
+    /// how the agent is ended. It runs on whichever thread notes the line, so it must be
+    /// thread-safe and fast.
+    public func onLog(_ observer: LogObserver?) {
+        lock.withLock { logObserver = observer }
+    }
+
+    /// Note `line` of the agent (``onLog(_:)``).
+    public func log(_ line: String) {
+        lock.withLock { logObserver }?(line)
     }
 
     /// Stop showing `sessionId`'s `session/update` notifications until the matching
@@ -106,7 +125,7 @@ public final class RawWireTap: @unchecked Sendable {
 /// A framing that shows every message body to a ``RawWireTap`` as it passes: an
 /// outbound body just before it is written, an inbound one as soon as it is complete —
 /// before it is decoded. A request is therefore always seen before its response. The
-/// write itself happens out of its sight, so an outbound body counts as being written
+/// write itself happens out of its sight, so an outbound body counts as written
 /// (``RawWireTap/onDelivery(_:)``) once it is framed, and never as failed.
 public struct TappedFraming<Base: MessageFraming>: MessageFraming {
     private var base: Base
@@ -120,6 +139,7 @@ public struct TappedFraming<Base: MessageFraming>: MessageFraming {
     public func frame(_ body: Data) -> Data {
         tap.observe(.outbound, body)
         tap.delivery(body, .writing)
+        tap.delivery(body, .written)
         return base.frame(body)
     }
 

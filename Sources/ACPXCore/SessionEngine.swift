@@ -28,6 +28,8 @@ public enum SessionEngine {
     ///     `--resume-session`. The record is written under its id.
     ///   - onStderr: shown what the agent writes to stderr, from its start
     ///     (``RawWireTap/onStderr(_:)``).
+    ///   - onLog: told what the client notes of the agent, from its spawn — acpx's
+    ///     `AcpClient.log` (``RawWireTap/onLog(_:)``).
     public static func createSession(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -48,6 +50,7 @@ public enum SessionEngine {
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> SessionRecord {
         // The record is written once the agent is gone: one written while it still runs would
@@ -60,7 +63,7 @@ public enum SessionEngine {
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
             writesRecord: false, handlers: handlers, baseEnvironment: baseEnvironment,
             terminalOutputCeiling: terminalOutputCeiling, inheritStderr: inheritStderr, onStderr: onStderr,
-            onModelWarning: onModelWarning)
+            onLog: onLog, onModelWarning: onModelWarning)
         beforeClosing?(held.record.acpxRecordId)
         var record = held.record
         let handle = held.agent
@@ -94,9 +97,10 @@ public enum SessionEngine {
     /// withholds stays off the record, for a caller that says it with each turn. `handlers`,
     /// when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
     /// false, the record is returned unwritten, for a caller that writes it once it keeps the
-    /// session — acpxd, where the id the agent gives may be another session's. The agent starts
-    /// over `baseEnvironment` when given — its caller's own — else this process's, and caps its
-    /// terminals by `terminalOutputCeiling`.
+    /// session — acpxd, where the id the agent gives may be another session's. The agent, and
+    /// the commands it runs through the client's terminals, start over `baseEnvironment` when
+    /// given — its caller's own — else this process's; its terminals are capped by
+    /// `terminalOutputCeiling`.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -119,6 +123,7 @@ public enum SessionEngine {
         terminalOutputCeiling: TerminalOutputLimit.Source = .environment,
         inheritStderr: Bool = false,
         onStderr: RawWireTap.StderrObserver? = nil,
+        onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> HeldSession {
         // Validate the session's own servers before paying for a spawn.
@@ -131,7 +136,8 @@ public enum SessionEngine {
                 authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
                 over: baseEnvironment ?? ProcessInfo.processInfo.environment),
             authCredentials: authCredentials, authPolicy: authPolicy,
-            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling, onStderr: onStderr)
+            inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling,
+            terminalEnvironment: baseEnvironment, onStderr: onStderr, onLog: onLog)
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,

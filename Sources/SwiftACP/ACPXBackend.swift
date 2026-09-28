@@ -26,15 +26,15 @@ public protocol ACPXBackend: Sendable {
     ) async throws -> Bool
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?
+        timeoutMs: Int?, environment: [String: String]?, verbose: Bool
     ) async throws -> SessionControlResult
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String?,
-        terminalOutputCeiling: Int?, timeoutMs: Int?
+        terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]?, verbose: Bool
     ) async throws -> SessionControlResult
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
-        timeoutMs: Int?
+        timeoutMs: Int?, environment: [String: String]?, verbose: Bool
     ) async throws -> SessionControlResult
     func closeSession(sessionId: String) async throws -> Bool
     func pruneSessions(
@@ -47,6 +47,8 @@ public protocol ACPXBackend: Sendable {
         limits: PromptLimits?
     ) async throws -> String
     func cancelSession(sessionId: String, turnToken: String?) async throws -> Bool
+    /// ``cancelSession(sessionId:turnToken:)``, saying whether the session's owner took it.
+    func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult
     func callOffCreation(creationToken: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
     func releaseSession(sessionId: String, turnToken: String?) async throws -> Bool
@@ -120,7 +122,8 @@ public struct SessionCreationMode: Sendable {
 /// begins (`turnToken`), the config that agent is started with (`callerConfig`; `nil`, the one
 /// where the session works), whether what the agent writes to stderr is streamed to the
 /// caller (`verbose`, acpx's `--verbose`), and the environment that agent starts over
-/// (`environment`; `nil`, the daemon's own).
+/// (`environment`; `nil`, the daemon's own) — for a queued turn, the one its session's owner
+/// was started with (#222).
 public struct PromptTurnMode: Sendable, Equatable {
     public var streamWire: Bool
     public var direct: Bool
@@ -161,5 +164,10 @@ extension ACPXBackend {
     /// A backend that holds no agents live keeps none it made.
     public func callOffCreation(creationToken: String) async throws -> Bool {
         false
+    }
+
+    /// A backend that holds no sessions as an owner has no owner to take a cancel.
+    public func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult {
+        SessionCancelResult(cancelled: try await cancelSession(sessionId: sessionId, turnToken: turnToken))
     }
 }

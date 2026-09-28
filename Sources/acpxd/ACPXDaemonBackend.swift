@@ -50,8 +50,12 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// Internal (not private) so the prompt turns in `ACPXDaemonBackend+Prompt.swift`
     /// can take a session's slot.
     let turnQueue = SessionTurnQueue()
-    /// The turn each session runs, by record: see ``TurnControl``.
+    /// The turn each session's queue owner runs, by record: see ``TurnControl``.
     var turns: [String: TurnControl] = [:]
+    /// The direct turns — a flow's — each session runs or has waiting for it, by record, in the
+    /// order they began, outside its queue owner, as acpx's `sendSessionDirect` takes only the
+    /// session's turn (#225). Only one has the session at a time.
+    var directTurns: [String: [TurnControl]] = [:]
     /// The tokens of turns a cancel named before they began, and when: each ends as it
     /// begins (``claimTurnToken(_:for:)``).
     var calledOffTurns: [String: Date] = [:]
@@ -103,6 +107,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     var controlTakenDuringPrompt: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: run once a prompt's turn has sealed its controls, before the turn is over.
     var controlsSealed: (@Sendable (_ recordId: String) async -> Void)?
+    /// For tests: run once a close or a let-go has sent the cancel of a prompt that was out,
+    /// before it sends the next.
+    var cancelSent: (@Sendable (_ recordId: String) async -> Void)?
     /// For tests: told the record id whenever a prompt waits to begin behind another.
     var promptWaits: (@Sendable (_ recordId: String) -> Void)?
     /// For tests: run once a flow's new session is held, before its call-off is looked for.
@@ -196,7 +203,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                     authPolicy: authPolicy, mcpServers: configServers,
                     sessionMcpServers: mcpServers, meta: meta, sessionOptions: options, capabilities: .acpx(fs: fs),
                     handlers: handlers, baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
-                    inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                    inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
             }
             return record.acpxRecordId
         }
@@ -214,7 +221,7 @@ actor ACPXDaemonBackend: ACPXBackend {
                 sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
                 capabilities: .acpx(fs: fs), recordsCapabilities: false, writesRecord: false, handlers: handlers,
                 baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
-                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer)
+                inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
         }
         let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
         return try await keepMadeSession(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
@@ -304,10 +311,13 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
+    ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool = false
     ) async throws -> SessionControlResult {
         let step = ControlStep<Void, Void>(
             request: { entry, _, timeout in
@@ -325,10 +335,11 @@ actor ACPXDaemonBackend: ACPXBackend {
                 acpx.desiredModeId = modeId
                 record.acpx = acpx
             })
-        let (_, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .mode, nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, step)
+        return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
     /// Set a session config option on the live agent (reconnecting if needed) and
@@ -345,13 +356,16 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
+    ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool = false
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -373,10 +387,12 @@ actor ACPXDaemonBackend: ACPXBackend {
                 // As the agent reported them: none, for a reply that only acknowledges.
                 return response.rawConfigOptions
             })
-        let (options, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed, rawConfigOptions: options)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, step)
+        return SessionControlResult(
+            resumed: outcome.resumed, rawConfigOptions: outcome.value, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
     /// Set a session's model on the live agent (reconnecting if needed) through the
@@ -392,10 +408,13 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///   - terminalOutputCeiling: the caller's cap on terminal output, `0` for none;
     ///     omitted, the daemon's own.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds (see
-    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:_:)``).
+    ///     ``withSessionTurn(_:replacing:nonInteractivePermissions:terminalOutputCeiling:timeoutMs:environment:_:)``).
+    ///   - environment: the caller's environment, for an agent the control starts (see there).
+    ///   - verbose: whether that agent's stderr and acpx's own lines go to the caller (see there).
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool = false
     ) async throws -> SessionControlResult {
         let step = ControlStep(
             request: { entry, record, timeout in
@@ -413,10 +432,11 @@ actor ACPXDaemonBackend: ACPXBackend {
                 ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
                 record.acpx = acpx
             })
-        let (_, resumed) = try await runControl(
+        let outcome = try await runControl(
             sessionId, replacing: .configOption("model"), nonInteractivePermissions: nonInteractivePermissions,
-            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, step)
-        return SessionControlResult(resumed: resumed)
+            terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs, environment: environment,
+            verbose: verbose, step)
+        return SessionControlResult(resumed: outcome.resumed, ownerPid: Self.pid(ifOwned: outcome.owned))
     }
 
     /// Whether this daemon holds a session live, and its agent's process while it runs:
@@ -461,37 +481,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         // A creation's token keeps its agent no longer: nothing is left for a call-off.
         madeCreations = madeCreations.filter { $0.value.agent !== entry.agent }
         await entry.agent.close()
-    }
-
-    /// Let every held agent go the way acpx's queue owner does when it stops
-    /// (`writeQueueOwnerLifecycleSnapshot`): each agent is closed, and how it ended goes
-    /// into its record, best effort — no pid, and the connection it was closed on unless
-    /// it had ended before.
-    func releaseAll() async {
-        // Before anything is let go: a turn whose agent this closes must not start another.
-        stopping = true
-        // The prompts still in line are refused, as each owner acpx stops refuses its own.
-        for recordId in promptLines.keys { refusePromptsWaiting(recordId) }
-        for recordId in owners.keys { forgetOwner(recordId) }
-        while let recordId = live.keys.first {
-            guard let entry = live.removeValue(forKey: recordId) else { continue }
-            await entry.agent.close()
-            // A turn the close ends saves its record first.
-            guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
-            defer { Task { await turnQueue.release(recordId) } }
-            guard var record = findRecord(recordId) else { continue }
-            record.applyLifecycle(entry.agent.lifecycle)
-            try? SessionStore.writeRecord(record)
-        }
-    }
-
-    /// Whether `error` indicates the agent no longer has the session (ACP has no
-    /// standard code, so match the text the agent puts in its error message/data).
-    func isSessionGone(_ error: Error) -> Bool {
-        let text = error.localizedDescription.lowercased()
-        guard text.contains("session") else { return false }
-        return ["not found", "unknown", "no such", "expired", "gone", "invalid"]
-            .contains { text.contains($0) }
     }
 
 }

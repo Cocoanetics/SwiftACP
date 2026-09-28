@@ -14,13 +14,14 @@ extension ACPXDaemonBackend {
     /// gone quiet, as acpx's does, so that what the agent sends after its answer is part
     /// of it. The answer is waited for within `timeout` (``answer(to:on:recordId:within:)``).
     func sendPrompt(
-        _ blocks: [ContentBlock], on entry: Live, recordId: String, within timeout: Int? = nil
+        _ blocks: [ContentBlock], on entry: Live, recordId: String, turn id: UUID, within timeout: Int? = nil
     ) async throws -> (response: PromptResponse, sent: Bool) {
-        guard turns[recordId]?.cancelPending != true else { return (PromptResponse(stopReason: .cancelled), false) }
+        guard turnControl(recordId, id)?.cancelPending != true else {
+            return (PromptResponse(stopReason: .cancelled), false)
+        }
         await promptGoingOut?(recordId)
         let (response, recovered) = try await answer(to: blocks, on: entry, recordId: recordId, within: timeout)
-        turns[recordId]?.prompt = nil
-        turns[recordId]?.answered = true
+        promptAnswered(recordId: recordId, turn: id)
         // An answer that came while a timed-out prompt's updates went quiet stands as it
         // is, as acpx's `recoveredSessionResult` does: they have gone quiet already.
         if recovered { return (response, true) }

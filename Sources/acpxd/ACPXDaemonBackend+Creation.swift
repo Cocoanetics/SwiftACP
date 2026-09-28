@@ -55,7 +55,7 @@ extension ACPXDaemonBackend {
             await held.agent.close()
             throw error
         }
-        let taken = live[recordId] != nil || turns[recordId] != nil || owners[recordId] != nil
+        let taken = live[recordId] != nil || hasTurn(recordId) || owners[recordId] != nil
         let outcome: Result<Void, Error>
         if isCalledOff(token) {
             // Its record kept when the id is new, as acpx's creation writes it — never over the
@@ -68,6 +68,7 @@ extension ACPXDaemonBackend {
                 // line, and one begun as the turn before it ended, yet to have the slot.
                 refusePromptsWaiting(recordId)
                 turns[recordId]?.refused = true
+                for turn in directTurns[recordId] ?? [] { changeTurn(recordId, turn.id) { $0.refused = true } }
                 forgetOwner(recordId)
                 await evict(recordId)
             }
@@ -115,7 +116,7 @@ extension ACPXDaemonBackend {
     /// nothing has it: not one that took its place under the same id since, nor one a turn or an
     /// owner now has, which let it go themselves (#219 review).
     private func releaseOwn(_ recordId: String, agent: AnyObject) async -> Bool {
-        guard live[recordId]?.agent === agent, turns[recordId] == nil, owners[recordId] == nil else {
+        guard live[recordId]?.agent === agent, !hasTurn(recordId), owners[recordId] == nil else {
             return false
         }
         await evict(recordId)

@@ -87,7 +87,7 @@ enum SessionLifecycle {
             do {
                 return try await DaemonClient.setModel(
                     sessionId: recordId, modelId: model, nonInteractivePermissions: flags.nonInteractivePermissions,
-                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs)
+                    terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs, verbose: flags.verbose)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
@@ -171,7 +171,7 @@ enum SessionLifecycle {
                 sessionMcpServers: config.sessionMcpServers,
                 meta: meta, resumeSessionId: resumeSessionId, sessionOptions: options,
                 capabilities: flags.clientCapabilities,
-                inheritStderr: flags.verbose,
+                inheritStderr: flags.verbose, onLog: flags.clientLog,
                 onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })
         }
     }

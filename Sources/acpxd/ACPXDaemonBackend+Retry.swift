@@ -13,6 +13,9 @@ extension ACPXDaemonBackend {
         var response: PromptResponse
         /// Whether a prompt went out: one cancelled before its first did not.
         var sent: Bool
+        /// How long the attempt that was answered took, in whole milliseconds: acpx's
+        /// `prompt.agent_turn`. `nil` for a turn cancelled between attempts.
+        var agentTurnMilliseconds: Double?
     }
 
     /// Send the turn's prompt, each attempt within its `--timeout` (``sendPrompt(_:on:recordId:within:)``),
@@ -50,46 +53,48 @@ extension ACPXDaemonBackend {
         let cancelled = PromptOutcome(response: PromptResponse(stopReason: .cancelled), sent: true)
         var attempt = 0
         while true {
+            let attemptStartedAt = ContinuousClock.now
             do {
                 let (response, sent) = try await sendPrompt(
-                    turn.blocks, on: entry, recordId: recordId, within: turn.timeoutMilliseconds)
-                return PromptOutcome(response: response, sent: sent || attempt > 0)
+                    turn.blocks, on: entry, recordId: recordId, turn: turn.id, within: turn.timeoutMilliseconds)
+                return PromptOutcome(
+                    response: response, sent: sent || attempt > 0,
+                    agentTurnMilliseconds: PromptTimings.milliseconds(since: attemptStartedAt, whole: true))
             } catch {
                 // The attempt's prompt is settled: a cancel from now on has none to go to,
                 // and a late note of it going out is too late.
-                turns[recordId]?.prompt = nil
-                turns[recordId]?.answered = true
+                promptAnswered(recordId: recordId, turn: turn.id)
                 guard attempt < turn.promptRetries, !sideEffects.any, PromptRetry.isRetryable(error),
                       await !entry.agent.connection.isClosed
                 else { throw error }
                 // What the attempt showed goes out first — its updates, then its error — and
                 // it is no longer a turn a fresh launch could take over unseen.
-                turns[recordId]?.retried = true
+                changeTurn(recordId, turn.id) { $0.retried = true }
                 await relay.handOver(showing: wireFeed.takeHeld())
-                if turns[recordId]?.cancelAsked == true { return cancelled }
+                if turnControl(recordId, turn.id)?.cancelAsked == true { return cancelled }
                 let delay = PromptRetry.delayMilliseconds(afterAttempt: attempt)
                 // acpx's notice goes to its queue owner's stderr, which its CLI does not show.
                 let notice = PromptRetry.notice(
                     for: error, delayMilliseconds: delay, retry: attempt + 1, maxRetries: turn.promptRetries)
                 retryLog.info("\(notice)")
-                await pause(milliseconds: delay, recordId: recordId)
-                if turns[recordId]?.cancelAsked == true { return cancelled }
+                await pause(milliseconds: delay, recordId: recordId, turn: turn.id)
+                if turnControl(recordId, turn.id)?.cancelAsked == true { return cancelled }
                 // What happened during the pause decides, as acpx looks once as it ends.
                 if sideEffects.any { throw error }
                 attempt += 1
-                turns[recordId]?.answered = false
+                changeTurn(recordId, turn.id) { $0.answered = false }
                 turn.errors.reset()
             }
         }
     }
 
     /// acpx's pause before a retry, which a cancel of the turn cuts short.
-    private func pause(milliseconds: Int, recordId: String) async {
+    private func pause(milliseconds: Int, recordId: String, turn id: UUID) async {
         let pause = Task<Void, Never> { try? await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000) }
-        turns[recordId]?.pause = pause
+        changeTurn(recordId, id) { $0.pause = pause }
         await retryPaused?(recordId)
         await pause.value
-        turns[recordId]?.pause = nil
+        changeTurn(recordId, id) { $0.pause = nil }
     }
 }
 

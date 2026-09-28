@@ -49,7 +49,7 @@ struct FlowRunStore {
         try Self.writeJSON(manifest.wire, to: runDir.appendingPathComponent("manifest.json"))
         try Self.writeJSON(state.wire, to: runDir.appendingPathComponent("projections/run.json"))
         try Self.writeJSON(state.live, to: runDir.appendingPathComponent("projections/live.json"))
-        try Self.writeJSON(.array(state.steps), to: runDir.appendingPathComponent("projections/steps.json"))
+        try Self.writeJSON(state.stepsWire, to: runDir.appendingPathComponent("projections/steps.json"))
         try Self.append(Data(), to: runDir.appendingPathComponent("trace.ndjson"))
         let runTitle = state["runTitle"]
         let flowPath = state["flowPath"]
@@ -69,7 +69,7 @@ struct FlowRunStore {
         state["updatedAt"] = nowISO()
         try Self.writeJSON(state.wire, to: runDir.appendingPathComponent("projections/run.json"))
         try Self.writeJSON(state.live, to: runDir.appendingPathComponent("projections/live.json"))
-        try Self.writeJSON(.array(state.steps), to: runDir.appendingPathComponent("projections/steps.json"))
+        try Self.writeJSON(state.stepsWire, to: runDir.appendingPathComponent("projections/steps.json"))
         try writeManifest(runDir, state)
         try appendTrace(runDir, state, scope: scope, type: type, nodeId: nodeId, attemptId: attemptId, payload: payload)
     }

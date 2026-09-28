@@ -1,3 +1,4 @@
+import ACPXCore
 import Foundation
 import SwiftACP
 import SwiftMCP
@@ -24,6 +25,29 @@ final class AgentStderrRelay: @unchecked Sendable {
     /// that reads the agent.
     var observer: RawWireTap.StderrObserver {
         { [weak self] bytes in self?.take(bytes) }
+    }
+
+    /// What the agent's tap is given for what the client notes of it (``RawWireTap/onLog(_:)``):
+    /// each note goes to the caller as acpx's client writes it to the flow's stderr, `[acpx] <line>`,
+    /// in order with what the agent writes.
+    var logObserver: RawWireTap.LogObserver {
+        { [weak self] line in self?.log(line) }
+    }
+
+    /// Send `line` to the caller as acpx writes its own diagnostics: `[acpx] <line>`.
+    func log(_ line: String) {
+        take(Data("[acpx] \(line)\n".utf8))
+    }
+
+    /// acpx's `logReconnectAttempt`: whether the agent `record` saved still runs, as a turn
+    /// connects its session.
+    func noteReconnect(of record: SessionRecord) {
+        guard let pid = record.pid, pid != 0 else { return }
+        if DaemonLock.isProcessAlive(Int32(pid)) {
+            log("saved session pid \(pid) is running; reconnecting to saved ACP session")
+        } else {
+            log("saved session pid \(pid) is dead; respawning agent and attempting session reconnect")
+        }
     }
 
     private func take(_ bytes: Data) {
@@ -81,6 +105,7 @@ extension ACPXDaemonBackend {
         let relay = live[recordId]?.stderr ?? AgentStderrRelay()
         live[recordId]?.stderr = relay
         live[recordId]?.agent.rawWire.onStderr(relay.observer)
+        live[recordId]?.agent.rawWire.onLog(relay.logObserver)
         return relay
     }
 

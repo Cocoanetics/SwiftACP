@@ -70,30 +70,38 @@ extension ACPXDaemonBackend {
         // Begun, the turn is the session's before it holds the session: a cancel is its
         // (``cancelSession(sessionId:)``), and so is a control sent, run on the prompt's
         // agent once the prompt goes out (acpx's `beginPrompt`). A turn that ends before
-        // then fails the controls still waiting.
-        let begun: BegunPrompt
+        // then fails the controls still waiting. A direct turn — a flow's — begins apart from
+        // the owner's line, as acpx's `sendSessionDirect` takes only the session's turn (#225).
+        let started: StartedTurn
+        var heldTheSlot: Bool
         do {
-            begun = try await beginPrompt(recordId, wait: wait, turnToken: turnToken)
+            (started, heldTheSlot) = try await startTurn(recordId, direct: direct, wait: wait, turnToken: turnToken)
         } catch let refused as QueueOwnerShuttingDown {
-            // Told to the client as acpx's owner tells it, the turn's error.
-            return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
+            return try await failedBeforeItsAttempt(refused, of: recordId, direct: direct)
         }
-        let (control, ticket) = (begun.control, begun.ticket)
-        var heldTheSlot = !wait
-        defer { promptEnded(recordId, begun, heldTheSlot: heldTheSlot) }
+        let control = started.control
+        defer { turnOver(recordId, started, heldTheSlot: heldTheSlot) }
         // One turn per session at a time, so concurrent CLI/MCP callers never drive one
         // agent — or persist one record — concurrently: the prompt waits for what holds the
-        // session, the controls sent before it began among them, as acpx's owner waits for
-        // its idle controls (`priorIdle`).
-        if wait {
-            try await turnQueue.acquire(recordId, wait: true)
+        // session — a direct turn, the controls sent before it began — as acpx's waits for the
+        // session's turn (`waitForSessionTurn`): within its `--timeout`, until a cancel ends
+        // the wait, the turn cancelled then with nothing sent (#225).
+        if !heldTheSlot {
+            do {
+                try await takeSlot(for: recordId, turn: control.id, within: direct ? nil : timeout)
+            } catch let timedOut as TimeoutError {
+                return try await failedBeforeItsAttempt(timedOut, of: recordId, direct: direct)
+            } catch where turnControl(recordId, control.id)?.cancelAsked == true {
+                return await Self.endedCancelled(as: initial.acpSessionId)
+            }
             heldTheSlot = true
         }
-        turns[recordId]?.running = true
+        changeTurn(recordId, control.id) { $0.running = true }
+        // acpx's `prompt.total` runs from here, as its turn has the session (`runOwnedSessionPrompt`).
+        let ownedAt = ContinuousClock.now
         // Begun for a session another took the place of since, it is refused (#219 review).
-        if turns[recordId]?.refused == true {
-            let refused = QueueOwnerShuttingDown(inLine: true)
-            return try await reportingFailure(of: recordId, errors: TurnErrorWatch(), direct: direct) { throw refused }
+        if turnControl(recordId, control.id)?.refused == true {
+            return try await failedBeforeItsAttempt(QueueOwnerShuttingDown(inLine: true), of: recordId, direct: direct)
         }
         // A free slot is had at once, however the prompt was called off meanwhile: then it
         // ends here, nothing sent and nothing kept — a direct turn's agent with it, as acpx's
@@ -106,7 +114,7 @@ extension ACPXDaemonBackend {
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
-        if !direct { turnStarts(recordId, ttlMs: limits?.ttlMs) }
+        if !direct { turnStarts(recordId, ttlMs: limits?.ttlMs, environment: environment) }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
         // just persisted new history, and the persister must build on that, not on a
@@ -118,15 +126,12 @@ extension ACPXDaemonBackend {
             guard let record = findRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
             return record
         }
-        // Cancelled while it waited, it ends now, as acpx's prompt ends cancelled once it
-        // holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.
-        if turns[recordId]?.cancelAsked == true {
+        // Cancelled as it took the session, it ends now, as acpx's prompt ends cancelled once
+        // it holds the session (`runSessionPrompt`): nothing sent, and nothing kept of it.
+        if turnControl(recordId, control.id)?.cancelAsked == true {
             // A direct turn's agent goes with it, as acpx closes the client it was handed however it ends.
             if direct { await evict(recordId) }
-            await Self.announceTheEnd(
-                of: PromptResponse(stopReason: .cancelled), permissions: PermissionStats(),
-                result: PromptResultCapture(), as: record.acpSessionId, to: Session.current)
-            return ""
+            return await Self.endedCancelled(as: record.acpSessionId)
         }
         let agentCommand = record.agentCommand
         let cwd = record.cwd
@@ -150,7 +155,7 @@ extension ACPXDaemonBackend {
         let persister = TurnPersister(
             record: prompted, eventBuffer: eventBuffer, requestId: direct ? nil : control.id.uuidString.lowercased())
         // The controls the turn takes change and save the prompt's record.
-        ticket.persister = persister
+        started.ticket?.persister = persister
         await persister.recordPrompt(content)
         // The turn's exchange, watched for the error a failure turns out to be.
         let errors = TurnErrorWatch()
@@ -163,14 +168,25 @@ extension ACPXDaemonBackend {
             permissions: permissions,
             terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout, promptRetries: retries,
             persister: persister, eventBuffer: eventBuffer, streamWire: streamWire, errors: errors, direct: direct,
-            capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
-            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose), environment: environment)
-        // acpx keeps the prompt of a turn that fails, and what the agent said of it.
+            ticket: started.ticket, capabilities: fs.map { .acpx(fs: $0) }, authPolicy: authPolicy,
+            callerConfig: callerConfig, stderr: stderrRelay(for: recordId, verbose: verbose),
+            environment: direct ? environment : owners[recordId]?.environment)
+        return try await runAttempts(turn, wasHeld: wasHeld, ownedAt: ownedAt)
+    }
+
+    /// The turn's attempts, as acpx runs the prompt its turn owns (`runOwnedSessionPrompt`): the
+    /// prompt, and what the agent said of it, kept however the turn ends; a direct turn's agent
+    /// let go with it; and for a caller under `--verbose`, what the agent writes to stderr sent to
+    /// it with acpx's own lines, the turn's total last (`prompt.total`, from `ownedAt`).
+    private func runAttempts(_ turn: Turn, wasHeld: Bool, ownedAt: ContinuousClock.Instant) async throws -> String {
+        let (recordId, direct, persister) = (turn.recordId, turn.direct, turn.persister)
         return try await relayingStderr(turn.stderr, logger: recordId) {
-            try await lettingDirectAgentGo(direct, recordId) {
-                try await reportingFailure(of: recordId, errors: errors, saving: persister, direct: direct) {
-                    try await beginTurn(on: persister, recordId: recordId)
-                    return try await attemptWithRetry(turn, wasHeld: wasHeld)
+            try await timingTotal(turn.stderr, from: ownedAt) {
+                try await lettingDirectAgentGo(direct, recordId) {
+                    try await reportingFailure(of: recordId, errors: turn.errors, saving: persister, direct: direct) {
+                        try await beginTurn(on: persister, recordId: recordId)
+                        return try await attemptWithRetry(turn, wasHeld: wasHeld)
+                    }
                 }
             }
         }
@@ -203,6 +219,9 @@ extension ACPXDaemonBackend {
         /// A flow's persistent turn, as acpx's `sendSessionDirect` runs it: the session
         /// taken back as itself or not at all, and its agent let go when the turn ends.
         let direct: Bool
+        /// The controls the turn takes as it runs: a queued turn's ticket. A direct turn has
+        /// none, and leaves the ticket of a prompt queued behind it alone (#229 review).
+        let ticket: PromptControlTicket?
         /// What an agent the turn connects is offered; `nil`, what the session was made with.
         let capabilities: SwiftACP.ClientCapabilities?
         /// How an agent the turn connects signs in; `nil`, as configured.
@@ -219,18 +238,12 @@ extension ACPXDaemonBackend {
         do {
             return try await attemptPrompt(turn, retriesOnAFreshLaunch: wasHeld)
         } catch is RetriedOnAFreshLaunch {
-            // A held session can disappear (the agent dropped it — e.g. after an
-            // earlier failure). Evict the stale entry and try once more from a fresh
-            // launch. Only retry for session-gone errors, never transient ones like
-            // rate limits — and only for a session held before this turn: when the
-            // turn connected it, the agent has just answered for a fresh launch, and a
-            // refused reconnect (which reads like a gone session) would only be asked
-            // again.
-            //
-            // A held agent can also exit just after `ensure` found it open. When none of
-            // the turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh
-            // launch unseen; one it did reach is never sent twice. Nor is one the agent
-            // answered at all (`TurnWireFeed.agentAnswered`): the attempt decides.
+            // A held agent can exit just after `ensure` found it open. When none of the
+            // turn reached it (`AgentExitedBeforeTheTurn`), the turn goes to a fresh launch
+            // unseen; one it did reach is never sent twice. Nor is one the agent answered at
+            // all (`TurnWireFeed.agentAnswered`): the attempt decides. A session the held
+            // agent dropped is no reason to go round again: acpx's owner makes no such retry,
+            // and its turn fails on the agent's error (#198).
             await evict(turn.recordId)
             return try await attemptPrompt(turn, retriesOnAFreshLaunch: false)
         }
@@ -242,10 +255,10 @@ extension ACPXDaemonBackend {
         let underlying: Error
     }
 
-    /// A failure a fresh launch of the agent would not have: the held agent dropped the
-    /// session, or exited before any of the turn reached it.
+    /// A failure a fresh launch of the agent would not have: the held agent exited before
+    /// any of the turn reached it.
     func isFixedByAFreshLaunch(_ error: Error) -> Bool {
-        isSessionGone(error) || error is AgentExitedBeforeTheTurn
+        error is AgentExitedBeforeTheTurn
     }
 
     /// Forwards what connecting an agent for a turn put on the wire to the MCP client
@@ -266,34 +279,13 @@ extension ACPXDaemonBackend {
     ///   not answered the attempt. It then throws ``RetriedOnAFreshLaunch``, and nothing
     ///   of the attempt is shown: it does not fail the turn.
     private func attemptPrompt(_ turn: Turn, retriesOnAFreshLaunch: Bool) async throws -> String {
-        let (recordId, permissions) = (turn.recordId, turn.permissions)
-        let (persister, eventBuffer, errors) = (turn.persister, turn.eventBuffer, turn.errors)
+        let (recordId, persister, errors) = (turn.recordId, turn.persister, turn.errors)
         // Nothing an earlier attempt showed says how this one fails — not even when it
         // fails to connect at all.
         errors.reset()
         // Until this attempt's prompt goes out, a cancel waits for it.
-        turns[recordId]?.prompt = nil
-        turns[recordId]?.answered = false
-        // A reconnect that has to start a new session hands it to the persister, so the
-        // turn's saves carry it on instead of writing the old session back; what the
-        // connecting put on the wire goes to the calling client first.
-        // This turn's permissions — acpx sends the mode with every prompt and the queue
-        // owner applies it to that turn — are the live agent's from before connecting
-        // on, as is its cap on terminal output. Turns are serialized per session, so no
-        // other turn can be reading them meanwhile.
-        let entry = try await ensure(
-            recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
-            settings: CallerSettings(
-                handlers: permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
-                timeoutMilliseconds: turn.timeoutMilliseconds, sameSessionOnly: turn.direct,
-                capabilities: turn.capabilities, authPolicy: turn.authPolicy, callerConfig: turn.callerConfig,
-                stderr: turn.stderr, environment: turn.environment),
-            requestedModel: turn.model, turnOptions: turn.sessionOptions, turnAcpx: await persister.acpx,
-            onRecordChange: { await persister.adopt($0) },
-            onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),
-            // acpx logs the exchange that connects the agent with the turn — all of it,
-            // a reconnect the agent refused too.
-            onConnectWire: { _, body in eventBuffer.append(body) })
+        promptUnsent(recordId: recordId, turn: turn.id)
+        let entry = try await connectForPrompt(turn)
         // The attempt proper starts once connected: a restore the agent refused while
         // connecting is on the wire, but it is not how this attempt fails.
         errors.reset()
@@ -349,13 +341,14 @@ extension ACPXDaemonBackend {
             // pauses between them, as acpx's client counts them across its run.
             let countedBefore = await connection.permissionTotals(for: boundSessionId)
             let outcome = try await promptWithRetries(turn, on: entry, relay: relay, wireFeed: wireFeed)
+            await noteAgentTurn(outcome, of: turn, after: wireFeed)
             if let failure = await permissionFailure(of: turn, on: connection, boundSessionId) { throw failure }
             let response = outcome.response
             // The controls the turn took are done before its last save, what they said part of
             // its exchange (acpx's `seal`, `onPromptFinalizing`) — those waiting for its prompt
             // too, however late the note that it went out comes.
-            takePromptNote(of: recordId, from: wrote)
-            await sealControls(of: recordId)
+            takePromptNote(of: turn, from: wrote)
+            await sealControls(of: turn)
             await relay.end()
             let fullText = await relay.text()
             // The exchange ends with the prompt's response; the turn's end follows it.
@@ -387,13 +380,51 @@ extension ACPXDaemonBackend {
         } catch {
             let failure = await permissionFailure(of: turn, on: connection, boundSessionId) ?? error
             throw await failedAttempt(
-                failure, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch, relay: relay,
-                wireFeed: wireFeed, recordId: recordId, persister: persister, direct: turn.direct)
+                failure, of: turn, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch,
+                relay: relay, wireFeed: wireFeed)
         }
     }
 }
 
 extension ACPXDaemonBackend {
+    /// acpx's `connectForPrompt`: the turn's agent connected, and for a caller under `--verbose`
+    /// how long that took (`prompt.connect_and_load`). A reconnect that has to start a new
+    /// session hands it to the persister, so the turn's saves carry it on instead of writing the
+    /// old session back; what the connecting put on the wire goes to the calling client first.
+    /// This turn's permissions — acpx sends the mode with every prompt and the queue owner
+    /// applies it to that turn — are the live agent's from before connecting on, as is its cap
+    /// on terminal output. Turns are serialized per session, so no other turn can be reading
+    /// them meanwhile.
+    func connectForPrompt(_ turn: Turn) async throws -> Live {
+        let (recordId, persister, eventBuffer, errors) = (turn.recordId, turn.persister, turn.eventBuffer, turn.errors)
+        let startedAt = ContinuousClock.now
+        let entry = try await ensure(
+            recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
+            settings: CallerSettings(
+                handlers: turn.permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
+                timeoutMilliseconds: turn.timeoutMilliseconds, sameSessionOnly: turn.direct,
+                capabilities: turn.capabilities, authPolicy: turn.authPolicy, callerConfig: turn.callerConfig,
+                stderr: turn.stderr, environment: turn.environment),
+            requestedModel: turn.model, turnOptions: turn.sessionOptions, turnAcpx: await persister.acpx,
+            onRecordChange: { await persister.adopt($0) },
+            onConnectOutput: Self.forwardToClient(logger: recordId, errors: errors),
+            // acpx logs the exchange that connects the agent with the turn — all of it,
+            // a reconnect the agent refused too.
+            onConnectWire: { _, body in eventBuffer.append(body) })
+        turn.stderr?.log(PromptTimings.metric(
+            "prompt.connect_and_load", milliseconds: PromptTimings.milliseconds(since: startedAt, whole: true)))
+        return entry
+    }
+
+    /// acpx's `prompt.agent_turn`, for a caller under `--verbose`: how long the answered attempt
+    /// took, once what the answer said has gone out — its usage line among it, which the caller
+    /// writes from it.
+    func noteAgentTurn(_ outcome: PromptOutcome, of turn: Turn, after wireFeed: TurnWireFeed) async {
+        guard let relay = turn.stderr, let milliseconds = outcome.agentTurnMilliseconds else { return }
+        await wireFeed.drain()
+        relay.log(PromptTimings.metric("prompt.agent_turn", milliseconds: milliseconds))
+    }
+
     /// Watch an attempt's exchange as it crosses the wire: for how it fails, for the
     /// calling client, and for the prompt's answer — whose arrival marks the turn
     /// answered at once, from the reader's thread, before the connection has even handed
@@ -420,7 +451,15 @@ extension ACPXDaemonBackend {
         }
         entry.agent.rawWire.onDelivery { [self] body, delivery in
             guard WireJSON(parsing: body)?["method"] == .text("session/prompt") else { return }
-            guard delivery == .writing else { return wrote.unmark() }
+            switch delivery {
+            case .writing: break
+            case .failed: return wrote.unmark()
+            case .written:
+                // From here on no fresh launch takes the attempt over: what it held back goes
+                // out, and the rest streams, as acpx's does (#198). Not before: a write that
+                // fails sends the attempt to one, its messages unseen (#236 review).
+                return wireFeed.promptWritten()
+            }
             wrote.mark(noting: true)
             let note: @Sendable () async -> Void = {
                 await self.promptWritten(
@@ -449,44 +488,5 @@ extension ACPXDaemonBackend {
             ModelSupport.applyModelSelection(model, response: response, to: &acpx)
             record.acpx = acpx
         }
-    }
-}
-
-/// One turn's permissions, as acpx sends them with every prompt: the mode
-/// (`--approve-all` / `--approve-reads` / `--deny-all`) and what a write needing
-/// confirmation does without a terminal. The daemon swaps the live agent's handlers
-/// to these for the turn — acpx's queue owner applies each prompt's mode to that turn.
-struct TurnPermissions: Sendable {
-    let handlers: ACPClientHandlers
-
-    /// - Parameters:
-    ///   - mode: `approve-all`, `approve-reads` or `deny-all`. `nil` — a caller that
-    ///     predates the parameter — keeps the old behaviour of approving everything.
-    ///   - nonInteractive: `deny` (the default) or `fail`.
-    ///   - rules: the turn's per-tool permission policy, which comes before `mode`.
-    init(mode: String?, nonInteractive: String?, rules: PermissionRules? = nil) throws {
-        let policy: PermissionPolicy
-        if let mode {
-            guard let parsed = PermissionPolicy(acpxMode: mode) else {
-                throw DaemonError.invalidPermissionMode(mode)
-            }
-            policy = parsed
-        } else {
-            policy = .approveAll
-        }
-        let unanswerable: NonInteractivePermissionPolicy
-        if let nonInteractive {
-            guard let parsed = NonInteractivePermissionPolicy(rawValue: nonInteractive) else {
-                throw DaemonError.invalidNonInteractivePermissions(nonInteractive)
-            }
-            unanswerable = parsed
-        } else {
-            unanswerable = .deny
-        }
-        // `.none`: the daemon's own terminal, if it has one, is not the user's. Like
-        // acpx's detached queue owner, it never asks — a write needing confirmation is
-        // refused, or refused as unanswerable under `fail`.
-        handlers = .standard(
-            permission: policy, nonInteractivePermissions: unanswerable, terminal: .none, rules: rules)
     }
 }

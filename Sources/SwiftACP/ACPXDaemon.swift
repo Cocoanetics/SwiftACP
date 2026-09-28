@@ -200,16 +200,26 @@ public actor ACPXDaemon {
     ///     `0` is no cap; omitted, the daemon's own environment decides.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
     ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
+    ///   - environment: the caller's environment. An agent the control starts for a session
+    ///     no owner holds starts over it, as acpx's direct control starts its client in the
+    ///     CLI's process; an owner's agents keep the one the owner started with (#222).
+    ///     Omitted, the daemon's own.
+    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
+    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
+    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
+    ///     owner holds (#221).
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setMode(
                 sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
+                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
+                environment: environment, verbose: verbose ?? false)
         }
     }
 
@@ -229,19 +239,28 @@ public actor ACPXDaemon {
     ///     `0` is no cap; omitted, the daemon's own environment decides.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
     ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
+    ///   - environment: the caller's environment. An agent the control starts for a session
+    ///     no owner holds starts over it, as acpx's direct control starts its client in the
+    ///     CLI's process; an owner's agents keep the one the owner started with (#222).
+    ///     Omitted, the daemon's own.
+    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
+    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
+    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
+    ///     owner holds (#221).
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setConfigOption(
                 sessionId: sessionId, configId: configId, value: value,
                 nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
-                timeoutMs: timeoutMs)
+                timeoutMs: timeoutMs, environment: environment, verbose: verbose ?? false)
         }
     }
 
@@ -261,16 +280,26 @@ public actor ACPXDaemon {
     ///     `0` is no cap; omitted, the daemon's own environment decides.
     ///   - timeoutMs: the caller's `--timeout`, in milliseconds, which the control fails
     ///     with `TIMEOUT` past, as acpx's does. Omitted or not positive, none.
+    ///   - environment: the caller's environment. An agent the control starts for a session
+    ///     no owner holds starts over it, as acpx's direct control starts its client in the
+    ///     CLI's process; an owner's agents keep the one the owner started with (#222).
+    ///     Omitted, the daemon's own.
+    ///   - verbose: whether what an agent the control starts writes to stderr, and acpx's own
+    ///     `[acpx]` lines, go to the caller as log notifications (``AgentStderrEvent``), as acpx's
+    ///     direct control shows them in the CLI's process under `--verbose` — for a session no
+    ///     owner holds (#221).
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
-        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil
+        terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
+        verbose: Bool? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setModel(
                 sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
-                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs)
+                terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
+                environment: environment, verbose: verbose ?? false)
         }
     }
 
@@ -373,7 +402,9 @@ public actor ACPXDaemon {
     ///     caller as ``AgentStderrEvent`` log notifications while the turn runs — first what
     ///     a held agent wrote since its session was made. Omitted, it is not.
     ///   - environment: the environment an agent the turn connects starts over — the caller's
-    ///     own, as `newSession`'s. Omitted, the daemon's own.
+    ///     own, as `newSession`'s. A queued turn's agents start over the environment of the
+    ///     prompt that started the session's owner, as acpx's queue owner starts its agent in
+    ///     the environment of the CLI that spawned it (#222). Omitted, the daemon's own.
     /// - Returns: the agent's aggregate response text for the turn. The turn's stop
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
@@ -426,10 +457,13 @@ public actor ACPXDaemon {
     ///   - turnToken: cancel only the turn `runPrompt` was given this token for — and, when it
     ///     has not begun yet, end it as it begins, nothing sent, as acpx's flow runner closes
     ///     the client a stopped direct turn would prompt on. Omitted, whatever turn runs.
-    /// - Returns: `false` if the session isn't currently live.
+    /// - Returns: whether a turn was cancelled — not if the session isn't currently live — and
+    ///   the daemon's pid when the session's owner took the cancel (``SessionCancelResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
-    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
-        try await admitted { [backend] in try await backend.cancelSession(sessionId: sessionId, turnToken: turnToken) }
+    func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> SessionCancelResult {
+        try await admitted { [backend] in
+            try await backend.cancelSessionReportingOwner(sessionId: sessionId, turnToken: turnToken)
+        }
     }
 
     /// Let go of a session's live agent without closing the session: the daemon stops
