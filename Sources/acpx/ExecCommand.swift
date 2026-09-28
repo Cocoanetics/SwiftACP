@@ -131,10 +131,14 @@ enum ExecCommand {
     /// The run's session, as acpx's `runOnce` opens it: `session/new` with the
     /// invocation's session options (`meta`), then its model and config options — each
     /// within `timeoutMs`. A warning about them goes to stderr, unless `quiet`.
+    ///
+    /// `control` is the run's `controlState`, which the caller hands the connection's
+    /// messages (``ModelApplication/ControlState/observe(_:_:)``), from before `session/new`:
+    /// `exec`, `compare` and a flow's turns all go through `runOnce` in acpx.
     static func openSession(
         on handle: ACPAgent, agent: AgentInvocation, mcpServers: [MCPServerSpec], meta: JSONValue?,
         model: String?, configOptions: [ModelApplication.ConfigOptionAssignment],
-        control: ModelApplication.ControlState = ModelApplication.ControlState(), timeoutMs: Int?, quiet: Bool
+        control: ModelApplication.ControlState, timeoutMs: Int?, quiet: Bool
     ) async throws -> ACPSession {
         let connection = handle.connection
         let request = NewSessionRequest(cwd: agent.cwd, mcpServers: mcpServers, meta: meta)

@@ -1,4 +1,5 @@
 @testable import ACPXCore
+@testable import ACPXFlows
 @testable import acpx
 import Foundation
 import JSONFoundation
@@ -9,7 +10,7 @@ import Testing
 /// (`test/run-once-model-catalog.test.ts`), run on `catalog-agent.py`. It sends
 /// `config_option_update`s before `session/new` answers and after it, and the run is held once
 /// answered until those after it have come, as acpx's test holds the session's creation.
-@Suite(.serialized, .agentLane) struct ExecStartupCatalogTests {
+@Suite(.serialized, .agentLane, .timeLimit(.minutes(1))) struct ExecStartupCatalogTests {
     static let sessionId = "creation-catalog-session"
     static let foreignId = "foreign-catalog-session"
     static let adapterError = "Synthetic catalog setter rejection"
@@ -135,13 +136,12 @@ import Testing
         func calls(_ kind: String) -> [String] { entries.filter { $0.kind == kind }.compactMap(\.call) }
     }
 
-    private func run(_ scenario: Scenario) async throws -> Run {
+    /// `scenario`'s fixture in `directory`, and the command that starts `catalog-agent.py` on it,
+    /// logging to the file it returns.
+    private func agent(for scenario: Scenario, in directory: URL) throws -> (command: String, log: URL) {
         let python = try #require(AgentRegistry.which("python3"))
         let agentScript = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/catalog-agent.py")
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("catalog-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = directory.appendingPathComponent("fixture.json")
         let log = directory.appendingPathComponent("agent.jsonl")
         let updates: ([Update]) -> String = { list in
@@ -153,32 +153,22 @@ import Testing
             + #""afterResponse":\#(updates(scenario.afterResponse)),"rejectSetter":\#(reject),"#
             + #""errorMessage":"\#(Self.adapterError)"}"#
         try Data(json.utf8).write(to: fixture)
-        let agent = "/usr/bin/env CATALOG_AGENT_FIXTURE='\(fixture.path)' CATALOG_AGENT_LOG='\(log.path)' "
+        let command = "/usr/bin/env CATALOG_AGENT_FIXTURE='\(fixture.path)' CATALOG_AGENT_LOG='\(log.path)' "
             + "'\(python)' '\(agentScript.path)'"
-        // `--model` is the root's, `--config-option` exec's own.
-        var global: [String] = []
-        var execOptions: [String] = []
-        switch scenario.request {
-        case .model(let model): global = ["--model", model]
-        case .config(let value): execOptions = ["--config-option", "llm=\(value)"]
-        }
-        let arguments = ["--format", "quiet", "--approve-all", "--cwd", directory.path] + global
-            + ["--agent", agent, "exec"] + execOptions + ["hi"]
-        let seen = scenario.afterResponse.count
-        let (code, err): (Int32, String) = await withIsolatedStore {
-            let capture = Console.Capture()
-            let code = await onThreadOfItsOwn {
-                let holdUntilSeen: @Sendable (ModelApplication.ControlState) async -> Void = {
-                    await $0.updatesSeen(seen)
-                }
-                return ExecCommand.$sessionAnswered.withValue(holdUntilSeen) {
-                    Console.$capture.withValue(capture) { runCommandLine(arguments) }
-                }
-            }
-            return (code, capture.err)
-        }
+        return (command, log)
+    }
+
+    /// A new directory for a run, and a way to remove it.
+    private func scratch() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("catalog-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// What the agent logged: each setter call as `<method> <id or config>=<value>`, and each prompt.
+    private func entries(_ log: URL) -> [(kind: String, call: String?)] {
         let lines = ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n")
-        let entries = lines.compactMap { line -> (kind: String, call: String?)? in
+        return lines.compactMap { line -> (kind: String, call: String?)? in
             guard let entry = try? JSONDecoder().decode(JSONValue.self, from: Data(line.utf8)),
                   case .object(let fields) = entry, case .string(let kind)? = fields["kind"]
             else { return nil }
@@ -190,7 +180,38 @@ import Testing
             if case .string(let model)? = params["modelId"] { return (kind, "\(method) \(model)") }
             return (kind, method)
         }
-        return Run(code: code, err: err, entries: entries)
+    }
+
+    /// Hold the run once `session/new` has answered until `scenario`'s updates after it have come.
+    private static func hold(_ scenario: Scenario) -> @Sendable (ModelApplication.ControlState) async -> Void {
+        let seen = scenario.afterResponse.count
+        return { await $0.updatesSeen(seen) }
+    }
+
+    private func run(_ scenario: Scenario) async throws -> Run {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (agent, log) = try agent(for: scenario, in: directory)
+        // `--model` is the root's, `--config-option` exec's own.
+        var global: [String] = []
+        var execOptions: [String] = []
+        switch scenario.request {
+        case .model(let model): global = ["--model", model]
+        case .config(let value): execOptions = ["--config-option", "llm=\(value)"]
+        }
+        let arguments = ["--format", "quiet", "--approve-all", "--cwd", directory.path] + global
+            + ["--agent", agent, "exec"] + execOptions + ["hi"]
+        let hold = Self.hold(scenario)
+        let (code, err): (Int32, String) = await withIsolatedStore {
+            let capture = Console.Capture()
+            let code = await onThreadOfItsOwn {
+                ExecCommand.$sessionAnswered.withValue(hold) {
+                    Console.$capture.withValue(capture) { runCommandLine(arguments) }
+                }
+            }
+            return (code, capture.err)
+        }
+        return Run(code: code, err: err, entries: entries(log))
     }
 
     @Test(.enabled(if: mockPythonAvailable), arguments: scenarios)
@@ -214,5 +235,59 @@ import Testing
             #expect(run.code != 0)
             #expect(run.err.contains(Self.adapterError), "\(run.err)")
         }
+    }
+
+    /// `compare` goes through acpx's `runOnce` too: a model the agent announced once
+    /// `session/new` had answered is one its run selects.
+    @Test(.enabled(if: mockPythonAvailable))
+    func compareSelectsByTheLatestCatalog() async throws {
+        let scenario = try #require(Self.scenarios.first { $0.name == "owned B-only startup model selection" })
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (agent, log) = try agent(for: scenario, in: directory)
+        let arguments = ["--format", "json", "--approve-all", "--cwd", directory.path, "--model", "b-target",
+                         "compare", agent, "hi"]
+        let hold = Self.hold(scenario)
+        let (code, out): (Int32, String) = await withIsolatedStore {
+            let capture = Console.Capture()
+            let code = await onThreadOfItsOwn {
+                ExecCommand.$sessionAnswered.withValue(hold) {
+                    Console.$capture.withValue(capture) { runCommandLine(arguments) }
+                }
+            }
+            return (code, capture.out)
+        }
+        let rows = try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [[String: Any]]
+        #expect(code == ExitCodes.success, "\(out)")
+        #expect(rows?.first?["status"] as? String == "ok", "\(out)")
+        #expect(entries(log).filter { $0.kind == "accepted" }.compactMap(\.call) == [Self.configCall("b-target")])
+    }
+
+    /// So does a flow's ACP turn.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aFlowTurnSelectsByTheLatestCatalog() async throws {
+        let scenario = try #require(Self.scenarios.first { $0.name == "owned B-only startup model selection" })
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (agentCommand, log) = try agent(for: scenario, in: directory)
+        let agent = FlowAgent(agentName: "catalog", agentCommand: agentCommand, agentArgv: nil, cwd: directory.path)
+        let hold = Self.hold(scenario)
+        try await withIsolatedStore {
+            let config = try ConfigLoader.load(cwd: directory.path)
+            var flags = try Flags.resolveGlobalFlags(ScannedArgs(), config: config)
+            flags.model = "b-target"
+            let sessions = FlowAgentSessions(
+                flags: flags, config: config, permission: .approveAll, permissionRules: nil, mcpServers: [])
+            let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+            let turn = FlowTurn(
+                agent: agent, prompt: [.text("hi")], onMessage: { _, _ in }, onSessionUpdate: { _ in },
+                onClientOperation: {}, onSessionReady: { _ in }, control: FlowTurnControl(attempt: attempt))
+            let sessionId = try await ExecCommand.$sessionAnswered.withValue(hold) {
+                try await sessions.runIsolated(turn)
+            }
+            #expect(sessionId == Self.sessionId)
+        }
+        #expect(entries(log).filter { $0.kind == "accepted" }.compactMap(\.call) == [Self.configCall("b-target")])
+        #expect(entries(log).filter { $0.kind == "prompt" }.count == 1)
     }
 }

@@ -223,11 +223,12 @@ public enum ModelApplication {
 
         /// For a test: once `count` `config_option_update`s have been seen since `session/new`
         /// answered, whatever session they name, as acpx's test holds a run until the updates
-        /// sent during its session's creation have come.
+        /// sent during its session's creation have come. A state that never saw the run's
+        /// `session/new` is not handed the connection's messages, and waits for none.
         public func updatesSeen(_ count: Int) async {
             await withCheckedContinuation { continuation in
                 let ready = lock.withLock {
-                    guard updatesSeen < count else { return true }
+                    guard creation != nil, updatesSeen < count else { return true }
                     waiters.append((count, continuation))
                     return false
                 }

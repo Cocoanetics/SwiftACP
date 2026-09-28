@@ -77,11 +77,16 @@ extension CompareCommand {
         on handle: ACPAgent, _ agent: AgentInvocation, _ job: Job, capture: RunCapture, interrupt: RunInterrupt
     ) async throws -> PromptResponse {
         let sideEffects = PromptSideEffects()
-        await handle.connection.setWireMessageObserver { sideEffects.observe($0, $1) }
+        // acpx's `runOnce` `controlState`, as `exec` keeps it.
+        let control = ModelApplication.ControlState()
+        await handle.connection.setWireMessageObserver {
+            sideEffects.observe($0, $1)
+            control.observe($0, $1)
+        }
         let session = try await ExecCommand.openSession(
             on: handle, agent: agent, mcpServers: job.mcpServers,
             meta: SessionLifecycle.sessionMeta(agent: agent, flags: job.flags), model: job.flags.model,
-            configOptions: [], timeoutMs: job.timeoutMs, quiet: true)
+            configOptions: [], control: control, timeoutMs: job.timeoutMs, quiet: true)
         capture.opened(session.id)
         interrupt.opened(session.id)
         let discarded = OutputRenderer(

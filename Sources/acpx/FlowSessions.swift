@@ -76,10 +76,13 @@ struct FlowAgentSessions: FlowSessionRunner {
         options.model = flags.model
         options.allowedTools = flags.allowedTools
         options.maxTurns = flags.maxTurns
+        // acpx's `runOnce` `controlState`, as `exec` keeps it.
+        let control = ModelApplication.ControlState()
+        await handle.connection.setWireMessageObserver { control.observe($0, $1) }
         let session = try await ExecCommand.openSession(
             on: handle, agent: invocation, mcpServers: mcpServers,
             meta: SessionMeta.build(options: options, agentCommand: agent.agentCommand), model: flags.model,
-            configOptions: [], timeoutMs: nil, quiet: ExecCommand.quietOutput(flags))
+            configOptions: [], control: control, timeoutMs: nil, quiet: ExecCommand.quietOutput(flags))
         events.opened(session.id)
         try turn.control.check()
         turn.onSessionReady(session.id)
