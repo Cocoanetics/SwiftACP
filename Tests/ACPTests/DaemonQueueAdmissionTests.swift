@@ -92,45 +92,49 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
             let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
-            func acpx(_ args: [String]) async -> OwnerLinesTests.Run {
-                let capture = Console.Capture()
-                let code: Int32 = await withCheckedContinuation { continuation in
-                    Thread {
-                        continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
-                            Console.$capture.withValue(capture) {
-                                runCommandLine(["--approve-all", "--agent", agent, "--cwd", directory.path] + args)
-                            }
-                        })
-                    }.start()
+            // Bounded, and not by cancellation, which a command blocked on its thread never sees: one
+            // that would wait fails the test rather than hang the run.
+            @Sendable func acpx(_ args: [String]) async throws -> OwnerLinesTests.Run {
+                try await withTimeout(milliseconds: 20_000) {
+                    let capture = Console.Capture()
+                    let code: Int32 = await withCheckedContinuation { continuation in
+                        Thread {
+                            continuation.resume(returning: DaemonClient.$standIn.withValue(daemon) {
+                                Console.$capture.withValue(capture) {
+                                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", directory.path] + args)
+                                }
+                            })
+                        }.start()
+                    }
+                    return OwnerLinesTests.Run(code: code, out: capture.out, err: capture.err, merged: capture.merged)
                 }
-                return OwnerLinesTests.Run(code: code, out: capture.out, err: capture.err, merged: capture.merged)
             }
-            let id = await acpx(["--format", "quiet", "sessions", "new"]).out
+            let id = try await acpx(["--format", "quiet", "sessions", "new"]).out
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let pid = ProcessInfo.processInfo.processIdentifier
             // A turn the agent holds until it is cancelled has the session first.
             let (goes, goingOut) = AsyncStream<Void>.makeStream()
             await backend.setPromptGoingOut { _ in goingOut.yield() }
-            let held = Task { await acpx(["--format", "quiet", "prompt", "hold turn"]) }
+            let held = Task { try await acpx(["--format", "quiet", "prompt", "hold turn"]) }
             try await nextEvent(goes)
 
-            let text = await acpx(["--verbose", "prompt", "--no-wait", "first"])
+            let text = try await acpx(["--verbose", "prompt", "--no-wait", "first"])
             #expect(text.code == 0)
             #expect(Self.isQueued(text.out, prefix: "[queued] ", suffix: "\n"))
             let line = "[acpx] queued prompt on active owner pid \(pid) for session \(id)\n"
             #expect(text.merged.contains(line + "[queued] "))
-            let json = await acpx(["--format", "json", "prompt", "--no-wait", "second"])
+            let json = try await acpx(["--format", "json", "prompt", "--no-wait", "second"])
             #expect(json.code == 0)
             let prefix = #"{"action":"prompt_queued","acpxRecordId":"\#(id)","requestId":""#
             #expect(Self.isQueued(json.out, prefix: prefix, suffix: "\"}\n"))
-            let quiet = await acpx(["--format", "quiet", "prompt", "--no-wait", "third"])
+            let quiet = try await acpx(["--format", "quiet", "prompt", "--no-wait", "third"])
             #expect(quiet.code == 0)
             #expect(quiet.out.isEmpty)
 
-            #expect(await acpx(["cancel"]).code == 0)
-            _ = await held.value
+            #expect(try await acpx(["cancel"]).code == 0)
+            _ = try await held.value
             // A prompt that waits comes after them: once it is over, so are they.
-            #expect(await acpx(["--format", "quiet", "prompt", "after"]).code == 0)
+            #expect(try await acpx(["--format", "quiet", "prompt", "after"]).code == 0)
             let asked = try await backend.sessionHistory(sessionId: id).filter { $0.role == "user" }
             #expect(asked.map(\.textPreview) == ["hold turn", "first", "second", "third", "after"])
             await backend.releaseAll()
