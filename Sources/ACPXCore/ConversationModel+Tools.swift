@@ -56,7 +56,7 @@ extension ConversationModel {
             func form(_ key: String, _ value: JSONValue?) -> WireJSON? {
                 guard let value, let wire = raw?[key] else { return nil }
                 switch wire {
-                case .object, .array: return wire.jsonValue == value ? wire : nil
+                case .object, .array: return wire.holds(value) ? wire : nil
                 default: return nil
                 }
             }

@@ -325,6 +325,37 @@ extension WireJSON {
         }
     }
 
+    /// Whether this is `value`, as JavaScript sees the two: numbers are the same number
+    /// however each was read — JSONFoundation reads a large integer as one, this as a double
+    /// (`9000000000000000`) — objects have the same members whatever their order, and arrays
+    /// the same items in turn (#242 review).
+    func holds(_ value: JSONValue) -> Bool {
+        switch (self, value) {
+        case (.null, .null):
+            return true
+        case (.bool(let flag), .bool(let other)):
+            return flag == other
+        case (.number(let number), .integer(let other)):
+            return number == Double(other)
+        case (.number(let number), .unsignedInteger(let other)):
+            return number == Double(other)
+        case (.number(let number), .double(let other)):
+            return number == other
+        case (.string, .string(let other)):
+            return stringValue == other
+        case (.array(let items), .array(let others)):
+            return items.count == others.count && zip(items, others).allSatisfy { $0.holds($1) }
+        case (.object(let members), .object(let others)):
+            var byName: [String: WireJSON] = [:]
+            // A repeated member counts as JavaScript counts it: its last value.
+            for member in members { byName[String(decoding: member.key, as: UTF16.self)] = member.value }
+            return byName.count == others.count
+                && others.allSatisfy { name, other in byName[name]?.holds(other) == true }
+        default:
+            return false
+        }
+    }
+
     /// The value as JSONFoundation's `JSONValue` — object member order is lost. A number
     /// too large for a double (`1e400`) parses to infinity, as in `JSON.parse`, and
     /// becomes `null`, which is how `JSON.stringify` sends it on.
