@@ -63,13 +63,12 @@ import Testing
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let script = directory.appendingPathComponent(name)
-        try """
+        try await TestScripts.write("""
             #!/bin/sh
             exec /usr/bin/env EXIT_AGENT_AUTH=1 EXIT_AGENT_AUTH_METHODS=xai.api_key,cached_token \
               '\(python)' '\(AgentLogTests.fixture.path)'
 
-            """.write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+            """, to: script.path)
         // Only what the case gives: a key this process has would sign the agent in otherwise.
         var caller = ProcessInfo.processInfo.environment.filter { key, _ in
             key != "XAI_API_KEY" && !key.hasPrefix("ACPX_AUTH_")

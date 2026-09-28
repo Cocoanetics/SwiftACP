@@ -70,8 +70,7 @@ struct ChildSpawnTests {
             ("plain", "echo plain\n", 0o644), ("orphan", "#!/nonexistent/interpreter\n", 0o755),
             ("text", "echo text\n", 0o755), ("runs", "#!/bin/sh\necho ran\n", 0o755)
         ] {
-            files.createFile(
-                atPath: "\(directory)/\(name)", contents: Data(text.utf8), attributes: [.posixPermissions: mode])
+            try await TestScripts.write(text, to: "\(directory)/\(name)", mode: mode)
         }
         for withoutChangeDirectory in Self.ways {
             for (command, code) in [
