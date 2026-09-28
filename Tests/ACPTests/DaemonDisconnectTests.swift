@@ -203,7 +203,7 @@ final class DroppingDaemon: @unchecked Sendable {
                     reply["result"] = [
                         "protocolVersion": params?["protocolVersion"] ?? "2025-06-18",
                         "capabilities": ["tools": [String: Any](), "logging": [String: Any]()],
-                        "serverInfo": ["name": "acpxd", "version": "0"]
+                        "serverInfo": ["name": "acpxd", "version": ACPXDaemon.version]
                     ]
                 case "tools/list":
                     reply["result"] = ["tools": [Any]()]

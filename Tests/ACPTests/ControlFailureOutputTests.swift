@@ -83,9 +83,10 @@ struct ControlFailureOutputTests {
             + #","sessionId":"unknown"}}}"# + "\n")
     }
 
-    /// A daemon from before failures said more than their message reports a control past its
-    /// `--timeout` by the message alone: still the ``TimeoutError`` it was (Codex review on #288).
-    /// A failure the daemon said more of stays as it said — an owner's detail code and origin too.
+    /// A daemon hosting a backend that says nothing more of its failures than their message reports
+    /// a control past its `--timeout` by the message alone: still the ``TimeoutError`` it was (Codex
+    /// reviews on #288, #292). A failure the daemon said more of stays as it said — an owner's detail
+    /// code and origin too.
     @Test func aTimeoutSaidByItsMessageAloneIsStillATimeout() async {
         await #expect(throws: TimeoutError(milliseconds: 300)) {
             try await DaemonClient.timingOut(after: 300) {

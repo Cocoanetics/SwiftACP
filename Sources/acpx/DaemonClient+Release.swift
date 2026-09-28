@@ -45,20 +45,4 @@ extension DaemonClient {
             return .refused(error)
         }
     }
-
-    /// Whether a *running* daemon lacks ``ACPXDaemon/releaseSession(sessionId:)``: an acpxd
-    /// from before it (#162), which lets a session's agent go only by closing the session.
-    /// With none running, nothing holds a session, and nothing is lacking.
-    static func lacksRelease() async -> Bool {
-        guard let proxy = await tryConnectLive(configure: { _ in })?.proxy else { return false }
-        let lacks = await lacksRelease(on: proxy)
-        await proxy.disconnect()
-        return lacks
-    }
-
-    /// Whether the daemon behind `proxy` lacks `releaseSession`, or cannot say what it has.
-    static func lacksRelease(on proxy: MCPServerProxy) async -> Bool {
-        guard let tools = try? await proxy.listTools() else { return true }
-        return !tools.contains { $0.name == "releaseSession" }
-    }
 }
