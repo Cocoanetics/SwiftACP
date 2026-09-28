@@ -40,9 +40,13 @@ extension DaemonToolsTests {
             await daemon.live[id]?.agent.connection.waitUntilClosed()
             let sessionsBefore = try methods().filter { $0 == "session/new" }.count
 
-            let error = await #expect(throws: DaemonError.self) {
+            // The session's owner answers the refusal under its own codes, as acpx's owner
+            // keeps a `SessionResumeRequiredError`'s (#171).
+            let error = await #expect(throws: OwnedControlFailure.self) {
                 _ = try await daemon.setMode(sessionId: id, modeId: "auto")
             }
+            #expect(error?.cause is DaemonError)
+            #expect(error?.detailCode == "SESSION_RESUME_REQUIRED" && error?.origin == "acp")
             #expect(error?.localizedDescription.hasPrefix(
                 "Persistent ACP session \(id) could not be resumed") == true)
             #expect(try methods().filter { $0 == "session/new" }.count == sessionsBefore)

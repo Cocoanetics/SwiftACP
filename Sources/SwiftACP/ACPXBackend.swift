@@ -53,6 +53,9 @@ public protocol ACPXBackend: Sendable {
     func callOffCreation(creationToken: String) async throws -> Bool
     func sessionStatus(sessionId: String) async -> LiveSessionStatus
     func releaseSession(sessionId: String, turnToken: String?) async throws -> Bool
+    /// What a tool's failure says beyond its message (``ToolFailure``), which goes to the
+    /// caller with the tool's error result; `nil` when it says nothing more.
+    func toolFailure(for error: Error) -> ToolFailure?
 }
 
 /// The config a caller read once, which a session's agents are started with in place of the
@@ -194,5 +197,10 @@ extension ACPXBackend {
     /// A backend that holds no sessions as an owner has no owner to take a cancel.
     public func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult {
         SessionCancelResult(cancelled: try await cancelSession(sessionId: sessionId, turnToken: turnToken))
+    }
+
+    /// A backend whose failures say nothing beyond their messages.
+    public func toolFailure(for error: Error) -> ToolFailure? {
+        nil
     }
 }

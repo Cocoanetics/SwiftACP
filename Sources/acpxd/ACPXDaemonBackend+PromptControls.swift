@@ -38,12 +38,13 @@ extension ACPXDaemonBackend {
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
         if let record = findRecord(sessionId), let ticket = tickets[record.acpxRecordId], !ticket.sealed {
-            // Its failure is said as one between turns is (``AgentFailure/shown(_:)``).
+            // Its failure is said as one between turns is (``AgentFailure/shown(_:)``), and
+            // answered as the session's owner answers it (``OwnedControlFailure``).
             do {
                 let value = try await control(duringPromptOf: record.acpxRecordId, ticket, timeout: timeout, step)
                 return ControlOutcome(value: value, resumed: false, owned: true)
             } catch {
-                throw AgentFailure.shown(error)
+                throw OwnedControlFailure(AgentFailure.shown(error))
             }
         }
         return try await withSessionTurn(
