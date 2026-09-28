@@ -17,6 +17,9 @@ struct WindowsSpawnCommand: Equatable {
         var exists: @Sendable (String) -> Bool
         /// What libuv's `search_path` looks for: a file, not a directory.
         var isFile: @Sendable (String) -> Bool
+        /// Node's `fs.readFileSync(path, "utf8")`: a file's text, with what is not UTF-8 replaced;
+        /// `nil` when it cannot be read.
+        var read: @Sendable (String) -> String? = { _ in nil }
 
         /// This machine's.
         static let local = FileSystem(
@@ -24,7 +27,8 @@ struct WindowsSpawnCommand: Equatable {
             isFile: { path in
                 var isDirectory: ObjCBool = false
                 return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && !isDirectory.boolValue
-            })
+            },
+            read: { FileManager.default.contents(atPath: $0).map { String(decoding: $0, as: UTF8.self) } })
     }
 }
 
@@ -83,6 +87,104 @@ extension WindowsSpawnCommand {
               fileSystem.isFile(resolved)
         else { return nil }
         return WindowsPath.resolve([resolved], processDirectory: processDirectory)
+    }
+
+    /// acpx's `resolveClaudeCodeExecutable` on `win32`: the Claude Code program Claude's adapter is
+    /// to run (`CLAUDE_CODE_EXECUTABLE`), unless the environment names one already.
+    static func claudeCodeExecutable(
+        environment: [String: String], cwd: String?, fileSystem: FileSystem, processDirectory: String
+    ) -> String? {
+        if let named = value(of: "CLAUDE_CODE_EXECUTABLE", in: environment), !named.isEmpty { return nil }
+        return executablePath(
+            "claude", environment: environment, cwd: cwd, fileSystem: fileSystem, processDirectory: processDirectory)
+    }
+
+    /// acpx's `resolveWindowsExecutablePath`: a native program for `command`, to start without a
+    /// shell. An `.exe` is itself. A `.cmd`, `.bat` or `.ps1` shim gives the `.exe` beside it, or
+    /// else the first `.exe` it names from its own directory. Anything else gives none.
+    static func executablePath(
+        _ command: String, environment: [String: String], cwd: String?, fileSystem: FileSystem,
+        processDirectory: String
+    ) -> String? {
+        guard let resolved = resolve(command, environment: environment, cwd: cwd, fileSystem: fileSystem)
+        else { return nil }
+        let absolute = WindowsPath.resolve([resolved], processDirectory: processDirectory)
+        let extensionName = WindowsPath.extname(absolute).lowercased()
+        if extensionName == ".exe" { return absolute }
+        guard [".cmd", ".bat", ".ps1"].contains(extensionName) else { return nil }
+        let sibling = String(decoding: absolute.utf16.dropLast(extensionName.utf16.count), as: UTF16.self) + ".exe"
+        if fileSystem.exists(sibling) { return sibling }
+        return wrapperExecutable(absolute, fileSystem: fileSystem, processDirectory: processDirectory)
+    }
+
+    /// acpx's `resolveWindowsWrapperExecutable`: the first of the shim's quoted tokens that names,
+    /// from `%dp0%` or `%~dp0`, an `.exe` that is there.
+    private static func wrapperExecutable(
+        _ wrapper: String, fileSystem: FileSystem, processDirectory: String
+    ) -> String? {
+        guard fileSystem.exists(wrapper), let text = fileSystem.read(wrapper) else { return nil }
+        for token in quotedTokens(in: Array(text.utf16)) {
+            guard let named = pathAfterScriptDirectory(in: token) else { continue }
+            let candidate = WindowsPath.resolve(
+                [WindowsPath.dirname(wrapper), named], processDirectory: processDirectory)
+            if WindowsPath.extname(candidate).lowercased() == ".exe", fileSystem.exists(candidate) { return candidate }
+        }
+        return nil
+    }
+
+    /// `/"([^"\r\n]*)"/g`'s captures: what each pair of quotes within one line holds.
+    private static func quotedTokens(in units: [UInt16]) -> [[UInt16]] {
+        let quote: UInt16 = 0x22
+        let lineEnds: Set<UInt16> = [0x0D, 0x0A]
+        var tokens: [[UInt16]] = []
+        var index = 0
+        while index < units.count {
+            guard units[index] == quote else {
+                index += 1
+                continue
+            }
+            let end = units[(index + 1)...].firstIndex { $0 == quote || lineEnds.contains($0) }
+            if let end, units[end] == quote {
+                tokens.append(Array(units[(index + 1)..<end]))
+                index = end + 1
+            } else {
+                index += 1
+            }
+        }
+        return tokens
+    }
+
+    /// acpx's `resolveWindowsWrapperToken` up to the path: what `/%~?dp0%?\s*[\\/]*(.*)$/i` captures
+    /// from the first place it matches, trimmed, runs of slashes as one backslash and none leading.
+    private static func pathAfterScriptDirectory(in token: [UInt16]) -> String? {
+        let lineEnds: Set<UInt16> = [0x0A, 0x0D, 0x2028, 0x2029]
+        let isSeparator = { (unit: UInt16) in unit == 0x5C || unit == 0x2F }
+        for start in token.indices where token[start] == 0x25 {
+            var index = start + 1
+            if index < token.count, token[index] == 0x7E { index += 1 }
+            let name = String(decoding: token[index..<min(index + 3, token.count)], as: UTF16.self)
+            guard name.lowercased() == "dp0" else { continue }
+            index += 3
+            if index < token.count, token[index] == 0x25 { index += 1 }
+            while index < token.count, let scalar = Unicode.Scalar(token[index]),
+                  TerminalOutputLimit.isJavaScriptWhitespace(scalar) { index += 1 }
+            while index < token.count, isSeparator(token[index]) { index += 1 }
+            let rest = token[index...]
+            guard !rest.contains(where: lineEnds.contains) else { continue }
+            let trimmed = Array(TerminalOutputLimit.javaScriptTrimmed(String(decoding: rest, as: UTF16.self)).utf16)
+            guard !trimmed.isEmpty else { return nil }
+            var collapsed: [UInt16] = []
+            for unit in trimmed {
+                if isSeparator(unit) {
+                    if collapsed.last != 0x5C { collapsed.append(0x5C) }
+                } else {
+                    collapsed.append(unit)
+                }
+            }
+            if collapsed.first == 0x5C { collapsed.removeFirst() }
+            return String(decoding: collapsed, as: UTF16.self)
+        }
+        return nil
     }
 
     /// acpx's `commandCandidates`: `command` as it is if it has an extension, else with each of

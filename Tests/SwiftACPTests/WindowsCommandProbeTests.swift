@@ -102,6 +102,28 @@ struct WindowsCommandProbeTests {
         #expect(arguments == ["--experimental-acp"])
     }
 
+    /// Claude's adapter is given Claude Code's program, found as acpx's `resolveClaudeCodeExecutable`
+    /// finds it: here the `.exe` first on `PATH`. One the environment names is left to it, and
+    /// another agent is given none.
+    @Test func claudesAdapterIsGivenClaudeCodesProgram() async throws {
+        let scripts = try Scripts([:])
+        defer { scripts.remove() }
+        let program = scripts.directory + "\\claude.exe"
+        FileManager.default.createFile(atPath: program, contents: Data())
+        func plan(_ executable: String, _ environment: [String: String]) async -> AgentLaunchCompat.Plan {
+            var launch = ProcessLaunch(
+                executable: executable, environment: environment, workingDirectory: scripts.directory)
+            return await AgentLaunchCompat.Plan(
+                &launch, limits: nil, clientInfo: Implementation(name: "test"), capabilities: ClientCapabilities(),
+                callerEnvironment: [:], probe: { _, _, _ in nil })
+        }
+        let claude = await plan("claude-agent-acp", scripts.environment)
+        #expect(claude.claudeCodeExecutable(cwd: scripts.directory) == WindowsPath.normalize(program))
+        let named = scripts.environment.merging(["CLAUDE_CODE_EXECUTABLE": #"D:\claude.exe"#]) { $1 }
+        #expect(await plan("claude-agent-acp", named).claudeCodeExecutable(cwd: scripts.directory) == nil)
+        #expect(await plan("codex-acp", scripts.environment).claudeCodeExecutable(cwd: scripts.directory) == nil)
+    }
+
     /// The launch asks Copilot's shim for its help, and refuses a CLI that has no `--acp`.
     @Test func theLaunchRefusesACopilotWithoutAcp() async throws {
         let scripts = try Scripts(["copilot.cmd": ["echo Usage: copilot [options]"]])

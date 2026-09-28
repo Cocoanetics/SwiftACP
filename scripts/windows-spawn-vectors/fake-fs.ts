@@ -5,20 +5,25 @@ import nodePath from "node:path";
 
 const existing = new Set<string>();
 const directories = new Set<string>();
+const texts = new Map<string, string>();
 const canonical = (file: string) => nodePath.win32.resolve(file).toLowerCase();
 
 export const fakeFs = {
-  set(files: string[], folders: string[] = []) {
+  set(files: string[], folders: string[] = [], contents: Record<string, string> = {}) {
     existing.clear();
     directories.clear();
+    texts.clear();
     for (const file of files) existing.add(canonical(file));
     for (const folder of folders) directories.add(canonical(folder));
+    for (const [file, text] of Object.entries(contents)) texts.set(canonical(file), text);
   },
   existsSync(file: string): boolean {
     return existing.has(canonical(file)) || directories.has(canonical(file));
   },
-  readFileSync(): string {
-    throw new Error("not in the fake file system");
+  readFileSync(file: string): string {
+    const text = texts.get(canonical(file));
+    if (text === undefined) throw new Error("not in the fake file system");
+    return text;
   },
   statSync(file: string): { isFile: () => boolean } | undefined {
     if (existing.has(canonical(file))) return { isFile: () => true };

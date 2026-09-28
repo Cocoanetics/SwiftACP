@@ -2641,6 +2641,258 @@
       "expected": null
     }
   ],
+  "claudeExecutable": [
+    {
+      "name": "an exe on PATH",
+      "env": {
+        "Path": "C:\\Users\\me\\.local\\bin;C:\\Users\\me\\AppData\\Roaming\\npm",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\.local\\bin\\claude.exe"
+      ],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\.local\\bin\\claude.exe"
+    },
+    {
+      "name": "a cmd with an exe beside it",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+      ],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+    },
+    {
+      "name": "npm's shim for the JavaScript CLI",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd": "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n"
+      },
+      "processDirectory": "C:\\work",
+      "expected": null
+    },
+    {
+      "name": "a shim naming the native program",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd": "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\" %*\r\n"
+      },
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
+    },
+    {
+      "name": "%~dp0 and ..",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\claude\\claude.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd": "@\"%~dp0\\..\\claude\\claude.exe\" %*"
+      },
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\claude\\claude.exe"
+    },
+    {
+      "name": "slashes and case",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.bat",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\bin\\claude.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.bat": "\"%DP0%/bin//claude.exe\" %*"
+      },
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\bin\\claude.exe"
+    },
+    {
+      "name": "space after the directory",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude-native.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd": "\"%dp0%  \\claude-native.exe\" %*"
+      },
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\claude-native.exe"
+    },
+    {
+      "name": "the first program there wins",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\b\\claude.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd": "\"%dp0%\" \"%dp0%\\a\\claude.exe\" \"%dp0%\\b\\claude.exe\" \"%dp0%\\c\\claude.exe\""
+      },
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\b\\claude.exe"
+    },
+    {
+      "name": "a quote left open on its line",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude-native.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd": "\"%dp0%\\claude-native.exe\r\n\"%dp0%\\claude-native.exe\""
+      },
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\claude-native.exe"
+    },
+    {
+      "name": "a ps1 with an exe beside it",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".PS1"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.ps1",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+      ],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+    },
+    {
+      "name": "a ps1 naming nothing it can read",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".PS1"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.ps1",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\bin\\claude.exe"
+      ],
+      "contents": {
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.ps1": "& \"$basedir/bin/claude.exe\" $args"
+      },
+      "processDirectory": "C:\\work",
+      "expected": null
+    },
+    {
+      "name": "CLAUDE_CODE_EXECUTABLE named",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC",
+        "claude_code_executable": "D:\\claude.exe"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+      ],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": null
+    },
+    {
+      "name": "CLAUDE_CODE_EXECUTABLE empty",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC",
+        "CLAUDE_CODE_EXECUTABLE": ""
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+      ],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.exe"
+    },
+    {
+      "name": "a relative PATH entry",
+      "env": {
+        "Path": "tools",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\proj",
+      "files": [
+        "C:\\proj\\tools\\claude.exe"
+      ],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": "C:\\proj\\tools\\claude.exe"
+    },
+    {
+      "name": "nothing found",
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [],
+      "contents": {},
+      "processDirectory": "C:\\work",
+      "expected": null
+    }
+  ],
   "paths": {
     "normalize": [
       {
@@ -3113,6 +3365,76 @@
       {
         "input": "..cmd",
         "output": ".cmd"
+      }
+    ],
+    "dirname": [
+      {
+        "input": "C:\\a\\b.cmd",
+        "output": "C:\\a"
+      },
+      {
+        "input": "C:\\a\\",
+        "output": "C:\\"
+      },
+      {
+        "input": "C:\\a",
+        "output": "C:\\"
+      },
+      {
+        "input": "C:\\",
+        "output": "C:\\"
+      },
+      {
+        "input": "C:",
+        "output": "C:"
+      },
+      {
+        "input": "C:x",
+        "output": "C:"
+      },
+      {
+        "input": "\\\\srv\\sh\\x.cmd",
+        "output": "\\\\srv\\sh\\"
+      },
+      {
+        "input": "\\\\srv\\sh",
+        "output": "\\\\srv\\sh"
+      },
+      {
+        "input": "\\\\srv\\sh\\",
+        "output": "\\\\srv\\sh\\"
+      },
+      {
+        "input": "/a/b",
+        "output": "/a"
+      },
+      {
+        "input": "a",
+        "output": "."
+      },
+      {
+        "input": "",
+        "output": "."
+      },
+      {
+        "input": "\\",
+        "output": "\\"
+      },
+      {
+        "input": "a\\\\b\\\\",
+        "output": "a\\"
+      },
+      {
+        "input": "C:\\a\\\\\\b",
+        "output": "C:\\a\\\\"
+      },
+      {
+        "input": "\\\\srv",
+        "output": "\\"
+      },
+      {
+        "input": "C:a\\b",
+        "output": "C:a"
       }
     ]
   }

@@ -11,7 +11,7 @@ repo=$(cd "$here/../.." && pwd)
 : "${ACPX_CHECKOUT:?set ACPX_CHECKOUT to an acpx clone}"
 ACPX_TAG=${ACPX_TAG:-v0.19.3}
 export ACPX_TAG
-work=$(mktemp -d)
+work=$(mktemp -d "${TMPDIR:-/tmp}/windows-spawn-vectors.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 git -C "$ACPX_CHECKOUT" show "$ACPX_TAG:src/spawn-command-options.ts" \
     | sed -e 's#^import fs from "node:fs";#import { fakeFs as fs } from "./fake-fs.ts";#' \
@@ -19,5 +19,12 @@ git -C "$ACPX_CHECKOUT" show "$ACPX_TAG:src/spawn-command-options.ts" \
     > "$work/spawn-command-options.ts"
 grep -q 'nodePath.win32' "$work/spawn-command-options.ts"
 grep -q 'fakeFs as fs' "$work/spawn-command-options.ts"
+# resolveClaudeCodeExecutable, from agent-command.ts, with the resolution above.
+git -C "$ACPX_CHECKOUT" show "$ACPX_TAG:src/acp/agent-command.ts" \
+    | awk '/^export function resolveClaudeCodeExecutable/,/^}/' \
+    | sed -e '1i\
+import { readWindowsEnvValue, resolveWindowsExecutablePath } from "./spawn-command-options.ts";' \
+    > "$work/agent-command.ts"
+grep -q 'resolveWindowsExecutablePath("claude"' "$work/agent-command.ts"
 cp "$here/fake-fs.ts" "$here/cases.ts" "$work/"
 "${NODE:-node}" "$work/cases.ts" > "$repo/Tests/SwiftACPTests/Fixtures/acpx-windows-spawn.json"
