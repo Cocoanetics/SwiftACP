@@ -133,6 +133,43 @@ struct OutputRendererTests {
         #expect(err.isEmpty)
     }
 
+    /// A refused update's `toolCallId` can be any JSON value. It names its tool as acpx 0.19.3's
+    /// `Map` keys it, and shows as JavaScript's `String()` shows it (#270 review):
+    /// - a number as JavaScript prints it, `1e20` too, rather than trapping;
+    /// - each object or array a new tool;
+    /// - `5` and `5.0` one tool, `5` and `[5]` two;
+    /// - one `null`, and `true` apart from `"true"`.
+    /// A status or kind of another type reads as JavaScript's text of it. Each case is what acpx
+    /// printed for the same updates.
+    @Test func refusedUpdatesNameTheirToolAsAcpxsMapKeysIt() throws {
+        let cases: [(updates: [String], printed: String)] = [
+            ([#"{"sessionUpdate":"tool_call","toolCallId":1e20,"status":"pending"}"#,
+              #"{"sessionUpdate":"tool_call","toolCallId":1e21,"status":"pending"}"#,
+              #"{"sessionUpdate":"tool_call","toolCallId":0.1,"status":"pending"}"#],
+             "[tool] 100000000000000000000 (pending)\n\n[tool] 1e+21 (pending)\n\n[tool] 0.1 (pending)\n"),
+            ([#"{"sessionUpdate":"tool_call","toolCallId":{},"title":"A","status":"pending"}"#,
+              #"{"sessionUpdate":"tool_call_update","toolCallId":{},"status":"in_progress"}"#],
+             "[tool] A (pending)\n\n[tool] [object Object] (running)\n"),
+            ([#"{"sessionUpdate":"tool_call","toolCallId":5,"status":"pending"}"#,
+              #"{"sessionUpdate":"tool_call_update","toolCallId":[5],"status":"in_progress"}"#,
+              #"{"sessionUpdate":"tool_call_update","toolCallId":5.0,"status":"in_progress"}"#],
+             "[tool] 5 (pending)\n\n[tool] 5 (running)\n"),
+            ([#"{"sessionUpdate":"tool_call","title":"T","status":1e20,"kind":1e20}"#,
+              #"{"sessionUpdate":"tool_call_update","status":"completed","kind":[1,[2,null],{}]}"#],
+             "[tool] T (running)\n\n[tool] T (completed)\n  kind: 1,2,,[object Object]\n"),
+            ([#"{"sessionUpdate":"tool_call","toolCallId":null,"title":"N","status":"pending"}"#,
+              #"{"sessionUpdate":"tool_call_update","toolCallId":null,"status":"in_progress"}"#,
+              #"{"sessionUpdate":"tool_call","toolCallId":true,"status":"pending"}"#,
+              #"{"sessionUpdate":"tool_call_update","toolCallId":"true","status":"in_progress"}"#],
+             "[tool] N (pending)\n\n[tool] true (pending)\n\n[tool] true (running)\n")
+        ]
+        for (json, printed) in cases {
+            let updates = try json.map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+            let (text, _) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+            #expect(text == printed, "\(json)")
+        }
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",

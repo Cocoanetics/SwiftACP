@@ -43,7 +43,7 @@ final class OutputRenderer: @unchecked Sendable {
     private let useColor: Bool
 
     // Text-mode state
-    var toolStates: [String: ToolRenderState] = [:]
+    var toolStates: [ToolKey: ToolRenderState] = [:]
     private var thoughtBuffer = ""
     private var wroteAny = false
     private var atLineStart = true

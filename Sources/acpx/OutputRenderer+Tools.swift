@@ -8,14 +8,14 @@ import SwiftACP
 extension OutputRenderer {
     // MARK: Tool state machine (mirrors renderToolUpdate)
 
-    /// Merge an update into the state of tool `id` — kept under `key` when that is not the id's
-    /// text — and render the tool when acpx would.
+    /// Merge an update into the state of tool `id` — kept under `key`, when that is not the id
+    /// as a string — and render the tool when acpx would.
     func renderTool(
-        id: String, key: String? = nil, title: String?, status: ToolCallStatus?, kind: ToolKind?,
+        id: String, key: ToolKey? = nil, title: String?, status: ToolCallStatus?, kind: ToolKind?,
         locations: [ToolCallLocation]?, rawInput: JSONValue?, rawOutput: JSONValue?,
         content: [ToolCallContent]?, clearing nulled: Set<String> = []
     ) {
-        let key = key ?? id
+        let key = key ?? .string(id)
         let state = toolStates[key] ?? {
             let created = ToolRenderState(id: id)
             toolStates[key] = created
@@ -49,13 +49,21 @@ extension OutputRenderer {
 
     /// A tool update acpx's ACP SDK refuses — without a member its schema requires — rendered all
     /// the same, as acpx's formatter renders the wire message as it came (#175): whatever members it
-    /// has, merged into the tool's state as they are. Its `toolCallId` is JavaScript's, shown as
-    /// `String()` shows it: one without keys the one state of `undefined`, titled so until a title
-    /// comes, and one that is no string is a tool of its own, as a `Map` keys it.
+    /// has, merged into the tool's state as they are. Its `toolCallId` is JavaScript's: shown as
+    /// `String()` shows it, and keyed as a `Map` keys it (``ToolKey``) — one without is the one
+    /// state of `undefined`, titled so until a title comes.
     func renderRefusedTool(_ payload: JSONValue) {
         guard case .object(let members) = payload else { return }
-        let id = members["toolCallId"].map(Self.javaScriptText) ?? "undefined"
-        let key: String = if case .string(let text)? = members["toolCallId"] { text } else { "\u{0}" + id }
+        let toolCallId = members["toolCallId"]
+        let id = toolCallId.map(Self.javaScriptText) ?? "undefined"
+        let key: ToolKey = switch toolCallId {
+        case nil: .undefined
+        case .null?: .null
+        case .bool(let flag)?: .bool(flag)
+        case .string(let text)?: .string(text)
+        case .integer?, .unsignedInteger?, .double?: .number(id)
+        case .array?, .object?: .object(UUID())
+        }
         let nulled = Set(members.filter { $0.value == .null }.map(\.key))
         let title: String? = if case .string(let text)? = members["title"] { text } else { nil }
         renderTool(
@@ -77,10 +85,10 @@ extension OutputRenderer {
         switch value {
         case .null: return "null"
         case .bool(let flag): return flag ? "true" : "false"
-        case .integer(let number): return String(number)
-        case .unsignedInteger(let number): return String(number)
-        case .double(let number):
-            return number == number.rounded() && abs(number) < 1e21 ? String(Int64(number)) : String(number)
+        // A number as JavaScript has it — every JSON number a double — and shows it (#270 review).
+        case .integer(let number): return WireJSON.javaScriptString(for: Double(number))
+        case .unsignedInteger(let number): return WireJSON.javaScriptString(for: Double(number))
+        case .double(let number): return WireJSON.javaScriptString(for: number)
         case .string(let text): return text
         case .array(let items): return items.map { $0 == .null ? "" : javaScriptText($0) }.joined(separator: ",")
         case .object: return "[object Object]"
@@ -128,6 +136,21 @@ extension OutputRenderer {
         ]
         return parts.joined(separator: "\u{1F}")
     }
+}
+
+/// A tool's key among the text renderer's tool states: a `toolCallId` as a JavaScript `Map` keys
+/// it (SameValueZero), for an update acpx's SDK refuses can name its tool with any JSON value
+/// (#270 review).
+enum ToolKey: Hashable {
+    case string(String)
+    case undefined
+    case null
+    case bool(Bool)
+    /// A number, by the text JavaScript shows it as: `5` and `5.0` are one number, as `0` and `-0`
+    /// are.
+    case number(String)
+    /// An object or an array, a new one with each update — no other update's key.
+    case object(UUID)
 }
 
 final class ToolRenderState {
