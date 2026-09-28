@@ -27,7 +27,9 @@ import Testing
         for descriptor: Int32 in 0...2 {
             posix_spawn_file_actions_addopen(&actions, descriptor, "/dev/null", O_RDWR, 0)
         }
-        let argv: [UnsafeMutablePointer<CChar>?] = [argv0, "30"].map { strdup($0) } + [nil]
+        // Typed apart: Swift 6.3 reads a literal mapped by `strdup` as its pointers.
+        let words: [String] = [argv0, "30"]
+        let argv: [UnsafeMutablePointer<CChar>?] = words.map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0
         let result = posix_spawn(&pid, "/bin/sleep", &actions, &attributes, argv, nil)
