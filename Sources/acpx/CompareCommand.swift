@@ -76,13 +76,16 @@ enum CompareCommand {
         }
         let format = scan.flag("json") ? "json" : flags.format
 
-        let promptFile = scan.string("file") ?? scan.string("prompt-file")
-        let (agents, promptText) = try splitArgs(context.positionals, promptFile: promptFile)
+        let promptFile = try resolvePromptFile(file: scan.string("file"), promptFile: scan.string("prompt-file"))
+        let (agents, promptText) = try splitArgs(
+            context.positionals, promptFile: promptFile, promptTokens: promptTokens(context.levels))
+        // The permission mode before the prompt is read, as acpx checks it.
+        let permission = try SessionLifecycle.permissionPolicy(flags, config: context.config)
         let prompt = try PromptInputResolver.contentBlocks(PromptInputResolver.resolve(
-            words: promptText.isEmpty ? [] : [promptText], file: promptFile, cwd: flags.cwd))
+            words: promptText.isEmpty ? [] : [promptText], file: promptFile, cwd: flags.cwd,
+            positionalLabel: "final argument"))
         let job = Job(
-            prompt: prompt, flags: flags, config: context.config,
-            permission: try SessionLifecycle.permissionPolicy(flags, config: context.config),
+            prompt: prompt, flags: flags, config: context.config, permission: permission,
             permissionRules: try flags.permissionRules(), mcpServers: try context.config.mcpServerSpecs())
 
         let (rows, interrupted) = runAgents(agents) { runAgent($0, job) }
@@ -111,7 +114,42 @@ enum CompareCommand {
         return (rows, signal.happened)
     }
 
-    private static func splitArgs(_ args: [String], promptFile: String?) throws -> ([String], String) {
+    /// acpx's `scanCompareArgs(program.args.slice(1))`: the words after the first `--` among those
+    /// the root hands `compare`, or `nil` without one. A `--` given to `compare` is its own; after a
+    /// `--` given to the root, `compare` gets its words as they are, unparsed, and the first `--`
+    /// among them that is no option's value starts the prompt — while `compare` takes it for an
+    /// agent, as acpx does (#254 review).
+    static func promptTokens(_ levels: [Commander.Level]) -> [String]? {
+        if let own = levels.last?.separated { return own }
+        guard levels.count > 1, var words = levels.first?.separated?.dropFirst() else { return nil }
+        while let word = words.popFirst() {
+            if word == "--" { return Array(words) }
+            if valueOptions.contains(word) { _ = words.popFirst() }
+        }
+        return nil
+    }
+
+    /// `compare`'s options that take a value: acpx's `VALUE_FLAGS`.
+    private static let valueOptions: Set<String> = ["--cwd", "--timeout", "--format", "-f", "--file", "--prompt-file"]
+
+    /// acpx's `resolvePromptFile`: `--file` or its alias `--prompt-file`, one of them.
+    private static func resolvePromptFile(file: String?, promptFile: String?) throws -> String? {
+        if let file, let promptFile, file != promptFile {
+            throw InvalidArgumentError("Use only one prompt file flag: --file or --prompt-file")
+        }
+        return file ?? promptFile
+    }
+
+    /// acpx's `splitCompareArgs`: the agents, and the prompt — the words after a `--`, joined;
+    /// else none when a prompt file is given; else the last argument.
+    private static func splitArgs(
+        _ args: [String], promptFile: String?, promptTokens: [String]?
+    ) throws -> ([String], String) {
+        if let promptTokens {
+            let agents = Array(args.dropLast(promptTokens.count))
+            if agents.isEmpty { throw InvalidArgumentError("At least one agent is required") }
+            return (agents, promptTokens.joined(separator: " "))
+        }
         if promptFile != nil {
             if args.isEmpty { throw InvalidArgumentError("At least one agent is required") }
             return (args, "")
