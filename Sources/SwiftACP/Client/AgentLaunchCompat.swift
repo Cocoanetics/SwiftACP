@@ -127,12 +127,18 @@ enum AgentLaunchCompat {
     }
 
     /// `operation`'s result, or ``StartupTimedOut`` once `milliseconds` pass first — acpx's
-    /// `withTimeout`, its timer firing on a queue of its own. Like a promise, the operation goes on;
-    /// what it waits for ends with the agent.
+    /// `withTimeout`, its timer firing on a queue of its own, and put away with what it holds as
+    /// soon as there is an outcome. Like a promise, the operation goes on; what it waits for ends
+    /// with the agent. A caller called off stops waiting at once, as `withTimeout`'s does (#267 review).
     static func within<T: Sendable>(
         _ milliseconds: Int, _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let first = FirstOutcome<T>()
+        let timer = DispatchSource.makeTimerSource(queue: .global())
+        timer.schedule(deadline: .now() + .milliseconds(milliseconds))
+        timer.setEventHandler { [weak first] in first?.settle(.failure(StartupTimedOut(milliseconds: milliseconds))) }
+        // The caller holds the outcome while it waits; the timer, cancelled with it, holds nothing.
+        defer { timer.cancel() }
         let task = Task {
             do {
                 first.settle(.success(try await operation()))
@@ -143,11 +149,10 @@ enum AgentLaunchCompat {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 first.wait(continuation)
-                DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(milliseconds)) {
-                    first.settle(.failure(StartupTimedOut(milliseconds: milliseconds)))
-                }
+                timer.resume()
             }
         } onCancel: {
+            first.settle(.failure(CancellationError()))
             task.cancel()
         }
     }

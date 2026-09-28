@@ -61,6 +61,28 @@ import Testing
         }
     }
 
+    /// A caller called off stops waiting at once, whatever the operation it waits for does — even
+    /// one deaf to the cancel, as a request no cancel reaches (#267 review).
+    @Test(.timeLimit(.minutes(1)))
+    func aLimitCalledOffStopsWaitingAtOnce() async throws {
+        let deaf = DeafOperation()
+        let waiting = Task { try await AgentLaunchCompat.within(3_600_000) { await deaf.run() } }
+        await deaf.started()
+        waiting.cancel()
+        await #expect(throws: CancellationError.self) { try await waiting.value }
+        deaf.finish()
+    }
+
+    /// Once there is an outcome, the limit keeps nothing of it for the rest of its time: the
+    /// operation's result lives only as long as its caller keeps it (#267 review).
+    @Test(.timeLimit(.minutes(1)))
+    func aLimitKeepsNothingOnceItHasAnOutcome() async throws {
+        let (released, release) = AsyncStream<Void>.makeStream()
+        _ = try await AgentLaunchCompat.within(3_600_000) { Released { release.yield() } }
+        var gone = released.makeAsyncIterator()
+        _ = await gone.next()
+    }
+
     /// A Gemini that does not answer `initialize` within its limit is ended, and the launch fails
     /// saying what `gemini --version` says, asked again once it is gone.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
@@ -96,5 +118,55 @@ import Testing
             _ = try await agent.newSession(cwd: directory.path)
         }
         await agent.close()
+    }
+
+    /// Says when it is gone.
+    final class Released: Sendable {
+        let gone: @Sendable () -> Void
+
+        init(_ gone: @escaping @Sendable () -> Void) {
+            self.gone = gone
+        }
+
+        deinit { gone() }
+    }
+
+    /// An operation deaf to cancellation, as a request no cancel reaches: it runs until ``finish()``.
+    final class DeafOperation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var waiter: CheckedContinuation<Void, Never>?
+        private var finished = false
+        private let starts: AsyncStream<Void>
+        private let start: AsyncStream<Void>.Continuation
+
+        init() {
+            (starts, start) = AsyncStream.makeStream()
+        }
+
+        func run() async {
+            await withCheckedContinuation { continuation in
+                let over: Bool = lock.withLock {
+                    if !finished { waiter = continuation }
+                    return finished
+                }
+                start.yield()
+                if over { continuation.resume() }
+            }
+        }
+
+        /// Returns once ``run()`` is under way.
+        func started() async {
+            var runs = starts.makeAsyncIterator()
+            _ = await runs.next()
+        }
+
+        func finish() {
+            let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+                finished = true
+                defer { waiter = nil }
+                return waiter
+            }
+            waiting?.resume()
+        }
     }
 }
