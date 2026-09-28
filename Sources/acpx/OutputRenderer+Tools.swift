@@ -70,9 +70,21 @@ extension OutputRenderer {
             id: id, key: key, title: title,
             status: members["status"].flatMap(Self.openText).map(ToolCallStatus.init(rawValue:)),
             kind: members["kind"].flatMap(Self.openText).map(ToolKind.init(rawValue:)),
-            locations: members["locations"].flatMap { try? $0.decoded([ToolCallLocation].self) },
+            locations: members["locations"].flatMap { Self.entries($0, as: ToolCallLocation.self) },
             rawInput: members["rawInput"], rawOutput: members["rawOutput"],
-            content: members["content"].flatMap { try? $0.decoded([ToolCallContent].self) }, clearing: nulled)
+            content: members["content"].flatMap { Self.entries($0, as: ToolCallContent.self) }, clearing: nulled)
+    }
+
+    /// A list member's entries that read as `T`, each on its own — as the ACP schema reads a tool's
+    /// lists, and as acpx's formatter shows only the entries it can: a malformed one leaves the
+    /// others (#270 review). One that is no list is an empty one, replacing what came before as
+    /// acpx's does; `null` is none, clearing it.
+    private static func entries<T: Decodable>(_ value: JSONValue, as type: T.Type) -> [T]? {
+        switch value {
+        case .null: return nil
+        case .array(let items): return items.compactMap { try? $0.decoded(T.self) }
+        default: return []
+        }
     }
 
     /// A member's value as JavaScript's `String()` shows it, `null` as none.

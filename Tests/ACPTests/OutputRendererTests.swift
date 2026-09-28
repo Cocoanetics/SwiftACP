@@ -170,6 +170,28 @@ struct OutputRendererTests {
         }
     }
 
+    /// A refused update's `locations` and `content` keep the entries that read, a malformed one
+    /// left out, and one that is no list replaces what came before: what acpx 0.19.3 printed for
+    /// the same updates (#270 review).
+    @Test func refusedUpdatesListsKeepTheirGoodEntries() throws {
+        let cases: [(updates: [String], printed: String)] = [
+            ([#"{"sessionUpdate":"tool_call","title":"L","status":"in_progress","#
+              + #""locations":[{"path":"/a"},{"line":1},{"path":"/b","line":3}]}"#,
+              #"{"sessionUpdate":"tool_call_update","status":"completed","#
+              + #""content":[{"type":"content","content":{"type":"text","text":"ok"}},{"type":"bogus"}]}"#],
+             "[tool] L (running)\n  files: /a, /b:3\n\n[tool] L (completed)\n  files: /a, /b:3\n  output:\n    ok\n"),
+            ([#"{"sessionUpdate":"tool_call","title":"M","status":"in_progress","locations":[{"path":"/a"}]}"#,
+              #"{"sessionUpdate":"tool_call_update","status":"completed","locations":"x","#
+              + #""content":[{"type":"bogus"},{"type":"content","content":{"type":"text","text":"second"}}]}"#],
+             "[tool] M (running)\n  files: /a\n\n[tool] M (completed)\n  output:\n    second\n")
+        ]
+        for (json, printed) in cases {
+            let updates = try json.map { try JSONDecoder().decode(SessionUpdate.self, from: Data($0.utf8)) }
+            let (text, _) = Self.capture(.text) { renderer in updates.forEach { renderer.render($0) } }
+            #expect(text == printed, "\(json)")
+        }
+    }
+
     @Test func otherOperationsRenderAsClientLines() {
         let operation = ClientOperation(
             method: "fs/read_text_file", status: .failed, summary: "read /missing.txt",
