@@ -147,8 +147,8 @@ extension ACPXDaemonBackend {
                             auth: config.auth, sessionEnv: record?.acpx?.sessionOptions?.env),
                         authCredentials: config.auth, authPolicy: settings.authPolicy ?? config.authPolicy,
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
-                        terminalEnvironment: settings.environment, onRawWire: connectTap,
-                        onStderr: settings.stderr?.observer, onLog: settings.stderr?.logObserver)
+                        terminalEnvironment: settings.environment, limits: sessionOptions?.limits,
+                        onRawWire: connectTap, onStderr: settings.stderr?.observer, onLog: settings.stderr?.logObserver)
                 }, discardingLate: { await $0.close() })
             }
         } catch {

@@ -146,7 +146,7 @@ public enum SessionEngine {
                 agent: agentCommand, argv: agentArgv, cwd: cwd, handlers: handlers, capabilities: capabilities,
                 environment: environment, authCredentials: authCredentials, authPolicy: authPolicy,
                 inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling,
-                terminalEnvironment: baseEnvironment, onStderr: onStderr, onLog: onLog)
+                terminalEnvironment: baseEnvironment, limits: sessionOptions?.limits, onStderr: onStderr, onLog: onLog)
         }, discardingLate: { await $0.close() })
         do {
             let target = Target(

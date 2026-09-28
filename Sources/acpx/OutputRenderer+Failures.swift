@@ -60,11 +60,13 @@ extension OutputRenderer {
 
     /// Report a failure the stream did not show, as the JSON-RPC error line acpx's
     /// top-level handler prints (session id `unknown`: it has no session to name).
-    func jsonFailure(outputCode: String, detailCode: String? = nil, origin: String = "cli", message: String) {
+    func jsonFailure(
+        outputCode: String, detailCode: String? = nil, origin: String = "cli", message: String, retryable: Bool? = nil
+    ) {
         lock.lock()
         defer { lock.unlock() }
         out(JSONErrorLine.make(
-            outputCode: outputCode, detailCode: detailCode, origin: origin, message: message,
+            outputCode: outputCode, detailCode: detailCode, origin: origin, message: message, retryable: retryable,
             sessionId: "unknown") + "\n")
     }
 

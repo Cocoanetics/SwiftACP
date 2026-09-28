@@ -101,6 +101,9 @@ public struct SessionAcpxState: Codable, Sendable {
         public var env: [String: String]?
         public init() {}
 
+        /// The turns and tools the session limits its agent to, for its launch (#248).
+        public var limits: SessionLimits { SessionLimits(maxTurns: maxTurns, allowedTools: allowedTools) }
+
         enum CodingKeys: String, CodingKey {
             case model, allowedTools, maxTurns, systemPrompt, env
         }

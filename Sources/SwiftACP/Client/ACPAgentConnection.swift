@@ -435,6 +435,10 @@ public actor ACPAgentConnection {
                 authorize: handlers.authorizeWrite)
         case _ where Self.terminalMethods.contains(method):
             return await routeTerminal(method, params)
+        case AgentLaunchCompat.devinDiagnosticsMethod
+            where advertisedCapabilities?.meta?["cognition.ai/requestDiagnostics"] == .bool(true):
+            // Devin asks a client that said it answers it; acpx answers nothing, whatever it asks.
+            return .success(.object([:]))
         case "session/request_permission":
             guard let handler = handlers.requestPermission else {
                 return .failure(Self.methodNotFound(method))

@@ -47,6 +47,7 @@ enum ExecCommand {
                                     permission: permission, nonInteractivePermissions: flags.nonInteractivePolicy,
                                     permissionRules: permissionRules, capabilities: flags.clientCapabilities,
                                     authCredentials: auth, authPolicy: flags.authPolicy, inheritStderr: flags.verbose,
+                                    limits: flags.sessionLimits,
                                     onClientRequest: onClientRequest, onRawWire: onRawWire, onLog: flags.clientLog)
                             }
                         }
@@ -173,7 +174,7 @@ enum ExecCommand {
             if !agentErrorShown, !renderer.showedFailure(failure.message) {
                 renderer.jsonFailure(
                     outputCode: failure.outputCode, detailCode: failure.detailCode, origin: failure.origin,
-                    message: failure.message)
+                    message: failure.message, retryable: failure.retryable)
             }
         case "quiet":
             renderer.flushQuietText()
@@ -220,6 +221,8 @@ enum ExecCommand {
         var detailCode: String?
         var origin = "cli"
         var message: String
+        /// acpx's `retryable`, when the error says (`AcpxOperationalError`).
+        var retryable: Bool?
         /// The agent's `data.details`, when the failure is its error response and it
         /// gave some (acpx's `preferredAcpErrorDetails`).
         var acpDetails: String?
@@ -239,6 +242,7 @@ enum ExecCommand {
                 outputCode = meta.outputCode ?? outputCode
                 detailCode = meta.detailCode
                 origin = meta.origin ?? origin
+                retryable = meta.retryable
             case let unsupported as ModelApplication.UnsupportedError:
                 message = unsupported.message
             case let unavailable as PromptUnavailable:
