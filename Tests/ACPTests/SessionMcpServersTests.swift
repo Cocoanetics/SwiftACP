@@ -219,6 +219,27 @@ import Testing
         }
     }
 
+    /// A config that does not read fails the prompt the same way with an agent held for the session
+    /// or without one: before anything is sent, as acpx's CLI fails on reading it (Codex review on
+    /// #293).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aConfigThatDoesNotReadFailsWithAnAgentHeldOrNot() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let broken = Self.files([McpServerConfig(name: "no-command")])
+            for held in [false, true] {
+                let id = try await daemon.newSession(
+                    agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: held)
+                let error = await #expect(throws: (any Error).self) {
+                    _ = try await daemon.runPrompt(sessionId: id, text: "ping", callerConfig: broken)
+                }
+                #expect(error?.localizedDescription == "Invalid mcpServers entry no-command: missing command")
+            }
+            await daemon.releaseAll()
+        }
+    }
+
     /// The CLI reports a prompt refused over its MCP config as acpx 0.19.3 does, in each format —
     /// the session's banner first, as acpx has shown it by then.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))

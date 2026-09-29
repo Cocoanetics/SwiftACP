@@ -104,8 +104,8 @@ extension ACPXDaemonBackend {
         // notes it first thing as it connects a session — one held here too.
         if let relay = settings.stderr, let saved = findRecord(recordId) { relay.noteReconnect(of: saved) }
         // What the caller's config — its own, else the cwd's — gives its agent, to find whether an
-        // agent held is the caller's.
-        let wanted = live[recordId] == nil ? nil : agentConfiguration(settings.callerConfig, cwd: rawCwd)
+        // agent held is the caller's. A config that does not read fails the call, held agent or not.
+        let wanted = live[recordId] == nil ? nil : try agentConfiguration(settings.callerConfig, cwd: rawCwd)
         let held = try await heldAgent(
             recordId, wanted: wanted, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
         if let entry = held.entry { return Connected(entry: entry, resumed: false, loadError: nil) }
@@ -234,7 +234,7 @@ extension ACPXDaemonBackend {
 
     /// The live entry for `recordId`, given this call's handlers and terminal output
     /// ceiling, when its agent is still connected — and was given what the caller's config gives
-    /// it (`wanted`), when that is known; an agent that has exited is let go.
+    /// it (`wanted`); an agent that has exited is let go.
     /// - Returns: that entry, `nil` when there is none, and whether an exited agent was
     ///   let go.
     private func heldAgent(
@@ -425,16 +425,11 @@ extension ACPXDaemonBackend {
     }
 
     /// What an agent connected for `caller` is given of its config — the caller's own, else the
-    /// config for `cwd` (``config(_:cwd:ownMcpServers:)``); `nil` when that does not read.
-    func agentConfiguration(_ caller: CallerConfig?, cwd: String) -> AgentConfiguration? {
-        let config: ResolvedAcpxConfig?
-        if let caller {
-            config = try? ResolvedAcpxConfig(caller: caller)
-        } else {
-            config = try? ConfigLoader.load(cwd: resolveCwd(cwd), ownMcpServers: false)
-        }
-        guard let config, let servers = try? config.mcpServerSpecs() else { return nil }
-        return AgentConfiguration(mcpServers: servers, auth: config.auth)
+    /// config for `cwd` (``config(_:cwd:ownMcpServers:)``) — failing as connecting would.
+    func agentConfiguration(_ caller: CallerConfig?, cwd: String) throws -> AgentConfiguration {
+        let config = try caller.map(ResolvedAcpxConfig.init(caller:))
+            ?? ConfigLoader.load(cwd: resolveCwd(cwd), ownMcpServers: false)
+        return AgentConfiguration(mcpServers: try config.mcpServerSpecs(), auth: config.auth)
     }
 
     func resolveCwd(_ rawCwd: String) throws -> String {
