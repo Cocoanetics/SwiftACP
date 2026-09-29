@@ -56,7 +56,9 @@ import Testing
             let session = Session(id: UUID())
             await session.setTransport(DaemonToolsTests.CallingClient())
             _ = try await session.work { _ in
-                try await daemon.runPrompt(sessionId: record.acpxRecordId, text: "hi")
+                try await daemon.servingCall {
+                    try await daemon.runPrompt(sessionId: record.acpxRecordId, text: "hi")
+                }
             }
             await daemon.releaseAll()
             #expect(try Self.written(record.acpxRecordId) == Self.later)

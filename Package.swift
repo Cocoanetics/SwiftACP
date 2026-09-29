@@ -29,7 +29,7 @@ var dependencies: [Package.Dependency] = [
     // SwiftACP's generated `ACPXDaemon.Client` uses, and — behind this package's
     // default-on `Server` trait — the swift-nio TCP/Bonjour/HTTP-SSE server transports
     // acpxd serves over. A client-only consumer (an iOS/Android app) disables `Server`.
-    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.12.0", traits: [
+    .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", from: "1.13.0", traits: [
         "Client",
         .trait(name: "Server", condition: .when(traits: ["Server"])),
         .trait(name: "OpenAPI", condition: .when(traits: ["Server"]))

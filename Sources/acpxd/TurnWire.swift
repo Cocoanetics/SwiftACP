@@ -69,7 +69,7 @@ final class TurnWireFeed: @unchecked Sendable {
     /// answered it.
     private var released = false
 
-    init(streamWire: Bool, provisional: Bool = false, logger: String, to clientSession: Session?) {
+    init(streamWire: Bool, provisional: Bool = false, logger: String, to caller: CallerOutbox?) {
         let (items, feed) = AsyncStream<Item>.makeStream()
         self.streamWire = streamWire
         self.provisional = provisional
@@ -78,7 +78,7 @@ final class TurnWireFeed: @unchecked Sendable {
             for await item in items {
                 switch item {
                 case .message(let message):
-                    await clientSession?.sendLogNotification(
+                    caller?.post(
                         LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
                 case .sent(let waiter):
                     waiter.resume()
@@ -186,7 +186,7 @@ actor TurnRelay {
     private let connection: ACPAgentConnection
     private let sessionId: SessionId
     private let logger: String
-    private let clientSession: Session?
+    private let caller: CallerOutbox?
     private let relaying: Relaying
     private var subscription: UUID
     /// The latest phase's relay, which waits for the phases before it; each returns the
@@ -196,13 +196,13 @@ actor TurnRelay {
     /// Subscribe to `connection`'s events — before the turn sends anything, so that none
     /// is missed — and relay them with `relaying`.
     init(
-        connection: ACPAgentConnection, sessionId: SessionId, logger: String, to clientSession: Session?,
+        connection: ACPAgentConnection, sessionId: SessionId, logger: String, to caller: CallerOutbox?,
         relaying: @escaping Relaying
     ) async {
         self.connection = connection
         self.sessionId = sessionId
         self.logger = logger
-        self.clientSession = clientSession
+        self.caller = caller
         self.relaying = relaying
         let (subscription, stream) = await connection.makeEventSubscription()
         self.subscription = subscription
@@ -216,11 +216,11 @@ actor TurnRelay {
         await connection.waitForSessionUpdatesHandled(sessionId: sessionId)
         let (next, stream) = await connection.replaceEventSubscription(subscription)
         subscription = next
-        let (previous, relaying, clientSession, logger) = (consumer, relaying, clientSession, logger)
+        let (previous, relaying, caller, logger) = (consumer, relaying, caller, logger)
         consumer = Task {
             let earlier = await previous.value
             for message in held {
-                await clientSession?.sendLogNotification(
+                caller?.post(
                     LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
             }
             return earlier + (await relaying(stream))

@@ -10,12 +10,31 @@ extension ACPXDaemonBackend {
     /// line has taken it, and the caller told then.
     @TaskLocal static var noWaitAdmission: NoWaitAdmission?
 
-    /// The MCP session a turn tells how it goes, in log notifications: its caller's — none for a
+    /// Where a turn tells how it goes, in log notifications: its caller's outbox — none for a
     /// prompt queued without waiting once its line has it, as acpx's owner closes the connection
     /// of a task that does not wait and runs it with its output discarded
     /// (`DISCARD_OUTPUT_FORMATTER`).
-    static var caller: Session? {
-        noWaitAdmission?.isTaken == true ? nil : Session.current
+    static var caller: CallerOutbox? {
+        noWaitAdmission?.isTaken == true ? nil : CallerOutbox.current
+    }
+
+    /// A call, its client told what it sends through the call's outbox (``CallerOutbox``):
+    /// without waiting for the client to read it, and all of it before the call's result —
+    /// however the call ends. What waits for a stopped client holds the call, not the session
+    /// the call's turn ran on, which the turn let go when it ended (openclaw/acpx#723).
+    func servingCall<T>(
+        isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T
+    ) async throws -> T {
+        guard let session = Session.current else { return try await work() }
+        let outbox = CallerOutbox(session: session)
+        let outcome: Result<T, Error>
+        do {
+            outcome = .success(try await CallerOutbox.$current.withValue(outbox) { try await work() })
+        } catch {
+            outcome = .failure(error)
+        }
+        await outbox.flush()
+        return try outcome.get()
     }
 
     /// acpx's `--no-wait` (#239): `turn` runs as any queued prompt does, and this returns as soon
@@ -41,12 +60,11 @@ extension ACPXDaemonBackend {
     /// Forwards what connecting an agent for a turn put on the wire to the MCP client
     /// the turn is for, before the turn's own messages — noting its errors on the way.
     static func forwardToClient(logger: String, errors: TurnErrorWatch? = nil) -> ConnectOutputHandler {
-        let clientSession = caller
+        let caller = Self.caller
         return { messages in
             errors?.observe(messages)
             for message in messages {
-                await clientSession?.sendLogNotification(
-                    LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
+                caller?.post(LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
             }
         }
     }

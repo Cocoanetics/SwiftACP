@@ -369,20 +369,6 @@ extension DaemonToolsTests {
         }
     }
 
-    /// What a noisy agent writes to stderr waits for a slow caller within a bound, the oldest
-    /// let go first — not all of it, however much the agent writes (#219 review).
-    @Test func agentStderrWaitsForASlowCallerWithinABound() async throws {
-        let client = SlowClient()
-        let session = Session(id: UUID())
-        await session.setTransport(client)
-        let relay = AgentStderrRelay()
-        relay.attach(to: session, logger: "stderr")
-        for _ in 0 ..< 2000 { relay.observer(Data("line\n".utf8)) }
-        client.letThrough()
-        await relay.detach()
-        #expect(client.sent <= AgentStderrRelay.attachedChunkLimit + 1)
-    }
-
     /// A call-off stays while its turn waits to begin behind another in its owner's line, however
     /// long: begun past the minute other call-offs are kept, the turn still ends at once, nothing
     /// sent (#219 review). A flow's direct turn begins at once instead (#225).
@@ -474,24 +460,3 @@ extension ACPXDaemonBackend {
 }
 
 /// A caller that takes nothing in until it is let through, then counts what it is sent.
-private final class SlowClient: Transport, @unchecked Sendable {
-    let logger = Logger(label: "acpx.tests.slow-client")
-    private let gate = HoldGate()
-    private let lock = NSLock()
-    private var count = 0
-
-    func start() async throws {}
-    func run() async throws {}
-    func stop() async throws {}
-
-    func send(_ data: Data) async throws {
-        await gate.wait()
-        lock.withLock { count += 1 }
-    }
-
-    func letThrough() {
-        gate.open()
-    }
-
-    var sent: Int { lock.withLock { count } }
-}

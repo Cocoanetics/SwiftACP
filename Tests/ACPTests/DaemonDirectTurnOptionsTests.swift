@@ -21,9 +21,11 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         return try await session.work { _ in
-            try await daemon.runPrompt(
-                sessionId: sessionId, text: text, permissionMode: permissionMode, nonInteractivePermissions: "fail",
-                direct: true, fs: fs, verbose: verbose)
+            try await daemon.servingCall {
+                try await daemon.runPrompt(
+                    sessionId: sessionId, text: text, permissionMode: permissionMode, nonInteractivePermissions: "fail",
+                    direct: true, fs: fs, verbose: verbose)
+            }
         }
     }
 

@@ -53,6 +53,10 @@ public protocol ACPXBackend: Sendable {
     /// What a tool's failure says beyond its message (``ToolFailure``), which goes to the
     /// caller with the tool's error result; `nil` when it says nothing more.
     func toolFailure(for error: Error) -> ToolFailure?
+    /// One call, served: `work`, and whatever the backend does around it before the caller
+    /// hears how it went — acpxd sends what the call told its client first (openclaw/acpx#723).
+    /// `work` runs on `isolation`, the caller's.
+    func servingCall<T>(isolation: isolated (any Actor)?, _ work: () async throws -> T) async throws -> T
 }
 
 /// The config a caller read once, which a session's agents are started with in place of the
@@ -187,6 +191,11 @@ public struct PromptTurnMode: Sendable, Equatable {
 }
 
 extension ACPXBackend {
+    /// A backend that sends its callers nothing of its own serves a call as its work.
+    public func servingCall<T>(isolation: isolated (any Actor)?, _ work: () async throws -> T) async throws -> T {
+        try await work()
+    }
+
     /// A backend that holds no agents live holds none of its sessions.
     public func sessionStatus(sessionId: String) async -> LiveSessionStatus {
         LiveSessionStatus(live: false)

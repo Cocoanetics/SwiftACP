@@ -41,6 +41,11 @@ extension DaemonToolsTests {
             lock.withLock { sent }.compactMap(Self.log)
         }
 
+        /// Every frame sent, as sent.
+        var sentData: [Data] {
+            lock.withLock { sent }
+        }
+
         /// The log `data` sends, if it is one.
         private static func log(_ data: Data) -> JSONValue? {
             guard let message = try? JSONDecoder().decode(JSONValue.self, from: data),
@@ -93,7 +98,9 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         _ = try await session.work { _ in
-            try await daemon.runPrompt(sessionId: sessionId, text: text, blocks: blocks, streamWire: streamWire)
+            try await daemon.servingCall {
+                try await daemon.runPrompt(sessionId: sessionId, text: text, blocks: blocks, streamWire: streamWire)
+            }
         }
     }
 

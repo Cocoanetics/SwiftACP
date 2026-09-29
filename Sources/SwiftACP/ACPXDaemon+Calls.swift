@@ -68,13 +68,13 @@ extension ACPXDaemon {
     }
 
     /// `work`, once the daemon takes the call, one of the calls it serves (``callsInFlight``)
-    /// until it is over.
+    /// until it is over — as the backend serves it (``ACPXBackend/servingCall(isolation:_:)``).
     func serving<T>(_ work: () async throws -> T) async throws -> T {
         try await takeCall()
         calls.taken += 1
         calls.inFlight += 1
         defer { calls.inFlight -= 1 }
-        return try await work()
+        return try await backend.servingCall(isolation: #isolation, work)
     }
 
     /// Take a call, as the daemon takes calls now (``CallGate/State``).

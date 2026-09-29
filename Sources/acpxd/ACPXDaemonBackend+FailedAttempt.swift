@@ -24,7 +24,7 @@ extension ACPXDaemonBackend {
             if let unwritten = await persister?.endTurn(TurnFailure.journalResult(for: error)) { failure = unwritten }
             let event = TurnFailure.event(
                 for: failure, shown: errors.match(failure), sessionId: recordId, direct: direct)
-            await Self.caller?.sendLogNotification(
+            Self.caller?.post(
                 LogMessage(level: .info, logger: recordId, data: toJSONValue(event)))
             throw failure
         }
