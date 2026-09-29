@@ -183,6 +183,33 @@ import Testing
         }
     }
 
+    /// An agent held from the session's creation runs the first prompt only when the prompt's
+    /// config gives it the same servers: a prompt of another config gets an agent of its own, which
+    /// takes the session back with its servers, as acpx's owner connects its own client (Codex
+    /// review on #293).
+    @Test(.enabled(if: mockPythonAvailable))
+    func aHeldCreationRunsThePromptOnlyWithItsServers() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let (sameLog, otherLog) = (requestLogURL(), requestLogURL())
+            let same = try await daemon.newSession(
+                agentCommand: loggedCommand(command, log: sameLog), cwd: NSTemporaryDirectory(), holdAgent: true)
+            _ = try await daemon.runPrompt(sessionId: same, text: "ping", callerConfig: Self.files([]))
+            #expect(try sessionRequests(sameLog).map(\.method) == ["session/new"])
+
+            let other = try await daemon.newSession(
+                agentCommand: loggedCommand(command, log: otherLog), cwd: NSTemporaryDirectory(), holdAgent: true)
+            _ = try await daemon.runPrompt(
+                sessionId: other, text: "ping", callerConfig: Self.file("/b.json", [Self.other]))
+            let requests = try sessionRequests(otherLog)
+            #expect(requests.map(\.method) == ["session/new", "session/load"])
+            #expect(requests.map(\.names) == [[], ["remote"]])
+            #expect(try prompts(otherLog) == 1)
+            await daemon.releaseAll()
+        }
+    }
+
     /// The CLI reports a prompt refused over its MCP config as acpx 0.19.3 does, in each format —
     /// the session's banner first, as acpx has shown it by then.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))

@@ -24,6 +24,15 @@ actor ACPXDaemonBackend: ACPXBackend {
         let session: ACPSession
         /// Where what a held agent writes to stderr waits for the next verbose call.
         var stderr: AgentStderrRelay?
+        /// What the agent was given of the config of the caller it connected for.
+        var configuration: AgentConfiguration?
+    }
+
+    /// What an agent is given of its caller's config as it connects: the MCP servers it is sent and
+    /// the credentials it signs in with — each acpx client's own (#245).
+    struct AgentConfiguration: Equatable, Sendable {
+        let mcpServers: [MCPServerSpec]
+        let auth: [String: String]
     }
 
     /// Live sessions held open between prompts, keyed by acpx record id.
@@ -214,7 +223,8 @@ actor ACPXDaemonBackend: ACPXBackend {
                 baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
                 inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
         }
-        return try await keepMadeSession(held, stderr: stderr, token: token)
+        let configuration = AgentConfiguration(mcpServers: servers, auth: config.auth)
+        return try await keepMadeSession(held, stderr: stderr, token: token, configuration: configuration)
     }
 
     /// ``newSession(agentCommand:agentArgv:cwd:name:mcpServers:sessionOptions:creation:)`` with

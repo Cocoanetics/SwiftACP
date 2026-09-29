@@ -103,7 +103,10 @@ extension ACPXDaemonBackend {
         // For a caller under `--verbose`, whether the agent the record saved still runs, as acpx
         // notes it first thing as it connects a session — one held here too.
         if let relay = settings.stderr, let saved = findRecord(recordId) { relay.noteReconnect(of: saved) }
-        let held = try await heldAgent(recordId, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
+        // What a caller with a config of its own gives its agent, to find whether an agent held is its.
+        let wanted = live[recordId] == nil ? nil : Self.agentConfiguration(settings.callerConfig)
+        let held = try await heldAgent(
+            recordId, wanted: wanted, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
         if let entry = held.entry { return Connected(entry: entry, resumed: false, loadError: nil) }
         let sameSessionOnly = (control && held.replacedExited) || settings.sameSessionOnly
         let cwd = try resolveCwd(rawCwd)
@@ -194,8 +197,8 @@ extension ACPXDaemonBackend {
             record.applyLifecycle(handle.lifecycle)
         }, to: recordId, via: onRecordChange)
         let entry = try await hold(
-            handle, on: session, for: recordId, via: onRecordChange,
-            stderr: settings.stderr)
+            handle, on: session, for: recordId, via: onRecordChange, stderr: settings.stderr,
+            configuration: AgentConfiguration(mcpServers: specs, auth: config.auth))
         await showConnectOutput(loaded.createdFreshSession)
         // Taken back unless a new session had to replace it.
         return Connected(entry: entry, resumed: !loaded.createdFreshSession, loadError: loaded.loadError)
@@ -205,11 +208,12 @@ extension ACPXDaemonBackend {
     /// meanwhile (``refuseIfStopping(_:of:via:)``).
     func hold(
         _ handle: ACPAgent, on session: ACPSession, for recordId: String,
-        via onRecordChange: RecordChangeHandler?, stderr: AgentStderrRelay? = nil
+        via onRecordChange: RecordChangeHandler?, stderr: AgentStderrRelay? = nil,
+        configuration: AgentConfiguration? = nil
     ) async throws -> Live {
         await reconnected?(recordId)
         try await refuseIfStopping(handle, of: recordId, via: onRecordChange)
-        let entry = Live(agent: handle, session: session, stderr: stderr)
+        let entry = Live(agent: handle, session: session, stderr: stderr, configuration: configuration)
         live[recordId] = entry
         handle.rawWire.set(nil)
         return entry
@@ -228,15 +232,23 @@ extension ACPXDaemonBackend {
     }
 
     /// The live entry for `recordId`, given this call's handlers and terminal output
-    /// ceiling, when its agent is still connected; an agent that has exited is let go.
+    /// ceiling, when its agent is still connected — and, for a caller with a config of its own,
+    /// was given what that config gives it (`wanted`); an agent that has exited is let go.
     /// - Returns: that entry, `nil` when there is none, and whether an exited agent was
     ///   let go.
     private func heldAgent(
-        _ recordId: String, handlers: ACPClientHandlers, terminalOutputCeiling: Int?
+        _ recordId: String, wanted: AgentConfiguration?, handlers: ACPClientHandlers, terminalOutputCeiling: Int?
     ) async throws -> (entry: Live?, replacedExited: Bool) {
         var replacedExited = false
         while let existing = live[recordId] {
             if await !existing.agent.connection.isClosed {
+                // Held with other servers or credentials than the caller's, it is not the caller's
+                // agent: each acpx client connects its own with its own config. It is let go, and
+                // the session is taken back with the caller's (Codex review on #293).
+                if let wanted, let had = existing.configuration, had != wanted {
+                    if live[recordId]?.agent === existing.agent { await evict(recordId) }
+                    return (nil, replacedExited)
+                }
                 // acpx replays nothing onto a session its client still holds.
                 await existing.agent.connection.setHandlers(handlers)
                 await existing.agent.setTerminalOutputCeiling(terminalOutputCeiling)
@@ -409,6 +421,14 @@ extension ACPXDaemonBackend {
     /// the one where the session works.
     static func config(_ caller: CallerConfig?, cwd: String, ownMcpServers: Bool) throws -> ResolvedAcpxConfig {
         try caller.map(ResolvedAcpxConfig.init(caller:)) ?? ConfigLoader.load(cwd: cwd, ownMcpServers: ownMcpServers)
+    }
+
+    /// What an agent connected for `caller` is given of its config; `nil` for a caller without a
+    /// config of its own, or with one that does not read.
+    static func agentConfiguration(_ caller: CallerConfig?) -> AgentConfiguration? {
+        guard let caller, let config = try? ResolvedAcpxConfig(caller: caller),
+              let servers = try? config.mcpServerSpecs() else { return nil }
+        return AgentConfiguration(mcpServers: servers, auth: config.auth)
     }
 
     func resolveCwd(_ rawCwd: String) throws -> String {
