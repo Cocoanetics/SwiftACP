@@ -10,14 +10,11 @@ import Testing
 /// the record already has that history. An acpx client holds one session; here both
 /// are kept per session, so the other sessions of a connection carry on.
 struct ReplaySuppressionTests {
-    /// Replays two updates for `session/load` before answering; then, when `trickle` is
-    /// set, keeps sending one every `trickle`, `trickleCount` times — an agent still
-    /// replaying after its answer. With `afterAnswer`, it sends as many `.` as each count the
-    /// test hands it, when it hands it: a replay that goes on at the test's word, not a clock's.
-    /// A prompt answers with one `after` chunk.
+    /// Replays two updates for `session/load` before answering. With `afterAnswer`, it then
+    /// sends as many `.` as each count the test hands it, when it hands it: an agent still
+    /// replaying after its answer, at the test's word, not a clock's. A prompt answers with
+    /// one `after` chunk.
     struct ReplayingAgent: ACPAgentHandler {
-        var trickle: Duration?
-        var trickleCount = 0
         var afterAnswer: AsyncStream<Int>?
         /// Told each time a `session/load` reaches the agent.
         var onLoad: (@Sendable () -> Void)?
@@ -42,21 +39,10 @@ struct ReplaySuppressionTests {
             await session.sendText("earlier answer")
             if refusesLoad { throw JSONRPCErrorBody(code: -32603, message: "Internal error") }
             if let afterAnswer {
-                // Unstructured on purpose, as the trickle is: the updates go on after this returns.
+                // Unstructured on purpose: the updates go on after this returns.
                 Task {
                     for await count in afterAnswer {
                         for _ in 0..<count { await session.sendText(".") }
-                    }
-                }
-            }
-            if let trickle {
-                // Unstructured on purpose: the updates have to go on after this returns,
-                // as a replay the agent has not finished does. Bounded by `trickleCount`.
-                let count = trickleCount
-                Task {
-                    for _ in 0..<count {
-                        try? await Task.sleep(for: trickle)
-                        await session.sendText(".")
                     }
                 }
             }
@@ -168,17 +154,46 @@ struct ReplaySuppressionTests {
         await client.close()
     }
 
-    /// A replay that never stops fails the load, in acpx's words.
-    @Test func aReplayThatDoesNotStopFailsTheDrain() async throws {
-        let (client, server) = try await connect(ReplayingAgent(trickle: .milliseconds(5), trickleCount: 600))
+    /// A replay that never stops fails the load, in acpx's words: updates that go on arriving past
+    /// the drain's deadline do not put it off (Codex review on #296). One of them stays read and not
+    /// yet handled, so the drain cannot end sooner however long a busy runner holds up the rest —
+    /// as a trickle on a clock was held up past the quiet it waits for (Windows CI on #293).
+    @Test(.timeLimit(.minutes(1)))
+    func aReplayThatDoesNotStopFailsTheDrain() async throws {
+        let (counts, more) = AsyncStream<Int>.makeStream()
+        let (client, server) = try await connect(ReplayingAgent(afterAnswer: counts))
         defer { server.cancel() }
+        let (subscription, stream) = await client.makeSubscription()
+        let (seen, each) = AsyncStream<String>.makeStream()
+        let delivered = Task { await texts(stream, each: each) }
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
 
+        client.sessionUpdates.arrived("replay-session")
+        // The replay goes on an update at a time, each delivered before the next, until the drain
+        // is over — for ten seconds at most, should the drain wait for it to stop.
+        let drainOver = DoneFlag()
+        let replay = Task { () -> Bool in
+            let cap = ContinuousClock.now + .seconds(10)
+            var arrivals = seen.makeAsyncIterator()
+            while !drainOver.isSet {
+                guard ContinuousClock.now < cap else { return false }
+                more.yield(1)
+                while let text = await arrivals.next(), text != "." {}
+            }
+            return true
+        }
         let error = await #expect(throws: SessionReplayDrainTimeout.self) {
             try await client.waitForSessionUpdateDrain(
                 sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 1000)
         }
+        drainOver.set()
+        #expect(await replay.value, "the drain waited for the replay to stop")
         #expect(error?.localizedDescription == "Timed out waiting for session replay drain after 1000ms")
+
+        client.sessionUpdates.finished("replay-session")
+        more.finish()
+        await client.endSubscription(subscription)
+        _ = await delivered.value
         await client.close()
     }
 
@@ -337,5 +352,17 @@ struct ReplaySuppressionTests {
 extension ACPAgentConnection {
     func setWaitingToLoad(_ hook: (@Sendable (SessionId) -> Void)?) {
         waitingToLoad = hook
+    }
+}
+
+/// Set once, read from any task.
+private final class DoneFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() {
+        lock.withLock { value = true }
     }
 }
