@@ -199,6 +199,21 @@ extension DaemonToolsTests {
         #expect(client.logs == [.string("after")])
     }
 
+    /// What has gone out is let go of as it goes, not kept while more goes out: the outbox holds
+    /// what waits, and what goes out, as its bounds count.
+    @Test func whatHasGoneOutIsLetGoOf() async throws {
+        let client = StoppedClient(reads: 3)
+        defer { client.letThrough() }
+        let outbox = await Self.outbox(on: client, CallerOutbox.Limits())
+        for index in 0 ..< 5 { await outbox.post(Self.log("\(index)")) }
+        // Three have gone, the fourth goes out, the fifth waits.
+        await client.sendWaits()
+        #expect(outbox.waitingCount == 1)
+        client.letThrough()
+        await outbox.flush()
+        #expect(client.texts == (0 ..< 5).map { "\($0)" })
+    }
+
     /// However many wait, all go out, in order, once the client reads.
     @Test func manyWaitingGoOutInOrder() async throws {
         let client = StoppedClient()
@@ -258,24 +273,32 @@ extension DaemonToolsTests {
     }
 }
 
-/// A caller that reads nothing until let through: each send waits, as one to a client that has
-/// stopped reading does. Disconnected, what waits goes, as a closed connection's sends end.
+/// A caller that reads nothing until let through — past its first `reads` messages: each send
+/// waits, as one to a client that has stopped reading does. Disconnected, what waits goes, as a
+/// closed connection's sends end.
 final class StoppedClient: Transport, @unchecked Sendable {
     let logger = Logger(label: "acpx.tests.stopped-client")
     private let gate = HoldGate()
     private let waiting = HoldGate()
     private let disconnection = HoldGate()
     private let lock = NSLock()
+    private var reads: Int
     private var sent: [Data] = []
     private var marked = false
+
+    init(reads: Int = 0) {
+        self.reads = reads
+    }
 
     func start() async throws {}
     func run() async throws {}
     func stop() async throws {}
 
     func send(_ data: Data) async throws {
-        waiting.open()
-        await gate.wait()
+        if lock.withLock({ () -> Bool in reads -= 1; return reads < 0 }) {
+            waiting.open()
+            await gate.wait()
+        }
         lock.withLock { sent.append(data) }
     }
 

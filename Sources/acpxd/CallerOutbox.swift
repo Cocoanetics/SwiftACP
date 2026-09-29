@@ -56,11 +56,12 @@ final class CallerOutbox: @unchecked Sendable {
     private let session: Session
     private let limits: Limits
     private let lock = NSLock()
-    /// What waits while an earlier message goes out: its frame, its level, and what it counts —
-    /// from `head` on: those before it have gone, and are let go of in bulk, so taking the next
-    /// costs no copy.
-    private var waiting: [Waiting] = []
-    private var head = 0
+    /// What waits while an earlier message goes out: its frame, its level, and what it counts.
+    /// Posted onto `incoming`, and taken from the end of `outgoing` — `incoming` reversed, once
+    /// `outgoing` runs out — so that what is taken is let go of at once: what the outbox holds
+    /// is what it counts.
+    private var incoming: [Waiting] = []
+    private var outgoing: [Waiting] = []
     /// What the client has yet to be sent: what waits, and the message going out.
     private var unsentBytes = 0
     /// What the message going out counts: given back once it has gone.
@@ -100,7 +101,7 @@ final class CallerOutbox: @unchecked Sendable {
                 return false
             }
             unsentBytes += bytes
-            waiting.append(Waiting(frame: frame, level: message.level, bytes: bytes))
+            incoming.append(Waiting(frame: frame, level: message.level, bytes: bytes))
             let starts = !sending
             sending = true
             return starts
@@ -113,6 +114,11 @@ final class CallerOutbox: @unchecked Sendable {
     /// Whether a bound was passed, the client disconnected: nothing more goes out.
     var isDropped: Bool {
         lock.withLock { dropped }
+    }
+
+    /// How many messages wait, the one going out not among them: for a test.
+    var waitingCount: Int {
+        lock.withLock { incoming.count + outgoing.count }
     }
 
     /// Once the outbox holds nothing: all that was posted gone out — or, the client disconnected
@@ -151,17 +157,15 @@ final class CallerOutbox: @unchecked Sendable {
             unsentBytes -= sendingBytes
             limits.budget.release(sendingBytes, call: false)
             sendingBytes = 0
-            guard !dropped, head < waiting.count else {
+            if outgoing.isEmpty, !dropped {
+                outgoing = incoming.reversed()
+                incoming = []
+            }
+            guard !dropped, let next = outgoing.popLast() else {
                 sending = false
                 limits.budget.release(0, call: true)
-                (waiting, head) = ([], 0)
+                (incoming, outgoing) = ([], [])
                 return (nil, takeIdle())
-            }
-            let next = waiting[head]
-            head += 1
-            if head >= 1024, head * 2 >= waiting.count {
-                waiting.removeFirst(head)
-                head = 0
             }
             sendingBytes = next.bytes
             return ((next.frame, next.level), [])
@@ -177,7 +181,7 @@ final class CallerOutbox: @unchecked Sendable {
         dropped = true
         limits.budget.release(unsentBytes - sendingBytes, call: false)
         unsentBytes = sendingBytes
-        (waiting, head) = ([], 0)
+        (incoming, outgoing) = ([], [])
     }
 
     /// Those waiting for the outbox to go idle. Under ``lock``.
