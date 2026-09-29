@@ -184,9 +184,9 @@ import Testing
     }
 
     /// An agent held from the session's creation runs the first prompt only when the prompt's
-    /// config gives it the same servers: a prompt of another config gets an agent of its own, which
-    /// takes the session back with its servers, as acpx's owner connects its own client (Codex
-    /// review on #293).
+    /// config — its own, else the config files' — gives it the same servers: a prompt of another
+    /// config gets an agent of its own, which takes the session back with its servers, as acpx's
+    /// owner connects its own client (Codex review on #293).
     @Test(.enabled(if: mockPythonAvailable))
     func aHeldCreationRunsThePromptOnlyWithItsServers() async throws {
         let command = try #require(mockCommand())
@@ -206,6 +206,15 @@ import Testing
             #expect(requests.map(\.method) == ["session/new", "session/load"])
             #expect(requests.map(\.names) == [[], ["remote"]])
             #expect(try prompts(otherLog) == 1)
+
+            // A caller without a config of its own has the config files' servers (none here), and
+            // is compared by them as well (Codex review on #293).
+            let givenLog = requestLogURL()
+            let given = try await daemon.newSession(
+                agentCommand: loggedCommand(command, log: givenLog), cwd: NSTemporaryDirectory(),
+                mcpServers: [Self.own], holdAgent: true)
+            _ = try await daemon.runPrompt(sessionId: given, text: "ping")
+            #expect(try sessionRequests(givenLog).map(\.names) == [["shot"], []])
             await daemon.releaseAll()
         }
     }

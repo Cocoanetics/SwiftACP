@@ -103,8 +103,9 @@ extension ACPXDaemonBackend {
         // For a caller under `--verbose`, whether the agent the record saved still runs, as acpx
         // notes it first thing as it connects a session — one held here too.
         if let relay = settings.stderr, let saved = findRecord(recordId) { relay.noteReconnect(of: saved) }
-        // What a caller with a config of its own gives its agent, to find whether an agent held is its.
-        let wanted = live[recordId] == nil ? nil : Self.agentConfiguration(settings.callerConfig)
+        // What the caller's config — its own, else the cwd's — gives its agent, to find whether an
+        // agent held is the caller's.
+        let wanted = live[recordId] == nil ? nil : agentConfiguration(settings.callerConfig, cwd: rawCwd)
         let held = try await heldAgent(
             recordId, wanted: wanted, handlers: handlers, terminalOutputCeiling: terminalOutputCeiling)
         if let entry = held.entry { return Connected(entry: entry, resumed: false, loadError: nil) }
@@ -232,8 +233,8 @@ extension ACPXDaemonBackend {
     }
 
     /// The live entry for `recordId`, given this call's handlers and terminal output
-    /// ceiling, when its agent is still connected — and, for a caller with a config of its own,
-    /// was given what that config gives it (`wanted`); an agent that has exited is let go.
+    /// ceiling, when its agent is still connected — and was given what the caller's config gives
+    /// it (`wanted`), when that is known; an agent that has exited is let go.
     /// - Returns: that entry, `nil` when there is none, and whether an exited agent was
     ///   let go.
     private func heldAgent(
@@ -242,9 +243,9 @@ extension ACPXDaemonBackend {
         var replacedExited = false
         while let existing = live[recordId] {
             if await !existing.agent.connection.isClosed {
-                // Held with other servers or credentials than the caller's, it is not the caller's
-                // agent: each acpx client connects its own with its own config. It is let go, and
-                // the session is taken back with the caller's (Codex review on #293).
+                // Held with other servers or credentials than the caller's config gives, it is not
+                // the caller's agent: each acpx client connects its own with its own config. It is
+                // let go, and the session is taken back with the caller's (Codex review on #293).
                 if let wanted, let had = existing.configuration, had != wanted {
                     if live[recordId]?.agent === existing.agent { await evict(recordId) }
                     return (nil, replacedExited)
@@ -423,11 +424,16 @@ extension ACPXDaemonBackend {
         try caller.map(ResolvedAcpxConfig.init(caller:)) ?? ConfigLoader.load(cwd: cwd, ownMcpServers: ownMcpServers)
     }
 
-    /// What an agent connected for `caller` is given of its config; `nil` for a caller without a
-    /// config of its own, or with one that does not read.
-    static func agentConfiguration(_ caller: CallerConfig?) -> AgentConfiguration? {
-        guard let caller, let config = try? ResolvedAcpxConfig(caller: caller),
-              let servers = try? config.mcpServerSpecs() else { return nil }
+    /// What an agent connected for `caller` is given of its config — the caller's own, else the
+    /// config for `cwd` (``config(_:cwd:ownMcpServers:)``); `nil` when that does not read.
+    func agentConfiguration(_ caller: CallerConfig?, cwd: String) -> AgentConfiguration? {
+        let config: ResolvedAcpxConfig?
+        if let caller {
+            config = try? ResolvedAcpxConfig(caller: caller)
+        } else {
+            config = try? ConfigLoader.load(cwd: resolveCwd(cwd), ownMcpServers: false)
+        }
+        guard let config, let servers = try? config.mcpServerSpecs() else { return nil }
         return AgentConfiguration(mcpServers: servers, auth: config.auth)
     }
 
