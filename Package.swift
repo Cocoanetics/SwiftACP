@@ -145,7 +145,7 @@ targets += [
             "Fixtures/acpx-record-parse.json", "Fixtures/record-agent.py", "Fixtures/acpx-turn-record.json",
             "Fixtures/acpx-turn-record-as-written.json",
             "Fixtures/acpx-session-archive.json", "Fixtures/retry-agent.py", "Fixtures/watch", "Fixtures/flows",
-            "Fixtures/catalog-agent.py"
+            "Fixtures/catalog-agent.py", "Fixtures/skill-wizard"
         ]
     )
 ]

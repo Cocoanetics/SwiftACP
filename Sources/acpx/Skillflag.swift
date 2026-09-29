@@ -18,12 +18,17 @@ enum Skillflag {
         /// Reads standard input to its end, as skillflag drains a pipe it leaves unread before it
         /// exits, so that what writes to it does not fail.
         var drainStdin: @Sendable () -> Void
+        /// The terminal skill-install's wizard would ask on (#294), if there is one: standard input
+        /// and output when standard input is a terminal, else the controlling terminal, as
+        /// skillflag opens `/dev/tty` for a piped standard input.
+        var promptTerminal: @Sendable () -> ClackTerminal? = { nil }
 
         static var process: Context {
             Context(
                 cwd: physicalCWD(), environment: ProcessInfo.processInfo.environment,
                 stdinIsTerminal: isatty(STDIN_FILENO) != 0,
-                drainStdin: { _ = try? FileHandle.standardInput.readToEnd() })
+                drainStdin: { _ = try? FileHandle.standardInput.readToEnd() },
+                promptTerminal: { isatty(STDIN_FILENO) != 0 ? ClackTerminal() : ClackTerminal.controlling() })
         }
     }
 

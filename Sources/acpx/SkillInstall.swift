@@ -59,18 +59,50 @@ enum SkillInstall {
                 return ExitCodes.success
             }
             guard options.paths.isEmpty else { throw Failure("PATH cannot be used when install input is preset.") }
-            let (agents, scopes) = try options.required()
-            let plan = try plan(ids: ids, agents: agents, scopes: scopes, context: context)
-            let installed = try plan.map { target in
-                let (skill, path) = try install(target, force: options.force, context: context)
-                return "Installed \(skill) to \(path) (\(target.agent)/\(target.scope))\n"
+            // Without an agent or a scope, the wizard asks for them where it can ask (#294).
+            let terminal = options.agent == nil || options.scope == nil ? context.promptTerminal() : nil
+            defer { terminal?.close() }
+            let choice: Choice
+            if let terminal {
+                guard let chosen = try wizard(options, ids: ids, on: terminal, context: context) else {
+                    if !context.stdinIsTerminal { context.drainStdin() }
+                    return ExitCodes.error
+                }
+                choice = chosen
+            } else {
+                let (agents, scopes) = try options.required()
+                choice = Choice(agents: agents, scopes: scopes, force: options.force)
             }
+            let installed = try install(ids: ids, choice, showingOn: terminal, context: context)
             installed.forEach(Console.err)
+            terminal?.outro("Done.")
             return ExitCodes.success
         } catch {
             if !context.stdinIsTerminal { context.drainStdin() }
             Console.err(((error as? Failure)?.message ?? error.localizedDescription) + "\n")
             return ExitCodes.error
+        }
+    }
+
+    /// `runInstall`: the plan made again, and each install of it done — under a spinner when the
+    /// wizard asked for it. What to say of each on stderr once all are done.
+    private static func install(
+        ids: [String], _ choice: Choice, showingOn terminal: ClackTerminal?, context: Skillflag.Context
+    ) throws -> [String] {
+        let plan = try plan(ids: ids, agents: choice.agents, scopes: choice.scopes, context: context)
+        try assertNoCollisions(plan)
+        let spinner = terminal.map(ClackSpinner.init)
+        spinner?.start("Installing \(plan.count) target\(plan.count == 1 ? "" : "s")...")
+        do {
+            let installed = try plan.map { target in
+                let (skill, path) = try install(target, force: choice.force, context: context)
+                return "Installed \(skill) to \(path) (\(target.agent)/\(target.scope))\n"
+            }
+            spinner?.finish("Install complete.", failed: false)
+            return installed
+        } catch {
+            spinner?.finish("Install failed.", failed: true)
+            throw error
         }
     }
 
