@@ -77,7 +77,7 @@ extension DaemonToolsTests {
                 // Read only while `ensure` waits for the change to be taken.
                 nonisolated(unsafe) let sent = methods
                 _ = try await ACPXDaemonBackend(inheritAgentStderr: false).ensure(
-                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd, mcpServers: nil,
+                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd,
                     onRecordChange: { apply in
                         var changed = record
                         apply(&changed)
@@ -133,18 +133,20 @@ extension DaemonToolsTests {
             let (queued, noteQueued) = AsyncStream<String>.makeStream()
             await daemon.turnQueue.setOnQueued { noteQueued.yield($0) }
             try await daemon.turnQueue.acquire(id, wait: true)
+            // A control, then a turn, both waiting behind the held slot — the control first, so
+            // that it waits for the slot rather than for the turn's prompt to go out — while what
+            // holds the slot replaces the session.
+            var waiting = queued.makeAsyncIterator()
+            async let control = daemon.setMode(sessionId: "replacement-1", modeId: "auto")
+            _ = await waiting.next()
             async let turn = daemon.runPrompt(sessionId: "replacement-1", text: "queued")
-            // `restart`: when the turn goes first, it leaves its agent live with other servers.
-            async let servers = daemon.setSessionMcpServers(
-                sessionId: "replacement-1", mcpServers: [], restart: true)
-            // Both wait behind the held slot, while the turn holding it replaces the session.
-            _ = await queued.prefix(2).reduce(0) { count, _ in count + 1 }
+            _ = await waiting.next()
             try Self.editRecord(id) { $0.acpSessionId = "replacement-2" }
             await daemon.turnQueue.release(id)
 
-            let (reply, stored) = try await (turn, servers)
+            let (reply, _) = try await (turn, control)
             #expect(reply.contains("You said: queued"))
-            #expect(stored)
+            #expect(try #require(SessionStore.loadRecord(id)).acpx?.desiredModeId == "auto")
             #expect(try #require(SessionStore.loadRecord(id)).acpSessionId == "replacement-2")
         }
     }

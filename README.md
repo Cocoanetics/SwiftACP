@@ -141,27 +141,23 @@ consumers of the `SwiftACP` library product.
 
 ### MCP servers for a session
 
-`mcpServers` in `~/.acpx/config.json` / `<cwd>/.acpxrc.json` (project replaces global)
-are sent on `session/new` and again on every reconnect (`session/load` / `session/resume`),
-as in npm acpx. Two ways attach servers to *one session* instead of a working tree:
+As in acpx, a session's MCP servers are each invocation's own, and the record keeps none:
+`mcpServers` in `~/.acpx/config.json` / `<cwd>/.acpxrc.json` (project replaces global), or
+`--mcp-config <path>` — a JSON file with the same top-level `mcpServers` array, which replaces
+both for the invocation.
 
-- `--mcp-config <path>` (CLI, npm parity): a JSON file with the same top-level
-  `mcpServers` array, replacing the config-file servers for the invocation. A session
-  created under it keeps that set — it is persisted on the record (`acpx.mcp_servers`,
-  a SwiftACP extension of the npm record) so `acpxd` replays it on every reconnect.
-- `newSession(mcpServers:)` / `setSessionMcpServers(sessionId:mcpServers:)` (daemon
-  tools): the same entry shape, inline, for MCP clients such as a dispatcher attaching a
-  run-scoped server. `[]` detaches every server; omitting the parameter keeps the
-  config-file ones.
+- `sessions new` gives them to the agent that creates the session.
+- A prompt that starts the session's owner gives the owner its servers (and its credentials):
+  every agent the owner connects, a reconnect included, gets them until the owner goes, at its
+  `--ttl`. A later prompt is refused, as acpx refuses it, unless it names the owner's
+  `--mcp-config` file with the same servers, or no file where the owner had none:
+  `Session queue owner uses a different MCP config; close the session before retrying`
+  (`QUEUE_MCP_CONFIG_CONFLICT`).
+- A control (`set-mode`, `set`) is never refused over its config. With no owner, it connects with
+  its own; under an owner, with the owner's.
 
-A session the daemon holds live does not silently switch servers: `setSessionMcpServers`
-refuses, as npm acpx does. Passing `restart` applies the switch anyway by dropping the
-adapter — only the local process, so the session is restored with `session/load` and its
-history survives, where npm has to close the session outright because its queue owner
-*is* the session. The CLI's `--mcp-config` always takes that path, so re-prompting an
-existing session with a different config just works; `sessions ensure --mcp-config`
-likewise re-attaches to the session it reuses. `sessions show --format json` and
-`showSession` list the attached set.
+The daemon's tools take the same entry shape for MCP clients: each prompt and control can bring
+its config (`callerConfig`), and `newSession(mcpServers:)` gives servers to the creating agent.
 
 ### Flows
 

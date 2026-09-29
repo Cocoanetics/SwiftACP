@@ -29,9 +29,9 @@ enum SessionRecordSerializer {
             .mapping("acpx") { acpx in
                 rebuilt.reduce(acpx) { acpx, map in acpx.mapping(map.key) { MessageOrder.ordered($0, by: map.value) } }
             }
-        var document = forDisk(built, storedAcpx: raw["acpx"])
+        var document = forDisk(built)
         if let stored = record.parsedByAcpx {
-            let read = forDisk(stored, storedAcpx: nil)
+            let read = forDisk(stored)
                 .mapping("messages") { MessageOrder.aligned($0, trimmed: record.messagesTrimmedSinceRead) }
             document = inStoredOrder(
                 document, stored: read, topLevel: true, rebuilt: Set(rebuilt.keys.map { Array($0.utf16) }))
@@ -111,9 +111,8 @@ enum SessionRecordSerializer {
         return parsed.replacing("acpx", with: .object(members + [WireJSON.Member("available_commands", .array([]))]))
     }
 
-    /// acpx's `serializeSessionRecordForDisk` of the in-memory record `parsed`, with
-    /// SwiftACP's own fields of `storedAcpx` after acpx's `acpx` fields.
-    static func forDisk(_ parsed: WireJSON, storedAcpx: WireJSON?) -> WireJSON {
+    /// acpx's `serializeSessionRecordForDisk` of the in-memory record `parsed`.
+    static func forDisk(_ parsed: WireJSON) -> WireJSON {
         SessionRecordParser.object([
             ("schema", parsed["schema"]),
             ("acpx_record_id", parsed["acpxRecordId"]),
@@ -145,7 +144,7 @@ enum SessionRecordSerializer {
             ("cumulative_token_usage", parsed["cumulative_token_usage"]),
             ("cumulative_cost", parsed["cumulative_cost"]),
             ("request_token_usage", parsed["request_token_usage"]),
-            ("acpx", parsed["acpx"].map { SessionRecordParser.withOwnFields($0, from: storedAcpx) }),
+            ("acpx", parsed["acpx"]),
             ("imported_from", importedFrom(parsed["importedFrom"]))
         ])
     }

@@ -67,7 +67,7 @@ enum ControlCommand {
                 return try await DaemonClient.setMode(
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: flags.nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
-                    verbose: flags.verbose, client: flags.clientOptions)
+                    verbose: flags.verbose, client: flags.clientOptions(config: context.config))
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
@@ -132,13 +132,13 @@ enum ControlCommand {
                         sessionId: sessionId, modelId: value,
                         nonInteractivePermissions: flags.nonInteractivePermissions,
                         terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
-                        verbose: flags.verbose, client: flags.clientOptions)
+                        verbose: flags.verbose, client: flags.clientOptions(config: context.config))
                 case .configOption(let configId):
                     return try await DaemonClient.setConfigOption(
                         sessionId: sessionId, configId: configId, value: value,
                         nonInteractivePermissions: flags.nonInteractivePermissions,
                         terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs,
-                        verbose: flags.verbose, client: flags.clientOptions)
+                        verbose: flags.verbose, client: flags.clientOptions(config: context.config))
                 }
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)

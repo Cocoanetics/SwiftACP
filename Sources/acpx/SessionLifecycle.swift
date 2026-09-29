@@ -55,12 +55,14 @@ enum SessionLifecycle {
             let gitRoot = SessionStore.findGitRepositoryRoot(agent.cwd)
             if let existing = SessionStore.findSessionByDirectoryWalk(
                 agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, boundary: gitRoot ?? agent.cwd) {
-                // Reusing a session still honours `--mcp-config`: ensure promises a
-                // session set up the way this invocation asked for.
-                var reused = try applyExplicitMcpServers(to: existing, config: context.config)
+                // A session found is kept as it is: its MCP servers are each prompt's own, as in
+                // acpx (#245).
+                var reused = existing
                 // And `--model`, as acpx's `ensureSessionWithOwnership` puts it on the session it
                 // keeps (`setSessionModel`), which fails the command if the session cannot take it.
-                if let model = flags.model { reused = try setModel(model, on: reused, flags: flags) }
+                if let model = flags.model {
+                    reused = try setModel(model, on: reused, flags: flags, config: context.config)
+                }
                 return (reused, false)
             }
             let record = try createSession(
@@ -76,7 +78,7 @@ enum SessionLifecycle {
     /// Put `model` on `record`'s session through acpxd, as `set model` does, and return the
     /// record as that leaves it.
     private static func setModel(
-        _ model: String, on record: SessionRecord, flags: GlobalFlags
+        _ model: String, on record: SessionRecord, flags: GlobalFlags, config: ResolvedAcpxConfig
     ) throws -> SessionRecord {
         let recordId = record.acpxRecordId
         let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
@@ -85,50 +87,12 @@ enum SessionLifecycle {
                 return try await DaemonClient.setModel(
                     sessionId: recordId, modelId: model, nonInteractivePermissions: flags.nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling, timeoutMs: flags.timeoutMs, verbose: flags.verbose,
-                    client: flags.clientOptions)
+                    client: flags.clientOptions(config: config))
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             }
         }
         return SessionStore.loadRecord(recordId) ?? record
-    }
-
-    /// Apply an explicit `--mcp-config` to a session that already exists, so a reused
-    /// record ends up with the servers this invocation asked for instead of silently
-    /// keeping its old ones. Returns the record to report on.
-    ///
-    /// A running daemon does it (it owns the live connection, and reconnects it so the
-    /// new servers take effect without losing the session); with no daemon running
-    /// there is no connection to reconcile, so the record is updated here.
-    /// Comparison is on the normalized wire specs, so a set spelled differently but
-    /// identical on the wire costs nothing.
-    static func applyExplicitMcpServers(
-        to record: SessionRecord, config: ResolvedAcpxConfig
-    ) throws -> SessionRecord {
-        guard let requested = config.sessionMcpServers else { return record }
-        let current = try record.acpx?.mcpServers.map { try $0.map { try $0.protocolSpec() } }
-        guard try current != requested.map({ try $0.protocolSpec() }) else { return record }
-
-        let sessionId = record.acpSessionId
-        do {
-            try runBlocking {
-                try await DaemonClient.setSessionMcpServers(
-                    sessionId: sessionId, mcpServers: requested, restart: true)
-            }
-        } catch is DaemonUnavailable {
-            var updated = record
-            var acpx = updated.acpx ?? SessionAcpxState()
-            acpx.mcpServers = requested
-            updated.acpx = acpx
-            try SessionStore.writeRecord(updated)
-            return updated
-        } catch let disconnected as DaemonClient.OwnerDisconnected {
-            // acpxd went away with the request: said as for any other request it had.
-            throw disconnected
-        } catch {
-            throw CLIError(error.localizedDescription)
-        }
-        return SessionStore.loadRecord(record.acpxRecordId) ?? record
     }
 
     // MARK: - Create (shared engine → record)
@@ -160,14 +124,13 @@ enum SessionLifecycle {
         // A failure reaches the top level as it is, as acpx's `createSession` throws it:
         // the agent's error with its code and data, an auth policy's with its detail code.
         return try runBlocking {
-            // An explicit `--mcp-config` becomes the session's own server set,
-            // persisted so the daemon replays it on every reconnect.
+            // The invocation's servers — its `--mcp-config` file's, else its config files' — as acpx
+            // gives them to `session/new`; the record keeps none (#245).
             try await SessionEngine.createSession(
                 agentCommand: agent.agentCommand, agentArgv: agent.agentArgv, cwd: agent.cwd, name: name,
                 permission: permission, permissionRules: permissionRules, authCredentials: config.auth,
-                authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(),
-                sessionMcpServers: config.sessionMcpServers,
-                meta: meta, resumeSessionId: resumeSessionId, sessionOptions: options,
+                authPolicy: flags.authPolicy, mcpServers: try config.mcpServerSpecs(), meta: meta,
+                resumeSessionId: resumeSessionId, sessionOptions: options,
                 capabilities: flags.clientCapabilities, timeoutMilliseconds: flags.timeoutMs,
                 inheritStderr: flags.verbose, onLog: flags.clientLog,
                 onModelWarning: flags.jsonStrict ? nil : { Console.errLine("[acpx] warning: \($0)") })

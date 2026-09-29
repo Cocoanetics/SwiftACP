@@ -14,12 +14,9 @@ public enum SessionEngine {
     /// and return it. The agent is closed before returning (ephemeral spawn).
     ///
     /// - Parameters:
-    ///   - mcpServers: the cwd's config-file servers for `session/new` (re-derived
-    ///     from config on every later reconnect, so not persisted).
-    ///   - sessionMcpServers: the session's *own* servers (`--mcp-config`, or the
-    ///     daemon's `newSession(mcpServers:)`). When given they replace
-    ///     `mcpServers` on the request and are persisted under the `acpx` state
-    ///     block so every reconnect replays them.
+    ///   - mcpServers: the servers for `session/new`: the invocation's — its `--mcp-config`
+    ///     file's, else its config files' — as acpx gives them. The record keeps none: each
+    ///     connect brings its own (#245).
     ///   - sessionOptions: per-session options (model, allowed tools, …) to record
     ///     under the `acpx` state block, or `nil` to leave them unset.
     ///   - meta: optional `_meta` for the `session/new` request (e.g. claude model), or
@@ -44,7 +41,6 @@ public enum SessionEngine {
         authCredentials: [String: String],
         authPolicy: String,
         mcpServers: [MCPServerSpec] = [],
-        sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
@@ -64,7 +60,7 @@ public enum SessionEngine {
         let held = try await createSessionHoldingAgent(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, permission: permission,
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
-            mcpServers: mcpServers, sessionMcpServers: sessionMcpServers, meta: meta,
+            mcpServers: mcpServers, meta: meta,
             resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
             timeoutMilliseconds: timeoutMilliseconds, writesRecord: false, handlers: handlers,
             baseEnvironment: baseEnvironment,
@@ -92,11 +88,11 @@ public enum SessionEngine {
         return record
     }
 
-    /// Runs in a test once ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:handlers:inheritStderr:onStderr:onModelWarning:)``
+    /// Runs in a test once ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:meta:resumeSessionId:sessionOptions:capabilities:handlers:inheritStderr:onStderr:onModelWarning:)``
     /// has made its session, before it closes the agent.
     @TaskLocal public static var beforeClosing: (@Sendable (_ recordId: String) -> Void)?
 
-    /// acpx's `createSessionWithClient`: ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:sessionMcpServers:meta:resumeSessionId:sessionOptions:capabilities:inheritStderr:onModelWarning:)``
+    /// acpx's `createSessionWithClient`: ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:meta:resumeSessionId:sessionOptions:capabilities:inheritStderr:onModelWarning:)``
     /// up to the record, which is written with the agent still running
     /// (`createSessionRecordWithClient`) — and the agent kept, on the session, for the
     /// caller to use and close. What `capabilities` withholds is the creating agent's alone, as
@@ -117,7 +113,6 @@ public enum SessionEngine {
         authCredentials: [String: String],
         authPolicy: String,
         mcpServers: [MCPServerSpec] = [],
-        sessionMcpServers: [McpServerConfig]? = nil,
         meta: JSONValue? = nil,
         resumeSessionId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
@@ -132,9 +127,6 @@ public enum SessionEngine {
         onLog: RawWireTap.LogObserver? = nil,
         onModelWarning: ((String) -> Void)? = nil
     ) async throws -> HeldSession {
-        // Validate the session's own servers before paying for a spawn.
-        let requestServers = try sessionMcpServers.map { try $0.map { try $0.protocolSpec() } }
-            ?? mcpServers
         let handlers = handlers ?? .standard(permission: permission, rules: permissionRules)
         let environment = AgentEnvironment.forAgent(
             authCredentials: authCredentials, sessionEnv: sessionOptions?.env,
@@ -150,7 +142,7 @@ public enum SessionEngine {
         }, discardingLate: { await $0.close() })
         do {
             let target = Target(
-                handle: handle, cwd: cwd, mcpServers: requestServers, meta: meta, model: sessionOptions?.model,
+                handle: handle, cwd: cwd, mcpServers: mcpServers, meta: meta, model: sessionOptions?.model,
                 agentCommand: agentCommand, timeoutMilliseconds: timeoutMilliseconds, onModelWarning: onModelWarning)
             // Called off, the agent is closed: what it was asked fails with its connection.
             let created: Created = try await withTaskCancellationHandler {
@@ -181,7 +173,6 @@ public enum SessionEngine {
             if let sessionOptions { acpx.sessionOptions = sessionOptions }
             ModelSupport.applyConfigOptions(created.configOptions, asSent: created.configOptionsAsSent, to: &acpx)
             ModelSupport.applyInitialModelSelection(application, originalModels: advertised, to: &acpx)
-            acpx.mcpServers = sessionMcpServers
             record.acpx = acpx
 
             if writesRecord { try SessionStore.writeRecord(record) }

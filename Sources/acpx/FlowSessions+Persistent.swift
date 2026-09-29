@@ -32,12 +32,12 @@ extension FlowAgentSessions {
         defer { stopListening() }
         let recordId: String
         do {
-            // The flow's own servers, from `--mcp-config`, as acpx's runner gives its client the
-            // invocation's; without, those of the flow's config, read once, with its `auth`,
-            // wherever the node works (#219 review).
+            // The flow's config's servers — its `--mcp-config` file's, else its config files' — as
+            // acpx's runner gives its client the invocation's, read once, with its `auth`, wherever
+            // the node works (#219 review).
             recordId = try await ACPXDaemon.Client(proxy: proxy).newSession(
-                agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, mcpServers: config.sessionMcpServers,
-                agentArgv: agent.agentArgv, sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
+                agentCommand: agent.agentCommand, cwd: agent.cwd, name: name, agentArgv: agent.agentArgv,
+                sessionOptions: flowSessionOptions, holdAgent: true, fs: flags.fs,
                 permissionMode: permissionMode, nonInteractivePermissions: flags.nonInteractivePermissions,
                 permissionPolicy: permissionRules, authPolicy: flags.authPolicy, callerConfig: callerConfig,
                 verbose: flags.verbose, creationToken: creationToken, environment: ProcessInfo.processInfo.environment,
@@ -170,7 +170,7 @@ extension FlowAgentSessions {
 
     /// The flow's config as acpx's runner gives it every client of the run: its `auth` and MCP
     /// servers, read once, as the run began.
-    var callerConfig: CallerConfig { CallerConfig(auth: config.auth, mcpServers: config.mcpServers) }
+    var callerConfig: CallerConfig { config.callerConfig }
 
     /// acpx's flow runner's `sessionOptions`: the model, allowed tools and turns.
     var flowSessionOptions: PromptSessionOptions? {

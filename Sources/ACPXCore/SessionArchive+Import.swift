@@ -34,11 +34,9 @@ extension SessionArchive {
         // could otherwise name any program there. The local agent's argv stands in — none
         // when the session is imported for no agent, and its command is what launches.
         record.agentArgv = expectedAgentCommand?.isEmpty == false ? expectedAgentArgv : nil
-        // Nothing an archive says is run here but the agent's own command: no MCP servers
-        // come with it (SwiftACP's archives carry none), so it runs the config's, as in acpx;
-        // and no environment for the agent, which decides what runs too (`PATH`,
-        // `NODE_OPTIONS`).
-        record.acpx?.mcpServers = nil
+        // Nothing an archive says is run here but the agent's own command: no environment for
+        // the agent, which decides what runs too (`PATH`, `NODE_OPTIONS`). MCP servers never come
+        // with a record: each prompt brings its own, as in acpx (#245).
         record.acpx?.sessionOptions?.env = nil
         if let options = record.acpx?.sessionOptions, options.model == nil, options.allowedTools == nil,
             options.maxTurns == nil, options.systemPrompt == nil {

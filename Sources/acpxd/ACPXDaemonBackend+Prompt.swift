@@ -75,6 +75,11 @@ extension ACPXDaemonBackend {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let recordId = initial.acpxRecordId
+        // acpx's CLI checks, before it hands a prompt to the session's owner, that the prompt's MCP
+        // config is the owner's: the owner's agent has the servers of the prompt that started it,
+        // and another config is refused (#245). A direct turn has no owner.
+        let claimed = direct ? false : try claimOwnerConfig(recordId, callerConfig)
+        defer { if claimed { releaseOwnerConfig(recordId) } }
 
         // The prompt begins as acpx's queue owner begins the prompt task it takes
         // (`runPromptTurn`): at once, unless another prompt of the session runs or waits
@@ -118,7 +123,7 @@ extension ACPXDaemonBackend {
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
-        let own = ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy)
+        let own = ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy, config: callerConfig)
         if !direct { turnStarts(recordId, limits: limits, environment: environment, client: own) }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has
@@ -164,17 +169,18 @@ extension ACPXDaemonBackend {
         let errors = TurnErrorWatch()
         let trimmedModel = sessionOptions?.model?.javaScriptTrimmed
         let requestedModel = trimmedModel?.isEmpty == false ? trimmedModel : nil
-        // What an agent the turn connects is offered, and how it signs in: a direct turn's own, as
-        // acpx's flow runner gives them every client it makes; a queued one's, the owner's (#246).
+        // What an agent the turn connects is offered, how it signs in, and the credentials and MCP
+        // servers it is given: a direct turn's own, as acpx's flow runner gives them every client it
+        // makes; a queued one's, the owner's (#246, #245).
         let client = direct ? own : owners[recordId]?.client ?? own
         let turn = Turn(
             id: control.id, recordId: recordId, agentCommand: record.agentCommand, cwd: record.cwd,
-            mcpServers: record.acpx?.mcpServers, blocks: content, model: requestedModel,
+            blocks: content, model: requestedModel,
             sessionOptions: SessionAcpxState.SessionOptions(turnModel: requestedModel, sessionOptions),
             permissions: permissions, terminalOutputCeiling: ceiling, timeoutMilliseconds: timeout,
             promptRetries: retries, persister: persister, eventBuffer: eventBuffer, streamWire: streamWire,
             errors: errors, direct: direct, ticket: started.ticket, capabilities: .acpx(client),
-            authPolicy: client.authPolicy, callerConfig: callerConfig,
+            authPolicy: client.authPolicy, callerConfig: client.config,
             stderr: stderrRelay(for: recordId, verbose: verbose),
             environment: direct ? environment : owners[recordId]?.environment)
         return try await runAttempts(turn, wasHeld: wasHeld, ownedAt: ownedAt)
@@ -205,7 +211,6 @@ extension ACPXDaemonBackend {
         let recordId: String
         let agentCommand: String
         let cwd: String
-        let mcpServers: [McpServerConfig]?
         let blocks: [ContentBlock]
         /// The turn's `--model`, trimmed; `nil` without one.
         let model: String?
@@ -395,7 +400,7 @@ extension ACPXDaemonBackend {
         let (recordId, persister, eventBuffer, errors) = (turn.recordId, turn.persister, turn.eventBuffer, turn.errors)
         let startedAt = ContinuousClock.now
         let connected = try await connect(
-            recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd, mcpServers: turn.mcpServers,
+            recordId: recordId, agentCommand: turn.agentCommand, cwd: turn.cwd,
             settings: CallerSettings(
                 handlers: turn.permissions.handlers, terminalOutputCeiling: turn.terminalOutputCeiling,
                 timeoutMilliseconds: turn.timeoutMilliseconds, sameSessionOnly: turn.direct,

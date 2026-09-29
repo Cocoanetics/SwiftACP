@@ -189,8 +189,8 @@ enum DaemonClient {
             permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling, model: model,
             sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(
                 streamWire: renderer.streamsWireJSON, fs: client.fs, terminal: client.terminal,
-                authPolicy: client.authPolicy, environment: ProcessInfo.processInfo.environment,
-                requestId: requestId))
+                authPolicy: client.authPolicy, callerConfig: client.config,
+                environment: ProcessInfo.processInfo.environment, requestId: requestId))
         turn.ownerPid = daemon.pid
         return turn
     }
@@ -225,8 +225,9 @@ enum DaemonClient {
             // Ordered delivery: the daemon's account of the failure came first.
             if let failure = await stopReason.failure { throw DaemonTurnFailed(event: failure, underlying: error) }
             // A daemon gone with the turn leaves its outcome unknown — unless the turn's end
-            // came first, which is its outcome.
-            guard (error as? JSONRPCPeerError) == .closed else { throw error }
+            // came first, which is its outcome. Refused before its turn, the prompt fails with the
+            // daemon's own error, said as acpx's CLI says it: a conflicting MCP config, say (#245).
+            guard (error as? JSONRPCPeerError) == .closed else { throw controlFailure(error) }
             guard await stopReason.ended else { throw OwnerDisconnected(waitingFor: "prompt completion") }
         }
         // Ordered delivery means the terminal event was handled before the tool
@@ -256,22 +257,9 @@ enum DaemonClient {
                     sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
                     environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
-                    terminal: client.terminal, authPolicy: client.authPolicy)
+                    terminal: client.terminal, authPolicy: client.authPolicy,
+                    callerConfig: client.config)
             }
-        }
-    }
-
-    /// Replace a session's own MCP servers via a *running* daemon (which persists them
-    /// and sends them on the next reconnect), reconnecting a live session so the new
-    /// servers take effect without losing it. Throws ``DaemonUnavailable`` when no
-    /// daemon is running — then nothing holds the session, and the caller persists the
-    /// set itself.
-    static func setSessionMcpServers(
-        sessionId: String, mcpServers: [McpServerConfig], restart: Bool
-    ) async throws {
-        try await withClient(spawnIfNeeded: false) {
-            _ = try await $0.setSessionMcpServers(
-                sessionId: sessionId, mcpServers: mcpServers, restart: restart)
         }
     }
 
@@ -287,7 +275,8 @@ enum DaemonClient {
                     sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
                     environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
-                    terminal: client.terminal, authPolicy: client.authPolicy)
+                    terminal: client.terminal, authPolicy: client.authPolicy,
+                    callerConfig: client.config)
             }
         }
     }
@@ -307,7 +296,8 @@ enum DaemonClient {
                     nonInteractivePermissions: nonInteractivePermissions,
                     terminalOutputCeiling: terminalOutputCeiling ?? 0, timeoutMs: timeoutMs,
                     environment: ProcessInfo.processInfo.environment, verbose: verbose, fs: client.fs,
-                    terminal: client.terminal, authPolicy: client.authPolicy)
+                    terminal: client.terminal, authPolicy: client.authPolicy,
+                    callerConfig: client.config)
             }
         }
     }

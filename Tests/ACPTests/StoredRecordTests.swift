@@ -68,29 +68,25 @@ struct StoredRecordTests {
         }
     }
 
-    /// SwiftACP's own restriction fails closed when it does not read — the field itself, or
-    /// the whole `acpx` block it lives in: no MCP servers rather than the config file's. The
-    /// record itself is still read, as acpx reads it.
-    @Test func anUnreadableRestrictionFailsClosed() async throws {
+    /// A record's `mcp_servers`, which SwiftACP wrote before #245, is read no more — whether or
+    /// not it reads — and an `acpx` block that is no object is dropped, as acpx drops both: what
+    /// is read is acpx's reading, and the record itself is still read.
+    @Test func whatAcpxDoesNotReadIsLeftAsAcpxLeavesIt() async throws {
         let unreadable = try Self.fixtureCase("acpx own field unreadable")
         try await withIsolatedStore {
             try Self.store(unreadable.raw, cwd: try Self.workingDirectory())
             let record = try #require(SessionStore.loadRecord("rec-1"))
-            #expect(record.acpx?.mcpServers?.isEmpty == true)
+            #expect(record.acpx?.currentModeId == "auto")
+            let written = try #require(String(data: try SessionRecordSerializer.data(for: record), encoding: .utf8))
+            #expect(!written.contains("mcp_servers") && !written.contains("client_capabilities"))
         }
         for name in ["acpx not an object", "acpx null"] {
             let whole = try Self.fixtureCase(name)
             try await withIsolatedStore {
                 try Self.store(whole.raw, cwd: try Self.workingDirectory())
                 let record = try #require(SessionStore.loadRecord("rec-1"), "\(name)")
-                #expect(record.acpx?.mcpServers?.isEmpty == true, "\(name)")
+                #expect(record.acpx == nil, "\(name)")
             }
-        }
-        let absent = try Self.fixtureCase("acpx empty")
-        try await withIsolatedStore {
-            try Self.store(absent.raw, cwd: try Self.workingDirectory())
-            let record = try #require(SessionStore.loadRecord("rec-1"))
-            #expect(record.acpx?.mcpServers == nil)
         }
     }
 

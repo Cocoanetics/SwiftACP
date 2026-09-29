@@ -44,9 +44,10 @@ extension ACPXDaemonBackend {
     /// the caller, with acpx's own lines — its client's log, whether the saved agent still runs,
     /// each preference put back — as acpx's direct control writes them in the CLI's process. An
     /// owner's control shows none: acpx's owner runs it, and its stderr is not the CLI's (#221).
-    /// So with what the agent is offered and how it signs in: a direct control's by its `client`,
-    /// as acpx builds its client from the control's `--no-fs`, `--no-terminal` and
-    /// `--auth-policy`; an owner's, as the prompt that started the owner asked (#246).
+    /// So with what the agent is offered, how it signs in, and the credentials and MCP servers it
+    /// is given: a direct control's by its `client`, as acpx builds its client from the control's
+    /// `--no-fs`, `--no-terminal`, `--auth-policy` and config; an owner's, as the prompt that
+    /// started the owner asked (#246, #245).
     func withSessionTurn<T: Sendable>(
         _ sessionId: String, replacing: ReconnectReplay.Replacing, nonInteractivePermissions: String?,
         terminalOutputCeiling: Int?, timeoutMs: Int?, environment: [String: String]? = nil, verbose: Bool = false,
@@ -90,7 +91,8 @@ extension ACPXDaemonBackend {
                     settings: CallerSettings(
                         handlers: permissions.handlers, terminalOutputCeiling: ceiling, timeoutMilliseconds: step,
                         sameSessionOnly: !direct, capabilities: .acpx(connecting), authPolicy: connecting.authPolicy,
-                        stderr: stderr, environment: direct ? environment : owners[recordId]?.environment),
+                        callerConfig: connecting.config, stderr: stderr,
+                        environment: direct ? environment : owners[recordId]?.environment),
                     body)
             }
         } catch {
@@ -117,9 +119,8 @@ extension ACPXDaemonBackend {
         let connected: Connected
         do {
             connected = try await connect(
-                recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd,
-                mcpServers: current.acpx?.mcpServers, control: true, settings: settings,
-                replacing: replacing, onRecordChange: { changes.add($0) })
+                recordId: recordId, agentCommand: current.agentCommand, cwd: current.cwd, control: true,
+                settings: settings, replacing: replacing, onRecordChange: { changes.add($0) })
         } catch {
             await settle(deadline, of: recordId)
             // Connecting can fail after it moved the record — the daemon began stopping

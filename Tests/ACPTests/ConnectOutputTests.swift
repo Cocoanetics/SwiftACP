@@ -56,7 +56,7 @@ extension DaemonToolsTests {
                 let (shown, show) = AsyncStream<[WireMessageEvent]>.makeStream()
                 let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
                 _ = try await daemon.ensure(
-                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd, mcpServers: nil,
+                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd,
                     onConnectOutput: { show.yield($0) })
                 show.finish()
                 let output = await shown.first { _ in true }
@@ -64,7 +64,7 @@ extension DaemonToolsTests {
                 // Held now: a later turn has nothing to show.
                 let (again, showAgain) = AsyncStream<[WireMessageEvent]>.makeStream()
                 _ = try await daemon.ensure(
-                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd, mcpServers: nil,
+                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd,
                     onConnectOutput: { showAgain.yield($0) })
                 showAgain.finish()
                 #expect(await again.first { _ in true } == nil, "\(mode)")
@@ -127,7 +127,7 @@ extension DaemonToolsTests {
             let (shown, show) = AsyncStream<[WireMessageEvent]>.makeStream()
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             _ = try await daemon.ensure(
-                recordId: id, agentCommand: record.agentCommand, cwd: record.cwd, mcpServers: nil,
+                recordId: id, agentCommand: record.agentCommand, cwd: record.cwd,
                 onConnectOutput: { show.yield($0) })
             show.finish()
             #expect(Self.methods(await shown.first { _ in true } ?? [])
@@ -157,7 +157,7 @@ extension DaemonToolsTests {
             let (shown, show) = AsyncStream<[WireMessageEvent]>.makeStream()
             await #expect(throws: (any Error).self) {
                 _ = try await ACPXDaemonBackend(inheritAgentStderr: false).ensure(
-                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd, mcpServers: nil,
+                    recordId: id, agentCommand: record.agentCommand, cwd: record.cwd,
                     onConnectOutput: { show.yield($0) })
             }
             show.finish()

@@ -7,7 +7,7 @@ extension ACPXDaemon {
     /// The fingerprint of the daemon's tools (``interfaceFingerprint(of:)``), pinned by a test
     /// (`DaemonVersionTests`): change a tool — add one, drop or rename a parameter, change what
     /// it takes or returns — and the test says what to put here.
-    static let interfaceFingerprint = "bb725ff28f3dd429"
+    static let interfaceFingerprint = "d476dd470dea09b5"
 
     /// The version acpxd reports in MCP's `serverInfo`: SwiftACP's release (``ACPVersion/current``)
     /// and its tools' fingerprint. acpx works only through a daemon reporting its own (#162): one of

@@ -26,10 +26,16 @@ struct DaemonToolSchemaTests {
         #expect(properties["env"]?["items"]?["required"] == .array([.string("name"), .string("value")]))
         #expect(properties["_meta"]?["type"] == .string("object"))
 
-        let setter = try #require(tools.first { $0.functionMetadata.name == "setSessionMcpServers" })
-        let servers = try #require(setter.functionMetadata.parameters.first { $0.name == "mcpServers" })
-        #expect(servers.isRequired)
-        #expect(try JSONValue(encoding: servers.schema)["items"]?["type"] == .string("object"))
+        // A session keeps no servers to set (#245): each prompt and control brings its config.
+        #expect(!tools.contains { $0.functionMetadata.name == "setSessionMcpServers" })
+        for name in ["runPrompt", "setMode", "setModel", "setConfigOption"] {
+            let tool = try #require(tools.first { $0.functionMetadata.name == name })
+            let config = try #require(tool.functionMetadata.parameters.first { $0.name == "callerConfig" }, "\(name)")
+            #expect(!config.isRequired, "\(name)")
+            let properties = try #require(try JSONValue(encoding: config.schema)["properties"], "\(name)")
+            #expect(properties["mcpServers"]?["items"]?["type"] == .string("object"), "\(name)")
+            #expect(properties["mcpConfigPath"] != nil && properties["auth"] != nil, "\(name)")
+        }
     }
 
     /// Same contract for `runPrompt`'s `blocks`: an MCP client must be able to build

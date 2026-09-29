@@ -21,9 +21,6 @@ public protocol ACPXBackend: Sendable {
     func listSessions(agentCommand: String?) async -> [SessionSummary]
     func showSession(sessionId: String) async throws -> SessionDetail
     func sessionHistory(sessionId: String, limit: Int?) async throws -> [HistoryEntry]
-    func setSessionMcpServers(
-        sessionId: String, mcpServers: [McpServerConfig], restart: Bool
-    ) async throws -> Bool
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String?, terminalOutputCeiling: Int?,
         timeoutMs: Int?, environment: [String: String]?, verbose: Bool, client: ClientOptions
@@ -59,35 +56,46 @@ public protocol ACPXBackend: Sendable {
 }
 
 /// The config a caller read once, which a session's agents are started with in place of the
-/// one where the session works: a flow's, as acpx's runner gives every client of its run the
-/// invocation's `config.auth` and `config.mcpServers`, read as the run starts — whatever `cwd`
-/// a node sets, and however the files change meanwhile.
+/// one where the session works, as acpx builds each client from the invoking CLI's config
+/// (`sessionConnectionOptions`): a prompt's, which the owner it starts keeps; a direct control's;
+/// a flow's, read as the run starts — whatever `cwd` a node sets, and however the files change
+/// meanwhile (#245).
+@Schema
 public struct CallerConfig: Codable, Sendable, Equatable {
     /// The credentials, by auth method (`auth`).
     public var auth: [String: String]
-    /// The MCP servers, sent to a session that has none of its own.
+    /// The MCP servers: the `--mcp-config` file's, else the config files'.
     public var mcpServers: [McpServerConfig]
+    /// The `--mcp-config` file the servers came from, `nil` for the config files': a session's
+    /// owner is told apart by it and, one given, by the servers in it — acpx refuses a prompt
+    /// whose config is another's than the owner's (`QUEUE_MCP_CONFIG_CONFLICT`).
+    public var mcpConfigPath: String?
 
-    public init(auth: [String: String], mcpServers: [McpServerConfig]) {
+    public init(auth: [String: String], mcpServers: [McpServerConfig], mcpConfigPath: String? = nil) {
         self.auth = auth
         self.mcpServers = mcpServers
+        self.mcpConfigPath = mcpConfigPath
     }
 }
 
 /// What an agent's client is built with beside its permissions, as acpx's CLI gives it to the
 /// queue owner it starts and to a control it runs itself (`sessionConnectionOptions`): whether it
 /// offers the filesystem methods and the terminal (`fs`, `terminal`: `false` for acpx's `--no-fs`
-/// and `--no-terminal`; `nil`, acpx's own), and how its agent signs in (`authPolicy`, acpx's
-/// `--auth-policy`; `nil`, as the session's config says).
+/// and `--no-terminal`; `nil`, acpx's own), how its agent signs in (`authPolicy`, acpx's
+/// `--auth-policy`; `nil`, as the session's config says), and the credentials and MCP servers it
+/// is started with (`config`, acpx's `authCredentials` and `mcpServers`; `nil`, those of the config
+/// where the session works).
 public struct ClientOptions: Codable, Sendable, Equatable {
     public var fs: Bool?
     public var terminal: Bool?
     public var authPolicy: String?
+    public var config: CallerConfig?
 
-    public init(fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil) {
+    public init(fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil, config: CallerConfig? = nil) {
         self.fs = fs
         self.terminal = terminal
         self.authPolicy = authPolicy
+        self.config = config
     }
 }
 

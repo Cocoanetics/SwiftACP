@@ -267,9 +267,8 @@ public enum SessionRecordParser {
             "cumulative_token_usage": parsed["cumulative_token_usage"],
             "cumulative_cost": parsed["cumulative_cost"],
             "request_token_usage": parsed["request_token_usage"],
-            // A block that does not read at all may have held MCP servers: it fails closed.
-            "acpx": parsed["acpx"].map { withOwnFields(withModelIntegers($0), from: raw["acpx"]) }
-                ?? (raw["acpx"] == nil ? nil : unreadableAcpxState)
+            // A block that does not read at all is dropped, as acpx drops it.
+            "acpx": parsed["acpx"].map(withModelIntegers)
         ]
         return .object(members.compactMap { member in
             guard let replacement = normalized[String(decoding: member.key, as: UTF16.self)] else {
@@ -278,11 +277,6 @@ public enum SessionRecordParser {
             return replacement.map { WireJSON.Member(key: member.key, value: $0) }
         })
     }
-
-    /// What an `acpx` block that is there but is no object leaves SwiftACP's model with:
-    /// its own restriction at its tightest — no MCP servers — since the block may have held
-    /// some. acpx drops such a block.
-    static let unreadableAcpxState = object([("mcp_servers", .array([]))])
 
     /// An integer beyond what the model's `Int` holds — acpx takes any finite integral
     /// number — read as the largest one a JavaScript number holds exactly, with its
@@ -303,21 +297,6 @@ public enum SessionRecordParser {
         guard let options = state["session_options"], let turns = options["max_turns"] else { return state }
         return state.replacing(
             "session_options", with: options.replacing("max_turns", with: modelInteger(turns) ?? turns))
-    }
-
-    /// The `acpx` fields acpx reads (`SessionAcpxState`).
-    static let acpxStateKeys: Set<String> = [
-        "reset_on_next_ensure", "current_mode_id", "desired_mode_id", "desired_config_options",
-        "current_model_id", "available_models", "available_model_names", "model_control",
-        "available_commands", "config_options", "session_options"
-    ]
-
-    /// acpx's reading of the `acpx` block, followed by the stored fields it does not
-    /// read — SwiftACP's own.
-    static func withOwnFields(_ state: WireJSON, from stored: WireJSON?) -> WireJSON {
-        guard case .object(let read) = state, case .object(let members)? = stored else { return state }
-        let own = members.filter { !acpxStateKeys.contains(String(decoding: $0.key, as: UTF16.self)) }
-        return .object(read + own)
     }
 
     // MARK: - Helpers

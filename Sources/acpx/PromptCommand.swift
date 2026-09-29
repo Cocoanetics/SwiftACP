@@ -28,12 +28,7 @@ enum PromptCommand {
         // session's owner has it, as acpx's does (#239).
         let wait = !scan.flag("no-wait")
 
-        // `--mcp-config` re-attaches the named servers to the routed session before
-        // the turn: a running daemon reconnects the session so they take effect,
-        // which keeps the session (and its history) rather than making the caller
-        // close and recreate it.
-        let record = try SessionLifecycle.applyExplicitMcpServers(
-            to: try findRoutedSessionOrThrow(agent: agent, name: name), config: context.config)
+        let record = try findRoutedSessionOrThrow(agent: agent, name: name)
         printSessionBanner(record, cwd: agent.cwd, flags: flags)
         // Checked here, as acpx checks it building its client; the daemon applies it to
         // this turn.
@@ -64,7 +59,8 @@ enum PromptCommand {
                     limits: PromptLimits(
                         timeoutMs: flags.timeoutMs, promptRetries: flags.promptRetries, ttlMs: flags.ttlMs,
                         queueMaxDepth: context.config.queueMaxDepth),
-                    client: flags.clientOptions, renderer: renderer, requestId: requestId)
+                    client: flags.clientOptions(config: context.config), renderer: renderer,
+                    requestId: requestId)
             } catch let unavailable as DaemonUnavailable {
                 throw CLIError(unavailable.cliMessage)
             } catch let failed as DaemonTurnFailed {
