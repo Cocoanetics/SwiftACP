@@ -9,24 +9,30 @@ import SwiftMCP
 ///
 /// The messages go out in order, one at a time, from the outbox's own task, and the call's
 /// result follows them (``flush()``). Each is held as the frame it goes out as, so what the
-/// bounds count is what is held. What waits while one goes out is bounded as acpx bounds what
-/// an observer's socket has not taken: 64 MiB for a call, 256 MiB for all calls, 64 calls with
-/// output waiting. Past a bound, the client is disconnected (``Session/disconnect()``), as
-/// acpx destroys that observer's socket, and nothing more goes to it; the turn goes on. A
-/// client that leaves its output unread for ten seconds is disconnected by the transport
+/// bounds count is what is held. What the client has yet to be sent — what waits, and the
+/// message going out, which the transport holds until it has gone — is bounded as acpx bounds
+/// an observer's output: 64 MiB for a call, 256 MiB for all calls, 64 calls with output unsent.
+/// Past a bound, the client is disconnected (``Session/disconnect()``), as acpx destroys that
+/// observer's socket, and nothing more goes to it; the turn goes on. A client that leaves its
+/// output unread for ten seconds is disconnected by the transport
 /// (`TCPBonjourTransport.sendStallTimeout`), as acpx's socket times out (see
 /// ``stallTimeout``).
+///
+/// acpx holds its limits for each session's owner, and leaves uncounted what its socket's own
+/// buffer holds: one 64 KiB piece of the frame going out. Its spool is a temp file; acpxd holds
+/// the output in memory, so its limits hold for all sessions together, and the frame going out
+/// counts in full, as the transport holds all of it.
 final class CallerOutbox: @unchecked Sendable {
     /// The outbox of the call being served (``ACPXDaemonBackend/servingCall(isolation:_:)``).
     @TaskLocal static var current: CallerOutbox?
 
     /// acpx's `QueueOutputLimits`, and the budget they are counted against.
     struct Limits: Sendable {
-        /// What may wait for one call's client (`observerBytes`).
+        /// What one call's client may have unsent (`observerBytes`).
         var callBytes = 64 << 20
-        /// What may wait for all of them (`totalBytes`).
+        /// What all of them may have unsent (`totalBytes`).
         var totalBytes = 256 << 20
-        /// How many calls may have output waiting (`observers`).
+        /// How many calls may have output unsent (`observers`).
         var calls = 64
         /// Shared by every call whose outbox these limits made.
         var budget = Budget()
@@ -55,13 +61,15 @@ final class CallerOutbox: @unchecked Sendable {
     /// costs no copy.
     private var waiting: [Waiting] = []
     private var head = 0
-    private var waitingBytes = 0
-    /// Whether a message is going out: the next waits.
+    /// What the client has yet to be sent: what waits, and the message going out.
+    private var unsentBytes = 0
+    /// What the message going out counts: given back once it has gone.
+    private var sendingBytes = 0
+    /// Whether a message is going out, or is about to — the next waits — and the call counted
+    /// among those with output unsent.
     private var sending = false
     /// Past a bound: the client is disconnected, and nothing more goes out.
     private var dropped = false
-    /// Counted among the calls with output waiting.
-    private var holdsSlot = false
     private var idle: [CheckedContinuation<Void, Never>] = []
     /// The disconnect past a bound, which the call's end waits for (``flush()``).
     private var disconnection: Task<Void, Never>?
@@ -76,38 +84,30 @@ final class CallerOutbox: @unchecked Sendable {
     /// read the client's log level: below it, the message would never go out, so it takes no
     /// room either, as ``Session/sendLogNotification(_:)`` never sends it.
     func post(_ message: LogMessage) async {
-        enum Outcome { case waits, startsSending, overflows }
         guard message.level.isAtLeast(await session.minimumLogLevel), let frame = Self.frame(of: message) else {
             return
         }
-        let outcome: Outcome = lock.withLock {
-            guard !dropped else { return .waits }
-            guard sending else {
-                sending = true
-                waiting.append(Waiting(frame: frame, level: message.level, bytes: 0))
-                return .startsSending
-            }
+        let startsSending: Bool = lock.withLock {
+            guard !dropped else { return false }
+            // Counted as it is posted, the one that goes out at once too, as acpx reserves
+            // before it writes; and until it has gone, as the transport holds it until then.
             let bytes = frame.count
-            guard waitingBytes + bytes <= limits.callBytes,
-                  limits.budget.reserve(bytes, newCall: !holdsSlot, limits: limits) else {
+            guard unsentBytes + bytes <= limits.callBytes,
+                  limits.budget.reserve(bytes, newCall: !sending, limits: limits) else {
                 dropAll()
                 let session = session
                 disconnection = Task { await session.disconnect() }
-                return .overflows
+                return false
             }
-            holdsSlot = true
+            unsentBytes += bytes
             waiting.append(Waiting(frame: frame, level: message.level, bytes: bytes))
-            waitingBytes += bytes
-            return .waits
+            let starts = !sending
+            sending = true
+            return starts
         }
-        switch outcome {
-        case .waits, .overflows:
-            break
-        case .startsSending:
-            // The outbox's own task: what it sends outlives the post, and the call's end waits
-            // for it (``flush()``).
-            Task { await self.drain() }
-        }
+        // The outbox's own task: what it sends outlives the post, and the call's end waits for
+        // it (``flush()``).
+        if startsSending { Task { await self.drain() } }
     }
 
     /// Whether a bound was passed, the client disconnected: nothing more goes out.
@@ -115,13 +115,13 @@ final class CallerOutbox: @unchecked Sendable {
         lock.withLock { dropped }
     }
 
-    /// Once all that was posted has gone out — or the client was disconnected, and it never will:
-    /// its disconnect done, so that the call's result does not reach it first, as a success
-    /// that lost part of its output.
+    /// Once the outbox holds nothing: all that was posted gone out — or, the client disconnected
+    /// past a bound, the message going out let go of, and the disconnect done, so that the
+    /// call's result does not reach the client first, as a success that lost part of its output.
     func flush() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let done: Bool = lock.withLock {
-                guard sending, !dropped else { return true }
+                guard sending else { return true }
                 idle.append(continuation)
                 return false
             }
@@ -143,11 +143,17 @@ final class CallerOutbox: @unchecked Sendable {
         }
     }
 
-    /// The next frame to send, and its level, no longer waiting — or none, the outbox idle.
+    /// The next frame to send, and its level, no longer waiting — the one sent before it gone,
+    /// and no longer counted — or none, the outbox idle, and the call no longer counted among
+    /// those with output unsent.
     private func next() -> (Data, LogLevel)? {
         let (message, woken): ((Data, LogLevel)?, [CheckedContinuation<Void, Never>]) = lock.withLock {
+            unsentBytes -= sendingBytes
+            limits.budget.release(sendingBytes, call: false)
+            sendingBytes = 0
             guard !dropped, head < waiting.count else {
                 sending = false
+                limits.budget.release(0, call: true)
                 (waiting, head) = ([], 0)
                 return (nil, takeIdle())
             }
@@ -157,24 +163,21 @@ final class CallerOutbox: @unchecked Sendable {
                 waiting.removeFirst(head)
                 head = 0
             }
-            waitingBytes -= next.bytes
-            limits.budget.release(next.bytes, call: false)
-            if head == waiting.count, holdsSlot {
-                holdsSlot = false
-                limits.budget.release(0, call: true)
-            }
+            sendingBytes = next.bytes
             return ((next.frame, next.level), [])
         }
         woken.forEach { $0.resume() }
         return message
     }
 
-    /// Past a bound: what waits dropped, its budget given back. Under ``lock``.
+    /// Past a bound: what waits dropped, its budget given back. The message going out still
+    /// counts, and keeps the call counted, until its send ends (``next()``), as acpx keeps an
+    /// observer's slot until its socket closes. Under ``lock``.
     private func dropAll() {
         dropped = true
-        limits.budget.release(waitingBytes, call: holdsSlot)
-        (waiting, head, waitingBytes, holdsSlot) = ([], 0, 0, false)
-        takeIdle().forEach { $0.resume() }
+        limits.budget.release(unsentBytes - sendingBytes, call: false)
+        unsentBytes = sendingBytes
+        (waiting, head) = ([], 0)
     }
 
     /// Those waiting for the outbox to go idle. Under ``lock``.
@@ -198,8 +201,7 @@ final class CallerOutbox: @unchecked Sendable {
 }
 
 extension CallerOutbox {
-    /// A message waiting: the frame it goes out as, its level, and what it counts (nothing for
-    /// the one sent at once).
+    /// A message waiting: the frame it goes out as, its level, and what it counts.
     struct Waiting {
         let frame: Data
         let level: LogLevel
@@ -230,7 +232,7 @@ extension CallerOutbox {
             }
         }
 
-        /// What waits, and for how many calls: for a test.
+        /// What is unsent, and for how many calls: for a test.
         var held: (bytes: Int, calls: Int) {
             lock.withLock { (bytes, calls) }
         }

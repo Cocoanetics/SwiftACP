@@ -130,9 +130,11 @@ by hand, by launchd, or hosted in an app — runs until it is stopped.
 
 A CLI that stops reading what `acpxd` sends it holds only its own call, as with acpx's queue
 owner: its turn goes on, and the next prompt on the session runs. `acpxd` disconnects a CLI that
-leaves its output unread for ten seconds, or whose unread output passes 64 MiB (256 MiB across all
-CLIs). That CLI then reports `Queue owner disconnected before prompt completion; outcome unknown`.
-acpx allows a second; over TCP a slow reader's progress shows only in bursts seconds apart.
+leaves its output unread for ten seconds, or whose unsent output passes 64 MiB (256 MiB across all
+CLIs, and 64 CLIs with output unsent). That CLI then reports `Queue owner disconnected before
+prompt completion; outcome unknown`. acpx allows a second; over TCP a slow reader's progress shows
+only in bursts seconds apart. acpx holds these limits for each session's owner, spooling to temp
+files; `acpxd` holds the output in memory, so they hold for all its sessions together.
 
 The CLI works only through an `acpxd` of its own version, which the daemon reports in MCP's
 `serverInfo`: SwiftACP's release and a fingerprint of the daemon's tools. With another running —

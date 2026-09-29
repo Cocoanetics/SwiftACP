@@ -80,41 +80,63 @@ extension DaemonToolsTests {
         }
     }
 
-    /// Past the calls that may have output waiting, the next call's client is disconnected; the
-    /// others go on and get all of theirs.
-    @Test func pastTheCallsWithOutputWaitingTheNextIsDisconnected() async throws {
+    /// Past the calls that may have output unsent, the next call's client is disconnected at its
+    /// first message. A call whose one message is still going out counts among them, as acpx
+    /// takes an observer's slot before its first write. The others go on and get all of theirs.
+    @Test func pastTheCallsWithOutputUnsentTheNextIsDisconnected() async throws {
         let limits = CallerOutbox.Limits(calls: 1)
         let (first, second) = (StoppedClient(), StoppedClient())
         defer { first.letThrough(); second.letThrough() }
         let (firstOutbox, secondOutbox) = (await Self.outbox(on: first, limits), await Self.outbox(on: second, limits))
-        for outbox in [firstOutbox, secondOutbox] {
-            await outbox.post(Self.log("one"))
-            await outbox.post(Self.log("two"))
-        }
-        #expect(!firstOutbox.isDropped && secondOutbox.isDropped)
+        await firstOutbox.post(Self.log("one"))
+        await first.sendWaits()
+        await secondOutbox.post(Self.log("one"))
+        // Else the flush below waits for a client that reads nothing.
+        try #require(!firstOutbox.isDropped && secondOutbox.isDropped)
         await secondOutbox.flush()
         #expect(second.isDisconnected, "the flush ended before the client was disconnected")
+        await firstOutbox.post(Self.log("two"))
         first.letThrough()
         await firstOutbox.flush()
-        #expect(first.sentCount == 2)
+        #expect(first.sentCount == 2 && second.sentCount == 0)
         #expect(limits.budget.held == (0, 0))
     }
 
-    /// Past what all calls may have waiting, the call that would pass it has its client
-    /// disconnected; one within it goes on.
-    @Test func pastWhatAllCallsMayHaveWaitingTheNextIsDisconnected() async throws {
+    /// Past what all calls may have unsent, the call that would pass it has its client
+    /// disconnected, though its message would go out at once. What goes out counts until it has
+    /// gone, as the transport holds it until then; one within the bound goes on.
+    @Test func pastWhatAllCallsMayHaveUnsentTheNextIsDisconnected() async throws {
         let one = CallerOutbox.size(of: log(String(repeating: "x", count: 100)))
         let limits = CallerOutbox.Limits(totalBytes: one + one / 2)
         let (first, second) = (StoppedClient(), StoppedClient())
         defer { first.letThrough(); second.letThrough() }
         let (firstOutbox, secondOutbox) = (await Self.outbox(on: first, limits), await Self.outbox(on: second, limits))
-        for outbox in [firstOutbox, secondOutbox] {
-            await outbox.post(Self.log("in flight"))
-            await outbox.post(Self.log(String(repeating: "x", count: 100)))
-        }
-        #expect(!firstOutbox.isDropped && secondOutbox.isDropped)
-        try await withTimeout(milliseconds: 10_000) { await second.disconnected() }
-        #expect(limits.budget.held.bytes == one)
+        await firstOutbox.post(Self.log(String(repeating: "x", count: 100)))
+        await first.sendWaits()
+        #expect(limits.budget.held == (one, 1), "what goes out was let go of before it had gone")
+        await secondOutbox.post(Self.log(String(repeating: "x", count: 100)))
+        // Else the flush below waits for a client that reads nothing.
+        try #require(!firstOutbox.isDropped && secondOutbox.isDropped)
+        first.letThrough()
+        await firstOutbox.flush()
+        #expect(first.sentCount == 1 && limits.budget.held == (0, 0))
+        await secondOutbox.flush()
+        #expect(second.isDisconnected && second.sentCount == 0)
+    }
+
+    /// A message past its call's bound disconnects the client though it would go out at once: the
+    /// transport would hold all of it while the client reads nothing.
+    @Test func aMessagePastItsCallsBoundDisconnectsTheClient() async throws {
+        let limits = CallerOutbox.Limits(callBytes: 1 << 10)
+        let client = StoppedClient()
+        defer { client.letThrough() }
+        let outbox = await Self.outbox(on: client, limits)
+        await outbox.post(Self.log(String(repeating: "x", count: 2 << 10)))
+        // Else the flush below waits for a client that reads nothing.
+        try #require(outbox.isDropped)
+        await outbox.flush()
+        #expect(client.isDisconnected && client.sentCount == 0)
+        #expect(limits.budget.held == (0, 0))
     }
 
     /// What a noisy agent writes to stderr waits for a slow caller within the call's bound — not
@@ -140,7 +162,7 @@ extension DaemonToolsTests {
     }
 
     /// What is below the client's log level takes no room: past the call's bound in messages the
-    /// client would never be sent, it is not disconnected, and nothing is counted.
+    /// client would never be sent, it is not disconnected, and nothing of them is counted.
     @Test func whatTheClientsLevelSuppressesTakesNoRoom() async throws {
         let client = StoppedClient()
         defer { client.letThrough() }
@@ -150,14 +172,16 @@ extension DaemonToolsTests {
         let limits = CallerOutbox.Limits(callBytes: 1 << 10)
         let outbox = CallerOutbox(session: session, limits: limits)
         // A warning goes out, and waits for the client; the info behind it would wait too.
-        await outbox.post(LogMessage(level: .warning, data: .string("warning")))
+        let warning = LogMessage(level: .warning, data: .string("warning"))
+        await outbox.post(warning)
         await client.sendWaits()
         for _ in 0 ..< 100 { await outbox.post(Self.log(String(repeating: "x", count: 100))) }
         #expect(!outbox.isDropped)
-        #expect(limits.budget.held == (0, 0))
+        #expect(limits.budget.held == (CallerOutbox.size(of: warning), 1), "only the warning counts")
         client.letThrough()
         await outbox.flush()
         #expect(client.sentCount == 1 && !client.isDisconnected)
+        #expect(limits.budget.held == (0, 0))
     }
 
     /// A level the client lowers during a call holds for what is posted from then on, as
