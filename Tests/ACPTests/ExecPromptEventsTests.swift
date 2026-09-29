@@ -29,11 +29,11 @@ struct ExecPromptEventsTests {
                     [.text("hi")], on: session, policy: policy, renderer: renderer, sideEffects: PromptSideEffects())
             }
         } catch {
-            await agent.close()
+            try await agent.close()
             throw error
         }
         let atTheFailure = written.value
-        await agent.close()
+        try await agent.close()
         #expect(atTheFailure.contains("u0 ") && atTheFailure.contains("u19 "), "\(atTheFailure)")
         #expect(written.value == atTheFailure)
     }
@@ -61,12 +61,12 @@ struct ExecPromptEventsTests {
             }
         } catch {
             release.finish()
-            await agent.close()
+            try await agent.close()
             throw error
         }
         let shown = written.value
         release.finish()
-        await agent.close()
+        try await agent.close()
         #expect(shown.hasPrefix("u0 "), "\(shown)")
     }
 
@@ -95,12 +95,12 @@ struct ExecPromptEventsTests {
             }
         } catch {
             release.finish()
-            await agent.close()
+            try await agent.close()
             throw error
         }
         let shown = written.value
         release.finish()
-        await agent.close()
+        try await agent.close()
         #expect(shown.hasSuffix("[error] RUNTIME: model overloaded\nlate "), "\(shown)")
     }
 
@@ -141,10 +141,10 @@ struct ExecPromptEventsTests {
                 }
             }
         } catch {
-            await agent.close()
+            try await agent.close()
             throw error
         }
-        await agent.close()
+        try await agent.close()
         #expect(seen.value == 20)
     }
 

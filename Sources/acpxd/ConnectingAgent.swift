@@ -31,13 +31,15 @@ final class ConnectingAgent: @unchecked Sendable {
             return !abandoned
         }
         guard held else {
-            await agent.close()
+            // Called off: that is the outcome, whatever closing the agent then says.
+            try? await agent.close()
             throw CancellationError()
         }
         return agent
     }
 
     /// Put it down: its launch called off, or the agent it launched closed — which it returns.
+    /// How the close went is not said, as acpx's owner shutting down swallows its client's.
     @discardableResult
     func abandon() async -> ACPAgent? {
         let (task, agent) = lock.withLock {
@@ -45,7 +47,7 @@ final class ConnectingAgent: @unchecked Sendable {
             return (launching, self.agent)
         }
         task?.cancel()
-        await agent?.close()
+        try? await agent?.close()
         return agent
     }
 }

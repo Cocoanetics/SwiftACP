@@ -115,7 +115,8 @@ extension ACPXDaemonBackend {
         guard owners[recordId]?.turnsRun == seen else { return }
         owners[recordId] = nil
         let entry = live.removeValue(forKey: recordId)
-        await entry?.agent.close()
+        // As acpx's owner shutting down swallows its client's close.
+        try? await entry?.agent.close()
         if var record = findRecord(recordId) {
             record.applyLifecycle(entry?.agent.lifecycle)
             try? SessionStore.writeRecord(record)

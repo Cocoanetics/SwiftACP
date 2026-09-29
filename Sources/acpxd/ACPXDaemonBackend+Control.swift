@@ -163,7 +163,7 @@ extension ACPXDaemonBackend {
             // `checkpoint` saves it.
             // An agent whose connection is gone is ended first, as a turn's is: it can be
             // running still, and its pid would be kept.
-            if direct || ACPAgentConnection.endedTheConnection(error) { await letGo(entry, of: recordId) }
+            if direct || ACPAgentConnection.endedTheConnection(error) { try? await letGo(entry, of: recordId) }
             var saved = answeredLate ? record : reconnected
             if !direct { saved.lastUsedAt = nowISO() }
             saved.applyLifecycle(entry.agent.lifecycle)
@@ -175,7 +175,7 @@ extension ACPXDaemonBackend {
             throw error
         }
         if direct {
-            await letGo(entry, of: recordId)
+            try await letGo(entry, of: recordId)
             // What the agent connected for it answered `initialize` with, as acpx's direct control
             // records it (`withConnectedSession`, #119). An owner's control leaves it be.
             await record.applyInitialize(of: entry.agent)
@@ -218,10 +218,10 @@ extension ACPXDaemonBackend {
         }, discardingLate: { await queue.release(recordId) })
     }
 
-    /// Close `entry`'s agent, and hold it no longer.
-    private func letGo(_ entry: Live, of recordId: String) async {
+    /// Close `entry`'s agent, and hold it no longer — throwing what closing it threw.
+    private func letGo(_ entry: Live, of recordId: String) async throws {
         if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
-        await entry.agent.close()
+        try await entry.agent.close()
     }
 
     /// A control's `--timeout`: none when not positive, as acpx takes it; one longer than

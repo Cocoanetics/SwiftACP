@@ -74,7 +74,7 @@ import Testing
                 let launch = config.agentLaunch(for: name)
                 let agent = try await ACPAgent.launch(
                     agent: launch.command, argv: launch.argv, cwd: NSTemporaryDirectory(), permission: .approveAll)
-                await agent.close()
+                try await agent.close()
             }
             #expect(try Self.loggedArgv(argvLog) == [Self.awkward])
             #expect(try Self.loggedArgv(argsLog) == [Self.awkward])

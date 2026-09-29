@@ -133,16 +133,29 @@ public actor TerminalManager: ACPTerminalHandler {
         return ReleaseTerminalResponse()
     }
 
-    public func shutdown() async {
+    /// Releases every terminal at once, and throws once all are tried if any release failed
+    /// (``TerminalShutdownFailed``): acpx's `Promise.allSettled` over the releases.
+    public func shutdown() async throws {
         shutDown = true
-        await withTaskGroup(of: Void.self) { group in
+        let failures = await withTaskGroup(of: (any Error)?.self) { group in
             for terminalId in terminals.keys {
                 group.addTask {
-                    _ = try? await self.releaseTerminal(
-                        ReleaseTerminalRequest(sessionId: "shutdown", terminalId: terminalId))
+                    do {
+                        _ = try await self.releaseTerminal(
+                            ReleaseTerminalRequest(sessionId: "shutdown", terminalId: terminalId))
+                        return nil
+                    } catch {
+                        return error
+                    }
                 }
             }
+            var failures: [any Error] = []
+            for await failure in group {
+                if let failure { failures.append(failure) }
+            }
+            return failures
         }
+        if !failures.isEmpty { throw TerminalShutdownFailed(failures: failures) }
     }
 
     /// The process ids of the commands still running: for a test to see them end.

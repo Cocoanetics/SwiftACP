@@ -152,7 +152,7 @@ extension ACPXDaemonBackend {
                         inheritStderr: inheritAgentStderr, terminalOutputCeiling: .given(terminalOutputCeiling),
                         terminalEnvironment: settings.environment, limits: sessionOptions?.limits,
                         onRawWire: connectTap, onStderr: settings.stderr?.observer, onLog: settings.stderr?.logObserver)
-                }, discardingLate: { await $0.close() })
+                }, discardingLate: { try? await $0.close() })
             }
         } catch {
             await showConnectOutput(false)
@@ -183,7 +183,7 @@ extension ACPXDaemonBackend {
             // Nothing will hold this agent: don't leave its process running. A failed
             // replay leaves the record as it was, on the session it had (acpx's
             // `settleFailedReplay`), and the next turn connects again.
-            await handle.close()
+            try? await handle.close()
             throw error
         }
         // The session the record is on from now on, and the agent's own id for it
@@ -227,7 +227,7 @@ extension ACPXDaemonBackend {
         _ handle: ACPAgent, of recordId: String, via onRecordChange: RecordChangeHandler?
     ) async throws {
         guard stopping else { return }
-        await handle.close()
+        try? await handle.close()
         await apply({ [handle] record in record.applyLifecycle(handle.lifecycle) }, to: recordId, via: onRecordChange)
         throw DaemonError.stopping
     }
@@ -260,7 +260,7 @@ extension ACPXDaemonBackend {
             // creation's token kept of it (#219 review).
             if live[recordId]?.agent === existing.agent { live.removeValue(forKey: recordId) }
             madeCreations = madeCreations.filter { $0.value.agent !== existing.agent }
-            await existing.agent.close()
+            try? await existing.agent.close()
         }
         return (nil, replacedExited)
     }

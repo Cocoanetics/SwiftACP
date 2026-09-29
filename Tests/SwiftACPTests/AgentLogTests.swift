@@ -13,7 +13,7 @@ import Testing
     func aLaunchNotesItsCommandThenItsProtocolVersion() async throws {
         let lines = Lines()
         let agent = try await Self.launch("EXIT_AGENT_CODE=3", lines)
-        await agent.close()
+        try await agent.close()
         let python = try #require(mockPython)
         #expect(lines.all == [
             "spawning agent: /usr/bin/env EXIT_AGENT_CODE=3 \(python) \(Self.fixture.path)",
@@ -44,7 +44,7 @@ import Testing
             environment: AgentEnvironment.forAgent(authCredentials: credentials, sessionEnv: nil, over: caller),
             authCredentials: credentials, inheritStderr: false, terminalEnvironment: caller,
             onLog: { lines.append($0) })
-        await agent.close()
+        try await agent.close()
         #expect(Array(lines.all.dropFirst()) == [line, "initialized protocol version 1"])
     }
 
@@ -59,7 +59,7 @@ import Testing
             agent: AgentEndTests.command("EXIT_AGENT_AUTH=1"), cwd: NSTemporaryDirectory(), permission: .approveAll,
             environment: environment, authCredentials: ["probe-login": "from-the-config"], inheritStderr: false,
             onLog: { lines.append($0) })
-        await agent.close()
+        try await agent.close()
         #expect(lines.all.dropFirst().first == "authenticated with method probe-login (env)")
     }
 
@@ -69,7 +69,7 @@ import Testing
     func anAgentThatOutlastsSIGTERMIsNotedAsItIsKilled() async throws {
         let lines = Lines()
         let agent = try await Self.launch("EXIT_AGENT_STUBBORN=1", lines)
-        await agent.close()
+        try await agent.close()
         #expect(lines.all.last == "agent processes did not exit after SIGTERM; forcing SIGKILL")
     }
 

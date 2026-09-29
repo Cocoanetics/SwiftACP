@@ -95,8 +95,7 @@ enum ExecCommand {
                 configOptions: configOptions, control: control, timeoutMs: flags.timeoutMs,
                 quiet: quietOutput(flags))
         } catch {
-            await handle.close()
-            return reportFailure(error, renderer: renderer, format: flags.format)
+            return reportFailure(await Self.close(handle, after: error), renderer: renderer, format: flags.format)
         }
         interrupt.opened(session.id)
         let run: PromptRun
@@ -104,16 +103,20 @@ enum ExecCommand {
             run = try await runPrompt(
                 prompt, on: session, policy: PromptPolicy(flags), renderer: renderer, sideEffects: sideEffects)
         } catch {
-            await handle.close()
+            let failure = await Self.close(handle, after: error)
             // An agent gone with the prompt out is reported too, once, in any format: acpx
             // 0.19.3 marks its error shown only when the output shows the agent's error
             // (`markOutputAlreadyEmitted`, #778).
             return reportFailure(
-                error, renderer: renderer, format: flags.format, agentErrorShown: showsAgentError(error))
+                failure, renderer: renderer, format: flags.format, agentErrorShown: showsAgentError(failure))
         }
         renderer.finish(stopReason: run.response.stopReason)
         renderer.promptMetadata(usage: promptResult.result?["usage"], cost: promptResult.result?["cost"])
-        await handle.close()
+        do {
+            try await handle.close()
+        } catch {
+            return reportFailure(error, renderer: renderer, format: flags.format)
+        }
         if run.permissions.promptUnavailable, flags.format != "quiet",
             !renderer.showedFailure(FileSystemPermissionError.promptUnavailable.description) {
             // acpx rethrows this after the turn; its top-level handler reports it
@@ -160,7 +163,7 @@ enum ExecCommand {
     static func launchAgent(
         within milliseconds: Int?, _ launch: @escaping @Sendable () async throws -> ACPAgent
     ) async throws -> ACPAgent {
-        try await withTimeout(milliseconds: milliseconds, launch) { await $0.close() }
+        try await withTimeout(milliseconds: milliseconds, launch) { try? await $0.close() }
     }
 
     /// Report a failed run the way acpx does in `format`, returning its exit code.
@@ -177,6 +180,17 @@ enum ExecCommand {
     ///   it, as `[error] RUNTIME: <details or message>` with hints going by that text,
     ///   and not repeated (`agentErrorShown`: it already is); anything else goes to
     ///   stderr bare, with its hints, as acpx's top-level handler prints it.
+    /// `error`, once `handle` is closed — or what closing it threw instead, as a close that fails
+    /// throws over what acpx's direct execution was throwing (`closeOwnedClient`, #281).
+    static func close(_ handle: ACPAgent, after error: Error) async -> Error {
+        do {
+            try await handle.close()
+            return error
+        } catch {
+            return error
+        }
+    }
+
     static func reportFailure(
         _ error: Error, renderer: OutputRenderer, format: String, agentErrorShown: Bool = false,
         err: (String) -> Void = { Console.errLine($0) }

@@ -199,8 +199,8 @@ public final class ACPAgent: Sendable {
                 transport: transport, rawWire: rawWire, initializeResult: info, terminals: terminals)
         } catch {
             // A command the agent started meanwhile goes with it: nothing else would
-            // ever reach its terminal.
-            await connection.shutDownTerminals()
+            // ever reach its terminal. The start's own failure is the one reported.
+            try? await connection.shutDownTerminals()
             if let agent = transport as? AgentProcessTransport {
                 // Whether the agent went is settled before anything closes it: closing ends
                 // its stdin, and it would exit then, whatever the failure was.
@@ -403,8 +403,23 @@ public final class ACPAgent: Sendable {
     /// Gracefully shut down the connection and terminate the subprocess — after the
     /// commands the agent still runs through the client, as acpx retires its
     /// terminals before the agent.
-    public func close() async {
-        await connection.shutDownTerminals()
+    ///
+    /// Everything is retired whatever fails: a failure is thrown after, as acpx's
+    /// `retireNativeResources` does (``ACPClientCleanupFailed``). Only a terminal that
+    /// outlives its cleanup fails it, which happens on Windows alone.
+    public func close() async throws {
+        var failures: [any Error] = []
+        do {
+            try await connection.shutDownTerminals()
+        } catch {
+            failures.append(error)
+        }
+        await retire()
+        if !failures.isEmpty { throw ACPClientCleanupFailed(failures: failures) }
+    }
+
+    /// The agent ended and the connection closed, its terminals gone.
+    private func retire() async {
         if let agent = transport as? AgentProcessTransport {
             // As acpx's `retireNativeResources` closes a client (#142): marked closing, the
             // agent ended — its end, recorded as acpx records it, failing what still waits
@@ -437,4 +452,20 @@ public struct SessionReconnectUnsupported: LocalizedError, Equatable, Sendable {
 
     /// acpx's reason for the same case.
     public var errorDescription: String? { "agent does not support session/resume or session/load" }
+}
+
+/// Closing an agent left something behind — the terminals it ran, on Windows
+/// (``TerminalShutdownFailed``) — though everything else was retired: acpx's
+/// `AggregateError(failures, "ACP client cleanup failed")` from closing its client.
+public struct ACPClientCleanupFailed: LocalizedError, ErrorWithCause, Sendable {
+    /// What failed.
+    public let failures: [any Error]
+
+    public init(failures: [any Error]) {
+        self.failures = failures
+    }
+
+    public var errorDescription: String? { "ACP client cleanup failed" }
+    /// The first failure, as the aggregate's `cause`.
+    public var cause: Error? { failures.first }
 }

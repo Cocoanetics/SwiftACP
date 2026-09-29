@@ -56,7 +56,7 @@ import Glibc
         #expect(lifecycle.lastExit?.reason == .processExit)
         #expect(lifecycle.lastExit?.exitCode == 3)
         #expect(lifecycle.lastExit?.unexpectedDuringPrompt == true)
-        await agent.close()
+        try await agent.close()
     }
 
     @Test(.enabled(if: mockPythonAvailable))
@@ -68,7 +68,7 @@ import Glibc
         }
         #expect(error?.localizedDescription
             == "ACP agent disconnected during request (process_exit, exit=null, signal=SIGKILL)")
-        await agent.close()
+        try await agent.close()
     }
 
     /// Closing an agent mid-turn ends it as the client's doing, not unexpectedly: acpx's
@@ -85,7 +85,7 @@ import Glibc
         let turn = Task { try await session.prompt([.text("hi")]) }
         var updates = streamed.makeAsyncIterator()
         _ = await updates.next()
-        await agent.close()
+        try await agent.close()
         _ = await turn.result
         let exit = try #require(agent.lifecycle?.lastExit)
         #expect([.connectionClose, .processExit].contains(exit.reason))
@@ -115,7 +115,7 @@ import Glibc
         #expect(exit.reason == .processExit)
         #expect(exit.exitCode == 0)
         #expect(!exit.unexpectedDuringPrompt)
-        await agent.close()
+        try await agent.close()
     }
 
     /// Its stdout closing while it runs on is put down to the pipe.
@@ -130,7 +130,7 @@ import Glibc
         // It is ended with its connection, closed or not (#113 review).
         let transport = try #require(agent.transport as? AgentProcessTransport)
         #expect(await transport.waitForExit(timeout: .seconds(5)))
-        await agent.close()
+        try await agent.close()
     }
 
     /// The transport ends such an agent itself, whoever reads it — not only once a
@@ -234,7 +234,7 @@ import Glibc
             _ = try await session.prompt([.text("hi")])
         }
         #expect(error == AgentDisconnectedError(reason: .connectionClose, exitCode: nil, signal: nil))
-        await agent.close()
+        try await agent.close()
     }
 
     /// acpx reads only JSON objects off the agent's stdout: other JSON values — a batch
@@ -255,7 +255,7 @@ import Glibc
         #expect(chunks.all == ["partial "])
         #expect(wire.all.contains(#"{"stray":true}"#))
         #expect(!wire.all.contains { $0 == "42" || $0 == #""x""# || $0 == "null" || $0.hasPrefix("[") })
-        await agent.close()
+        try await agent.close()
     }
 
     /// acpx's `cleanupAgentProcess`: an agent that ignores its stdin's end and `SIGTERM`
@@ -265,7 +265,7 @@ import Glibc
     func closingEndsAnAgentThatIgnoresItsStdinAndSIGTERM() async throws {
         let agent = try await Self.launch("EXIT_AGENT_STUBBORN=1")
         let pid = try #require(agent.lifecycle?.pid)
-        await agent.close()
+        try await agent.close()
         #expect(!Self.isRunning(pid))
         let lifecycle = try #require(agent.lifecycle)
         #expect(!lifecycle.running)
@@ -297,7 +297,7 @@ import Glibc
     @Test(.enabled(if: mockPythonAvailable))
     func closingAnAgentThatRunsOnRecordsTheSignalThatEndedIt() async throws {
         let agent = try await Self.launch("EXIT_AGENT_LINGER=1")
-        await agent.close()
+        try await agent.close()
         let exit = try #require(agent.lifecycle?.lastExit)
         #expect(exit.reason == .processExit)
         #expect(exit.signal == "SIGTERM")
@@ -314,7 +314,7 @@ import Glibc
         let agent = try await Self.launch("EXIT_AGENT_CHILD='\(pidFile)'")
         let child = try #require(pid_t(String(contentsOfFile: pidFile, encoding: .utf8)))
         #expect(Self.isRunning(child))
-        await agent.close()
+        try await agent.close()
         #expect(!Self.isRunning(child))
     }
 
@@ -337,7 +337,7 @@ import Glibc
         let child = try #require(pid_t(String(contentsOfFile: pidFile, encoding: .utf8)))
         #expect(Self.isRunning(child))
         _ = try? await agent.connection.prompt(PromptRequest(sessionId: sessionId, prompt: [.text("hi")]))
-        await agent.close()
+        try await agent.close()
         #expect(!Self.isRunning(child))
     }
 

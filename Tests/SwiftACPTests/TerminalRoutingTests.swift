@@ -305,7 +305,7 @@ struct TerminalRoutingTests {
                 method: "terminal/create", params: .object(["sessionId": .string("s"), "command": .string("true")]))
         }
         await gate.waitUntilAsked()
-        await client.shutDownTerminals()
+        try await client.shutDownTerminals()
         await gate.open()
         guard case .failure(let error) = await create.value else { Issue.record("started"); return }
         #expect(error.code == -32800 && error.message == "Request cancelled")
@@ -331,7 +331,7 @@ struct TerminalRoutingTests {
         let gate = Gate()
         let client = ACPAgentConnection(transport: LoopbackTransport.pair().0)
         await client.setTerminalHandler(RecordingTerminals(shutdownGate: gate))
-        let shuttingDown = Task { await client.shutDownTerminals() }
+        let shuttingDown = Task { try? await client.shutDownTerminals() }
         await gate.waitUntilAsked()
         let late = RecordingTerminals()
         await client.setTerminalHandler(late)
@@ -340,7 +340,7 @@ struct TerminalRoutingTests {
         await shuttingDown.value
 
         let bare = ACPAgentConnection(transport: LoopbackTransport.pair().0)
-        await bare.shutDownTerminals()
+        try await bare.shutDownTerminals()
         let afterwards = RecordingTerminals()
         await bare.setTerminalHandler(afterwards)
         #expect(await afterwards.hasShutDown)

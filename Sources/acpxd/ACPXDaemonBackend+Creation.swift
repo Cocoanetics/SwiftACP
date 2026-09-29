@@ -54,7 +54,7 @@ extension ACPXDaemonBackend {
         do {
             try await turnQueue.acquire(recordId, wait: true)
         } catch {
-            await held.agent.close()
+            try? await held.agent.close()
             throw error
         }
         let taken = live[recordId] != nil || hasTurn(recordId) || owners[recordId] != nil
@@ -78,7 +78,7 @@ extension ACPXDaemonBackend {
         }
         await turnQueue.release(recordId)
         if case .failure(let error) = outcome {
-            await held.agent.close()
+            try? await held.agent.close()
             throw error
         }
     }

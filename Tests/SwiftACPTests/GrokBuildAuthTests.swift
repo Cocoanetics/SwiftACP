@@ -25,7 +25,7 @@ import Testing
     func grokBuildSignsInAsAcpxHasIt(_ environment: [String: String], _ line: String) async throws {
         let lines = Lines()
         let agent = try await Self.launch(standIn: "grok", environment: environment, lines)
-        await agent.close()
+        try await agent.close()
         #expect(lines.all.dropFirst().first == line)
     }
 
@@ -39,7 +39,7 @@ import Testing
         }
         let agent = try await Self.launch(
             standIn: "grok", environment: ["XAI_API_KEY": "a key"], agentEnvironment: agentEnvironment, lines)
-        await agent.close()
+        try await agent.close()
         #expect(lines.all.dropFirst().first == "authenticated with method cached_token (agent)")
     }
 

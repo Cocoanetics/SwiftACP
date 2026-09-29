@@ -1,0 +1,21 @@
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite CleanupFailureTests started.
+􀟈  Test everyCallerOfTheShutdownHearsHowItWent() started.
+􀟈  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() started.
+􀟈  Test aConnectionThatEndedByItselfStillSaysSoOnClose() started.
+􁁛  Test aConnectionThatEndedByItselfStillSaysSoOnClose() passed after 0.002 seconds.
+􁁛  Test everyCallerOfTheShutdownHearsHowItWent() passed after 0.002 seconds.
+􀢄  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() recorded an issue at CleanupFailureTests.swift:84:9: Expectation failed: await agent.connection.isClosed
+􀄵  await agent.connection.isClosed → <not evaluated>
+􀢄  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() failed after 0.003 seconds with 1 issue.
+􀄵  /// Closing throws the terminals' failure once the rest is retired: the connection closed.
+􀢄  Suite CleanupFailureTests failed after 0.003 seconds with 1 issue.
+􀄵  /// A terminal cleanup that fails is said where acpx says it (#281): the terminals' shutdown
+􀄵  /// throws once every release was tried — acpx's "Terminal shutdown failed" — and closing the agent
+􀄵  /// throws it on after retiring everything else, as "ACP client cleanup failed". Only a Windows
+􀄵  /// terminal whose processes outlive their cleanup fails for real; a handler stands in for it.
+􀢄  Test run with 3 tests in 1 suite failed after 0.003 seconds with 1 issue.
+Note: Some test targets reported failures:
+  - SwiftACPTests (Swift Testing)

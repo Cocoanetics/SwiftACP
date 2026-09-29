@@ -31,7 +31,9 @@ extension ACPAgentConnection {
                 // Asking can take long; a connection that ended meanwhile has released its
                 // terminals, and a command started now would outlive it. acpx rechecks its
                 // control authority here and answers `Request cancelled`.
-                guard !terminalsShutDown, !isClosed, !Task.isCancelled else { return .failure(Self.requestCancelled) }
+                guard terminalShutdown == nil, !isClosed, !Task.isCancelled else {
+                    return .failure(Self.requestCancelled)
+                }
                 return .success(try JSONValue(encoding: try await terminals.createTerminal(request)))
             case "terminal/output":
                 let request: TerminalOutputRequest = try decode(params, for: method)
@@ -83,22 +85,28 @@ extension ACPAgentConnection {
     /// replaced by another is shut down first, since nothing could reach its terminals
     /// afterwards. One given once the terminals are being shut down is shut down at
     /// once instead: nothing would shut it down later.
+    ///
+    /// Such a handler's shutdown failing is not said anywhere: nothing waits for it.
     public func setTerminalHandler(_ handler: (any ACPTerminalHandler)?) async {
-        guard !terminalsShutDown else {
-            await handler?.shutdown()
+        guard terminalShutdown == nil else {
+            try? await handler?.shutdown()
             return
         }
         let previous = terminalHandler
         terminalHandler = handler
-        if let previous, previous !== handler { await previous.shutdown() }
+        if let previous, previous !== handler { try? await previous.shutdown() }
     }
 
     /// Release every terminal the agent still has open, as acpx does when its client
-    /// closes — called when the connection ends, whichever side ends it. Only the first
-    /// call does anything, with a handler or without one.
-    public func shutDownTerminals() async {
-        guard !terminalsShutDown else { return }
-        terminalsShutDown = true
-        await terminalHandler?.shutdown()
+    /// closes — begun when the connection ends, whichever side ends it. The first call
+    /// begins it, with a handler or without one; each waits for it, and throws what it threw
+    /// (``TerminalShutdownFailed``), so that the close of a connection that ended by itself
+    /// still says so.
+    public func shutDownTerminals() async throws {
+        if terminalShutdown == nil {
+            let handler = terminalHandler
+            terminalShutdown = Task { try await handler?.shutdown() }
+        }
+        try await terminalShutdown?.value
     }
 }

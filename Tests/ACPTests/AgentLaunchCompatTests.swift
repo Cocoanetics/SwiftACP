@@ -154,7 +154,7 @@ import Testing
         let gemini = try Self.fakeCLI(
             "gemini", in: directory, version: "gemini 0.32.9", environment: ["MOCK_ARGV_LOG": argv.path])
         let agent = try await ACPAgent.launch(agent: "'\(gemini)' --acp", cwd: directory.path, permission: .approveAll)
-        await agent.close()
+        try await agent.close()
         #expect(try String(contentsOf: argv, encoding: .utf8) == "[\"--experimental-acp\"]\n")
     }
 
@@ -195,7 +195,7 @@ import Testing
         let agent = try await ACPAgent.launch(
             agent: "'\(qoder)' --acp", cwd: directory.path, permission: .approveAll,
             limits: SessionLimits(maxTurns: 5, allowedTools: ["bash", "custom"]))
-        await agent.close()
+        try await agent.close()
         #expect(try String(contentsOf: argv, encoding: .utf8)
             == "[\"--acp\", \"--max-turns=5\", \"--allowed-tools=BASH,custom\"]\n")
     }
@@ -210,7 +210,7 @@ import Testing
             "devin", in: directory, environment: ["MOCK_WIRE_LOG": requests.path, "MOCK_DIAGNOSTICS": "1"])
         let agent = try await ACPAgent.launch(agent: "'\(devin)' acp", cwd: directory.path, permission: .approveAll)
         _ = try await agent.newSession(cwd: directory.path)
-        await agent.close()
+        try await agent.close()
         let messages = try String(contentsOf: requests, encoding: .utf8).split(separator: "\n")
             .compactMap { WireJSON(parsing: Data($0.utf8)) }
         let initialize = try #require(messages.first { $0["method"]?.stringValue == "initialize" })

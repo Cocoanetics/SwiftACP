@@ -99,7 +99,7 @@ import Glibc
                 agent: command, cwd: launchDirectory, permission: .approveAll, capabilities: .acpx,
                 inheritStderr: false)
             _ = try await agent.newSession(cwd: sessionDirectory)
-            await agent.close()
+            try await agent.close()
             let expected = mode.hasPrefix("MOCK_TERMINAL") ? sessionDirectory + "\n" : "ok:session notes\n"
             #expect(try String(contentsOfFile: log, encoding: .utf8) == expected)
         }

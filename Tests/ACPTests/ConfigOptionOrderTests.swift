@@ -244,7 +244,7 @@ import Testing
         let agent = try await ACPAgent.launch(agent: command, cwd: NSTemporaryDirectory(), permission: .approveAll)
         let padding = JSONValue.string(String(repeating: "x", count: 100_000))
         let session = try await agent.newSession(meta: .object(["padding": padding]))
-        await agent.close()
+        try await agent.close()
         #expect(session.configOptionsAsSent?.stringified == Self.optionsAsSent)
     }
 

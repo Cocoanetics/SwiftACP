@@ -93,7 +93,7 @@ extension ACPXDaemonBackend {
         for recordId in owners.keys { forgetOwner(recordId) }
         while let recordId = live.keys.first {
             guard let entry = live.removeValue(forKey: recordId) else { continue }
-            await entry.agent.close()
+            try? await entry.agent.close()
             // A turn the close ends saves its record first.
             guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
             defer { Task { await turnQueue.release(recordId) } }

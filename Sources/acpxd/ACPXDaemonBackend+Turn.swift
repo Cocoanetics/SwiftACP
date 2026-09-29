@@ -88,7 +88,7 @@ extension ACPXDaemonBackend {
             try? await connection.cancel(sessionId: session.id)
             _ = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) { try await prompting.value }
             if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }
-            await entry.agent.close()
+            try? await entry.agent.close()
             throw timedOut
         }
     }

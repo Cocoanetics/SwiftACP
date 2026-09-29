@@ -22,7 +22,25 @@ public protocol ACPTerminalHandler: AnyObject, Sendable {
     /// Release every terminal still open: the connection has ended. It may be called
     /// more than once. A ``createTerminal(_:)`` arriving once this has begun must be
     /// refused (throw `CancellationError`), or its command would outlive the connection.
-    func shutdown() async
+    /// Throws when a release failed, once every one has been tried
+    /// (``TerminalShutdownFailed``), as acpx's `TerminalManager.shutdown()` rejects.
+    func shutdown() async throws
+}
+
+/// A shutdown that could not release every terminal — on Windows, one whose processes
+/// outlived their cleanup (``TerminalError/cleanupUnfinished``) — as acpx's
+/// `AggregateError(failures, "Terminal shutdown failed")`.
+public struct TerminalShutdownFailed: LocalizedError, ErrorWithCause, Sendable {
+    /// Why each release failed.
+    public let failures: [any Error]
+
+    public init(failures: [any Error]) {
+        self.failures = failures
+    }
+
+    public var errorDescription: String? { "Terminal shutdown failed" }
+    /// The first failure, as the aggregate's `cause`.
+    public var cause: Error? { failures.first }
 }
 
 /// Why a `terminal/*` request failed. The messages are acpx's, and reach the agent in

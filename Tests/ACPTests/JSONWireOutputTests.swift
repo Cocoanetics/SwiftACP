@@ -279,7 +279,7 @@ import Testing
             NewSessionRequest(cwd: NSTemporaryDirectory(), mcpServers: []))
         let session = ACPSession(id: created.sessionId, agent: agent, modes: created.modes)
         try await session.run([.text("ping")]) { renderer.render($0) }
-        await agent.close()
+        try await agent.close()
 
         let lines = out.text.split(separator: "\n").map(String.init)
         let messages = try lines.map { try #require(WireJSON(parsing: $0)) }

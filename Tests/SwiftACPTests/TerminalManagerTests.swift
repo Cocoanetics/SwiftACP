@@ -415,7 +415,7 @@ struct TerminalManagerTests {
         let manager = TerminalManager(cwd: try workspace())
         let id = try await manager.createTerminal(shell("echo $$ > \"$1\"; exec sleep 30", fifo)).terminalId
         let command = try #require(pid_t(await fifo.read()))
-        await manager.shutdown()
+        try await manager.shutdown()
         #expect(!isAlive(command))
         await #expect(throws: TerminalError.unknownTerminal(id)) {
             try await manager.terminalOutput(TerminalOutputRequest(sessionId: "s", terminalId: id))
@@ -425,7 +425,7 @@ struct TerminalManagerTests {
     /// Once shutdown has begun, no command starts: it would outlive the connection.
     @Test func nothingStartsOnceShutdownHasBegun() async throws {
         let manager = TerminalManager(cwd: try workspace())
-        await manager.shutdown()
+        try await manager.shutdown()
         await #expect(throws: CancellationError.self) {
             try await manager.createTerminal(CreateTerminalRequest(sessionId: "s", command: "true"))
         }

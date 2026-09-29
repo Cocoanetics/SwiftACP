@@ -91,15 +91,18 @@ enum SessionsList {
                 } catch is AgentLaunchError {
                     return .spawnFailed
                 }
+                let outcome: Outcome
                 do {
-                    let outcome = try await list(on: handle, cursor: cursor, filterCwd: filterCwd, answer: answer,
-                                                 timeoutMs: flags.timeoutMs)
-                    await handle.close()
-                    return outcome
+                    outcome = try await list(on: handle, cursor: cursor, filterCwd: filterCwd, answer: answer,
+                                             timeoutMs: flags.timeoutMs)
                 } catch {
-                    await handle.close()
+                    // acpx's `listAgentSessions` closes its client in `finally`: a close that fails
+                    // is the failure (#281).
+                    try await handle.close()
                     throw error
                 }
+                try await handle.close()
+                return outcome
             }, onInterrupt: { await interrupt.putDown(endInterrupted: $0) })
         }
     }

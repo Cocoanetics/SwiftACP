@@ -131,7 +131,7 @@ extension DaemonToolsTests {
         for _ in 0..<5 {
             let agent = try await ACPAgent.launch(
                 agent: Self.exitAgent(""), cwd: NSTemporaryDirectory(), permission: .approveAll, inheritStderr: false)
-            await agent.close()
+            try await agent.close()
             let exit = try #require(agent.lifecycle?.lastExit)
             #expect(idleCloseEnds.contains(exit.reason.rawValue))
             #expect(!exit.unexpectedDuringPrompt)
