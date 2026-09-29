@@ -9,8 +9,8 @@ import JSONFoundation
 
 /// An MCP server entry in acpx's *config* shape — the flat stdio / http / sse union
 /// that `mcpServers` takes in `~/.acpx/config.json`, `.acpxrc.json` and `--mcp-config`
-/// files (npm acpx's `McpServerConfig`), and that the daemon's `newSession` /
-/// `setSessionMcpServers` tools accept per session.
+/// files (npm acpx's `McpServerConfig`), and that the daemon's tools take in a caller's
+/// config (``CallerConfig``) and in `newSession`.
 ///
 /// It is deliberately a flat struct rather than the ACP wire enum ``MCPServerSpec``:
 /// an MCP tool parameter needs a JSON schema (`@Schema`), which only structs get, and
@@ -398,18 +398,13 @@ public struct SessionDetail: Codable, Sendable {
     public var lastAgentExitAt: String?
     public var lastAgentDisconnectReason: String?
     public var historyEntries: Int
-    /// The session's own MCP servers (set via `newSession` / `setSessionMcpServers`
-    /// or `--mcp-config`), replayed on every reconnect; `nil` = the session uses the
-    /// cwd's config-file servers.
-    public var mcpServers: [McpServerConfig]?
 
     public init(
         id: String, sessionId: String, agentSessionId: String?, agentCommand: String,
         cwd: String, name: String?, createdAt: String, lastUsedAt: String,
         lastPromptAt: String?, closed: Bool, closedAt: String?, pid: Int?,
         agentStartedAt: String?, lastAgentExitCode: Int?, lastAgentExitSignal: String?,
-        lastAgentExitAt: String?, lastAgentDisconnectReason: String?, historyEntries: Int,
-        mcpServers: [McpServerConfig]? = nil
+        lastAgentExitAt: String?, lastAgentDisconnectReason: String?, historyEntries: Int
     ) {
         self.id = id
         self.sessionId = sessionId
@@ -429,7 +424,6 @@ public struct SessionDetail: Codable, Sendable {
         self.lastAgentExitAt = lastAgentExitAt
         self.lastAgentDisconnectReason = lastAgentDisconnectReason
         self.historyEntries = historyEntries
-        self.mcpServers = mcpServers
     }
 }
 

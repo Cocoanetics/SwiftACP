@@ -22,16 +22,6 @@ actor ACPXDaemonBackend: ACPXBackend {
     struct Live {
         let agent: ACPAgent
         let session: ACPSession
-        /// The session's *own* MCP servers as sent on the wire when this connection
-        /// was made, or `nil` when the session uses the cwd's config-file servers.
-        /// Normalized (not the raw config shape) so entries that differ only in
-        /// omitted-vs-explicit defaults — `{name, command}` and
-        /// `{type: "stdio", name, command, args: [], env: []}` — compare equal,
-        /// the way npm acpx fingerprints the *parsed* server list. A record that
-        /// later asks for a different set can't be served by this connection; a
-        /// config-file-backed session (`nil`) never conflicts, matching npm, where
-        /// only an explicit `--mcp-config` is fingerprinted — see ``ensure``.
-        let sessionSpecs: [MCPServerSpec]?
         /// Where what a held agent writes to stderr waits for the next verbose call.
         var stderr: AgentStderrRelay?
     }
@@ -147,9 +137,8 @@ actor ACPXDaemonBackend: ACPXBackend {
     ///     resolved launch command is stored on the session.
     ///   - cwd: the working directory the agent runs in (`~` is expanded).
     ///   - name: an optional session label (like `sessions new --name`); blank = none.
-    ///   - mcpServers: the session's own MCP servers, replacing the cwd's config-file
-    ///     ones (like `--mcp-config`); persisted on the record and replayed on every
-    ///     reconnect. `nil` = config-file servers; `[]` = none.
+    ///   - mcpServers: the MCP servers the creating agent is given, in place of those of the
+    ///     caller's config or the cwd's; the record keeps none, as acpx keeps none (#245).
     ///   - agentArgv: the argv the caller resolved for `agentCommand`, which is then taken as
     ///     it is; `nil` to resolve and split the command here.
     ///   - sessionOptions: the session's options, recorded and sent as `_meta`.
@@ -181,10 +170,10 @@ actor ACPXDaemonBackend: ACPXBackend {
         let config = try Self.config(creation.callerConfig, cwd: cwd, ownMcpServers: mcpServers != nil)
         // The caller's `--auth-policy`, as acpx's runner makes its client with the flow's.
         let authPolicy = creation.authPolicy ?? config.authPolicy
-        // Only normalize the config-file servers when they're the ones being sent:
-        // a caller supplying its own set must not be refused over an unrelated bad
-        // entry in the cwd's config.
-        let configServers = mcpServers == nil ? try config.mcpServerSpecs() : []
+        // The servers the creating agent is given: the caller's own for it, else its config's.
+        // Only the config's ones sent are read, so a caller supplying its own set is not refused
+        // over an unrelated bad entry in the cwd's config.
+        let servers = try mcpServers.map { try $0.map { try $0.protocolSpec() } } ?? config.mcpServerSpecs()
         let launch = config.agentLaunch(for: agentCommand)
         let (command, argv) = agentArgv.map { (agentCommand, Optional($0)) } ?? (launch.command, launch.argv)
         let options = SessionAcpxState.SessionOptions(turnModel: promptOptions?.model, promptOptions)
@@ -200,8 +189,8 @@ actor ACPXDaemonBackend: ACPXBackend {
                 try await SessionEngine.createSession(
                     agentCommand: command, agentArgv: argv, cwd: cwd,
                     name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-                    authPolicy: authPolicy, mcpServers: configServers,
-                    sessionMcpServers: mcpServers, meta: meta, sessionOptions: options, capabilities: .acpx(fs: fs),
+                    authPolicy: authPolicy, mcpServers: servers, meta: meta, sessionOptions: options,
+                    capabilities: .acpx(fs: fs),
                     handlers: handlers, baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
                     inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
             }
@@ -217,14 +206,12 @@ actor ACPXDaemonBackend: ACPXBackend {
             try await SessionEngine.createSessionHoldingAgent(
                 agentCommand: command, agentArgv: argv, cwd: cwd,
                 name: nonBlank(name), permission: .approveAll, authCredentials: config.auth,
-                authPolicy: authPolicy, mcpServers: configServers,
-                sessionMcpServers: mcpServers, meta: meta, sessionOptions: options,
+                authPolicy: authPolicy, mcpServers: servers, meta: meta, sessionOptions: options,
                 capabilities: .acpx(fs: fs), writesRecord: false, handlers: handlers,
                 baseEnvironment: creation.environment, terminalOutputCeiling: ceiling,
                 inheritStderr: inheritAgentStderr, onStderr: stderr?.observer, onLog: stderr?.logObserver)
         }
-        let sessionSpecs = try mcpServers.map { try $0.map { try $0.protocolSpec() } }
-        return try await keepMadeSession(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
+        return try await keepMadeSession(held, stderr: stderr, token: token)
     }
 
     /// ``newSession(agentCommand:agentArgv:cwd:name:mcpServers:sessionOptions:creation:)`` with
@@ -237,57 +224,6 @@ actor ACPXDaemonBackend: ACPXBackend {
         try await newSession(
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, mcpServers: mcpServers,
             sessionOptions: sessionOptions, creation: SessionCreationMode(holdAgent: holdAgent, fs: fs))
-    }
-
-    /// Replace a session's own MCP servers and persist them (see `newSession`'s
-    /// `mcpServers`); the next reconnect sends the new set. Refused while the daemon
-    /// holds the session live with a different set — npm acpx likewise rejects
-    /// switching a live session's MCP config ("close the session before retrying") —
-    /// unless `restart` is set, which drops that connection so the next turn
-    /// reconnects with the new servers, keeping the session (and its history) alive.
-    ///
-    /// - Parameters:
-    ///   - sessionId: the acpx record id or the ACP session id.
-    ///   - mcpServers: the servers to attach from now on; `[]` detaches them all.
-    ///   - restart: reconnect a live session instead of refusing the switch.
-    /// - Returns: `true` once persisted.
-    func setSessionMcpServers(
-        sessionId: String, mcpServers: [McpServerConfig], restart: Bool = false
-    ) async throws -> Bool {
-        // Reject malformed entries up front, before touching the record.
-        let specs = try mcpServers.map { try $0.protocolSpec() }
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let recordId = initial.acpxRecordId
-        // Take the session's turn slot so the check against the live connection
-        // can't race a turn that is about to (re)connect it.
-        try await turnQueue.acquire(recordId, wait: true)
-        defer { Task { await turnQueue.release(recordId) } }
-        // Re-read inside the slot: `evict` below (and any turn we queued behind) can
-        // suspend us, so the write must build on the current record — found by its
-        // record id, as that turn may have moved it to a new ACP session.
-        guard var record = findRecord(recordId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        // Compare what would go on the wire, so re-sending the same servers written
-        // differently (omitted vs explicit `args`/`env`/`type`) is the no-op it looks
-        // like, rather than a conflict.
-        if let entry = live[recordId], entry.sessionSpecs != specs {
-            guard restart else { throw DaemonError.mcpConfigConflict(sessionId) }
-            // Safe here: this call holds the session's turn slot, so no turn is in
-            // flight. Only the adapter process goes; the record — and the agent's
-            // rollout behind it — stay, so the next turn reconnects with the new set.
-            await evict(recordId)
-            // Its agent is gone: the record keeps no pid for it, as `closeSession` keeps none.
-            record.pid = nil
-        }
-        var acpx = record.acpx ?? SessionAcpxState()
-        acpx.mcpServers = mcpServers
-        record.acpx = acpx
-        record.lastUsedAt = nowISO()
-        try SessionStore.writeRecord(record)
-        return true
     }
 
     // MARK: - Mutation tools

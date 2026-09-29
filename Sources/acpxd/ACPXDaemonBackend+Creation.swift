@@ -20,10 +20,10 @@ extension ACPXDaemonBackend {
     /// acpx's runner closes a client made after its attempt stopped: nobody would ever take
     /// it, or let it go.
     func keepMadeSession(
-        _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?, token: String?
+        _ held: SessionEngine.HeldSession, stderr: AgentStderrRelay?, token: String?
     ) async throws -> String {
         let recordId = held.record.acpxRecordId
-        try await holdAsNew(held, sessionSpecs: sessionSpecs, stderr: stderr, token: token)
+        try await holdAsNew(held, stderr: stderr, token: token)
         await creationKept?(recordId)
         // Called off as it was held: its own agent goes, and none that took its place since under
         // the same id — from a task of its own, as this one's cancellation would cut the close
@@ -45,7 +45,7 @@ extension ACPXDaemonBackend {
     /// refused. A creation called off before it has the slot takes nobody's place: its own agent
     /// goes, and a session held under the id stays as it is, its record too (#219 review).
     private func holdAsNew(
-        _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?, token: String?
+        _ held: SessionEngine.HeldSession, stderr: AgentStderrRelay?, token: String?
     ) async throws {
         let recordId = held.record.acpxRecordId
         await reconnected?(recordId)
@@ -72,7 +72,7 @@ extension ACPXDaemonBackend {
                 forgetOwner(recordId)
                 await evict(recordId)
             }
-            outcome = Result { try keep(held, sessionSpecs: sessionSpecs, stderr: stderr) }
+            outcome = Result { try keep(held, stderr: stderr) }
         }
         await turnQueue.release(recordId)
         if case .failure(let error) = outcome {
@@ -83,12 +83,12 @@ extension ACPXDaemonBackend {
 
     /// Keep a new session: its record written, and its agent held for its first turn.
     private func keep(
-        _ held: SessionEngine.HeldSession, sessionSpecs: [MCPServerSpec]?, stderr: AgentStderrRelay?
+        _ held: SessionEngine.HeldSession, stderr: AgentStderrRelay?
     ) throws {
         guard !stopping else { throw DaemonError.stopping }
         let recordId = held.record.acpxRecordId
         try SessionStore.writeRecord(held.record)
-        live[recordId] = Live(agent: held.agent, session: held.session, sessionSpecs: sessionSpecs, stderr: stderr)
+        live[recordId] = Live(agent: held.agent, session: held.session, stderr: stderr)
         held.agent.rawWire.set(nil)
     }
 

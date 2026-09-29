@@ -20,12 +20,6 @@ public struct SessionAcpxState: Codable, Sendable {
     public var availableCommands: [AvailableCommand]? { didSet { place("available_commands") } }
     public var configOptions: JSONValue? { didSet { place("config_options") } }
     public var sessionOptions: SessionOptions? { didSet { place("session_options") } }
-    /// The session's own MCP servers (config-file entry shape), persisted as
-    /// `mcp_servers`: set by the daemon's `newSession` / `setSessionMcpServers` or by
-    /// creating the session under `--mcp-config`, and sent again on every reconnect.
-    /// `nil` = the session uses the cwd's config-file servers. (A SwiftACP extension
-    /// of the npm record: npm acpx keeps MCP servers per invocation, not per record.)
-    public var mcpServers: [McpServerConfig]?
     /// The member order acpx gave each map of this block that it built anew since the
     /// record was read, by the map's name in the record: `available_model_names` from the
     /// models an agent advertised, `desired_config_options` from a control's reply —
@@ -48,7 +42,7 @@ public struct SessionAcpxState: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case resetOnNextEnsure, currentModeId, desiredModeId, desiredConfigOptions, currentModelId
         case availableModels, availableModelNames, modelControl, availableCommands, configOptions
-        case sessionOptions, mcpServers
+        case sessionOptions
     }
 
     /// A persisted slash command. Agents advertise these either as bare strings
@@ -172,10 +166,9 @@ extension SessionAcpxState {
     /// the record: acpx drops what it cannot read in this block and keeps the record
     /// (`parseAcpxState`), and so does SwiftACP.
     ///
-    /// SwiftACP's own `mcp_servers`, which acpx never reads, restricts a session, so one that
-    /// does not read fails closed: no MCP servers rather than the config file's. A record's
-    /// `client_capabilities`, which SwiftACP wrote before #246, is read no more: what an agent is
-    /// offered is what the prompt that starts its owner asks for, as in acpx.
+    /// A record's `client_capabilities` and `mcp_servers`, which SwiftACP wrote before #246 and
+    /// #245, are read no more: what an agent is offered, and the MCP servers it is given, are
+    /// what the prompt that starts its owner brings, as in acpx.
     public init(from decoder: Decoder) throws {
         self.init()
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -193,12 +186,6 @@ extension SessionAcpxState {
         availableCommands = field(.availableCommands)
         configOptions = field(.configOptions)
         sessionOptions = field(.sessionOptions)
-        // `try?` would make an absent field look like one that did not read.
-        do {
-            mcpServers = try container.decodeIfPresent([McpServerConfig].self, forKey: .mcpServers)
-        } catch {
-            mcpServers = []
-        }
         // acpx builds a read block anew, in its parser's order.
         slots = parseOrder()
     }

@@ -44,19 +44,20 @@ struct McpConfigLoaderTests {
             try #"{"mcpServers":[{"type":"http","name":"job","url":"https://example.com/mcp"}]}"#
                 .write(toFile: explicit, atomically: true, encoding: .utf8)
 
-            // Without the flag: project replaces global, and the session has no own set.
+            // Without the flag: project replaces global, and the invocation names no file (#245).
             let plain = try ConfigLoader.load(cwd: cwd)
             #expect(plain.mcpServers.map(\.name) == ["project"])
             #expect(plain.mcpConfigPath == nil)
-            #expect(plain.sessionMcpServers == nil)
+            #expect(plain.callerConfig == CallerConfig(auth: [:], mcpServers: plain.mcpServers))
 
-            // With it: the file replaces both, and its servers are the session's own.
+            // With it: the file replaces both, and the invocation's config names it.
             let config = try ConfigLoader.load(cwd: cwd, mcpConfigPath: explicit)
             #expect(config.mcpServers.map(\.name) == ["job"])
             #expect(config.mcpConfigPath == explicit)
-            #expect(config.sessionMcpServers == [
+            #expect(config.callerConfig.mcpServers == [
                 McpServerConfig(type: "http", name: "job", url: "https://example.com/mcp")
             ])
+            #expect(config.callerConfig.mcpConfigPath == explicit)
             // The rest of the config is untouched by the flag.
             #expect(config.hasGlobalConfig && config.hasProjectConfig)
         }
@@ -103,7 +104,7 @@ struct McpConfigLoaderTests {
             try #"{"mcpServers":[]}"#.write(toFile: empty, atomically: true, encoding: .utf8)
             let config = try ConfigLoader.load(cwd: cwd, mcpConfigPath: empty)
             #expect(config.mcpServers.isEmpty)
-            #expect(config.sessionMcpServers == [])
+            #expect(config.callerConfig == CallerConfig(auth: [:], mcpServers: [], mcpConfigPath: empty))
         }
     }
 

@@ -85,11 +85,11 @@ extension ResolvedAcpxConfig {
         try mcpServers.map { try $0.protocolSpec() }
     }
 
-    /// The servers an explicit `--mcp-config` file supplies for *this session* —
-    /// persisted on a record created under it so the daemon replays them on every
-    /// reconnect — or `nil` when the invocation relies on the config-file servers.
-    public var sessionMcpServers: [McpServerConfig]? {
-        mcpConfigPath == nil ? nil : mcpServers
+    /// What an agent this invocation starts is given of its config (``CallerConfig``), as acpx
+    /// builds a client from the invoking CLI's config (`sessionConnectionOptions`): its credentials
+    /// and MCP servers, and the `--mcp-config` file those came from (#245).
+    public var callerConfig: CallerConfig {
+        CallerConfig(auth: auth, mcpServers: mcpServers, mcpConfigPath: mcpConfigPath)
     }
 }
 

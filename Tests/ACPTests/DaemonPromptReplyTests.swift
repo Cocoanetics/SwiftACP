@@ -80,11 +80,12 @@ extension DaemonToolsTests {
         }
     }
 
-    /// Only the ignored text is excused: a turn the daemon refuses still fails.
+    /// Only the ignored text is excused: a turn the daemon refuses still fails, with the daemon's
+    /// error (#245).
     @Test(.enabled(if: mockPythonAvailable))
     func aRefusedTurnStillFails() async throws {
         try await withLoopbackDaemon { proxy, _, stopReason in
-            await #expect(throws: MCPServerProxyError.self) {
+            await #expect(throws: DaemonClient.DaemonControlFailure.self) {
                 _ = try await runTurn(on: proxy, stopReason, sessionId: "no-such-session")
             }
         }

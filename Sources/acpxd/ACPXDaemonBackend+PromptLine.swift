@@ -163,3 +163,30 @@ struct QueueOwnerShuttingDown: LocalizedError, OutputErrorMeta, Equatable {
     var origin: String? { "queue" }
     var retryable: Bool? { true }
 }
+
+/// acpx's refusal of a prompt whose MCP config is not the one the session's owner was started
+/// with (`assertQueueOwnerMcpConfigMatches`, #245).
+struct QueueMcpConfigConflict: LocalizedError, OutputErrorMeta, Equatable {
+    var errorDescription: String? {
+        "Session queue owner uses a different MCP config; close the session before retrying"
+    }
+    var outputCode: String? { "RUNTIME" }
+    var detailCode: String? { "QUEUE_MCP_CONFIG_CONFLICT" }
+    var origin: String? { "queue" }
+    var retryable: Bool? { false }
+}
+
+extension ACPXDaemonBackend {
+    /// acpx's `queueOwnerMcpConfigMatches`: a prompt's MCP config is its session owner's when it
+    /// names the same `--mcp-config` file as the owner's — none, or one whose servers are the
+    /// same, normalized as acpx fingerprints the parsed ones — whatever the config files say.
+    static func sameMcpConfig(_ owner: CallerConfig?, _ prompt: CallerConfig?) -> Bool {
+        guard owner?.mcpConfigPath == prompt?.mcpConfigPath else { return false }
+        guard owner?.mcpConfigPath != nil else { return true }
+        return servers(of: owner) == servers(of: prompt)
+    }
+
+    private static func servers(of config: CallerConfig?) -> [MCPServerSpec]? {
+        try? config?.mcpServers.map { try $0.protocolSpec() }
+    }
+}

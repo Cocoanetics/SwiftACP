@@ -201,8 +201,7 @@ enum ConfigFields {
     }
 
     /// Fields the file left out stay out (`nil`), where acpx fills in empty lists: the
-    /// wire form is the same either way (``McpServerConfig/protocolSpec()``), and a
-    /// record that keeps a session's own servers keeps them as they were written.
+    /// wire form is the same either way (``McpServerConfig/protocolSpec()``).
     static func mcpServer(_ raw: WireJSON, _ path: String) throws -> McpServerConfig {
         guard case .object = raw else { throw ConfigError("Invalid \(path): expected object") }
         let name = try nonEmptyString(raw["name"], "\(path).name")

@@ -29,7 +29,7 @@ struct SessionRecordSerializerTests {
         for testCase in written {
             let text = try #require(testCase.parsed)
             let parsed = try #require(WireJSON(parsing: Data(text.utf8)))
-            let disk = SessionRecordSerializer.forDisk(parsed, storedAcpx: nil).stringified(indent: 2) + "\n"
+            let disk = SessionRecordSerializer.forDisk(parsed).stringified(indent: 2) + "\n"
             #expect(disk == testCase.disk, "\(testCase.name)")
         }
     }
@@ -43,7 +43,7 @@ struct SessionRecordSerializerTests {
             for testCase in Self.cases where testCase.disk != nil {
                 let raw = try #require(WireJSON(parsing: Data(testCase.raw.utf8)))
                 let parsed = try #require(SessionRecordParser.parse(raw), "\(testCase.name)")
-                let disk = SessionRecordSerializer.forDisk(parsed, storedAcpx: nil).stringified(indent: 2) + "\n"
+                let disk = SessionRecordSerializer.forDisk(parsed).stringified(indent: 2) + "\n"
                 let expected = testCase.disk?.replacingOccurrences(of: "/ACPX-HOME/.acpx/sessions", with: sessionsDir)
                 #expect(disk == expected, "\(testCase.name)")
             }
@@ -309,8 +309,9 @@ struct SessionRecordSerializerTests {
         }
     }
 
-    /// SwiftACP's own `acpx` fields, which acpx does not read, follow acpx's.
-    @Test func swiftACPsOwnFieldsFollowAcpxs() throws {
+    /// An `acpx` field acpx does not read — SwiftACP's `mcp_servers`, which it wrote before #245 —
+    /// is dropped, as acpx drops it.
+    @Test func fieldsAcpxDoesNotReadAreDropped() throws {
         let raw = try #require(WireJSON(parsing: Data(#"""
             {"schema":"acpx.session.v1","acpx_record_id":"r","acp_session_id":"s","agent_command":"a","cwd":"/w",
             "created_at":"t","last_used_at":"t","last_seq":0,"event_log":{"active_path":"/p","segment_count":1,
@@ -319,7 +320,7 @@ struct SessionRecordSerializerTests {
             "acpx":{"mcp_servers":[],"current_mode_id":"plan"}}
             """#.utf8)))
         let parsed = try #require(SessionRecordParser.parse(raw))
-        let acpx = try #require(SessionRecordSerializer.forDisk(parsed, storedAcpx: raw["acpx"])["acpx"])
-        #expect(acpx.stringified == #"{"current_mode_id":"plan","mcp_servers":[]}"#)
+        let acpx = try #require(SessionRecordSerializer.forDisk(parsed)["acpx"])
+        #expect(acpx.stringified == #"{"current_mode_id":"plan"}"#)
     }
 }

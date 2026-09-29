@@ -59,8 +59,9 @@ import Testing
         }
     }
 
-    /// So does a prompt's `--mcp-config`, whose servers acpxd takes before the prompt: a daemon
-    /// gone with them is said as for any other request (Codex review on #197).
+    /// So does a prompt with its own `--mcp-config`, whose servers travel with the prompt as acpx's
+    /// submit carries them (#245): a daemon gone with it is said as for any prompt (Codex review
+    /// on #197).
     @Test(.timeLimit(.minutes(1)))
     func aPromptsServersWhoseDaemonGoesAwayHaveAnUnknownOutcome() async throws {
         let daemon = try DroppingDaemon()
@@ -76,7 +77,7 @@ import Testing
                 ["--mcp-config", servers.path, "--format", "json", "prompt", "hi"], cwd: cwd, daemon: daemon)
             #expect(json.code == 1)
             #expect(json.out == #"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"#
-                + #""message":"Queue owner disconnected before responding; outcome unknown","#
+                + #""message":"Queue owner disconnected before prompt completion; outcome unknown","#
                 + #""data":{"acpxCode":"RUNTIME","detailCode":"QUEUE_DISCONNECTED_BEFORE_COMPLETION","#
                 + #""origin":"queue","retryable":false,"sessionId":"unknown"}}}"# + "\n", "\(json.out)\(json.err)")
         }

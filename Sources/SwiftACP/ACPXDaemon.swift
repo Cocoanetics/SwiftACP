@@ -16,7 +16,7 @@ import SwiftMCP
 ///
 /// ## MCP tools
 /// - ``newSession(agentCommand:cwd:name:mcpServers:)`` — create + persist a session
-///   (optionally with its own MCP servers), return its id.
+///   (its creating agent given MCP servers of the caller's), return its id.
 /// - ``runPrompt(sessionId:text:blocks:wait:)`` — run one prompt turn of text plus
 ///   optional content blocks (agent + cwd come from the session record),
 ///   streaming each ACP `session/update` back to the caller as an MCP log
@@ -26,7 +26,7 @@ import SwiftMCP
 /// - ``sessionStatus(sessionId:)`` — whether the daemon holds a session live.
 /// - ``listSessions(agentCommand:)`` / ``showSession(sessionId:)`` /
 ///   ``sessionHistory(sessionId:limit:)`` — read the persisted session store.
-/// - ``setSessionMcpServers(sessionId:mcpServers:)`` / ``setMode(sessionId:modeId:)`` /
+/// - ``setMode(sessionId:modeId:)`` / ``setModel(sessionId:modelId:)`` /
 ///   ``setConfigOption(sessionId:configId:value:)`` / ``closeSession(sessionId:)`` /
 ///   ``pruneSessions(agentCommand:olderThanDays:includeHistory:dryRun:)``
 ///   — mutate live sessions and the store.
@@ -66,12 +66,10 @@ public actor ACPXDaemon {
     ///     resolved launch command is stored on the session.
     ///   - cwd: the working directory the agent runs in (`~` is expanded).
     ///   - name: an optional session label (like `sessions new --name`); blank = none.
-    ///   - mcpServers: MCP servers for this session only (the config-file
-    ///     `mcpServers` shape). They *replace* the cwd's config-file servers — like
-    ///     the CLI's `--mcp-config` — are persisted on the session, and are sent
-    ///     again on every reconnect (`session/load` / `session/resume`), so they
-    ///     survive daemon and adapter restarts. Omitted = use the config-file
-    ///     servers; `[]` = none.
+    ///   - mcpServers: the MCP servers the agent that creates the session is given (the
+    ///     config-file `mcpServers` shape), in place of `callerConfig`'s or those of `cwd`'s
+    ///     config — as the CLI's `--mcp-config` gives them to `sessions new`. The record keeps
+    ///     none: each prompt brings its own (``CallerConfig``), as in acpx (#245). `[]` = none.
     ///   - agentArgv: the argv to launch the agent as, when the caller has resolved it —
     ///     recorded as the session's `agent_argv`. Omitted, the daemon splits the command.
     ///   - sessionOptions: the session's options (model, allowed tools, turns, system
@@ -91,8 +89,8 @@ public actor ACPXDaemon {
     ///   - authPolicy: acpx's `--auth-policy` for the creating agent — `fail` refuses one that
     ///     advertises sign-in methods none of the credentials match. Omitted, as configured.
     ///   - callerConfig: the config the creating agent is started with — its credentials and,
-    ///     without `mcpServers`, its MCP servers — in place of the config of `cwd`: a flow's,
-    ///     read once as its run began, as acpx's runner gives every client of the run the
+    ///     without `mcpServers`, its MCP servers — in place of the config of `cwd`: the caller's,
+    ///     a flow's read once as its run began, as acpx's runner gives every client of the run the
     ///     invocation's (``CallerConfig``). Omitted, the config of `cwd`.
     ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
     ///     caller as ``AgentStderrEvent`` log notifications while the session is made, as
@@ -137,32 +135,6 @@ public actor ACPXDaemon {
     @MCPTool
     func callOffCreation(creationToken: String) async throws -> Bool {
         try await described { try await backend.callOffCreation(creationToken: creationToken) }
-    }
-
-    /// Replace a session's own MCP servers (see `newSession`'s `mcpServers`) and
-    /// persist them. The change takes effect on the session's next reconnect; while
-    /// the daemon still holds the session live with a *different* server set the
-    /// call fails — mirroring npm acpx, where a live session cannot switch MCP
-    /// config — unless `restart` says to reconnect it.
-    ///
-    /// - Parameters:
-    ///   - sessionId: the acpx record id or the ACP session id.
-    ///   - mcpServers: the servers to attach from now on; `[]` detaches them all.
-    ///   - restart: when the session is held live with a different set, drop that
-    ///     connection instead of failing, so the next turn reconnects with the new
-    ///     servers. Only the local adapter process goes away: the session itself is
-    ///     restored with `session/load` / `session/resume`, so its history survives —
-    ///     unlike npm acpx, whose per-session queue owner *is* the session and which
-    ///     therefore has to be closed. Defaults to `false`, so a client never has a
-    ///     warm adapter pulled out from under it by surprise.
-    /// - Returns: `true` once persisted.
-    @MCPTool(idempotentHint: true)
-    func setSessionMcpServers(
-        sessionId: String, mcpServers: [McpServerConfig], restart: Bool = false
-    ) async throws -> Bool {
-        try await described {
-            try await backend.setSessionMcpServers(sessionId: sessionId, mcpServers: mcpServers, restart: restart)
-        }
     }
 
     /// List persisted sessions (newest-first), optionally filtered to one agent —
@@ -223,19 +195,23 @@ public actor ACPXDaemon {
     ///     an owner's agents keep what the prompt that started the owner asked for (#246).
     ///   - terminal: acpx's `--no-terminal`, the same way: `false` withholds the terminal.
     ///   - authPolicy: acpx's `--auth-policy`, the same way. Omitted, the session's config's.
+    ///   - callerConfig: the caller's credentials and MCP servers, the same way: an agent the control
+    ///     starts for a session no owner holds is started with them, as acpx's direct control builds
+    ///     its client from its own config (#245). Omitted, those of the config where the session works.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setMode(
         sessionId: String, modeId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil
+        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil,
+        callerConfig: CallerConfig? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setMode(
                 sessionId: sessionId, modeId: modeId, nonInteractivePermissions: nonInteractivePermissions,
                 terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
                 environment: environment, verbose: verbose ?? false,
-                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy))
+                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy, config: callerConfig))
         }
     }
 
@@ -254,6 +230,7 @@ public actor ACPXDaemon {
     ///   - fs: as `setMode`'s: `false` withholds the filesystem methods from that agent.
     ///   - terminal: as `setMode`'s: `false` withholds the terminal from that agent.
     ///   - authPolicy: as `setMode`'s: how that agent signs in.
+    ///   - callerConfig: as `setMode`'s: the credentials and MCP servers that agent starts with.
     /// - Returns: the agent's advertised config options after the change (the data
     ///   the CLI echoes; may be empty if the agent reports none), and whether the
     ///   session had to be taken back first.
@@ -261,14 +238,15 @@ public actor ACPXDaemon {
     func setConfigOption(
         sessionId: String, configId: String, value: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil
+        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil,
+        callerConfig: CallerConfig? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setConfigOption(
                 sessionId: sessionId, configId: configId, value: value,
                 nonInteractivePermissions: nonInteractivePermissions, terminalOutputCeiling: terminalOutputCeiling,
                 timeoutMs: timeoutMs, environment: environment, verbose: verbose ?? false,
-                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy))
+                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy, config: callerConfig))
         }
     }
 
@@ -287,19 +265,21 @@ public actor ACPXDaemon {
     ///   - fs: as `setMode`'s: `false` withholds the filesystem methods from that agent.
     ///   - terminal: as `setMode`'s: `false` withholds the terminal from that agent.
     ///   - authPolicy: as `setMode`'s: how that agent signs in.
+    ///   - callerConfig: as `setMode`'s: the credentials and MCP servers that agent starts with.
     /// - Returns: whether the session had to be taken back first (``SessionControlResult``).
     @MCPTool(idempotentHint: true, openWorldHint: true)
     func setModel(
         sessionId: String, modelId: String, nonInteractivePermissions: String? = nil,
         terminalOutputCeiling: Int? = nil, timeoutMs: Int? = nil, environment: [String: String]? = nil,
-        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil
+        verbose: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil,
+        callerConfig: CallerConfig? = nil
     ) async throws -> SessionControlResult {
         try await admitted { [backend] in
             try await backend.setModel(
                 sessionId: sessionId, modelId: modelId, nonInteractivePermissions: nonInteractivePermissions,
                 terminalOutputCeiling: terminalOutputCeiling, timeoutMs: timeoutMs,
                 environment: environment, verbose: verbose ?? false,
-                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy))
+                client: ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy, config: callerConfig))
         }
     }
 
@@ -404,9 +384,12 @@ public actor ACPXDaemon {
     ///     Omitted, as configured.
     ///   - turnToken: the caller's name for the turn, which `cancelSession` can give: a
     ///     cancel that named it before it began ends it as it begins, nothing sent.
-    ///   - callerConfig: the config an agent the turn connects is started with — its
-    ///     credentials and, for a session without its own, its MCP servers — a flow's, as
-    ///     `newSession`'s. Omitted, the config of the session's cwd.
+    ///   - callerConfig: the credentials and MCP servers an agent the turn connects is started
+    ///     with — the caller's, a CLI's or a flow's. A queued turn's agents are started with those
+    ///     of the prompt that started the session's owner, as acpx's queue owner keeps the config
+    ///     of the CLI that spawned it; a prompt whose MCP config differs from the owner's — another
+    ///     `--mcp-config` file, or its servers since changed — is refused, as acpx refuses it
+    ///     (`QUEUE_MCP_CONFIG_CONFLICT`, #245). Omitted, the config of the session's cwd.
     ///   - verbose: acpx's `--verbose`: what the agent writes to stderr is streamed to the
     ///     caller as ``AgentStderrEvent`` log notifications while the turn runs — first what
     ///     a held agent wrote since its session was made. Omitted, it is not.

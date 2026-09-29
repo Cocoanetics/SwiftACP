@@ -1,335 +1,247 @@
 @testable import ACPXCore
+@testable import acpx
 @testable import acpxd
 import Foundation
 import JSONFoundation
 import SwiftACP
+import SwiftMCP
 import Testing
 
-/// Per-session MCP servers over the daemon API (issue #17): `newSession(mcpServers:)`
-/// persists the session's own server set, every reconnect replays it in place of the
-/// cwd's config-file servers, and `setSessionMcpServers` follows npm acpx's rule that
-/// a live session cannot switch MCP config.
+/// A session's MCP servers as acpx has them (#245): each invocation's own — its `--mcp-config`
+/// file's, else its config files' — and none kept on the record. A session's owner keeps those of
+/// the prompt that started it and refuses a prompt whose MCP config is another's
+/// (`QUEUE_MCP_CONFIG_CONFLICT`); a control never is, and one with no owner connects with its own.
 @Suite(.serialized, .agentLane) struct SessionMcpServersTests {
     private static let own = McpServerConfig(
         name: "shot", command: "/usr/local/bin/shot-mcp", args: ["--run", "42"],
         env: [.init(name: "RUN_TOKEN", value: "secret")], meta: ["run": .string("42")])
     private static let other = McpServerConfig(type: "http", name: "remote", url: "https://example.com/mcp")
+    private static let configured = McpServerConfig(name: "cfg", command: "cfg-tool")
 
+    /// The config of an invocation given `--mcp-config` `path`, whose servers are `servers`.
+    private static func file(_ path: String, _ servers: [McpServerConfig]) -> CallerConfig {
+        CallerConfig(auth: [:], mcpServers: servers, mcpConfigPath: path)
+    }
+
+    /// The config of an invocation without `--mcp-config`: its config files' servers.
+    private static func files(_ servers: [McpServerConfig]) -> CallerConfig {
+        CallerConfig(auth: [:], mcpServers: servers)
+    }
+
+    /// The servers `newSession` is given go to the agent that creates the session, and nowhere
+    /// else: the record keeps none, and a prompt that brings no config connects with the config
+    /// files'.
     @Test(.enabled(if: mockPythonAvailable))
-    func ownServersReplaceConfigAndReplayOnEveryReconnect() async throws {
+    func newSessionsServersAreTheCreatingAgentsAlone() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             try writeGlobalConfig(servers: #"[{"name":"cfg","command":"cfg-tool"}]"#)
             let log = requestLogURL()
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-
             let id = try await daemon.newSession(
-                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory(),
-                mcpServers: [Self.own])
-
-            // Persisted on the record's acpx block and surfaced by showSession.
-            let record = try #require(SessionStore.loadRecord(id))
-            #expect(record.acpx?.mcpServers == [Self.own])
-            #expect(try await daemon.showSession(sessionId: id).mcpServers == [Self.own])
+                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory(), mcpServers: [Self.own])
+            let stored = try String(contentsOf: ACPXPaths.sessionRecordPath(id), encoding: .utf8)
+            #expect(!stored.contains("mcp_servers") && !stored.contains("shot-mcp"))
 
             _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-
-            // The create spawn, the reconnect (session/load) and its session-gone
-            // fallback (session/new) all carry the session's own set, never `cfg`.
             let requests = try sessionRequests(log)
-            #expect(requests.map(\.method) == ["session/new", "session/load", "session/new"])
-            for request in requests {
+            #expect(requests.map(\.method) == ["session/new", "session/load"])
+            #expect(requests.map(\.names) == [["shot"], ["cfg"]])
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A session's owner keeps the servers of the prompt that started it — acpx's owner keeps its
+    /// spawning CLI's config — and gives them to every agent it connects: one a later prompt of
+    /// the same config needs too, on the wire as the config spells them.
+    @Test(.enabled(if: mockPythonAvailable))
+    func anOwnerKeepsTheServersOfThePromptThatStartedIt() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
+            let log = requestLogURL()
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory())
+            let config = Self.file("/work/mcp.json", [Self.own])
+            _ = try await daemon.runPrompt(sessionId: id, text: "one", callerConfig: config)
+            await daemon.evict(id)
+            _ = try await daemon.runPrompt(sessionId: id, text: "two", callerConfig: config)
+
+            let requests = try sessionRequests(log)
+            #expect(requests.map(\.method) == ["session/new", "session/load", "session/load"])
+            for request in requests.dropFirst() {
+                let server = try #require(request.servers.first)
                 #expect(request.servers.count == 1)
-                #expect(request.servers.first?["name"] as? String == "shot")
-                #expect(request.servers.first?["args"] as? [String] == ["--run", "42"])
-                #expect(request.servers.first?["type"] == nil)
-                #expect((request.servers.first?["_meta"] as? [String: String])?["run"] == "42")
-                #expect(
-                    (request.servers.first?["env"] as? [[String: String]])
-                        == [["name": "RUN_TOKEN", "value": "secret"]])
+                #expect(server["name"] as? String == "shot" && server["args"] as? [String] == ["--run", "42"])
+                #expect((server["_meta"] as? [String: String])?["run"] == "42")
+                #expect((server["env"] as? [[String: String]]) == [["name": "RUN_TOKEN", "value": "secret"]])
             }
-            _ = try await daemon.closeSession(sessionId: id)
+            await daemon.releaseAll()
         }
     }
 
+    /// A prompt whose MCP config is not its session owner's is refused before anything is sent,
+    /// as acpx refuses it: another `--mcp-config` file, the same file with other servers, or none —
+    /// whatever the config files say. The owner's own config, spelled otherwise, is not another's.
     @Test(.enabled(if: mockPythonAvailable))
-    func emptyOwnListDetachesConfigServers() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            try writeGlobalConfig(servers: #"[{"name":"cfg","command":"cfg-tool"}]"#)
-            let log = requestLogURL()
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-
-            let id = try await daemon.newSession(
-                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory(),
-                mcpServers: [])
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-
-            let requests = try sessionRequests(log)
-            #expect(requests.count == 3)
-            #expect(requests.flatMap(\.servers).isEmpty)
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [])
-            _ = try await daemon.closeSession(sessionId: id)
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func omittedListKeepsConfigServers() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            try writeGlobalConfig(servers: #"[{"name":"cfg","command":"cfg-tool"}]"#)
-            let log = requestLogURL()
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-
-            let id = try await daemon.newSession(
-                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory())
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-
-            let requests = try sessionRequests(log)
-            #expect(requests.count == 3)
-            #expect(requests.allSatisfy { $0.servers.map { $0["name"] as? String } == ["cfg"] })
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == nil)
-            _ = try await daemon.closeSession(sessionId: id)
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func setSessionMcpServersIsRefusedWhileLiveWithADifferentSet() async throws {
+    func aPromptWhoseConfigIsNotTheOwnersIsRefused() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             let log = requestLogURL()
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
                 agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory())
-
-            // Not live yet: the set is simply persisted.
-            #expect(try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.own]))
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.own])
-
-            // The reconnect uses the persisted set …
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-            let reconnects = try sessionRequests(log).dropFirst()
-            #expect(reconnects.count == 2)
-            #expect(reconnects.allSatisfy { $0.servers.map { $0["name"] as? String } == ["shot"] })
-
-            // … and while that connection is held, a different set is a conflict
-            // (npm acpx's QUEUE_MCP_CONFIG_CONFLICT); the same set is a no-op.
-            await #expect(throws: DaemonError.self) {
-                try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.other])
-            }
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.own])
-            #expect(try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.own]))
-
-            // Closing the session releases the connection, after which it may switch.
-            #expect(try await daemon.closeSession(sessionId: id))
-            #expect(try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.other]))
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.other])
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func conflictErrorNamesTheSessionAndMirrorsNpmWording() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-            do {
-                _ = try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.own])
-                Issue.record("expected a conflict")
-            } catch let error as DaemonError {
-                guard case .mcpConfigConflict(let conflicted) = error else {
-                    Issue.record("unexpected error \(error)")
-                    return
+            _ = try await daemon.runPrompt(
+                sessionId: id, text: "one", callerConfig: Self.file("/work/a.json", [Self.configured]))
+            let conflicting: [CallerConfig?] = [
+                Self.file("/work/b.json", [Self.configured]), Self.file("/work/a.json", [Self.other]),
+                Self.files([Self.configured]), nil
+            ]
+            for config in conflicting {
+                await #expect(throws: QueueMcpConfigConflict()) {
+                    _ = try await daemon.runPrompt(sessionId: id, text: "two", callerConfig: config)
                 }
-                #expect(conflicted == id)
-                #expect(error.localizedDescription.contains("close the session before retrying"))
             }
-            _ = try await daemon.closeSession(sessionId: id)
+            #expect(try prompts(log) == 1)
+
+            let spelledOtherwise = McpServerConfig(type: "stdio", name: "cfg", command: "cfg-tool", args: [], env: [])
+            _ = try await daemon.runPrompt(
+                sessionId: id, text: "three", callerConfig: Self.file("/work/a.json", [spelledOtherwise]))
+            #expect(try prompts(log) == 2)
+            #expect(QueueMcpConfigConflict().localizedDescription
+                == "Session queue owner uses a different MCP config; close the session before retrying")
+            await daemon.releaseAll()
         }
     }
 
-    @Test func setSessionMcpServersValidatesEntriesBeforePersisting() async throws {
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            var record = SessionRecord(
-                acpxRecordId: "rec-1", acpSessionId: "acp-1", agentCommand: "mock",
-                cwd: "/tmp", createdAt: nowISO(), lastUsedAt: nowISO())
-            record.closed = false
-            try SessionStore.writeRecord(record)
-
-            // A stdio entry without a command is rejected the way the config loader
-            // rejects it, and nothing is written.
-            await #expect(throws: ConfigError.self) {
-                try await daemon.setSessionMcpServers(
-                    sessionId: "rec-1", mcpServers: [McpServerConfig(name: "broken")])
-            }
-            #expect(try #require(SessionStore.loadRecord("rec-1")).acpx?.mcpServers == nil)
-
-            await #expect(throws: DaemonError.self) {
-                try await daemon.setSessionMcpServers(sessionId: "missing", mcpServers: [Self.own])
-            }
-        }
-    }
-
+    /// An owner started without a `--mcp-config` file takes a prompt without one whatever its
+    /// config files' servers — acpx fingerprints only a file given — and refuses one with a file.
     @Test(.enabled(if: mockPythonAvailable))
-    func equivalentSetsWrittenDifferentlyAreNotAConflict() async throws {
+    func anOwnerStartedWithoutAFileComparesNoConfigFiles() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
+            let log = requestLogURL()
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let terse = McpServerConfig(name: "shot", command: "/bin/shot")
-            let verbose = McpServerConfig(
-                type: "stdio", name: "shot", command: "/bin/shot", args: [], env: [])
-
             let id = try await daemon.newSession(
-                agentCommand: command, cwd: NSTemporaryDirectory(), mcpServers: [terse])
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-
-            // Both spell the same `session/new` params, so re-sending the spelled-out
-            // form while live is the no-op it looks like, not a conflict (npm acpx
-            // fingerprints the parsed servers, not the config text).
-            #expect(try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [verbose]))
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [verbose])
-            // …and the held connection still serves the next turn.
-            _ = try await daemon.runPrompt(sessionId: id, text: "again")
-            _ = try await daemon.closeSession(sessionId: id)
+                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(sessionId: id, text: "one", callerConfig: Self.files([Self.configured]))
+            _ = try await daemon.runPrompt(sessionId: id, text: "two", callerConfig: Self.files([Self.other]))
+            await #expect(throws: QueueMcpConfigConflict()) {
+                _ = try await daemon.runPrompt(
+                    sessionId: id, text: "three", callerConfig: Self.file("/work/a.json", [Self.configured]))
+            }
+            #expect(try prompts(log) == 2)
+            await daemon.releaseAll()
         }
     }
 
+    /// Once the owner goes — its TTL over, or the session let go — the next prompt starts one of
+    /// its own, with its own config, as acpx's next owner is spawned by the next prompt.
     @Test(.enabled(if: mockPythonAvailable))
-    func configFileSessionsNeverConflictWhenTheConfigChangesWhileLive() async throws {
+    func theNextOwnerTakesTheConfigOfThePromptThatStartsIt() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
-            try writeGlobalConfig(servers: #"[{"name":"cfg","command":"cfg-tool"}]"#)
+            let log = requestLogURL()
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let id = try await daemon.newSession(
+                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory())
+            _ = try await daemon.runPrompt(
+                sessionId: id, text: "one", callerConfig: Self.file("/work/a.json", [Self.own]))
+            #expect(try await daemon.releaseSession(sessionId: id))
+            _ = try await daemon.runPrompt(sessionId: id, text: "two", callerConfig: Self.files([Self.other]))
+
+            let requests = try sessionRequests(log)
+            #expect(requests.map(\.method) == ["session/new", "session/load", "session/load"])
+            #expect(requests.map(\.names) == [[], ["shot"], ["remote"]])
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A control is never refused over its MCP config. With no owner, it connects with its own,
+    /// as acpx's direct control builds its client from its own config; under an owner — its agent
+    /// held or taken back — with the owner's.
+    @Test(.enabled(if: mockPythonAvailable))
+    func aControlConnectsWithItsOwnConfigUnlessAnOwnerHoldsTheSession() async throws {
+        let command = try #require(mockCommand())
+        try await withIsolatedStore {
             let log = requestLogURL()
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(
                 agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory())
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
+            _ = try await daemon.setMode(
+                sessionId: id, modeId: "plan", client: ClientOptions(config: Self.file("/work/a.json", [Self.own])))
+            _ = try await daemon.runPrompt(sessionId: id, text: "one", callerConfig: Self.files([Self.configured]))
+            let another = ClientOptions(config: Self.file("/work/b.json", [Self.other]))
+            _ = try await daemon.setMode(sessionId: id, modeId: "code", client: another)
+            await daemon.evict(id)
+            _ = try await daemon.setMode(sessionId: id, modeId: "plan", client: another)
 
-            // Editing the config file under a live session must not start failing its
-            // turns: npm only pins a session to an *explicit* MCP config, and a
-            // retained connection keeps the servers it was made with.
-            try writeGlobalConfig(servers: #"[{"name":"changed","command":"other-tool"}]"#)
-            _ = try await daemon.runPrompt(sessionId: id, text: "again")
-            #expect(try sessionRequests(log).allSatisfy { request in
-                request.servers.map { $0["name"] as? String } == ["cfg"]
-            })
-            _ = try await daemon.closeSession(sessionId: id)
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func ownServersSurviveABadConfigFileInTheCwd() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            // A stdio entry with no command: unusable, but irrelevant to a caller
-            // bringing its own servers, so it must not fail the call.
-            try writeGlobalConfig(servers: #"[{"name":"broken"}]"#)
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(
-                agentCommand: command, cwd: NSTemporaryDirectory(), mcpServers: [Self.own])
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.own])
-
-            // Without its own set the same session creation does surface the error.
-            await #expect(throws: ConfigError.self) {
-                try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            }
-            _ = try await daemon.closeSession(sessionId: id)
-        }
-    }
-
-    /// Closing and attaching servers in flight leave a consistent record whichever
-    /// way the two interleave. The close takes its turn with the session, so an attach
-    /// that gets there first still finds the agent held and refuses; one that comes
-    /// after it goes through. (The specific lost-update window inside `closeSession` —
-    /// its write landing after another tool's — is a single actor hop and is not
-    /// deterministically reproducible here; the guard is the re-read in
-    /// `closeSession`, not this test.)
-    @Test(.enabled(if: mockPythonAvailable))
-    func closeAndAttachConcurrentlyLeaveAConsistentRecord() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-
-            // The sequence the conflict message invites, run concurrently.
-            async let closing: Bool = daemon.closeSession(sessionId: id)
-            async let setting: Result<Bool, Error> = {
-                do {
-                    return .success(try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.own]))
-                } catch {
-                    return .failure(error)
-                }
-            }()
-            let (closed, set) = try await (closing, setting)
-            #expect(closed)
-            let record = try #require(SessionStore.loadRecord(id))
-            #expect(record.closed == true)
-            switch set {
-            case .success(let applied):
-                #expect(applied)
-                #expect(record.acpx?.mcpServers == [Self.own])
-            case .failure(let error):
-                guard case DaemonError.mcpConfigConflict = error else {
-                    Issue.record("the attach failed otherwise: \(error)")
-                    return
-                }
-                #expect(record.acpx?.mcpServers == nil)
-            }
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func restartSwitchesALiveSessionsServersWithoutLosingIt() async throws {
-        let command = try #require(mockCommand())
-        try await withIsolatedStore {
-            let log = requestLogURL()
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(
-                agentCommand: loggedCommand(command, log: log), cwd: NSTemporaryDirectory(),
-                mcpServers: [Self.own])
-            _ = try await daemon.runPrompt(sessionId: id, text: "ping")
-            #expect(SessionStore.loadRecord(id)?.pid != nil)
-
-            // Without `restart` the live session refuses the switch (npm's rule) …
-            await #expect(throws: DaemonError.self) {
-                try await daemon.setSessionMcpServers(sessionId: id, mcpServers: [Self.other])
-            }
-            // … with it, the switch is applied by dropping the adapter, so the next
-            // turn reconnects with the new servers. The session itself survives: it
-            // is restored, not recreated, and its history is intact.
-            #expect(try await daemon.setSessionMcpServers(
-                sessionId: id, mcpServers: [Self.other], restart: true))
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.other])
-            // The adapter it dropped leaves no pid behind (#113 review).
-            #expect(SessionStore.loadRecord(id)?.pid == nil)
-
-            _ = try await daemon.runPrompt(sessionId: id, text: "after switch")
             let requests = try sessionRequests(log)
-            #expect(requests.map(\.method) == [
-                "session/new", "session/load", "session/new", "session/load", "session/new"
-            ])
-            #expect(requests.prefix(3).allSatisfy { $0.servers.map { $0["name"] as? String } == ["shot"] })
-            #expect(requests.suffix(2).allSatisfy { $0.servers.map { $0["name"] as? String } == ["remote"] })
-            // Both turns are in one conversation — the switch kept the session.
-            #expect(try await daemon.sessionHistory(sessionId: id).count == 4)
-            _ = try await daemon.closeSession(sessionId: id)
+            #expect(requests.map(\.method) == ["session/new", "session/load", "session/load", "session/load"])
+            #expect(requests.map(\.names) == [[], ["shot"], ["cfg"], ["cfg"]])
+            await daemon.releaseAll()
         }
     }
 
-    @Test(.enabled(if: mockPythonAvailable))
-    func restartOnAnIdleSessionJustPersists() async throws {
-        let command = try #require(mockCommand())
+    /// The CLI reports a prompt refused over its MCP config as acpx 0.19.3 does, in each format —
+    /// the session's banner first, as acpx has shown it by then.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func theCLIReportsAConflictingPromptAsAcpxDoes() async throws {
+        let agent = try #require(mockCommand())
+        let directory = try DaemonToolsTests.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
         try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(
-                agentCommand: command, cwd: NSTemporaryDirectory(), mcpServers: [Self.own])
-            #expect(try await daemon.setSessionMcpServers(
-                sessionId: id, mcpServers: [Self.other], restart: true))
-            #expect(try #require(SessionStore.loadRecord(id)).acpx?.mcpServers == [Self.other])
+            try #"{"mcpServers":[{"name":"alpha","command":"/bin/echo"}]}"#
+                .write(to: directory.appendingPathComponent("a.json"), atomically: true, encoding: .utf8)
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect(await Self.acpx(["sessions", "new"], agent: agent, cwd: directory, backend).code == 0)
+            #expect(await Self.acpx(["--mcp-config", "a.json", "prompt", "hi"], agent: agent, cwd: directory, backend)
+                .code == 0)
+
+            let message = "Session queue owner uses a different MCP config; close the session before retrying"
+            let json = await Self.acpx(["--format", "json", "prompt", "again"], agent: agent, cwd: directory, backend)
+            #expect(json.code == 1)
+            #expect(json.out == #"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":""# + message
+                + #"","data":{"acpxCode":"RUNTIME","detailCode":"QUEUE_MCP_CONFIG_CONFLICT","origin":"queue","#
+                + #""retryable":false,"sessionId":"unknown"}}}"# + "\n")
+            let quiet = await Self.acpx(["--format", "quiet", "prompt", "again"], agent: agent, cwd: directory, backend)
+            #expect(quiet.code == 1)
+            #expect(quiet.err == "[acpx] error: RUNTIME QUEUE_MCP_CONFIG_CONFLICT \(message)\n")
+            let text = await Self.acpx(["prompt", "again"], agent: agent, cwd: directory, backend)
+            #expect(text.code == 1)
+            #expect(text.err.hasPrefix("[acpx] session ") && text.err.hasSuffix("\n\(message)\n"), "\(text.err)")
+            await backend.releaseAll()
         }
+    }
+
+    /// `acpx --approve-all --agent <agent> --cwd <cwd> <args>` against `backend`, the daemon running.
+    private static func acpx(
+        _ args: [String], agent: String, cwd: URL, _ backend: ACPXDaemonBackend
+    ) async -> CLIRun {
+        let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+        let capture = Console.Capture()
+        let code: Int32 = await onThreadOfItsOwn {
+            DaemonClient.$standIn.withValue(daemon) {
+                Console.$capture.withValue(capture) {
+                    runCommandLine(["--approve-all", "--agent", agent, "--cwd", cwd.path] + args)
+                }
+            }
+        }
+        return CLIRun(code: code, out: capture.out, err: capture.err)
+    }
+
+    /// acpx's `queueOwnerMcpConfigMatches`: the same `--mcp-config` file — none, or one whose
+    /// servers are the same on the wire.
+    @Test func whatMakesAPromptsConfigTheOwners() {
+        let same = ACPXDaemonBackend.sameMcpConfig
+        #expect(same(nil, nil))
+        #expect(same(nil, Self.files([Self.own])))
+        #expect(same(Self.files([Self.own]), Self.files([Self.other])))
+        #expect(same(Self.file("/a.json", [Self.own]), Self.file("/a.json", [Self.own])))
+        #expect(!same(Self.file("/a.json", [Self.own]), Self.file("/a.json", [Self.other])))
+        #expect(!same(Self.file("/a.json", [Self.own]), Self.file("/b.json", [Self.own])))
+        #expect(!same(Self.file("/a.json", [Self.own]), Self.files([Self.own])))
+        #expect(!same(nil, Self.file("/a.json", [])))
     }
 
     // MARK: - Helpers
@@ -344,28 +256,40 @@ import Testing
         ACPXPaths.baseDir.appendingPathComponent("requests-\(UUID().uuidString).ndjson")
     }
 
-    /// The mock agent appends every `session/*` request it receives to `log`.
+    /// The mock agent — one that takes a session back — appending every `session/*` request it
+    /// receives to `log`.
     private func loggedCommand(_ command: String, log: URL) -> String {
-        "/usr/bin/env MOCK_REQUEST_LOG='\(log.path)' \(command)"
+        "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(log.path)' \(command)"
     }
 
     private struct LoggedRequest {
         var method: String
         var servers: [[String: Any]]
+        var names: [String] { servers.compactMap { $0["name"] as? String } }
     }
 
-    /// The session-setup requests (everything but `session/prompt`) with their
-    /// `mcpServers` param, in the order the agent received them.
-    private func sessionRequests(_ log: URL) throws -> [LoggedRequest] {
-        try String(contentsOf: log, encoding: .utf8)
+    /// The requests the agent received, in order.
+    private func requests(_ log: URL) throws -> [[String: Any]] {
+        guard FileManager.default.fileExists(atPath: log.path) else { return [] }
+        return try String(contentsOf: log, encoding: .utf8)
             .split(separator: "\n")
             .map { try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
-            .filter { ($0["method"] as? String) != "session/prompt" }
+    }
+
+    /// The requests that got a session, with their `mcpServers`, in the order the agent got them.
+    private func sessionRequests(_ log: URL) throws -> [LoggedRequest] {
+        try requests(log)
+            .filter { ["session/new", "session/load"].contains($0["method"] as? String) }
             .map { request in
                 let params = try #require(request["params"] as? [String: Any])
                 return LoggedRequest(
                     method: try #require(request["method"] as? String),
                     servers: try #require(params["mcpServers"] as? [[String: Any]]))
             }
+    }
+
+    /// How many prompts reached the agent.
+    private func prompts(_ log: URL) throws -> Int {
+        try requests(log).filter { ($0["method"] as? String) == "session/prompt" }.count
     }
 }

@@ -198,23 +198,22 @@ struct SessionArchiveTests {
         }
     }
 
-    /// SwiftACP's own fields, which acpx does not know, stay home: a session's MCP servers,
-    /// whose commands and credentials are this machine's, go neither out nor back in, and the
-    /// `client_capabilities` a record SwiftACP wrote before #246 has goes nowhere — acpx's
-    /// archive has neither.
-    @Test func swiftACPsOwnFieldsDoNotTravel() async throws {
+    /// Fields acpx does not know go nowhere: the `client_capabilities` and `mcp_servers` a record
+    /// SwiftACP wrote before #246 and #245 has are not exported, and an archive made by hand to
+    /// bring MCP servers — whose commands and credentials would run here — is imported without
+    /// them. acpx's archive has neither.
+    @Test func fieldsAcpxDoesNotKnowDoNotTravel() async throws {
         let fixture = try Self.fixture()
         try await withIsolatedStore {
             try Self.storeSource(fixture, home: "/home/user")
             let stored = ACPXPaths.sessionRecordPath("rec-1")
             let written = try String(contentsOf: stored, encoding: .utf8)
             let old = written.replacingOccurrences(
-                of: #""acpx": {"#, with: #""acpx": {"client_capabilities": {"terminal": false},"#)
+                of: #""acpx": {"#,
+                with: #""acpx": {"client_capabilities": {"terminal": false}, "mcp_servers": [{"name": "t0ken"}],"#)
             #expect(old != written)
             try old.write(to: stored, atomically: true, encoding: .utf8)
-            var record = try #require(SessionStore.loadRecord("rec-1"))
-            record.acpx?.mcpServers = [try JSONDecoder().decode(McpServerConfig.self, from: Data(
-                #"{"name": "secret", "command": "run-me", "env": [{"name": "TOKEN", "value": "t0ken"}]}"#.utf8))]
+            let record = try #require(SessionStore.loadRecord("rec-1"))
             let archive = try Self.directory() + "/archive.json"
 
             try SessionArchive.export(
@@ -234,8 +233,8 @@ struct SessionArchiveTests {
                 at: archive, name: nil, cwd: nil, expectedAgentName: "probe", expectedAgentCommand: fixture.command,
                 home: "/home/user")
 
-            let back = try #require(SessionStore.loadRecord(imported.recordId))
-            #expect(back.acpx?.mcpServers == nil)
+            let back = try String(contentsOf: ACPXPaths.sessionRecordPath(imported.recordId), encoding: .utf8)
+            #expect(!back.contains("mcp_servers") && !back.contains("run-me"))
         }
     }
 
