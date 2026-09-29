@@ -50,6 +50,9 @@ final class ClackSpinner: @unchecked Sendable {
     private var frame = 0
     private var dots = 0.0
     private var timer: DispatchSourceTimer?
+    /// Finished: a tick the timer began before ``finish(_:failed:)`` draws nothing after it
+    /// — clack's `clearInterval` stops every tick, one thread being all JavaScript has.
+    private var stopped = false
 
     private static let frames = ClackSymbol.unicode
         ? ["\u{25D2}", "\u{25D0}", "\u{25D3}", "\u{25D1}"] : ["\u{2022}", "o", "O", "0"]
@@ -77,8 +80,10 @@ final class ClackSpinner: @unchecked Sendable {
         timer.resume()
     }
 
-    private func tick() {
+    /// A frame, unless the spinner has finished.
+    func tick() {
         lock.withLock {
+            guard !stopped else { return }
             if Self.continuousIntegration, lastFrame == message { return }
             clearFrame()
             lastFrame = message
@@ -105,6 +110,7 @@ final class ClackSpinner: @unchecked Sendable {
     /// after the symbol that says how it went, and the cursor shown.
     func finish(_ message: String, failed: Bool) {
         lock.withLock {
+            stopped = true
             timer?.cancel()
             timer = nil
             clearFrame()
