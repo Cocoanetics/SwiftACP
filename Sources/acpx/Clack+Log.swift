@@ -40,6 +40,8 @@ extension ClackTerminal {
 /// ends with.
 final class ClackSpinner: @unchecked Sendable {
     private let terminal: ClackTerminal
+    /// The terminal's width when the spinner was made, which its frames are wrapped to.
+    private let columns: Int
     /// Standard input, raw while the spinner runs if it is a terminal, as clack's `block` has it.
     private let standardInput = ClackTerminal()
     private let lock = NSLock()
@@ -57,6 +59,7 @@ final class ClackSpinner: @unchecked Sendable {
 
     init(on terminal: ClackTerminal) {
         self.terminal = terminal
+        columns = terminal.columns
     }
 
     /// `start(message)`: the cursor hidden, a bar, and a frame every 80 ms from then on — the
@@ -82,17 +85,18 @@ final class ClackSpinner: @unchecked Sendable {
             let symbol = ClackText.style("magenta", text: Self.frames[frame])
             let shown = Self.continuousIntegration
                 ? "..." : String(String(repeating: ".", count: Int(dots.rounded(.down))).prefix(3))
-            terminal.write(ClackText.wrap("\(symbol)  \(message)\(shown)", columns: terminal.columns))
+            terminal.write(ClackText.wrap("\(symbol)  \(message)\(shown)", columns: columns))
             frame = frame + 1 < Self.frames.count ? frame + 1 : 0
             dots = dots < 4 ? dots + 0.125 : 0
         }
     }
 
-    /// `y`: the last frame taken back.
+    /// `y`: the last frame taken back — counted as clack counts it, from the message alone
+    /// (`p = s`), not from the frame drawn with its symbol and dots.
     private func clearFrame() {
         guard let lastFrame else { return }
         if Self.continuousIntegration { terminal.write("\n") }
-        let lines = ClackText.wrap(lastFrame, columns: terminal.columns).components(separatedBy: "\n")
+        let lines = ClackText.wrap(lastFrame, columns: columns).components(separatedBy: "\n")
         if lines.count > 1 { terminal.write("\u{1B}[\(lines.count - 1)A") }
         terminal.write("\u{1B}[1G\u{1B}[J")
     }
