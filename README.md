@@ -176,6 +176,25 @@ TypeScript flows compile with sucrase, to CommonJS as acpx's tsx does (`.mts` as
 module). So far compute, function action and checkpoint nodes run; shell actions and ACP
 nodes follow (#202).
 
+### The acpx skill
+
+`acpx --skill` serves the skill acpx bundles for coding agents, as acpx serves it with
+[skillflag](https://github.com/osolmaz/skillflag). The skill is acpx 0.19.3's
+`skills/acpx/SKILL.md`, embedded in the CLI; it describes acpx, whose commands and flags this
+CLI shares.
+
+```sh
+swift run acpx --skill list
+swift run acpx --skill show acpx
+swift run acpx --skill install acpx --agent codex --scope user   # into ~/.codex/skills/acpx
+swift run acpx --skill export acpx > acpx-skill.tar
+```
+
+`install` puts the skill where each agent keeps its skills: `--agent` is one of codex, claude,
+portable, vscode, copilot, amp, goose, opencode, factory or cursor, and `--scope` one of repo,
+user or cwd. Given neither on a terminal, acpx asks for them in a wizard; this CLI does not yet,
+and says they are missing. `scripts/skill/embed.sh` embeds the skill of another acpx release.
+
 ## Status
 
 A byte-faithful Swift clone of
@@ -185,4 +204,6 @@ SwiftAgents' Coder example exposes itself over ACP via the server half.
 
 ## License
 
-BSD 2-Clause — see [LICENSE](LICENSE).
+BSD 2-Clause — see [LICENSE](LICENSE). The `acpx` CLI embeds acpx's skill
+(`skills/acpx/SKILL.md`, MIT, © 2025 OpenClaw Team) with its license, in
+`Sources/acpx/BundledSkill.swift`.
