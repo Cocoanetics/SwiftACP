@@ -154,22 +154,46 @@ struct ReplaySuppressionTests {
         await client.close()
     }
 
-    /// A replay that never stops fails the load, in acpx's words. It goes on as an update read
-    /// and not yet handled, which holds the drain for as long as it is not: an agent trickling
-    /// updates could be held up by a busy runner past the idle window, and the drain would end
-    /// (Windows CI on #293).
-    @Test func aReplayThatDoesNotStopFailsTheDrain() async throws {
-        let (client, server) = try await connect(ReplayingAgent())
+    /// A replay that never stops fails the load, in acpx's words: updates that go on arriving past
+    /// the drain's deadline do not put it off (Codex review on #296). One of them stays read and not
+    /// yet handled, so the drain cannot end sooner however long a busy runner holds up the rest —
+    /// as a trickle on a clock was held up past the quiet it waits for (Windows CI on #293).
+    @Test(.timeLimit(.minutes(1)))
+    func aReplayThatDoesNotStopFailsTheDrain() async throws {
+        let (counts, more) = AsyncStream<Int>.makeStream()
+        let (client, server) = try await connect(ReplayingAgent(afterAnswer: counts))
         defer { server.cancel() }
+        let (subscription, stream) = await client.makeSubscription()
+        let (seen, each) = AsyncStream<String>.makeStream()
+        let delivered = Task { await texts(stream, each: each) }
         _ = try await client.loadSession(LoadSessionRequest(sessionId: "replay-session", cwd: "/"))
 
         client.sessionUpdates.arrived("replay-session")
+        // The replay goes on an update at a time, each delivered before the next, until the drain
+        // is over — for ten seconds at most, should the drain wait for it to stop.
+        let drainOver = DoneFlag()
+        let replay = Task { () -> Bool in
+            let cap = ContinuousClock.now + .seconds(10)
+            var arrivals = seen.makeAsyncIterator()
+            while !drainOver.isSet {
+                guard ContinuousClock.now < cap else { return false }
+                more.yield(1)
+                while let text = await arrivals.next(), text != "." {}
+            }
+            return true
+        }
         let error = await #expect(throws: SessionReplayDrainTimeout.self) {
             try await client.waitForSessionUpdateDrain(
                 sessionId: "replay-session", idleMilliseconds: 500, timeoutMilliseconds: 1000)
         }
-        client.sessionUpdates.finished("replay-session")
+        drainOver.set()
+        #expect(await replay.value, "the drain waited for the replay to stop")
         #expect(error?.localizedDescription == "Timed out waiting for session replay drain after 1000ms")
+
+        client.sessionUpdates.finished("replay-session")
+        more.finish()
+        await client.endSubscription(subscription)
+        _ = await delivered.value
         await client.close()
     }
 
@@ -328,5 +352,17 @@ struct ReplaySuppressionTests {
 extension ACPAgentConnection {
     func setWaitingToLoad(_ hook: (@Sendable (SessionId) -> Void)?) {
         waitingToLoad = hook
+    }
+}
+
+/// Set once, read from any task.
+private final class DoneFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() {
+        lock.withLock { value = true }
     }
 }
