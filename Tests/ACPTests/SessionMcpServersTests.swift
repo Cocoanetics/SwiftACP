@@ -12,19 +12,19 @@ import Testing
 /// the prompt that started it and refuses a prompt whose MCP config is another's
 /// (`QUEUE_MCP_CONFIG_CONFLICT`); a control never is, and one with no owner connects with its own.
 @Suite(.serialized, .agentLane) struct SessionMcpServersTests {
-    private static let own = McpServerConfig(
+    static let own = McpServerConfig(
         name: "shot", command: "/usr/local/bin/shot-mcp", args: ["--run", "42"],
         env: [.init(name: "RUN_TOKEN", value: "secret")], meta: ["run": .string("42")])
-    private static let other = McpServerConfig(type: "http", name: "remote", url: "https://example.com/mcp")
+    static let other = McpServerConfig(type: "http", name: "remote", url: "https://example.com/mcp")
     private static let configured = McpServerConfig(name: "cfg", command: "cfg-tool")
 
     /// The config of an invocation given `--mcp-config` `path`, whose servers are `servers`.
-    private static func file(_ path: String, _ servers: [McpServerConfig]) -> CallerConfig {
+    static func file(_ path: String, _ servers: [McpServerConfig]) -> CallerConfig {
         CallerConfig(auth: [:], mcpServers: servers, mcpConfigPath: path)
     }
 
     /// The config of an invocation without `--mcp-config`: its config files' servers.
-    private static func files(_ servers: [McpServerConfig]) -> CallerConfig {
+    static func files(_ servers: [McpServerConfig]) -> CallerConfig {
         CallerConfig(auth: [:], mcpServers: servers)
     }
 

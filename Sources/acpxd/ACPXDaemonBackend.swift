@@ -68,6 +68,9 @@ actor ACPXDaemonBackend: ACPXBackend {
     var shuttingDown: [String: Int] = [:]
     /// The sessions held as acpx's queue owner holds one, by record: see ``SessionOwner``.
     var owners: [String: SessionOwner] = [:]
+    /// The MCP config each session's owner will have, by record, while none holds it yet: see
+    /// ``OwnerConfigClaim``.
+    var ownerConfigClaims: [String: OwnerConfigClaim] = [:]
     /// For tests: run as a turn's prompt is about to be written, once a cancel can no
     /// longer keep it from going out.
     var promptGoingOut: (@Sendable (_ recordId: String) async -> Void)?

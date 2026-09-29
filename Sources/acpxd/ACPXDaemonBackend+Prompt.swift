@@ -76,12 +76,10 @@ extension ACPXDaemonBackend {
         }
         let recordId = initial.acpxRecordId
         // acpx's CLI checks, before it hands a prompt to the session's owner, that the prompt's MCP
-        // config is the owner's (`assertQueueOwnerMcpConfigMatches`): the owner's agent has the
-        // servers of the prompt that started it, and another config is refused (#245). A direct
-        // turn has no owner.
-        if !direct, let owner = owners[recordId], !Self.sameMcpConfig(owner.client.config, callerConfig) {
-            throw QueueMcpConfigConflict()
-        }
+        // config is the owner's: the owner's agent has the servers of the prompt that started it,
+        // and another config is refused (#245). A direct turn has no owner.
+        let claimed = direct ? false : try claimOwnerConfig(recordId, callerConfig)
+        defer { if claimed { releaseOwnerConfig(recordId) } }
 
         // The prompt begins as acpx's queue owner begins the prompt task it takes
         // (`runPromptTurn`): at once, unless another prompt of the session runs or waits

@@ -177,6 +177,40 @@ struct QueueMcpConfigConflict: LocalizedError, OutputErrorMeta, Equatable {
 }
 
 extension ACPXDaemonBackend {
+    /// The MCP config a session's owner will have while none holds the session yet: that of the
+    /// prompts handed to it since, the first of which starts the owner (#245).
+    struct OwnerConfigClaim {
+        let config: CallerConfig?
+        /// The prompts that claimed it and whose calls are not over.
+        var holders: Int
+    }
+
+    /// acpx's `assertQueueOwnerMcpConfigMatches`, run as a prompt is handed to its session's owner:
+    /// the prompt's MCP config must be the owner's. Before an owner holds the session, it must be
+    /// that of the prompts already handed on, whose first starts the owner — as acpx checks a CLI
+    /// racing another to the session against the owner that won it, not against none (Codex review
+    /// on #293) — and the prompt claims that config until its call is over. `true` when it did:
+    /// ``releaseOwnerConfig(_:)`` then ends its claim.
+    func claimOwnerConfig(_ recordId: String, _ config: CallerConfig?) throws -> Bool {
+        if let owner = owners[recordId] {
+            guard Self.sameMcpConfig(owner.client.config, config) else { throw QueueMcpConfigConflict() }
+            return false
+        }
+        var claim = ownerConfigClaims[recordId] ?? OwnerConfigClaim(config: config, holders: 0)
+        guard Self.sameMcpConfig(claim.config, config) else { throw QueueMcpConfigConflict() }
+        claim.holders += 1
+        ownerConfigClaims[recordId] = claim
+        return true
+    }
+
+    /// A prompt that claimed its owner's config (``claimOwnerConfig(_:_:)``) is over: the claim
+    /// ends with the last of them.
+    func releaseOwnerConfig(_ recordId: String) {
+        guard var claim = ownerConfigClaims[recordId] else { return }
+        claim.holders -= 1
+        ownerConfigClaims[recordId] = claim.holders > 0 ? claim : nil
+    }
+
     /// acpx's `queueOwnerMcpConfigMatches`: a prompt's MCP config is its session owner's when it
     /// names the same `--mcp-config` file as the owner's — none, or one whose servers are the
     /// same, normalized as acpx fingerprints the parsed ones — whatever the config files say.
