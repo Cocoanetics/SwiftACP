@@ -83,6 +83,10 @@ struct AcpxdCommand: AsyncParsableCommand {
         // that order, rather than cancelling every task concurrently (which could drop
         // the lock while a transport is still draining).
         let bonjour = TCPBonjourTransport(server: daemon, instanceName: "acpx")
+        // A CLI that leaves what acpxd sends it unread for a second is disconnected, as acpx's
+        // queue owner times an observer's blocked socket out (`DRAIN_TIMEOUT_MS`,
+        // openclaw/acpx#723); its call's outbox then lets go of what waited (``CallerOutbox``).
+        bonjour.sendStallTimeout = CallerOutbox.stallTimeout
         var services: [ServiceGroupConfiguration.ServiceConfiguration] = [
             .init(
                 service: backend, successTerminationBehavior: .gracefullyShutdownGroup,

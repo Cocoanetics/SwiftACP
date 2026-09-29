@@ -127,9 +127,11 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         return try await session.work { _ in
-            try await daemon.newSession(
-                agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
-                sessionOptions: options, creation: SessionCreationMode(holdAgent: true, verbose: true))
+            try await daemon.servingCall {
+                try await daemon.newSession(
+                    agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
+                    sessionOptions: options, creation: SessionCreationMode(holdAgent: true, verbose: true))
+            }
         }
     }
 
@@ -140,7 +142,9 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         return try await session.work { _ in
-            try await daemon.setMode(sessionId: sessionId, modeId: "plan", verbose: true)
+            try await daemon.servingCall {
+                try await daemon.setMode(sessionId: sessionId, modeId: "plan", verbose: true)
+            }
         }
     }
 
@@ -151,8 +155,10 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         return try await session.work { _ in
-            try await daemon.runPrompt(
-                sessionId: sessionId, text: text, permissionMode: "approve-all", direct: true, verbose: verbose)
+            try await daemon.servingCall {
+                try await daemon.runPrompt(
+                    sessionId: sessionId, text: text, permissionMode: "approve-all", direct: true, verbose: verbose)
+            }
         }
     }
 }

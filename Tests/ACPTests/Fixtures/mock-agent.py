@@ -154,6 +154,18 @@ def handle_prompt(req_id, params):
         send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
         return
 
+    # "chunks N SIZE": N reply chunks of SIZE characters each, then the answer — output a
+    # caller may leave unread.
+    parts = text.strip().split()
+    if len(parts) == 3 and parts[0] == "chunks" and parts[1].isdigit() and parts[2].isdigit():
+        for _ in range(int(parts[1])):
+            session_update(session_id, {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "x" * int(parts[2])},
+            })
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        return
+
     # "gone turn": a partial reply, then a session-gone error.
     if text.strip() == "gone turn":
         session_update(session_id, {

@@ -30,7 +30,9 @@ import Testing
                 let session = Session(id: UUID())
                 await session.setTransport(client)
                 _ = try await session.work { _ in
-                    try await daemon.runPrompt(sessionId: created.acpxRecordId, text: text)
+                    try await daemon.servingCall {
+                        try await daemon.runPrompt(sessionId: created.acpxRecordId, text: text)
+                    }
                 }
                 ends += client.logs.compactMap { try? $0.decoded(TurnEndedEvent.self) }
             }

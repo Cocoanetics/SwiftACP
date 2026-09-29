@@ -312,9 +312,11 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         return try await session.work { _ in
-            try await daemon.runPrompt(
-                sessionId: sessionId, text: "hi", streamWire: streamWire,
-                sessionOptions: model.map { PromptSessionOptions(model: $0) }, limits: limits)
+            try await daemon.servingCall {
+                try await daemon.runPrompt(
+                    sessionId: sessionId, text: "hi", streamWire: streamWire,
+                    sessionOptions: model.map { PromptSessionOptions(model: $0) }, limits: limits)
+            }
         }
     }
 

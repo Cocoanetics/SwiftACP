@@ -64,12 +64,12 @@ final class AgentStderrRelay: @unchecked Sendable {
         }
     }
 
-    /// Send what the agent writes to `clientSession` from now on, what waited first.
-    func attach(to clientSession: Session?, logger: String) {
+    /// Send what the agent writes to `caller` from now on, what waited first.
+    func attach(to caller: CallerOutbox?, logger: String) {
         let (chunks, feed) = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(Self.attachedChunkLimit))
         let forwarder = Task {
             for await chunk in chunks {
-                await clientSession?.sendLogNotification(
+                await caller?.post(
                     LogMessage(level: .info, logger: logger, data: toJSONValue(AgentStderrEvent(chunk))))
             }
         }

@@ -299,9 +299,9 @@ extension ACPXDaemonBackend {
         // launch asks for it again, which does no harm. Cleared when the turn ends.
         let wrote = WriteMark()
         // The calling client's MCP session — stream updates to it as log notifications.
-        let clientSession = Self.caller
+        let caller = Self.caller
         let wireFeed = TurnWireFeed(
-            streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: clientSession)
+            streamWire: turn.streamWire, provisional: retriesOnAFreshLaunch, logger: recordId, to: caller)
         // The prompt's result as it crossed the wire: its usage and cost go to the
         // client with the turn's end, in the shape the agent sent them.
         let promptResult = PromptResultCapture()
@@ -316,14 +316,14 @@ extension ACPXDaemonBackend {
         // subscription deterministically: ending it (after `prompt` returns)
         // finishes the stream, so the relay completes having sent every event — in
         // order — and built the agent's message content for the turn.
-        let announceAnswer = Self.announcingTheAnswer(as: sessionId, to: clientSession) { [self] in
+        let announceAnswer = Self.announcingTheAnswer(as: sessionId, to: caller) { [self] in
             await self.promptAnswered(recordId: recordId, turn: turnId)
         }
         let relay = await TurnRelay(
-            connection: connection, sessionId: boundSessionId, logger: recordId, to: clientSession
+            connection: connection, sessionId: boundSessionId, logger: recordId, to: caller
         ) { stream in
             await Self.relay(
-                stream, of: boundSessionId, as: sessionId, into: persister, to: clientSession,
+                stream, of: boundSessionId, as: sessionId, into: persister, to: caller,
                 onAnswered: announceAnswer)
         }
         do {
@@ -372,7 +372,7 @@ extension ACPXDaemonBackend {
                 ? await connection.permissionTotals(for: boundSessionId).counted(since: countedBefore)
                 : PermissionStats()
             await Self.announceTheEnd(
-                of: response, permissions: permissions, result: promptResult, as: sessionId, to: clientSession,
+                of: response, permissions: permissions, result: promptResult, as: sessionId, to: caller,
                 loadError: connected.loadError)
             return fullText
         } catch let unwritten as SessionJournalWriteError {

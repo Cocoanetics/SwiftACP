@@ -99,7 +99,7 @@ extension ACPXDaemonBackend {
     /// diagnostics, in order. Returns the agent's message text.
     static func relay(
         _ stream: AsyncStream<ConnectionEvent>, of boundSessionId: SessionId, as sessionId: String,
-        into persister: TurnPersister, to clientSession: Session?,
+        into persister: TurnPersister, to caller: CallerOutbox?,
         onAnswered: @escaping @Sendable (PromptResponse) async -> Void
     ) async -> String {
         // Accumulate the full streamed text for the MCP result, and fold each
@@ -113,14 +113,14 @@ extension ACPXDaemonBackend {
                 }
                 await persister.apply(note.update, raw: note.rawUpdate)
                 let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
-                await clientSession?.sendLogNotification(
+                await caller?.post(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
             case .inboundRequest(let request)
                 where request.sessionId == nil || request.sessionId == boundSessionId:
                 // The agent's own request (a file write, a permission question), and
                 // the client's refusal of it: acpx's formatter prints both, so they
                 // stream in order with the updates.
-                await clientSession?.sendLogNotification(
+                await caller?.post(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
             case .clientOperation(let operation)
                 where operation.sessionId == nil || operation.sessionId == boundSessionId:
@@ -129,7 +129,7 @@ extension ACPXDaemonBackend {
                 // Streamed in order like an update, so the CLI renders it in place;
                 // not part of the conversation history (the wire log has the
                 // annotated response).
-                await clientSession?.sendLogNotification(
+                await caller?.post(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
             case .promptAnswered(let answered, let response) where answered == boundSessionId:
                 await onAnswered(response)
@@ -146,12 +146,12 @@ extension ACPXDaemonBackend {
     /// them for its result (`toPromptResult`) — and the answer's usage and cost.
     static func announceTheEnd(
         of response: PromptResponse, permissions: PermissionStats, result: PromptResultCapture,
-        as sessionId: String, to clientSession: Session?, loadError: String? = nil
+        as sessionId: String, to caller: CallerOutbox?, loadError: String? = nil
     ) async {
         // No answer crossed the wire: the turn was cancelled before its prompt went out, or
         // between attempts at it — nothing marks it done.
         let unanswered: Bool? = result.result == nil ? true : nil
-        await clientSession?.sendLogNotification(
+        await caller?.post(
             LogMessage(
                 level: .info, logger: sessionId,
                 data: toJSONValue(TurnEndedEvent(
@@ -186,11 +186,11 @@ extension ACPXDaemonBackend {
     /// from the moment the client learns of it has nothing to send. How the turn went —
     /// its permissions among it, which may still be asked — comes with its end.
     static func announcingTheAnswer(
-        as sessionId: String, to clientSession: Session?, markAnswered: @escaping @Sendable () async -> Void
+        as sessionId: String, to caller: CallerOutbox?, markAnswered: @escaping @Sendable () async -> Void
     ) -> @Sendable (PromptResponse) async -> Void {
         { response in
             await markAnswered()
-            await clientSession?.sendLogNotification(
+            await caller?.post(
                 LogMessage(
                     level: .info, logger: sessionId,
                     data: toJSONValue(TurnAnsweredEvent(answeredStopReason: response.stopReason.rawValue))))
