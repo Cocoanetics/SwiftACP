@@ -53,8 +53,9 @@ public actor ACPAgentConnection {
 
     /// Runs the agent's `terminal/*` requests — see ``setTerminalHandler(_:)``.
     var terminalHandler: (any ACPTerminalHandler)?
-    /// Set once ``shutDownTerminals()`` has run.
-    var terminalsShutDown = false
+    /// The one release of the agent's terminals, once ``shutDownTerminals()`` began it: every
+    /// call waits for it, and hears how it went.
+    var terminalShutdown: Task<Void, any Error>?
 
     /// Widen or restore how far `fs/*` may reach. Containment is the default; an
     /// embedder that mediates filesystem access itself can opt out.
@@ -174,7 +175,7 @@ public actor ACPAgentConnection {
         // acpx retires an agent's terminals whenever its connection ends: a disconnected
         // agent can no longer release them. Not awaited, so the end of the connection is
         // not held up by commands being killed; `ACPAgent.close()` awaits it itself.
-        if terminalHandler != nil { Task { await shutDownTerminals() } }
+        if terminalHandler != nil { Task { try? await shutDownTerminals() } }
     }
 
     /// Whether `error` is this layer reporting the connection ended — a request sent
@@ -270,7 +271,7 @@ public actor ACPAgentConnection {
         // The agent's commands go too, as acpx retires its terminals when its client
         // closes. The task keeps the connection until they have; `ACPAgent.close()`
         // awaits the same shutdown itself.
-        if terminalHandler != nil { Task { await shutDownTerminals() } }
+        if terminalHandler != nil { Task { try? await shutDownTerminals() } }
         isClosed = true
         for sink in updateSinks.values { sink.finish() }
         eventSinks.finishAll()

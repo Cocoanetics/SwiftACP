@@ -61,14 +61,17 @@ extension CompareCommand {
                 }
             }
             await capture.follow(handle.connection)
+            let response: PromptResponse
             do {
-                let response = try await prompt(on: handle, agent, job, capture: capture, interrupt: interrupt)
-                await handle.close()
-                return response
+                response = try await prompt(on: handle, agent, job, capture: capture, interrupt: interrupt)
             } catch {
-                await handle.close()
+                // A close that fails is the failure, as closing acpx's client throws over what it
+                // was throwing (#281).
+                try await handle.close()
                 throw error
             }
+            try await handle.close()
+            return response
         }, onInterrupt: { await interrupt.putDown(endInterrupted: $0) })
     }
 

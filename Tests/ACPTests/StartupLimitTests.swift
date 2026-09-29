@@ -117,7 +117,7 @@ import Testing
         await #expect(throws: ClaudeAcpSessionCreateTimeoutError()) {
             _ = try await agent.newSession(cwd: directory.path)
         }
-        await agent.close()
+        try await agent.close()
     }
 
     /// Says when it is gone.

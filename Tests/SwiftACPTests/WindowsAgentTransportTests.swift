@@ -32,7 +32,7 @@ struct WindowsAgentTransportTests {
         #expect(!lifecycle.running)
         #expect(lifecycle.lastExit?.exitCode == 3)
         #expect(lifecycle.lastExit?.unexpectedDuringPrompt == true)
-        await agent.close()
+        try await agent.close()
     }
 
     /// acpx's `AgentStartupError`: the exit, then the agent's stderr with its runs of whitespace
@@ -58,7 +58,7 @@ struct WindowsAgentTransportTests {
         #expect(exit.reason == .processExit)
         #expect(exit.exitCode == 0)
         #expect(!exit.unexpectedDuringPrompt)
-        await agent.close()
+        try await agent.close()
     }
 
     /// An agent that runs on once its stdin ends is ended as acpx ends it, and that is its end: the
@@ -66,7 +66,7 @@ struct WindowsAgentTransportTests {
     @Test(.enabled(if: mockPythonAvailable), arguments: ["EXIT_AGENT_LINGER", "EXIT_AGENT_STUBBORN"])
     func closingAnAgentThatRunsOnRecordsTheSignalThatEndedIt(_ runsOn: String) async throws {
         let agent = try await Self.launch([runsOn: "1"])
-        await agent.close()
+        try await agent.close()
         let exit = try #require(agent.lifecycle?.lastExit)
         #expect(exit.reason == .processExit)
         #expect(exit.signal == "SIGTERM")
@@ -96,7 +96,7 @@ struct WindowsAgentTransportTests {
         let outcome = try await session.run("hi")
         #expect(outcome.stopReason == .endTurn)
         #expect(agent.lifecycle?.running == true)
-        await agent.close()
+        try await agent.close()
         #expect(agent.lifecycle?.running == false)
     }
 }

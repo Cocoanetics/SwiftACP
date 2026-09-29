@@ -1,0 +1,33 @@
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite CleanupFailureTests started.
+􀟈  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() started.
+􀟈  Test aConnectionThatEndedByItselfStillSaysSoOnClose() started.
+􀟈  Test everyCallerOfTheShutdownHearsHowItWent() started.
+􀢄  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() recorded an issue at CleanupFailureTests.swift:78:27: Expectation failed: an error was expected but none was thrown
+􀄵  ACPClientCleanupFailed.self → <not evaluated>
+􀢄  Test aConnectionThatEndedByItselfStillSaysSoOnClose() recorded an issue at CleanupFailureTests.swift:116:15: Expectation failed: an error was expected but none was thrown
+􀄵  ACPClientCleanupFailed.self → <not evaluated>
+􀢄  Test aConnectionThatEndedByItselfStillSaysSoOnClose() failed after 0.002 seconds with 1 issue.
+􀄵  /// A connection that ended by itself shut its terminals down then: closing the agent after
+􀄵  /// still says how that went.
+􀢄  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() recorded an issue at CleanupFailureTests.swift:80:9: Expectation failed: error?.localizedDescription == "ACP client cleanup failed"
+􀄵  error?.localizedDescription == "ACP client cleanup failed" → false
+􀄵    error?.localizedDescription → nil
+􀄵      some → "ACP client cleanup failed"
+􀢄  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() recorded an issue at CleanupFailureTests.swift:81:25: Expectation failed: error?.cause as? TerminalShutdownFailed
+􀄵  error?.cause as? TerminalShutdownFailed → <not evaluated>
+􀄵    error?.cause → nil
+􀄵    TerminalShutdownFailed → Optional<Error>
+􁁛  Test everyCallerOfTheShutdownHearsHowItWent() passed after 0.002 seconds.
+􀢄  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() failed after 0.003 seconds with 3 issues.
+􀄵  /// Closing throws the terminals' failure once the rest is retired: the connection closed.
+􀢄  Suite CleanupFailureTests failed after 0.003 seconds with 4 issues.
+􀄵  /// A terminal cleanup that fails is said where acpx says it (#281): the terminals' shutdown
+􀄵  /// throws once every release was tried — acpx's "Terminal shutdown failed" — and closing the agent
+􀄵  /// throws it on after retiring everything else, as "ACP client cleanup failed". Only a Windows
+􀄵  /// terminal whose processes outlive their cleanup fails for real; a handler stands in for it.
+􀢄  Test run with 3 tests in 1 suite failed after 0.003 seconds with 4 issues.
+Note: Some test targets reported failures:
+  - SwiftACPTests (Swift Testing)

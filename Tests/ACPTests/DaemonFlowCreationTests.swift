@@ -80,7 +80,7 @@ extension DaemonToolsTests {
                 agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory(), name: nil, mcpServers: nil,
                 sessionOptions: nil, creation: SessionCreationMode(holdAgent: true, creationToken: "made"))
             #expect(await daemon.madeCreations["made"] != nil)
-            await (try #require(await daemon.live[id]?.agent)).close()
+            try await (try #require(await daemon.live[id]?.agent)).close()
             _ = try await daemon.runPrompt(sessionId: id, text: "hi", permissionMode: "approve-all", direct: true)
             #expect(await daemon.madeCreations["made"] == nil)
             await daemon.releaseAll()

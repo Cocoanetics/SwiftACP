@@ -437,7 +437,7 @@ actor ACPXDaemonBackend: ACPXBackend {
         guard let entry = live.removeValue(forKey: recordId) else { return }
         // A creation's token keeps its agent no longer: nothing is left for a call-off.
         madeCreations = madeCreations.filter { $0.value.agent !== entry.agent }
-        await entry.agent.close()
+        try? await entry.agent.close()
     }
 
 }

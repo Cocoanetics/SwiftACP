@@ -120,9 +120,9 @@ extension ACPXDaemonBackend {
     func wrapUp(failedAttemptOn entry: Live, error: Error, retried: Bool, of turn: Turn) async {
         if turn.direct {
             await letGoOfDirectAgent(turn.recordId, persister: turn.persister)
-            await entry.agent.close()
+            try? await entry.agent.close()
         } else if ACPAgentConnection.endedTheConnection(error) {
-            await entry.agent.close()
+            try? await entry.agent.close()
         }
         if !retried { await sealControls(of: turn) }
         await turn.persister.applyLifecycle(entry.agent.lifecycle)

@@ -1,0 +1,28 @@
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite CleanupFailureTests started.
+􀟈  Test aConnectionThatEndedByItselfStillSaysSoOnClose() started.
+􀟈  Test everyCallerOfTheShutdownHearsHowItWent() started.
+􀟈  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() started.
+􀢄  Test aConnectionThatEndedByItselfStillSaysSoOnClose() recorded an issue at CleanupFailureTests.swift:116:15: Expectation failed: an error was expected but none was thrown
+􀄵  ACPClientCleanupFailed.self → <not evaluated>
+􀢄  Test aConnectionThatEndedByItselfStillSaysSoOnClose() failed after 0.002 seconds with 1 issue.
+􀄵  /// A connection that ended by itself shut its terminals down then: closing the agent after
+􀄵  /// still says how that went.
+􀢄  Test everyCallerOfTheShutdownHearsHowItWent() recorded an issue at CleanupFailureTests.swift:99:15: Expectation failed: an error was expected but none was thrown
+􀄵  TerminalShutdownFailed.self → <not evaluated>
+􀢄  Test everyCallerOfTheShutdownHearsHowItWent() recorded an issue at CleanupFailureTests.swift:100:15: Expectation failed: an error was expected but none was thrown
+􀄵  TerminalShutdownFailed.self → <not evaluated>
+􀢄  Test everyCallerOfTheShutdownHearsHowItWent() failed after 0.002 seconds with 2 issues.
+􀄵  /// The terminals are shut down once, and every caller hears how it went — one that comes
+􀄵  /// after too.
+􁁛  Test closingSaysTheTerminalsFailedOnceTheRestIsRetired() passed after 0.003 seconds.
+􀢄  Suite CleanupFailureTests failed after 0.003 seconds with 3 issues.
+􀄵  /// A terminal cleanup that fails is said where acpx says it (#281): the terminals' shutdown
+􀄵  /// throws once every release was tried — acpx's "Terminal shutdown failed" — and closing the agent
+􀄵  /// throws it on after retiring everything else, as "ACP client cleanup failed". Only a Windows
+􀄵  /// terminal whose processes outlive their cleanup fails for real; a handler stands in for it.
+􀢄  Test run with 3 tests in 1 suite failed after 0.003 seconds with 3 issues.
+Note: Some test targets reported failures:
+  - SwiftACPTests (Swift Testing)

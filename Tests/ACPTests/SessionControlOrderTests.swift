@@ -41,10 +41,10 @@ struct SessionControlOrderTests {
                 connection: agent.connection, session: session, model: model,
                 configOptions: configOptions, agentCommand: command)
         } catch {
-            await agent.close()
+            try await agent.close()
             throw error
         }
-        await agent.close()
+        try await agent.close()
 
         let lines = (try? String(contentsOf: log, encoding: .utf8))?
             .split(separator: "\n").map(String.init) ?? []

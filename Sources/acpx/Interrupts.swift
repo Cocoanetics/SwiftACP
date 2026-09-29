@@ -333,7 +333,7 @@ final class RunInterrupt: @unchecked Sendable {
                 endInterrupted()
                 launching?.cancel()
             }
-            if let late = try? await launching?.value { await late.close() }
+            if let late = try? await launching?.value { try? await late.close() }
             return
         }
         let connection = agent.connection
@@ -347,6 +347,7 @@ final class RunInterrupt: @unchecked Sendable {
         } else if await !connection.hasRequestsOutstanding {
             endInterrupted()
         }
-        await agent.close()
+        // The interrupt is the run's end, whatever closing says.
+        try? await agent.close()
     }
 }

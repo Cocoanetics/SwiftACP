@@ -52,7 +52,7 @@ struct MockAgentIntegrationTests {
         let agent = try await ACPAgent.launch(
             agent: "mock", cwd: NSTemporaryDirectory(), permission: .approveAll,
             inheritStderr: false, overrides: overrides)
-        defer { Task { await agent.close() } }
+        defer { Task { try? await agent.close() } }
         let session = try await agent.newSession()
 
         let gated: [(ContentBlock, String)] = [
@@ -102,7 +102,7 @@ struct MockAgentIntegrationTests {
         #expect(kinds.contains("tool_call_update"))
         #expect(kinds.contains("agent_message_chunk"))
 
-        await agent.close()
+        try await agent.close()
     }
 
     @Test(.enabled(if: mockPythonAvailable))
@@ -120,7 +120,7 @@ struct MockAgentIntegrationTests {
         #expect(second.text.contains("two"))
         #expect(second.stopReason == .endTurn)
 
-        await agent.close()
+        try await agent.close()
     }
 
     // MARK: - Permission refusals through the spawn client
@@ -184,7 +184,7 @@ struct MockAgentIntegrationTests {
         #expect(outcome.clientOperations.first?.method == ClientOperation.requestPermission)
         #expect(outcome.clientOperations.first?.summary.contains("can end the current turn") == true)
 
-        await agent.close()
+        try await agent.close()
     }
 
     @Test(.enabled(if: mockPythonAvailable))
@@ -216,6 +216,6 @@ struct MockAgentIntegrationTests {
         let reactionAt = try #require(order.firstIndex(of: "update:agent_message_chunk"))
         #expect(operationAt < reactionAt)
 
-        await agent.close()
+        try await agent.close()
     }
 }

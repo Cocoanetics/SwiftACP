@@ -27,16 +27,26 @@ struct FlowAgentSessions: FlowSessionRunner {
         let errors = FlowTurnErrors()
         let stopListening = turn.control.onStop { owner.stop() }
         defer { stopListening() }
+        let outcome: Result<String, Error>
         do {
-            let sessionId = try await run(turn, owner: owner, events: events, errors: errors)
-            await owner.close()
-            await events.finish()
-            return sessionId
+            outcome = .success(try await run(turn, owner: owner, events: events, errors: errors))
         } catch {
-            // acpx's client closes before its turn ends, whatever ended it; what it took in
-            // until then is the turn's.
-            await owner.close()
-            await events.finish()
+            outcome = .failure(error)
+        }
+        // acpx's client closes before its turn ends, whatever ended it; what it took in until
+        // then is the turn's. A close that fails is the turn's failure, over what it had (#281).
+        var closeFailure: Error?
+        do {
+            try await owner.close()
+        } catch {
+            closeFailure = error
+        }
+        await events.finish()
+        if let closeFailure { throw closeFailure }
+        switch outcome {
+        case .success(let sessionId):
+            return sessionId
+        case .failure(let error):
             // acpx's `directExecutionError`: the agent gone — or its launch called off — once
             // the turn was stopped, it fails with why it was stopped.
             if let reason = turn.control.stopReason, error is CancellationError { throw reason }
@@ -170,7 +180,7 @@ final class FlowTurnOwner: @unchecked Sendable {
         }
         if stoppedMeanwhile {
             // Stopped as it came up: nothing else is to be sent it.
-            await agent.close()
+            try? await agent.close()
             throw CancellationError()
         }
         return agent
@@ -202,27 +212,28 @@ final class FlowTurnOwner: @unchecked Sendable {
                     await connection.waitForPromptToSettle(sessionId: prompted)
                 }
             }
-            await Self.close(running, afterUpdatesOf: prompted)
+            // Whether this close fails is said by the turn's own close, which waits for it.
+            try? await Self.close(running, afterUpdatesOf: prompted)
         }
         lock.withLock { self.stopping = task }
     }
 
     /// acpx's `closeOwnedClient`, which the turn ends with: the agent closed, once a stop
-    /// under way has closed it.
-    func close() async {
+    /// under way has closed it — throwing what closing it threw, a stop's close too.
+    func close() async throws {
         let (agent, sessionId, stopping) = lock.withLock { (self.agent, self.sessionId, self.stopping) }
         await stopping?.value
         guard let agent else { return }
-        await Self.close(agent, afterUpdatesOf: sessionId)
+        try await Self.close(agent, afterUpdatesOf: sessionId)
     }
 
     /// Close `agent` once every update of `sessionId` its connection has read is handled.
     /// Closing ends the connection's subscriptions there and then, so an update read but
     /// still on its way to them would be lost to the turn's record, though the turn's
     /// `events.ndjson` has it. acpx's client takes in all it has read before it closes.
-    private static func close(_ agent: ACPAgent, afterUpdatesOf sessionId: SessionId?) async {
+    private static func close(_ agent: ACPAgent, afterUpdatesOf sessionId: SessionId?) async throws {
         if let sessionId { await agent.connection.waitForSessionUpdatesHandled(sessionId: sessionId) }
-        await agent.close()
+        try await agent.close()
     }
 }
 

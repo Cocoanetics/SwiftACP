@@ -71,8 +71,9 @@ public enum SessionEngine {
         let handle = held.agent
         // Ephemeral spawn: acpx closes the agent's stdin, so it exits on EOF
         // (a graceful connection close, not a kill), and records how it went — the
-        // connection closing, seen before the process exits.
-        await handle.close()
+        // connection closing, seen before the process exits. A close that fails fails the
+        // creation, the record unwritten, as acpx's `createSession` closes before it writes.
+        try await handle.close()
         if let lifecycle = handle.lifecycle {
             record.applyLifecycle(lifecycle)
         } else {
@@ -139,7 +140,7 @@ public enum SessionEngine {
                 environment: environment, authCredentials: authCredentials, authPolicy: authPolicy,
                 inheritStderr: inheritStderr, terminalOutputCeiling: terminalOutputCeiling,
                 terminalEnvironment: baseEnvironment, limits: sessionOptions?.limits, onStderr: onStderr, onLog: onLog)
-        }, discardingLate: { await $0.close() })
+        }, discardingLate: { try? await $0.close() })
         do {
             let target = Target(
                 handle: handle, cwd: cwd, mcpServers: mcpServers, meta: meta, model: sessionOptions?.model,
@@ -149,7 +150,7 @@ public enum SessionEngine {
                 if let resumeSessionId { return try await resume(resumeSessionId, on: target) }
                 return try await startSession(on: target)
             } onCancel: {
-                Task { await handle.close() }
+                Task { try? await handle.close() }
             }
             try Task.checkCancellation()
             let advertised = created.models
@@ -179,7 +180,8 @@ public enum SessionEngine {
             let session = ACPSession(id: created.sessionId, agent: handle, meta: created.meta)
             return HeldSession(record: record, agent: handle, session: session)
         } catch {
-            await handle.close()
+            // A close that fails too is the failure, as in acpx's `createSessionWithClient`.
+            try await handle.close()
             throw error
         }
     }
