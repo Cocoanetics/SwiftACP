@@ -98,7 +98,7 @@ struct WindowsTerminalTests {
         #expect(output.exitStatus == TerminalExitStatus(exitCode: 23))
         _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: id))
         await #expect(throws: TerminalError.unknownTerminal(id)) { _ = try await Self.output(manager, id) }
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 
     /// acpx's own Windows check for a command line (openclaw/acpx#797): run through `cmd.exe`, what
@@ -111,7 +111,7 @@ struct WindowsTerminalTests {
         #expect(exit == WaitForTerminalExitResponse(exitCode: 23))
         let output = try await Self.output(manager, id).output
         #expect(Self.lines(output) == ["child-err", "child-out"])
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 
     /// A `.cmd` found on the request's `Path` runs through Node's own shell, as acpx gives it
@@ -135,7 +135,7 @@ struct WindowsTerminalTests {
         #expect(exit == WaitForTerminalExitResponse(exitCode: 7))
         let output = try await Self.output(manager, id).output
         #expect(Self.lines(output) == ["cmd-args a b"])
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 
     /// Killing a command with `args` ends it with Node's `kill`, reported as `SIGTERM`, and ends the
@@ -149,7 +149,7 @@ struct WindowsTerminalTests {
         let exit = try await Self.exit(manager, id)
         #expect(exit == WaitForTerminalExitResponse(signal: "SIGTERM"))
         _ = await pipe.rest()
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 
     /// Killing a command line ends its shell's tree with `taskkill`, as acpx does: first without
@@ -166,7 +166,7 @@ struct WindowsTerminalTests {
         _ = await pipe.rest()
         let output = try await Self.output(manager, id).output
         #expect(!output.contains("after"), "\(output)")
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 
     /// acpx's own Windows check (`terminal-windows-descendants`): a command that exits and leaves a
@@ -186,7 +186,7 @@ struct WindowsTerminalTests {
         _ = try await manager.releaseTerminal(ReleaseTerminalRequest(sessionId: "s", terminalId: id))
         _ = await pipe.rest()
         #expect(!sibling.isExiting)
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 
     /// A command that is not found, and does not read as a command line, fails as Node's `spawn`
@@ -203,7 +203,7 @@ struct WindowsTerminalTests {
         #expect(exit == WaitForTerminalExitResponse(exitCode: 1))
         let output = try await Self.output(manager, id).output
         #expect(output.contains(name + ".cmd"), "\(output)")
-        await manager.shutdown()
+        try await manager.shutdown()
     }
 }
 #endif

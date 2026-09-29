@@ -46,7 +46,7 @@ import JSONRPCSubprocess
 /// Task { for await update in await session.updates() { render(update) } }
 /// let outcome = try await session.run("Explain this project")
 /// print(outcome.text, outcome.stopReason)
-/// await agent.close()
+/// try await agent.close()
 /// ```
 public final class ACPAgent: Sendable {
     public let name: String

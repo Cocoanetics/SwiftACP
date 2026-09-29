@@ -79,7 +79,7 @@ let agent = try await ACPAgent.launch(agent: "claude", cwd: repoPath, permission
 let session = try await agent.newSession()
 let outcome = try await session.run("Explain this project") { update in render(update) }
 print(outcome.text, outcome.stopReason)
-await agent.close()
+try await agent.close()
 ```
 
 Tool-call permission requests are answered by the `PermissionPolicy` (`.approveAll`,
