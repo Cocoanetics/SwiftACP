@@ -159,9 +159,11 @@ extension ClackText {
             }
             let wordLength = width(word)
             if wordLength > columns {
-                let remaining = columns - rowLength
-                let breaksHere = 1 + Int((Double(wordLength - remaining - 1) / Double(columns)).rounded(.down))
-                let breaksNext = Int((Double(wordLength - 1) / Double(columns)).rounded(.down))
+                // In JavaScript's numbers: no room at all (`columns` 0 or less) divides to infinity
+                // or NaN, which compare false, and the word goes a character a row.
+                let remaining = Double(columns - rowLength)
+                let breaksHere = 1 + ((Double(wordLength) - remaining - 1) / Double(columns)).rounded(.down)
+                let breaksNext = (Double(wordLength - 1) / Double(columns)).rounded(.down)
                 if breaksNext < breaksHere { rows.append("") }
                 wrapWord(&rows, word, columns: columns)
                 rowLength = width(rows.last ?? "")
