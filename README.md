@@ -192,8 +192,10 @@ swift run acpx --skill export acpx > acpx-skill.tar
 
 `install` puts the skill where each agent keeps its skills: `--agent` is one of codex, claude,
 portable, vscode, copilot, amp, goose, opencode, factory or cursor, and `--scope` one of repo,
-user or cwd. Given neither on a terminal, acpx asks for them in a wizard; this CLI does not yet,
-and says they are missing. `scripts/skill/embed.sh` embeds the skill of another acpx release.
+user or cwd. Without either, it asks for them on the terminal in acpx's wizard, drawn as acpx
+draws it with @clack/prompts. With standard input piped, it asks on `/dev/tty`. With no terminal
+at all, it reports the missing flags. `scripts/skill/embed.sh` embeds the skill of another acpx
+release.
 
 ## Status
 

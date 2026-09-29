@@ -1,0 +1,26 @@
+{
+ "about": "the agents and scopes asked for, and the install",
+ "arguments": [
+  "acpx"
+ ],
+ "keys": [
+  " ",
+  "\r",
+  "\u001b[B",
+  "\u001b[B",
+  " ",
+  "\r",
+  "\r",
+  "\r"
+ ],
+ "screens": [
+  "\u001b[90m\u250c\u001b[39m  skill-install wizard\r\n\u001b[?25l\u001b[90m\u2502\u001b[39m\r\n\u001b[36m\u25c6\u001b[39m  Agent targets\r\n\u001b[36m\u2502\u001b[39m  \u001b[36m\u25fb\u001b[39m codex \u001b[2m(OpenAI Codex CLI skills (.codex/skills or CODEX_HOME/skills))\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mclaude\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mportable\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mvscode\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mcopilot\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mamp\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mgoose\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mopencode\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mfactory\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mcursor\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u2191/\u2193\u001b[22m to navigate \u2022 \u001b[2mSpace:\u001b[22m select \u2022 \u001b[2mEnter:\u001b[22m confirm\r\n\u001b[36m\u2514\u001b[39m\r\n",
+  "\u001b[999D\u001b[14A\u001b[2B\u001b[2K\u001b[G\u001b[36m\u2502\u001b[39m  \u001b[32m\u25fc\u001b[39m codex \u001b[2m(OpenAI Codex CLI skills (.codex/skills or CODEX_HOME/skills))\u001b[22m\u001b[12B",
+  "\u001b[999D\u001b[14A\u001b[1B\u001b[J\u001b[32m\u25c7\u001b[39m  Agent targets\r\n\u001b[90m\u2502\u001b[39m  \u001b[2mcodex\u001b[22m\r\n\u001b[?25h\u001b[?25l\u001b[90m\u2502\u001b[39m\r\n\u001b[36m\u25c6\u001b[39m  Scope targets\r\n\u001b[36m\u2502\u001b[39m  \u001b[36m\u25fb\u001b[39m repo \u001b[2m(Install to the current git repo root.)\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mcwd\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2muser\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u2191/\u2193\u001b[22m to navigate \u2022 \u001b[2mSpace:\u001b[22m select \u2022 \u001b[2mEnter:\u001b[22m confirm\r\n\u001b[36m\u2514\u001b[39m\r\n",
+  "\u001b[999D\u001b[7A\u001b[2B\u001b[J\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mrepo\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[36m\u25fb\u001b[39m cwd \u001b[2m(Install relative to the current working directory.)\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2muser\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u2191/\u2193\u001b[22m to navigate \u2022 \u001b[2mSpace:\u001b[22m select \u2022 \u001b[2mEnter:\u001b[22m confirm\r\n\u001b[36m\u2514\u001b[39m\r\n",
+  "\u001b[999D\u001b[7A\u001b[3B\u001b[J\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mcwd\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[36m\u25fb\u001b[39m user \u001b[2m(Install to your user-level skills directory.)\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u2191/\u2193\u001b[22m to navigate \u2022 \u001b[2mSpace:\u001b[22m select \u2022 \u001b[2mEnter:\u001b[22m confirm\r\n\u001b[36m\u2514\u001b[39m\r\n",
+  "\u001b[999D\u001b[7A\u001b[4B\u001b[2K\u001b[G\u001b[36m\u2502\u001b[39m  \u001b[32m\u25fc\u001b[39m user \u001b[2m(Install to your user-level skills directory.)\u001b[22m\u001b[3B",
+  "\u001b[999D\u001b[7A\u001b[1B\u001b[J\u001b[32m\u25c7\u001b[39m  Scope targets\r\n\u001b[90m\u2502\u001b[39m  \u001b[2muser\u001b[22m\r\n\u001b[?25h\u001b[?25l\u001b[90m\u2502\u001b[39m\r\n\u001b[36m\u25c6\u001b[39m  Force overwrite if the destination already exists? (--force)\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25cb\u001b[22m \u001b[2mYes\u001b[22m \u001b[2m/\u001b[22m \u001b[32m\u25cf\u001b[39m No\r\n\u001b[36m\u2514\u001b[39m\r\n"
+ ],
+ "beforeSummary": "\u001b[999D\u001b[4A\u001b[1B\u001b[J\u001b[32m\u25c7\u001b[39m  Force overwrite if the destination already exists? (--force)\r\n\u001b[90m\u2502\u001b[39m  \u001b[2mNo\u001b[22m\r\n\u001b[?25h"
+}

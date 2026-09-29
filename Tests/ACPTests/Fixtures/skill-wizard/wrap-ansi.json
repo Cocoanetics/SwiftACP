@@ -1,0 +1,364 @@
+{
+ "cases": [
+  {
+   "text": "abc",
+   "columns": -3,
+   "wrapped": "\na\nb\nc"
+  },
+  {
+   "text": "abc",
+   "columns": -1,
+   "wrapped": "\na\nb\nc"
+  },
+  {
+   "text": "abc",
+   "columns": 0,
+   "wrapped": "\na\nb\nc"
+  },
+  {
+   "text": "abc",
+   "columns": 1,
+   "wrapped": "a\nb\nc"
+  },
+  {
+   "text": "abc",
+   "columns": 2,
+   "wrapped": "ab\nc"
+  },
+  {
+   "text": "abc",
+   "columns": 3,
+   "wrapped": "abc"
+  },
+  {
+   "text": "abc def",
+   "columns": -3,
+   "wrapped": "\na\nb\nc\n \nd\ne\nf"
+  },
+  {
+   "text": "abc def",
+   "columns": -1,
+   "wrapped": "\na\nb\nc\n \nd\ne\nf"
+  },
+  {
+   "text": "abc def",
+   "columns": 0,
+   "wrapped": "\na\nb\nc\n \nd\ne\nf"
+  },
+  {
+   "text": "abc def",
+   "columns": 1,
+   "wrapped": "a\nb\nc\n \nd\ne\nf"
+  },
+  {
+   "text": "abc def",
+   "columns": 2,
+   "wrapped": "ab\nc \nde\nf"
+  },
+  {
+   "text": "abc def",
+   "columns": 3,
+   "wrapped": "abc\n \ndef"
+  },
+  {
+   "text": "abcdef ghi",
+   "columns": -3,
+   "wrapped": "\na\nb\nc\nd\ne\nf\n \ng\nh\ni"
+  },
+  {
+   "text": "abcdef ghi",
+   "columns": -1,
+   "wrapped": "\na\nb\nc\nd\ne\nf\n \ng\nh\ni"
+  },
+  {
+   "text": "abcdef ghi",
+   "columns": 0,
+   "wrapped": "\na\nb\nc\nd\ne\nf\n \ng\nh\ni"
+  },
+  {
+   "text": "abcdef ghi",
+   "columns": 1,
+   "wrapped": "a\nb\nc\nd\ne\nf\n \ng\nh\ni"
+  },
+  {
+   "text": "abcdef ghi",
+   "columns": 2,
+   "wrapped": "ab\ncd\nef\n g\nhi"
+  },
+  {
+   "text": "abcdef ghi",
+   "columns": 3,
+   "wrapped": "abc\ndef\n \nghi"
+  },
+  {
+   "text": " lead",
+   "columns": -3,
+   "wrapped": "\n \nl\ne\na\nd"
+  },
+  {
+   "text": " lead",
+   "columns": -1,
+   "wrapped": "\n \nl\ne\na\nd"
+  },
+  {
+   "text": " lead",
+   "columns": 0,
+   "wrapped": "\n \nl\ne\na\nd"
+  },
+  {
+   "text": " lead",
+   "columns": 1,
+   "wrapped": " \nl\ne\na\nd"
+  },
+  {
+   "text": " lead",
+   "columns": 2,
+   "wrapped": " \nle\nad"
+  },
+  {
+   "text": " lead",
+   "columns": 3,
+   "wrapped": " le\nad"
+  },
+  {
+   "text": "a  b",
+   "columns": -3,
+   "wrapped": "\na\n \n \nb"
+  },
+  {
+   "text": "a  b",
+   "columns": -1,
+   "wrapped": "\na\n \n \nb"
+  },
+  {
+   "text": "a  b",
+   "columns": 0,
+   "wrapped": "\na\n \n \nb"
+  },
+  {
+   "text": "a  b",
+   "columns": 1,
+   "wrapped": "a\n \n \nb"
+  },
+  {
+   "text": "a  b",
+   "columns": 2,
+   "wrapped": "a \n b"
+  },
+  {
+   "text": "a  b",
+   "columns": 3,
+   "wrapped": "a  \nb"
+  },
+  {
+   "text": "\u001b[36mcyan text\u001b[39m",
+   "columns": -3,
+   "wrapped": "\n\u001b\n[\n3\n6\nm\nc\ny\na\nn\n \nt\ne\nx\nt\n\u001b\n[\n3\n9m"
+  },
+  {
+   "text": "\u001b[36mcyan text\u001b[39m",
+   "columns": -1,
+   "wrapped": "\n\u001b\n[\n3\n6\nm\nc\ny\na\nn\n \nt\ne\nx\nt\n\u001b\n[\n3\n9m"
+  },
+  {
+   "text": "\u001b[36mcyan text\u001b[39m",
+   "columns": 0,
+   "wrapped": "\u001b\n[\n3\n6\nm\nc\ny\na\nn\n \nt\ne\nx\nt\n\u001b\n[\n3\n9m"
+  },
+  {
+   "text": "\u001b[36mcyan text\u001b[39m",
+   "columns": 1,
+   "wrapped": "\u001b[36mc\u001b[39m\n\u001b[36my\u001b[39m\n\u001b[36ma\u001b[39m\n\u001b[36mn\u001b[39m\n\u001b[36m \u001b[39m\n\u001b[36mt\u001b[39m\n\u001b[36me\u001b[39m\n\u001b[36mx\u001b[39m\n\u001b[36mt\u001b[39m"
+  },
+  {
+   "text": "\u001b[36mcyan text\u001b[39m",
+   "columns": 2,
+   "wrapped": "\u001b[36mcy\u001b[39m\n\u001b[36man\u001b[39m\n\u001b[36m \u001b[39m\n\u001b[36mte\u001b[39m\n\u001b[36mxt\u001b[39m"
+  },
+  {
+   "text": "\u001b[36mcyan text\u001b[39m",
+   "columns": 3,
+   "wrapped": "\u001b[36mcya\u001b[39m\n\u001b[36mn t\u001b[39m\n\u001b[36mext\u001b[39m"
+  },
+  {
+   "text": "\u001b[2m(hint)\u001b[22m x",
+   "columns": -3,
+   "wrapped": "\n\u001b\n[\n2\nm\n(\nh\ni\nn\nt\n)\n\u001b\n[\n2\n2m\n \nx"
+  },
+  {
+   "text": "\u001b[2m(hint)\u001b[22m x",
+   "columns": -1,
+   "wrapped": "\n\u001b\n[\n2\nm\n(\nh\ni\nn\nt\n)\n\u001b\n[\n2\n2m\n \nx"
+  },
+  {
+   "text": "\u001b[2m(hint)\u001b[22m x",
+   "columns": 0,
+   "wrapped": "\u001b\n[\n2\nm\n(\nh\ni\nn\nt\n)\n\u001b\n[\n2\n2m\n \nx"
+  },
+  {
+   "text": "\u001b[2m(hint)\u001b[22m x",
+   "columns": 1,
+   "wrapped": "\u001b[2m(\u001b[22m\n\u001b[2mh\u001b[22m\n\u001b[2mi\u001b[22m\n\u001b[2mn\u001b[22m\n\u001b[2mt\u001b[22m\n\u001b[2m)\u001b[22m\n \nx"
+  },
+  {
+   "text": "\u001b[2m(hint)\u001b[22m x",
+   "columns": 2,
+   "wrapped": "\u001b[2m(h\u001b[22m\n\u001b[2min\u001b[22m\n\u001b[2mt)\u001b[22m\n x"
+  },
+  {
+   "text": "\u001b[2m(hint)\u001b[22m x",
+   "columns": 3,
+   "wrapped": "\u001b[2m(hi\u001b[22m\n\u001b[2mnt)\u001b[22m\n x"
+  },
+  {
+   "text": "日本語 text",
+   "columns": -3,
+   "wrapped": "\n日\n本\n語\n \nt\ne\nx\nt"
+  },
+  {
+   "text": "日本語 text",
+   "columns": -1,
+   "wrapped": "\n日\n本\n語\n \nt\ne\nx\nt"
+  },
+  {
+   "text": "日本語 text",
+   "columns": 0,
+   "wrapped": "\n日\n本\n語\n \nt\ne\nx\nt"
+  },
+  {
+   "text": "日本語 text",
+   "columns": 1,
+   "wrapped": "\n日\n本\n語\n \nt\ne\nx\nt"
+  },
+  {
+   "text": "日本語 text",
+   "columns": 2,
+   "wrapped": "日\n本\n語\n \nte\nxt"
+  },
+  {
+   "text": "日本語 text",
+   "columns": 3,
+   "wrapped": "日\n本\n語 \ntex\nt"
+  },
+  {
+   "text": "é café",
+   "columns": -3,
+   "wrapped": "\né\n \nc\na\nf\né"
+  },
+  {
+   "text": "é café",
+   "columns": -1,
+   "wrapped": "\né\n \nc\na\nf\né"
+  },
+  {
+   "text": "é café",
+   "columns": 0,
+   "wrapped": "\né\n \nc\na\nf\né"
+  },
+  {
+   "text": "é café",
+   "columns": 1,
+   "wrapped": "é\n \nc\na\nf\né"
+  },
+  {
+   "text": "é café",
+   "columns": 2,
+   "wrapped": "é \nca\nfé"
+  },
+  {
+   "text": "é café",
+   "columns": 3,
+   "wrapped": "é c\nafé"
+  },
+  {
+   "text": "",
+   "columns": -3,
+   "wrapped": ""
+  },
+  {
+   "text": "",
+   "columns": -1,
+   "wrapped": ""
+  },
+  {
+   "text": "",
+   "columns": 0,
+   "wrapped": ""
+  },
+  {
+   "text": "",
+   "columns": 1,
+   "wrapped": ""
+  },
+  {
+   "text": "",
+   "columns": 2,
+   "wrapped": ""
+  },
+  {
+   "text": "",
+   "columns": 3,
+   "wrapped": ""
+  },
+  {
+   "text": "x\ny",
+   "columns": -3,
+   "wrapped": "\nx\n\ny"
+  },
+  {
+   "text": "x\ny",
+   "columns": -1,
+   "wrapped": "\nx\n\ny"
+  },
+  {
+   "text": "x\ny",
+   "columns": 0,
+   "wrapped": "\nx\n\ny"
+  },
+  {
+   "text": "x\ny",
+   "columns": 1,
+   "wrapped": "x\ny"
+  },
+  {
+   "text": "x\ny",
+   "columns": 2,
+   "wrapped": "x\ny"
+  },
+  {
+   "text": "x\ny",
+   "columns": 3,
+   "wrapped": "x\ny"
+  },
+  {
+   "text": "│  Agent targets",
+   "columns": -3,
+   "wrapped": "\n│\n \n \nA\ng\ne\nn\nt\n \nt\na\nr\ng\ne\nt\ns"
+  },
+  {
+   "text": "│  Agent targets",
+   "columns": -1,
+   "wrapped": "\n│\n \n \nA\ng\ne\nn\nt\n \nt\na\nr\ng\ne\nt\ns"
+  },
+  {
+   "text": "│  Agent targets",
+   "columns": 0,
+   "wrapped": "\n│\n \n \nA\ng\ne\nn\nt\n \nt\na\nr\ng\ne\nt\ns"
+  },
+  {
+   "text": "│  Agent targets",
+   "columns": 1,
+   "wrapped": "│\n \n \nA\ng\ne\nn\nt\n \nt\na\nr\ng\ne\nt\ns"
+  },
+  {
+   "text": "│  Agent targets",
+   "columns": 2,
+   "wrapped": "│ \n A\nge\nnt\n t\nar\nge\nts"
+  },
+  {
+   "text": "│  Agent targets",
+   "columns": 3,
+   "wrapped": "│  \nAge\nnt \ntar\nget\ns"
+  }
+ ]
+}

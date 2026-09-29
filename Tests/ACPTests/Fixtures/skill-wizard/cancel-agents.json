@@ -1,0 +1,13 @@
+{
+ "about": "Ctrl-C at the agents",
+ "arguments": [
+  "acpx"
+ ],
+ "keys": [
+  "\u0003"
+ ],
+ "screens": [
+  "\u001b[90m\u250c\u001b[39m  skill-install wizard\r\n\u001b[?25l\u001b[90m\u2502\u001b[39m\r\n\u001b[36m\u25c6\u001b[39m  Agent targets\r\n\u001b[36m\u2502\u001b[39m  \u001b[36m\u25fb\u001b[39m codex \u001b[2m(OpenAI Codex CLI skills (.codex/skills or CODEX_HOME/skills))\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mclaude\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mportable\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mvscode\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mcopilot\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mamp\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mgoose\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mopencode\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mfactory\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u25fb\u001b[22m \u001b[2mcursor\u001b[22m\r\n\u001b[36m\u2502\u001b[39m  \u001b[2m\u2191/\u2193\u001b[22m to navigate \u2022 \u001b[2mSpace:\u001b[22m select \u2022 \u001b[2mEnter:\u001b[22m confirm\r\n\u001b[36m\u2514\u001b[39m\r\n",
+  "\u001b[999D\u001b[14A\u001b[1B\u001b[J\u001b[31m\u25a0\u001b[39m  Agent targets\r\n\u001b[90m\u2502\u001b[39m\r\n\u001b[?25h\u001b[90m\u2502\u001b[39m\r\n\u001b[90m\u2514\u001b[39m  Install cancelled.\r\n\r\n"
+ ]
+}
