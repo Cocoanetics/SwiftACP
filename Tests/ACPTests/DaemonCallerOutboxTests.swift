@@ -88,8 +88,8 @@ extension DaemonToolsTests {
         defer { first.letThrough(); second.letThrough() }
         let (firstOutbox, secondOutbox) = (await Self.outbox(on: first, limits), await Self.outbox(on: second, limits))
         for outbox in [firstOutbox, secondOutbox] {
-            outbox.post(Self.log("one"))
-            outbox.post(Self.log("two"))
+            await outbox.post(Self.log("one"))
+            await outbox.post(Self.log("two"))
         }
         #expect(!firstOutbox.isDropped && secondOutbox.isDropped)
         await secondOutbox.flush()
@@ -109,8 +109,8 @@ extension DaemonToolsTests {
         defer { first.letThrough(); second.letThrough() }
         let (firstOutbox, secondOutbox) = (await Self.outbox(on: first, limits), await Self.outbox(on: second, limits))
         for outbox in [firstOutbox, secondOutbox] {
-            outbox.post(Self.log("in flight"))
-            outbox.post(Self.log(String(repeating: "x", count: 100)))
+            await outbox.post(Self.log("in flight"))
+            await outbox.post(Self.log(String(repeating: "x", count: 100)))
         }
         #expect(!firstOutbox.isDropped && secondOutbox.isDropped)
         try await withTimeout(milliseconds: 10_000) { await second.disconnected() }
@@ -148,11 +148,11 @@ extension DaemonToolsTests {
         await session.setTransport(client)
         await session.setMinimumLogLevel(.warning)
         let limits = CallerOutbox.Limits(callBytes: 1 << 10)
-        let outbox = CallerOutbox(session: session, minimumLevel: await session.minimumLogLevel, limits: limits)
+        let outbox = CallerOutbox(session: session, limits: limits)
         // A warning goes out, and waits for the client; the info behind it would wait too.
-        outbox.post(LogMessage(level: .warning, data: .string("warning")))
+        await outbox.post(LogMessage(level: .warning, data: .string("warning")))
         await client.sendWaits()
-        for _ in 0 ..< 100 { outbox.post(Self.log(String(repeating: "x", count: 100))) }
+        for _ in 0 ..< 100 { await outbox.post(Self.log(String(repeating: "x", count: 100))) }
         #expect(!outbox.isDropped)
         #expect(limits.budget.held == (0, 0))
         client.letThrough()
@@ -160,12 +160,27 @@ extension DaemonToolsTests {
         #expect(client.sentCount == 1 && !client.isDisconnected)
     }
 
+    /// A level the client lowers during a call holds for what is posted from then on, as
+    /// `Session.sendLogNotification` reads the level each time.
+    @Test func aLoweredLevelHoldsForWhatFollows() async throws {
+        let client = CallingClient()
+        let session = Session(id: UUID())
+        await session.setTransport(client)
+        await session.setMinimumLogLevel(.warning)
+        let outbox = CallerOutbox(session: session)
+        await outbox.post(Self.log("before"))
+        await session.setMinimumLogLevel(.info)
+        await outbox.post(Self.log("after"))
+        await outbox.flush()
+        #expect(client.logs == [.string("after")])
+    }
+
     /// However many wait, all go out, in order, once the client reads.
     @Test func manyWaitingGoOutInOrder() async throws {
         let client = StoppedClient()
         defer { client.letThrough() }
         let outbox = await Self.outbox(on: client, CallerOutbox.Limits())
-        for index in 0 ..< 3000 { outbox.post(Self.log("\(index)")) }
+        for index in 0 ..< 3000 { await outbox.post(Self.log("\(index)")) }
         client.letThrough()
         await outbox.flush()
         #expect(client.texts == (0 ..< 3000).map { "\($0)" })
@@ -181,12 +196,12 @@ extension DaemonToolsTests {
         await session.work { session in await session.sendLogNotification(message) }
         await session.setTransport(posted)
         let outbox = CallerOutbox(session: session)
-        outbox.post(message)
+        await outbox.post(message)
         await outbox.flush()
         #expect(posted.sentData == direct.sentData && posted.sentData.count == 1)
 
         await session.setMinimumLogLevel(.warning)
-        outbox.post(message)
+        await outbox.post(message)
         await outbox.flush()
         #expect(posted.sentData.count == 1, "a message below the client's level went out")
     }
@@ -198,7 +213,7 @@ extension DaemonToolsTests {
         let session = Session(id: UUID())
         await session.setTransport(client)
         let outbox = CallerOutbox(session: session)
-        await Task.detached { outbox.post(Self.log("from nowhere")) }.value
+        await Task.detached { await outbox.post(Self.log("from nowhere")) }.value
         await outbox.flush()
         let id = await session.id
         #expect(client.sentAs == [id])

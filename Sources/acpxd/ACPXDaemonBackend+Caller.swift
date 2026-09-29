@@ -26,7 +26,7 @@ extension ACPXDaemonBackend {
         isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T
     ) async throws -> T {
         guard let session = Session.current else { return try await work() }
-        let outbox = CallerOutbox(session: session, minimumLevel: await session.minimumLogLevel)
+        let outbox = CallerOutbox(session: session)
         let outcome: Result<T, Error>
         do {
             outcome = .success(try await CallerOutbox.$current.withValue(outbox) { try await work() })
@@ -64,7 +64,7 @@ extension ACPXDaemonBackend {
         return { messages in
             errors?.observe(messages)
             for message in messages {
-                caller?.post(LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
+                await caller?.post(LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
             }
         }
     }

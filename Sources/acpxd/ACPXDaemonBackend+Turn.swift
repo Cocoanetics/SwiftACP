@@ -113,14 +113,14 @@ extension ACPXDaemonBackend {
                 }
                 await persister.apply(note.update, raw: note.rawUpdate)
                 let payload = SessionNotification(sessionId: boundSessionId, update: note.update)
-                caller?.post(
+                await caller?.post(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(payload)))
             case .inboundRequest(let request)
                 where request.sessionId == nil || request.sessionId == boundSessionId:
                 // The agent's own request (a file write, a permission question), and
                 // the client's refusal of it: acpx's formatter prints both, so they
                 // stream in order with the updates.
-                caller?.post(
+                await caller?.post(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(request)))
             case .clientOperation(let operation)
                 where operation.sessionId == nil || operation.sessionId == boundSessionId:
@@ -129,7 +129,7 @@ extension ACPXDaemonBackend {
                 // Streamed in order like an update, so the CLI renders it in place;
                 // not part of the conversation history (the wire log has the
                 // annotated response).
-                caller?.post(
+                await caller?.post(
                     LogMessage(level: .info, logger: sessionId, data: toJSONValue(operation)))
             case .promptAnswered(let answered, let response) where answered == boundSessionId:
                 await onAnswered(response)
@@ -151,7 +151,7 @@ extension ACPXDaemonBackend {
         // No answer crossed the wire: the turn was cancelled before its prompt went out, or
         // between attempts at it — nothing marks it done.
         let unanswered: Bool? = result.result == nil ? true : nil
-        caller?.post(
+        await caller?.post(
             LogMessage(
                 level: .info, logger: sessionId,
                 data: toJSONValue(TurnEndedEvent(
@@ -190,7 +190,7 @@ extension ACPXDaemonBackend {
     ) -> @Sendable (PromptResponse) async -> Void {
         { response in
             await markAnswered()
-            caller?.post(
+            await caller?.post(
                 LogMessage(
                     level: .info, logger: sessionId,
                     data: toJSONValue(TurnAnsweredEvent(answeredStopReason: response.stopReason.rawValue))))

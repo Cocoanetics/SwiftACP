@@ -69,7 +69,7 @@ final class AgentStderrRelay: @unchecked Sendable {
         let (chunks, feed) = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(Self.attachedChunkLimit))
         let forwarder = Task {
             for await chunk in chunks {
-                caller?.post(
+                await caller?.post(
                     LogMessage(level: .info, logger: logger, data: toJSONValue(AgentStderrEvent(chunk))))
             }
         }

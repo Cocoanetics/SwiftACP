@@ -78,7 +78,7 @@ final class TurnWireFeed: @unchecked Sendable {
             for await item in items {
                 switch item {
                 case .message(let message):
-                    caller?.post(
+                    await caller?.post(
                         LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
                 case .sent(let waiter):
                     waiter.resume()
@@ -220,7 +220,7 @@ actor TurnRelay {
         consumer = Task {
             let earlier = await previous.value
             for message in held {
-                caller?.post(
+                await caller?.post(
                     LogMessage(level: .info, logger: logger, data: toJSONValue(message)))
             }
             return earlier + (await relaying(stream))

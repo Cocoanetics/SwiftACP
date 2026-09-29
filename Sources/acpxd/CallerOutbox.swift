@@ -65,22 +65,19 @@ final class CallerOutbox: @unchecked Sendable {
     private var idle: [CheckedContinuation<Void, Never>] = []
     /// The disconnect past a bound, which the call's end waits for (``flush()``).
     private var disconnection: Task<Void, Never>?
-    /// The client's log level as last read: what is below it is neither held nor counted.
-    private var minimumLevel: LogLevel
 
-    /// An outbox for `session`'s client, whose log level is `minimumLevel` to begin with.
-    init(session: Session, minimumLevel: LogLevel = .info, limits: Limits = CallerOutbox.limits) {
+    init(session: Session, limits: Limits = CallerOutbox.limits) {
         self.session = session
-        self.minimumLevel = minimumLevel
         self.limits = limits
     }
 
     /// Send `message` after those before it: at once when none goes out, else once they
-    /// have — as acpx writes to the socket what it takes, and spools the rest.
-    func post(_ message: LogMessage) {
+    /// have — as acpx writes to the socket what it takes, and spools the rest. Waits only to
+    /// read the client's log level: below it, the message would never go out, so it takes no
+    /// room either, as ``Session/sendLogNotification(_:)`` never sends it.
+    func post(_ message: LogMessage) async {
         enum Outcome { case waits, startsSending, overflows }
-        // Below the client's level it would never go out, so it takes no room either.
-        guard message.level.isAtLeast(lock.withLock({ minimumLevel })), let frame = Self.frame(of: message) else {
+        guard message.level.isAtLeast(await session.minimumLogLevel), let frame = Self.frame(of: message) else {
             return
         }
         let outcome: Outcome = lock.withLock {
@@ -140,9 +137,7 @@ final class CallerOutbox: @unchecked Sendable {
     private func drain() async {
         await session.work { session in
             while let (frame, level) = self.next() {
-                let minimum = await session.minimumLogLevel
-                self.lock.withLock { self.minimumLevel = minimum }
-                guard level.isAtLeast(minimum) else { continue }
+                guard level.isAtLeast(await session.minimumLogLevel) else { continue }
                 try? await session.transport?.send(frame)
             }
         }
