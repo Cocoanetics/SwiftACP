@@ -63,9 +63,15 @@ final class CallerOutbox: @unchecked Sendable {
     /// Counted among the calls with output waiting.
     private var holdsSlot = false
     private var idle: [CheckedContinuation<Void, Never>] = []
+    /// The disconnect past a bound, which the call's end waits for (``flush()``).
+    private var disconnection: Task<Void, Never>?
+    /// The client's log level as last read: what is below it is neither held nor counted.
+    private var minimumLevel: LogLevel
 
-    init(session: Session, limits: Limits = CallerOutbox.limits) {
+    /// An outbox for `session`'s client, whose log level is `minimumLevel` to begin with.
+    init(session: Session, minimumLevel: LogLevel = .info, limits: Limits = CallerOutbox.limits) {
         self.session = session
+        self.minimumLevel = minimumLevel
         self.limits = limits
     }
 
@@ -73,7 +79,10 @@ final class CallerOutbox: @unchecked Sendable {
     /// have — as acpx writes to the socket what it takes, and spools the rest.
     func post(_ message: LogMessage) {
         enum Outcome { case waits, startsSending, overflows }
-        guard let frame = Self.frame(of: message) else { return }
+        // Below the client's level it would never go out, so it takes no room either.
+        guard message.level.isAtLeast(lock.withLock({ minimumLevel })), let frame = Self.frame(of: message) else {
+            return
+        }
         let outcome: Outcome = lock.withLock {
             guard !dropped else { return .waits }
             guard sending else {
@@ -85,6 +94,8 @@ final class CallerOutbox: @unchecked Sendable {
             guard waitingBytes + bytes <= limits.callBytes,
                   limits.budget.reserve(bytes, newCall: !holdsSlot, limits: limits) else {
                 dropAll()
+                let session = session
+                disconnection = Task { await session.disconnect() }
                 return .overflows
             }
             holdsSlot = true
@@ -93,15 +104,12 @@ final class CallerOutbox: @unchecked Sendable {
             return .waits
         }
         switch outcome {
-        case .waits:
+        case .waits, .overflows:
             break
         case .startsSending:
             // The outbox's own task: what it sends outlives the post, and the call's end waits
             // for it (``flush()``).
             Task { await self.drain() }
-        case .overflows:
-            let session = session
-            Task { await session.disconnect() }
         }
     }
 
@@ -110,7 +118,9 @@ final class CallerOutbox: @unchecked Sendable {
         lock.withLock { dropped }
     }
 
-    /// Once all that was posted has gone out — or the client was disconnected, and it never will.
+    /// Once all that was posted has gone out — or the client was disconnected, and it never will:
+    /// its disconnect done, so that the call's result does not reach it first, as a success
+    /// that lost part of its output.
     func flush() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let done: Bool = lock.withLock {
@@ -120,6 +130,7 @@ final class CallerOutbox: @unchecked Sendable {
             }
             if done { continuation.resume() }
         }
+        await lock.withLock({ disconnection })?.value
     }
 
     /// Send what is posted, in order, until nothing waits — as the client's session, which a
@@ -129,7 +140,9 @@ final class CallerOutbox: @unchecked Sendable {
     private func drain() async {
         await session.work { session in
             while let (frame, level) = self.next() {
-                guard level.isAtLeast(await session.minimumLogLevel) else { continue }
+                let minimum = await session.minimumLogLevel
+                self.lock.withLock { self.minimumLevel = minimum }
+                guard level.isAtLeast(minimum) else { continue }
                 try? await session.transport?.send(frame)
             }
         }

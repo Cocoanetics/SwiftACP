@@ -71,7 +71,9 @@ extension DaemonToolsTests {
                     }
                 }
                 #expect(reply.count == 200_000, "the turn ended early")
-                try await withTimeout(milliseconds: 10_000) { await stopped.disconnected() }
+                // The call ends only once its client is disconnected, so no result reaches the
+                // client first, as though nothing of its output had been dropped.
+                #expect(stopped.isDisconnected, "the call ended before its client was disconnected")
                 #expect(stopped.sentCount <= 1)
                 #expect(limits.budget.held == (0, 0))
             }
@@ -90,7 +92,8 @@ extension DaemonToolsTests {
             outbox.post(Self.log("two"))
         }
         #expect(!firstOutbox.isDropped && secondOutbox.isDropped)
-        try await withTimeout(milliseconds: 10_000) { await second.disconnected() }
+        await secondOutbox.flush()
+        #expect(second.isDisconnected, "the flush ended before the client was disconnected")
         first.letThrough()
         await firstOutbox.flush()
         #expect(first.sentCount == 2)
@@ -134,6 +137,27 @@ extension DaemonToolsTests {
         await outbox.flush()
         #expect(client.sent <= 1, "\(client.sent) chunks went out past the bound")
         #expect(limits.budget.held == (0, 0))
+    }
+
+    /// What is below the client's log level takes no room: past the call's bound in messages the
+    /// client would never be sent, it is not disconnected, and nothing is counted.
+    @Test func whatTheClientsLevelSuppressesTakesNoRoom() async throws {
+        let client = StoppedClient()
+        defer { client.letThrough() }
+        let session = Session(id: UUID())
+        await session.setTransport(client)
+        await session.setMinimumLogLevel(.warning)
+        let limits = CallerOutbox.Limits(callBytes: 1 << 10)
+        let outbox = CallerOutbox(session: session, minimumLevel: await session.minimumLogLevel, limits: limits)
+        // A warning goes out, and waits for the client; the info behind it would wait too.
+        outbox.post(LogMessage(level: .warning, data: .string("warning")))
+        await client.sendWaits()
+        for _ in 0 ..< 100 { outbox.post(Self.log(String(repeating: "x", count: 100))) }
+        #expect(!outbox.isDropped)
+        #expect(limits.budget.held == (0, 0))
+        client.letThrough()
+        await outbox.flush()
+        #expect(client.sentCount == 1 && !client.isDisconnected)
     }
 
     /// However many wait, all go out, in order, once the client reads.
@@ -204,6 +228,7 @@ final class StoppedClient: Transport, @unchecked Sendable {
     private let disconnection = HoldGate()
     private let lock = NSLock()
     private var sent: [Data] = []
+    private var marked = false
 
     func start() async throws {}
     func run() async throws {}
@@ -218,6 +243,10 @@ final class StoppedClient: Transport, @unchecked Sendable {
     func disconnect(_ session: Session) async {
         disconnection.open()
         gate.open()
+        // Marked a few hops on, so that whoever returned before the disconnect finished sees it
+        // unmarked.
+        for _ in 0 ..< 3 { await Task.yield() }
+        lock.withLock { marked = true }
     }
 
     func letThrough() {
@@ -235,6 +264,9 @@ final class StoppedClient: Transport, @unchecked Sendable {
     }
 
     var sentCount: Int { lock.withLock { sent.count } }
+
+    /// Whether the disconnect has finished.
+    var isDisconnected: Bool { lock.withLock { marked } }
 
     /// The text each message sent carried as its data.
     var texts: [String] {
