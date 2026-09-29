@@ -16,6 +16,33 @@ public enum NodePath {
         return joined.hasSuffix("/") && normalized != "/" ? normalized + "/" : normalized
     }
 
+    /// `path.join(...parts)`: the parts that are not empty joined with `/` and normalized — never
+    /// resolved against a directory, so what is relative stays relative; `.` when all are empty.
+    public static func joined(_ parts: String...) -> String {
+        let present = parts.filter { !$0.isEmpty }
+        return present.isEmpty ? "." : normalize(present.joined(separator: "/"))
+    }
+
+    /// `path.normalize(path)`: `.` and empty parts gone, and each `..` taking the part before it
+    /// — kept at the start of a relative path, dropped at the root — a trailing `/` kept.
+    public static func normalize(_ path: String) -> String {
+        guard !path.isEmpty else { return "." }
+        let isAbsolute = path.hasPrefix("/")
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") where part != "." {
+            if part != ".." {
+                parts.append(part)
+            } else if let last = parts.last, last != ".." {
+                parts.removeLast()
+            } else if !isAbsolute {
+                parts.append(part)
+            }
+        }
+        let body = parts.joined(separator: "/")
+        if body.isEmpty { return isAbsolute ? "/" : (path.hasSuffix("/") ? "./" : ".") }
+        return (isAbsolute ? "/" : "") + body + (path.hasSuffix("/") ? "/" : "")
+    }
+
     /// `path.relative(from, to)`: the way from one to the other, `""` when they are one.
     static func relative(from: String, to: String) -> String {
         let (start, end) = (resolve(from).split(separator: "/"), resolve(to).split(separator: "/"))
@@ -26,7 +53,7 @@ public enum NodePath {
     }
 
     /// `path.dirname(path)`: all of it but its last part — `.` when it has only one.
-    static func dirname(_ path: String) -> String {
+    public static func dirname(_ path: String) -> String {
         var trimmed = Substring(path)
         while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed = trimmed.dropLast() }
         guard let slash = trimmed.lastIndex(of: "/") else { return "." }
@@ -45,7 +72,7 @@ public enum NodePath {
 
     /// Node's message for a failed `syscall` on `path`, as libuv names the error:
     /// `ENOENT: no such file or directory, open '<path>'`.
-    static func errorMessage(_ code: Int32, syscall: String, path: String? = nil) -> String {
+    public static func errorMessage(_ code: Int32, syscall: String, path: String? = nil) -> String {
         let (name, text) = libuvErrors[code] ?? ("E\(code)", String(cString: strerror(code)).lowercased())
         return "\(name): \(text), \(syscall)" + (path.map { " '\($0)'" } ?? "")
     }

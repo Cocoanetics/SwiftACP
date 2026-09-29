@@ -12,15 +12,23 @@ enum Console {
         private var stdout = ""
         private var stderr = ""
         private var both = ""
+        private var stdoutBytes = Data()
 
         var out: String { lock.withLock { stdout } }
         var err: String { lock.withLock { stderr } }
         /// Both streams as they were written, in order, as `2>&1` shows them.
         var merged: String { lock.withLock { both } }
+        /// Every byte written to stdout, text or not.
+        var outBytes: Data { lock.withLock { stdoutBytes } }
 
         fileprivate func write(_ text: String, toStandardError: Bool) {
+            write(Data(text.utf8), toStandardError: toStandardError)
+        }
+
+        fileprivate func write(_ data: Data, toStandardError: Bool) {
+            let text = String(decoding: data, as: UTF8.self)
             lock.withLock {
-                if toStandardError { stderr += text } else { stdout += text }
+                if toStandardError { stderr += text } else { stdout += text; stdoutBytes += data }
                 both += text
             }
         }
@@ -49,6 +57,28 @@ enum Console {
     }
 
     static func errLine(_ text: String) { err(text + "\n") }
+
+    /// Bytes to stdout as they are: a tar, say.
+    static func outBytes(_ data: Data) {
+        if let capture {
+            capture.write(data, toStandardError: false)
+            return
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        FileHandle.standardOutput.write(data)
+    }
+
+    /// Bytes to stderr as they are: what another program said there.
+    static func errBytes(_ data: Data) {
+        if let capture {
+            capture.write(data, toStandardError: true)
+            return
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        FileHandle.standardError.write(data)
+    }
 }
 
 /// ANSI styling for stderr-bound CLI chrome (banners, permission prompts).

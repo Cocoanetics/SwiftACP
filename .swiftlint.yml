@@ -12,6 +12,8 @@ excluded:
   - Tests/ACPTests/Fixtures
   # The flow host's JavaScript, embedded by scripts/flow-host/build.sh.
   - Sources/ACPXFlows/FlowHostScripts.swift
+  # acpx's bundled skill, embedded by scripts/skill/embed.sh.
+  - Sources/acpx/BundledSkill.swift
 
 disabled_rules:
   # The Data -> String conversions here decode JSONEncoder output, which is

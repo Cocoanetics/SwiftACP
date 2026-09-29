@@ -53,6 +53,8 @@ enum Router {
             Console.out(ACPVersion.current + "\n")
             return ExitCodes.success
         }
+        // Then `--skill`, anywhere among the arguments, before any config (#249).
+        if Skillflag.handles(rawArgs) { return Skillflag.run(rawArgs) }
         // acpx loads the config once, from the leading `--cwd` (or `compare`'s own) and
         // the leading `--mcp-config` — before commander has parsed anything.
         let base = physicalCWD()
