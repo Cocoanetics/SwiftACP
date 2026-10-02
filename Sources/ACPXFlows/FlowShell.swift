@@ -7,7 +7,7 @@ import Darwin
 #endif
 
 /// acpx's shell action rules that need no process (`src/flows/executors/shell.ts` and
-/// `shell-output.ts`, v0.19.3): how a command is shown, what a failure says, and the
+/// `shell-output.ts`, v0.19.4): how a command is shown, what a failure says, and the
 /// timeout and capture limit a command runs under.
 enum FlowShell {
     /// acpx's `renderShellCommand`: the command, then each argument as `JSON.stringify`
@@ -17,47 +17,28 @@ enum FlowShell {
         return rendered.isEmpty ? command : "\(command) \(rendered)"
     }
 
-    /// acpx's `resolveShellActionTimeoutMs`: the value as given when JavaScript's `> 0`
-    /// holds for it — a positive number, or a string, boolean or list that converts to one
-    /// — else no deadline: `0`, a negative number, `NaN`, and what converts to none of them.
-    static func resolveTimeout(_ timeoutMs: WireJSON?) -> WireJSON? {
-        guard let timeoutMs, javaScriptNumber(timeoutMs) > 0 else { return nil }
-        return timeoutMs
+    /// acpx's `resolveShellActionTimeoutMs`, which is its `resolveFlowTimeoutMs`
+    /// (``FlowTimer/resolveTimeoutMs(_:)``): no deadline for `undefined` or for nothing
+    /// positive; a finite number within Node's timer limit as given; anything else — a
+    /// string, `null`, a boolean, a list, an object, `NaN` or an infinity — refused with
+    /// acpx's `TypeError`, before the command is started (openclaw/acpx#812).
+    static func resolveTimeout(_ timeoutMs: WireJSON?) throws -> Double? {
+        guard let timeoutMs else { return nil }
+        guard case .number(let delay) = timeoutMs else { throw FlowTimerLimitError() }
+        return try FlowTimer.resolveTimeoutMs(delay)
     }
 
-    /// The delay Node's `setTimeout` runs `timeout` after: its number, at least 1 ms. Node
-    /// runs a delay above 2,147,483,647 ms after 1 ms as well, which times the command out
-    /// at once (openclaw/acpx#812); here such a delay is taken as given.
-    static func timerDelayMs(_ timeout: WireJSON) -> Double {
-        let delay = javaScriptNumber(timeout)
-        return delay >= 1 ? delay : 1
-    }
-
-    /// JavaScript's `Number(value)` for a JSON value: a string as `Number` reads it, a
-    /// boolean as 1 or 0, a list as the text it joins to, `null` as 0, an object as NaN.
-    static func javaScriptNumber(_ value: WireJSON) -> Double {
-        switch value {
-        case .number(let number): return number
-        case .string(let units): return JavaScriptNumber.parse(String(decoding: units, as: UTF16.self))
-        case .bool(let flag): return flag ? 1 : 0
-        case .null: return 0
-        case .array: return JavaScriptNumber.parse(SessionArchive.javaScriptString(value))
-        case .object:
-            switch FlowJS.marker(value) {
-            case .number(let number)?, .instance(_, _, _, let number)?: return number
-            default: return .nan
-            }
-        }
+    /// The delay Node's `setTimeout` runs a resolved deadline after: as given, at least 1 ms.
+    static func timerDelayMs(_ delay: Double) -> Double {
+        delay >= 1 ? delay : 1
     }
 
     /// acpx's `new TimeoutError(timeoutMs ?? spec.timeoutMs ?? 0)` for a command past its
-    /// deadline: the message shows the value as JavaScript's `${…}` writes it.
+    /// deadline: the deadline it ran under, or the non-positive `timeoutMs` it was given —
+    /// its attempt's deadline stopped it then — or 0.
     static func timeoutError(_ spec: FlowShellExecution) -> FlowTimeoutError {
-        var given = spec.timeoutMs
-        if given == .null { given = nil }
-        let timeout = resolveTimeout(spec.timeoutMs) ?? given ?? .number(0)
-        let shown: String? = if case .number = timeout { nil } else { SessionArchive.javaScriptString(timeout) }
-        return FlowTimeoutError(timeoutMs: javaScriptNumber(timeout), shown: shown)
+        let resolved = (try? resolveTimeout(spec.timeoutMs)) ?? nil
+        return FlowTimeoutError(timeoutMs: resolved ?? spec.timeoutMs?.numberValue ?? 0)
     }
 
     /// acpx's `createShellFailureError`: the command, how it ended, and its stderr. (Its
@@ -260,8 +241,7 @@ struct FlowShellExecution: Sendable {
     var shell: WireJSON? { json["shell"] }
     var allowNonZeroExit: Bool { json["allowNonZeroExit"] == .bool(true) }
 
-    /// `timeoutMs` as given, which acpx takes as JavaScript compares it
-    /// (``FlowShell/resolveTimeout(_:)``).
+    /// `timeoutMs` as given, which ``FlowShell/resolveTimeout(_:)`` takes or refuses.
     var timeoutMs: WireJSON? { json["timeoutMs"] }
 
     /// `maxBufferBytes`: a number as it is; anything else, which acpx's check refuses, NaN.

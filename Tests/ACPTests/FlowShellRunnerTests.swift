@@ -137,20 +137,66 @@ struct FlowShellRunnerTests {
         #expect(member(run.state, "results", "slow", "outcome") == .text("timed_out"))
     }
 
-    /// A delay no clock can hold — a node's `timeoutMs` and `heartbeatMs`, and a command's
-    /// `timeoutMs`, of 10²⁴ ms — is no timer: the run goes on as without one. acpx's Node
-    /// runs such a timer after 1 ms and times the step out at once (openclaw/acpx#812).
+    /// acpx: "flow nodes reject deadlines beyond the native timer limit" (openclaw/acpx#812):
+    /// a node's `timeoutMs` past 2,147,483,647 ms fails its definition; the limit itself is a
+    /// deadline. A `heartbeatMs` past it, which acpx 0.19.4 left as it was, is no heartbeat
+    /// here, and the run goes on.
     @Test(.enabled(if: nodeAvailable))
-    func aDelayNoClockCanHoldTimesNothingOut() async throws {
+    func aNodeDeadlinePastNodesTimerLimitIsRefusedAtItsDefinition() async throws {
+        let refused = try await runnerRun("""
+            export default defineFlow({ name: "huge-deadline", startAt: "a", nodes: {
+              a: compute({ timeoutMs: 2147483648, run: () => "ran" }) }, edges: [] });
+            """)
+        #expect(refused.code == 1)
+        #expect(refused.err
+            == "Invalid compute node definition: timeoutMs: Too big: expected number to be <=2147483647")
+        let limit = try await runnerRun("""
+            export default defineFlow({ name: "limit-deadline", startAt: "a", nodes: {
+              a: compute({ timeoutMs: 2147483647, heartbeatMs: 1e24, run: () => "ran" }) }, edges: [] });
+            """)
+        #expect(limit.code == 0, "\(limit.err)")
+        #expect(member(limit.state, "outputs", "a") == .text("ran"))
+        #expect(!limit.trace.contains { $0["type"] == .text("node_heartbeat") })
+    }
+
+    /// The runner's default deadline, `--timeout`, past the limit is refused as acpx's
+    /// `FlowAttempt` refuses it — with the `TypeError`, which fails the run (openclaw/acpx#812).
+    @Test(.enabled(if: nodeAvailable))
+    func aDefaultDeadlinePastNodesTimerLimitFailsTheRun() async throws {
+        let run = try await FlowRunnerHarness.run("""
+            export default defineFlow({ name: "huge-default", startAt: "a",
+              nodes: { a: compute({ run: () => "ran" }) }, edges: [] });
+            """, timeoutMs: 2_147_483_648)
+        #expect(run.code == 1)
+        #expect(run.err == "timeoutMs must be a finite number no greater than 2147483647")
+        #expect(member(run.state, "status") == .text("failed"))
+    }
+
+    /// acpx: "shell input and deadlines are validated before spawning" (openclaw/acpx#812): a
+    /// command's `timeoutMs` past the limit, `Infinity`, `NaN` or a string is refused with
+    /// acpx's `TypeError` — by `runShell`, and by a shell action, whose step fails on it —
+    /// before anything is started; the limit itself runs the command.
+    @Test(.enabled(if: nodeAvailable))
+    func aCommandDeadlineNodesTimerCannotHoldIsRefusedBeforeTheSpawn() async throws {
+        let scratch = Scratch()
         let run = try await runnerRun("""
-            export default defineFlow({ name: "huge-delays", startAt: "a", nodes: {
-              a: compute({ timeoutMs: 1e24, heartbeatMs: 1e24, run: () => "ran" }),
-              b: shell({ timeoutMs: 1e24, exec: () => ({ command: "/bin/sh", args: ["-c", "true"], timeoutMs: 1e24 }),
-                parse: (result) => result.exitCode }) },
+            const touch = (file) => ["-c", `printf spawned > ${JSON.stringify(file)}`];
+            const attempt = (runShell, timeoutMs) => runShell({ command: "/bin/sh", timeoutMs,
+              args: touch(\(scratch.js("a"))) }).then(() => "spawned", (e) => `${e.name}: ${e.message}`);
+            export default defineFlow({ name: "refused-deadlines", startAt: "a", nodes: {
+              a: action({ run: async ({ runShell }) => [
+                await attempt(runShell, 2147483648), await attempt(runShell, Infinity), await attempt(runShell, NaN),
+                await attempt(runShell, "100"), await attempt(runShell, 2147483647) ] }),
+              b: shell({ exec: () => ({ command: "/bin/sh", timeoutMs: "100", args: touch(\(scratch.js("b"))) }) }) },
               edges: [{ from: "a", to: "b" }] });
             """)
-        #expect(run.code == 0, "\(run.err)")
-        #expect(member(run.state, "outputs", "b") == .number(0))
+        #expect(run.code == 1)
+        let refused = WireJSON.text("TypeError: timeoutMs must be a finite number no greater than 2147483647")
+        #expect(member(run.state, "outputs", "a") == .array([refused, refused, refused, refused, .text("spawned")]))
+        #expect(run.err == "timeoutMs must be a finite number no greater than 2147483647")
+        #expect(member(run.state, "results", "b", "outcome") == .text("failed"))
+        #expect(scratch.read("a") == "spawned")
+        #expect(scratch.read("b") == nil)
     }
 
     /// acpx: "FlowRunner does not launch a shell action when its executor resolves after

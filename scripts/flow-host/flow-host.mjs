@@ -9,11 +9,10 @@
 // starts keep the terminal, as they do in acpx. `ACPX_FLOW_RUNTIME` names the module a flow imports as "acpx/flows": acpx's
 // own authoring helpers (`flow-runtime.mjs`).
 //
-// The loading follows acpx's `src/flows/cli.ts` (v0.19.3); the definition snapshot its
-// `src/flows/store.ts`.
+// The loading follows acpx's `src/flows/cli.ts` and `src/flows/module-resolution.ts`
+// (v0.19.4); the definition snapshot its `src/flows/store.ts`.
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import fs from "node:fs/promises";
 import Module, { createRequire, register } from "node:module";
 import net from "node:net";
 import path from "node:path";
@@ -23,8 +22,6 @@ import util from "node:util";
 const RUNTIME_PATH = process.env.ACPX_FLOW_RUNTIME;
 // sucrase, which compiles a TypeScript flow as acpx's tsx does (`flow-sucrase.mjs`).
 const SUCRASE_PATH = process.env.ACPX_FLOW_SUCRASE;
-const FLOW_RUNTIME_SPECIFIER = "acpx/flows";
-const TEXT_MODULE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
 const TYPESCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".cts", ".mts"]);
 
 // acpx's `TimeoutError` and `InterruptedError` (`src/async-control.ts`): what a callback's
@@ -104,13 +101,8 @@ async function loadFlow(params) {
   flowPath = params.path;
   const rt = await loadRuntime();
   const extension = path.extname(flowPath).toLowerCase();
-  const prepared = await prepareFlowModuleImport(flowPath, extension);
-  let module;
-  try {
-    module = await loadFlowRuntimeModule(prepared.flowPath, extension);
-  } finally {
-    await prepared.cleanup?.();
-  }
+  installFlowRuntimeResolution(pathToFileURL(RUNTIME_PATH).href);
+  const module = await loadFlowRuntimeModule(flowPath, extension);
   const candidate = findFlowDefinition(rt, module);
   if (!candidate) {
     throw new Error(`Flow module must export default defineFlow({...}) from "acpx/flows": ${flowPath}`);
@@ -120,44 +112,30 @@ async function loadFlow(params) {
   return describeFlow(flow);
 }
 
-// acpx's `prepareFlowModuleImport`: a sibling copy with "acpx/flows" pointed at the runtime.
-async function prepareFlowModuleImport(file, extension) {
-  if (!TEXT_MODULE_EXTENSIONS.has(extension)) {
-    return { flowPath: file };
-  }
-  const source = await fs.readFile(file, "utf8");
-  if (!source.includes(FLOW_RUNTIME_SPECIFIER)) {
-    return { flowPath: file };
-  }
-  const runtimeSpecifier = RUNTIME_PATH.replaceAll(path.sep, "/");
-  const rewritten = source.replaceAll(/(["'])acpx\/flows\1/g, (_match, quote) => `${quote}${runtimeSpecifier}${quote}`);
-  if (rewritten === source) {
-    return { flowPath: file };
-  }
-  const tempPath = path.join(path.dirname(file), `.acpx-flow-load-${randomUUID()}${extension}`);
-  await writePrivateFile(tempPath, rewritten);
-  return { flowPath: tempPath, cleanup: () => fs.rm(tempPath, { force: true }) };
-}
-
-// acpx's `writePrivateFile(…, { privateDirectory: false })`: written whole, owner-only,
-// in a temporary directory beside it (fs-safe's `tempFile`), then moved into place.
-async function writePrivateFile(file, text) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const directory = await fs.realpath(path.dirname(file));
-  const scratch = await fs.mkdtemp(path.join(directory, "acpx-write-"));
-  try {
-    const temporary = path.join(scratch, "record.json");
-    const handle = await fs.open(temporary, "wx", 0o600);
-    try {
-      await handle.writeFile(text, "utf8");
-      await handle.chmod(0o600);
-    } finally {
-      await handle.close();
+// acpx's `installFlowRuntimeResolution` (openclaw/acpx#810): "acpx/flows" resolves to the
+// runtime for every module in the flow's graph — the flow and its helpers alike — through
+// the loaders, not by rewriting anyone's source: an ES module's import by a resolve hook,
+// and a CommonJS `require` through `Module._resolveFilename`, as Node 22.13 has ESM hooks
+// but no synchronous CommonJS ones. Nothing is written beside the flow, which may be in a
+// directory it cannot write to. Registered once; the TypeScript hooks below, registered
+// later, run first and hand a bare specifier on.
+let flowRuntimeResolutionInstalled = false;
+function installFlowRuntimeResolution(runtimeUrl) {
+  if (flowRuntimeResolutionInstalled) return;
+  const hook = `
+    let runtimeUrl;
+    export function initialize(data) { runtimeUrl = data.runtimeUrl; }
+    export function resolve(specifier, context, nextResolve) {
+      return nextResolve(specifier === "acpx/flows" ? runtimeUrl : specifier, context);
     }
-    await fs.rename(temporary, path.join(directory, path.basename(file)));
-  } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
-  }
+  `;
+  register(`data:text/javascript,${encodeURIComponent(hook)}`, { data: { runtimeUrl } });
+  const resolveFilename = Module._resolveFilename;
+  const runtimePath = fileURLToPath(runtimeUrl);
+  Module._resolveFilename = function (request, parent, isMain, options) {
+    return resolveFilename.call(this, request === "acpx/flows" ? runtimePath : request, parent, isMain, options);
+  };
+  flowRuntimeResolutionInstalled = true;
 }
 
 // acpx's `loadFlowRuntimeModule`, where tsx compiles TypeScript: `.ts`, `.tsx` and `.cts`
@@ -368,6 +346,7 @@ async function importModuleTypeScript(file) {
 
 function findFlowDefinition(rt, module) {
   const candidates = [
+    module,
     module.default,
     module["module.exports"],
     nestedDefault(module.default),
@@ -591,8 +570,8 @@ function encodeExecution(execution, inherited) {
   if (execution === null || typeof execution !== "object") return execution;
   // Null-prototype, so a member named `__proto__` is a member.
   const encoded = Object.create(null);
-  // What acpx's spread copies, each member read once; `args`, `env`, `shell` and `stdin`
-  // are taken from these alone, never from the prototype.
+  // What acpx's spread copies, each member read once; `args`, `env` and `shell` are taken
+  // from these alone, never from the prototype.
   const own = Object.create(null);
   const members = Object.keys(execution);
   for (const key of members) own[key] = execution[key];
@@ -607,11 +586,6 @@ function encodeExecution(execution, inherited) {
   const args = copied("args");
   const env = copied("env");
   const shell = copied("shell");
-  const stdin = copied("stdin");
-  // Bytes Node's `stdin.end` writes as they are: a Buffer, typed array or DataView.
-  if (ArrayBuffer.isView(stdin)) {
-    encoded.stdin = jsMarker("bytes", Buffer.from(stdin.buffer, stdin.byteOffset, stdin.byteLength).toString("base64"));
-  }
   // acpx spreads `env` (`{ ...process.env, ...spec.env }`): an object's own members, a
   // string's or a list's characters and items by index, nothing of a number.
   if (env !== undefined && env !== null) {
@@ -688,7 +662,7 @@ function typedByNode(value) {
 }
 
 // Such a value for the runner: Node's `determineSpecificType` of it, what `String` makes
-// of it, its JSON, and what `Number` makes of it (`timeoutMs > 0` compares that).
+// of it, and its JSON.
 function instanceMarker(value) {
   let string;
   try {
@@ -696,13 +670,7 @@ function instanceMarker(value) {
   } catch {
     string = "[object Object]";
   }
-  let number;
-  try {
-    number = String(Number(value));
-  } catch {
-    number = "NaN";
-  }
-  return { [JS_MARKER]: "instance", text: specificType(value), string, json: specJSON(value), number };
+  return { [JS_MARKER]: "instance", text: specificType(value), string, json: specJSON(value) };
 }
 
 function specificType(value) {

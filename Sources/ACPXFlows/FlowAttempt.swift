@@ -6,26 +6,41 @@ import SwiftACP
 /// (exit 3), as any timeout.
 public struct FlowTimeoutError: Error, LocalizedError, OutputErrorMeta, Equatable {
     public let timeoutMs: Double
-    /// The timeout as acpx's message shows it, when it was given as other than a number:
-    /// `${timeoutMs}` of the value (a shell command's `timeoutMs: "100"`).
-    var shown: String?
-    public var errorDescription: String? {
-        "Timed out after \(shown ?? WireJSON.javaScriptString(for: timeoutMs))ms"
-    }
+    public var errorDescription: String? { "Timed out after \(WireJSON.javaScriptString(for: timeoutMs))ms" }
     public var outputCode: String? { "TIMEOUT" }
     public var detailCode: String? { nil }
     public var origin: String? { nil }
 }
 
-/// A flow's delay as a `Duration`: `nil` for one past about 31 years, which no run
-/// outlives. (`Duration.milliseconds` traps from about 10²³ ms.) Node runs a delay above
-/// 2,147,483,647 ms after 1 ms instead (openclaw/acpx#812); here a delay is taken as given.
+/// A flow's timers, held to Node's: `setTimeout` runs a delay above 2,147,483,647 ms — or
+/// one that is no finite number — after 1 ms instead, which timed a node or command out
+/// at once (openclaw/acpx#812). acpx 0.19.4 refuses such a deadline before it is set.
 enum FlowTimer {
-    static let maxDelayMs = 1e12
+    /// acpx's `MAX_TIMER_DELAY_MS`.
+    static let maxDelayMs = Double(JavaScriptNumber.maxTimerDelayMs)
 
+    /// acpx's `resolveFlowTimeoutMs` (`src/flows/timeout.ts`): no deadline for none given,
+    /// or for nothing positive; the deadline as given, within the limit; else the
+    /// `TypeError` acpx throws, for a node's and a command's deadline alike.
+    static func resolveTimeoutMs(_ timeoutMs: Double?) throws -> Double? {
+        guard let timeoutMs else { return nil }
+        guard timeoutMs.isFinite, timeoutMs <= maxDelayMs else { throw FlowTimerLimitError() }
+        return timeoutMs > 0 ? timeoutMs : nil
+    }
+
+    /// A delay as a `Duration`: `nil` for one past the limit. A deadline never is, once
+    /// resolved; a `heartbeatMs` past it — which acpx 0.19.4 left as it was, so Node's
+    /// `setInterval` runs it every 1 ms — is no heartbeat here (openclaw/acpx#812).
     static func duration(milliseconds: Double) -> Duration? {
         guard milliseconds.isFinite, milliseconds <= maxDelayMs else { return nil }
         return .nanoseconds(Int64(max(0, milliseconds) * 1_000_000))
+    }
+}
+
+/// acpx's `TypeError` for a deadline Node's timer cannot hold (openclaw/acpx#812).
+struct FlowTimerLimitError: Error, LocalizedError, Equatable {
+    var errorDescription: String? {
+        "timeoutMs must be a finite number no greater than \(JavaScriptNumber.maxTimerDelayMs)"
     }
 }
 
@@ -101,6 +116,8 @@ final class FlowAttempt: @unchecked Sendable {
     private var timer: Task<Void, Never>?
     private var onCancel: (@Sendable (Error) -> Void)?
 
+    /// `timeoutMs` is the deadline as ``FlowTimer/resolveTimeoutMs(_:)`` gave it: within
+    /// Node's timer limit, or none.
     init(nodeId: String, attemptId: String, startedAt: String, timeoutMs: Double?) {
         self.nodeId = nodeId
         self.attemptId = attemptId

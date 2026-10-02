@@ -15,7 +15,7 @@
 # node_modules provide esbuild and zod, and a node_modules with sucrase (SUCRASE_MODULES).
 set -eu
 
-ACPX_TAG="${ACPX_TAG:-v0.19.3}"
+ACPX_TAG="${ACPX_TAG:-v0.19.4}"
 ACPX_SRC="${ACPX_SRC:?set ACPX_SRC to an acpx git checkout}"
 ACPX_PACKAGE="${ACPX_PACKAGE:?set ACPX_PACKAGE to an installed acpx package directory}"
 SUCRASE_MODULES="${SUCRASE_MODULES:?set SUCRASE_MODULES to a node_modules directory holding sucrase}"
@@ -27,7 +27,10 @@ OUT="$ROOT/Sources/ACPXFlows/FlowHostScripts.swift"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-git -C "$ACPX_SRC" archive "$ACPX_TAG" src/flows src/types.ts src/prompt-content.ts | tar -x -C "$WORK"
+# `src/cli/timer-duration.ts` holds the timer limit the schema checks a node's `timeoutMs`
+# against (0.19.4, openclaw/acpx#812).
+git -C "$ACPX_SRC" archive "$ACPX_TAG" src/flows src/types.ts src/prompt-content.ts src/cli/timer-duration.ts \
+    | tar -x -C "$WORK"
 cp "$HERE/runtime-entry.ts" "$WORK/runtime-entry.ts"
 ZOD_VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$ACPX_PACKAGE/node_modules/zod/package.json")"
 SUCRASE_VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$SUCRASE_MODULES/sucrase/package.json")"

@@ -257,7 +257,10 @@ public actor FlowRunner {
         state.markNodeStarted(
             nodeId: nodeId, attemptId: attemptId, nodeType: node.nodeType.rawValue, startedAt: startedAt,
             detail: node.statusDetail)
-        let timeoutMs = node.timeoutMs ?? defaultNodeTimeoutMs
+        // A deadline Node's timer cannot hold is refused as acpx's `FlowAttempt` refuses it
+        // (openclaw/acpx#812): the flow's definition has refused a node's own already, so
+        // this is the default from `--timeout`.
+        let timeoutMs = try FlowTimer.resolveTimeoutMs(node.timeoutMs ?? defaultNodeTimeoutMs)
         let attempt = FlowAttempt(nodeId: nodeId, attemptId: attemptId, startedAt: startedAt, timeoutMs: timeoutMs)
         let host = self.host
         // The host aborts the attempt's `signal` with the reason: a timeout, an interrupt, or
@@ -352,7 +355,10 @@ public actor FlowRunner {
     }
 
     /// acpx's `startHeartbeat`: while the attempt runs, a `node_heartbeat` every
-    /// `heartbeatMs` (5 seconds by default; 0 for none), best effort, one at a time.
+    /// `heartbeatMs` (5 seconds by default; 0 for none), best effort, one at a time. A
+    /// `heartbeatMs` past Node's timer limit is none as well: acpx 0.19.4 holds a node's and a
+    /// command's deadline to the limit but left `heartbeatMs` as it was, so its `setInterval`
+    /// runs such a heartbeat every 1 ms (openclaw/acpx#812).
     private func startHeartbeat(_ node: FlowNode, attempt: FlowAttempt, runDir: URL) {
         let heartbeatMs = max(0, (node.heartbeatMs ?? Self.defaultHeartbeatMs).rounded(.toNearestOrAwayFromZero))
         guard heartbeatMs > 0, let interval = FlowTimer.duration(milliseconds: heartbeatMs) else { return }

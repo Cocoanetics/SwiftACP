@@ -327,11 +327,13 @@ public final class FlowHost: @unchecked Sendable {
 
     /// What the host needs to reject with the error acpx's code would: its `name` —
     /// `TimeoutError`, `InterruptedError`, or the `TypeError` of a value Node or JavaScript
-    /// refuses, with Node's code — and the properties Node gives a spawn failure.
+    /// refuses, with Node's code, or of a deadline past Node's timer limit — and the
+    /// properties Node gives a spawn failure.
     static func javaScriptErrorData(_ error: Error) -> WireJSON? {
         switch error {
         case is FlowTimeoutError: return .object([("name", .text("TimeoutError"))])
         case is FlowInterruptedError: return .object([("name", .text("InterruptedError"))])
+        case is FlowTimerLimitError: return .object([("name", .text("TypeError"))])
         case let shell as FlowShellError:
             guard let name = shell.name else { return nil }
             return .object([("name", .text(name)), ("props", shell.code.map { .object([("code", .text($0))]) })])
