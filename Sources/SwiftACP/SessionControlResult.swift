@@ -14,8 +14,9 @@ public struct SessionControlResult: Codable, Sendable {
         get { rawConfigOptions?.arrayValue }
         set { rawConfigOptions = newValue.map(JSONValue.array) }
     }
-    /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` for a
-    /// reply that only acknowledges, and ``JSONValue/null`` when it is `null`.
+    /// The reply's `configOptions` as the agent sent it, when it listed them: `nil` for a
+    /// reply that only acknowledges — one listing none, which the daemon reads as acpx 0.19.4
+    /// does (``SetSessionConfigOptionResponse/rawConfigOptions``). Carried as sent, whatever it holds.
     public var rawConfigOptions: JSONValue?
     /// The pid of the daemon whose owner of the session ran the control, as acpx's queue owner
     /// runs one sent while it holds the session — which acpx's CLI names under `--verbose`

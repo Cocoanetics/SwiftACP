@@ -136,6 +136,65 @@ struct ModelApplicationTests {
         #expect(error?.message.contains("multiple advertised Cursor models match") == true)
     }
 
+    /// acpx 0.19.4's `resolveRequestedConfigOption` (openclaw/acpx#807): only the model's own
+    /// option takes its value as a model id, resolved as `--model` resolves one.
+    @Test func onlyTheModelsOptionResolvesItsValueAsAModelId() throws {
+        let models = advertised(["gpt-5[thinking]", "m1"])
+        #expect(try ModelApplication.resolveRequestedConfigOption(
+            "model", value: "gpt-5", models: models, agentCommand: "cursor-agent") == "gpt-5[thinking]")
+        #expect(try ModelApplication.resolveRequestedConfigOption(
+            "effort", value: "gpt-5", models: models, agentCommand: "cursor-agent") == "gpt-5")
+        #expect(try ModelApplication.resolveRequestedConfigOption(
+            "model", value: "gpt-5", models: models, agentCommand: "probe") == "gpt-5")
+        #expect(try ModelApplication.resolveRequestedConfigOption(
+            "model", value: "gpt-5", models: nil, agentCommand: "cursor-agent") == "gpt-5")
+    }
+
+    // MARK: - Recording a selection
+
+    /// The catalog acpx's `owned-controls.test.ts` gives a Cursor session: on `m1`, with
+    /// `gpt-5[thinking]` beside it.
+    private static func cursorCatalog() -> SessionAcpxState {
+        var state = SessionAcpxState()
+        state.configOptions = .array([.object([
+            "id": .string("model"), "name": .string("Model"), "type": .string("select"),
+            "category": .string("model"), "currentValue": .string("m1"),
+            "options": .array([
+                .object(["value": .string("m1"), "name": .string("One")]),
+                .object(["value": .string("gpt-5[thinking]"), "name": .string("Thinking")])
+            ])
+        ])])
+        return state
+    }
+
+    /// acpx 0.19.4 (openclaw/acpx#807, `owned-controls.test.ts`): a model set by its alias and
+    /// acknowledged with `{}` is current as the id that went out, which the option's value
+    /// takes too, while `session_options` keeps the alias — the preference a reconnect
+    /// replays — whether it was set as the model or as the model's option.
+    @Test(arguments: [false, true])
+    func anAcknowledgedAliasIsRecordedAsTheIdThatWentOut(throughOption: Bool) {
+        var state = Self.cursorCatalog()
+        let acknowledgement = SetSessionConfigOptionResponse()
+        if throughOption {
+            ModelSupport.applyConfigOptionSelection(
+                "model", value: "gpt-5", resolvedTo: "gpt-5[thinking]", response: acknowledgement, to: &state)
+        } else {
+            ModelSupport.applyModelSelection(
+                "gpt-5", resolvedTo: "gpt-5[thinking]", response: acknowledgement, to: &state)
+        }
+        #expect(state.currentModelId == "gpt-5[thinking]")
+        #expect(state.configOptions?.arrayValue?.first?.dictionaryValue?["currentValue"] == .string("gpt-5[thinking]"))
+        #expect(state.sessionOptions?.model == "gpt-5")
+    }
+
+    /// Without a resolved id the model went out as asked, and is recorded so.
+    @Test func aModelThatWentOutAsAskedIsRecordedAsAsked() {
+        var state = Self.cursorCatalog()
+        ModelSupport.applyModelSelection("gpt-5[thinking]", response: SetSessionConfigOptionResponse(), to: &state)
+        #expect(state.currentModelId == "gpt-5[thinking]")
+        #expect(state.sessionOptions?.model == "gpt-5[thinking]")
+    }
+
     @Test func anEmptyModelListReadsAsNoneAdvertised() {
         #expect(ModelApplication.formatAvailableModelIds(nil) == "none advertised")
         #expect(ModelApplication.formatAvailableModelIds(advertised([])) == "none advertised")

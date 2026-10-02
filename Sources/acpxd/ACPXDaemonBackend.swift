@@ -322,22 +322,27 @@ actor ACPXDaemonBackend: ACPXBackend {
         let step = ControlStep(
             request: { entry, record, timeout in
                 // acpx's owner control: a value for the model's own option is a model id,
-                // checked and resolved against the session's advertised models.
+                // checked and resolved against the session's advertised models — and recorded
+                // as resolved (acpx 0.19.4, openclaw/acpx#807).
                 let (connection, id) = (entry.agent.connection, entry.session.id)
                 let models = ModelSupport.advertisedModelState(record.acpx ?? SessionAcpxState())
                 let agentCommand = record.agentCommand
-                return try await withTimeout(milliseconds: timeout) {
+                let resolved = try ModelApplication.resolveRequestedConfigOption(
+                    configId, value: value, models: models, agentCommand: agentCommand)
+                let response = try await withTimeout(milliseconds: timeout) {
                     try await ModelApplication.setConfigOption(
                         connection: connection, sessionId: id, configId: configId, value: value, models: models,
                         agentCommand: agentCommand)
                 }
+                return (response: response, resolved: resolved)
             },
-            apply: { (response: SetSessionConfigOptionResponse, record: inout SessionRecord) in
+            apply: { sent, record in
                 var acpx = record.acpx ?? SessionAcpxState()
-                ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
+                ModelSupport.applyConfigOptionSelection(
+                    configId, value: value, resolvedTo: sent.resolved, response: sent.response, to: &acpx)
                 record.acpx = acpx
-                // As the agent reported them: none, for a reply that only acknowledges.
-                return response.rawConfigOptions
+                // As the agent listed them: none, for a reply that only acknowledges.
+                return sent.response.rawConfigOptions
             })
         let outcome = try await runControl(
             sessionId, replacing: .configOption(configId), nonInteractivePermissions: nonInteractivePermissions,
@@ -375,15 +380,19 @@ actor ACPXDaemonBackend: ACPXBackend {
                 let (connection, id) = (entry.agent.connection, entry.session.id)
                 let models = ModelSupport.advertisedModelState(record.acpx ?? SessionAcpxState())
                 let agentCommand = record.agentCommand
-                return try await withTimeout(milliseconds: timeout) {
+                // The id that goes out, for the record to keep current (acpx 0.19.4, openclaw/acpx#807).
+                let resolved = try ModelApplication.resolveRequestedModelId(
+                    modelId, models: models, agentCommand: agentCommand)
+                let response = try await withTimeout(milliseconds: timeout) {
                     try await ModelApplication.setModel(
                         connection: connection, sessionId: id, modelId: modelId, models: models,
                         agentCommand: agentCommand)
                 }
+                return (response: response, resolved: resolved)
             },
-            apply: { (response: SetSessionConfigOptionResponse?, record: inout SessionRecord) in
+            apply: { sent, record in
                 var acpx = record.acpx ?? SessionAcpxState()
-                ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
+                ModelSupport.applyModelSelection(modelId, resolvedTo: sent.resolved, response: sent.response, to: &acpx)
                 record.acpx = acpx
             })
         let outcome = try await runControl(

@@ -105,7 +105,8 @@ public enum ReconnectReplay {
         /// Whether a `session/new` started it, rather than a load or resume.
         public var createdFreshSession: Bool
         /// The reply's `configOptions` as acpx takes them
-        /// (``ModelSupport/normalizedResponseConfigOptions(_:)``): `nil` when it had none.
+        /// (``ModelSupport/normalizedResponseConfigOptions(_:)``): `nil` when it had none, or
+        /// no list of them (acpx 0.19.4, openclaw/acpx#809).
         public var configOptions: JSONValue?
         /// Those `configOptions` as the agent wrote them, when a wire tap read the reply (#119).
         public var configOptionsAsSent: WireJSON?
@@ -144,7 +145,9 @@ public enum ReconnectReplay {
     /// What the session's own reply says of the record, before anything is replayed —
     /// acpx's `applyConfigOptionsToRecord` and `applyReconnectedModelState`.
     public static func applyLoaded(_ loaded: Loaded, to state: inout SessionAcpxState?) {
-        if let configOptions = loaded.configOptions, configOptions.isTruthyInJavaScript {
+        // Only a list of options is recorded (`Array.isArray`, acpx 0.19.4, openclaw/acpx#809),
+        // which is all `loaded` keeps.
+        if let configOptions = loaded.configOptions {
             // On the block built anew — a clone, or a new block when there was none.
             var acpx = state?.cloned() ?? SessionAcpxState()
             ModelSupport.applyConfigOptionsModelState(configOptions, asSent: loaded.configOptionsAsSent, to: &acpx)
@@ -307,13 +310,17 @@ public enum ReconnectReplay {
                 onWarning?(warning)
             }
             guard let models else { return nil }
+            // The id that goes out — the adapter's alias rules applied — is what the record keeps
+            // current (acpx 0.19.4, openclaw/acpx#807).
+            let resolved = try ModelApplication.resolveRequestedModelId(
+                modelId, models: models, agentCommand: target.agentCommand)
             let response = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
                 try await ModelApplication.setModel(
                     connection: target.connection, sessionId: target.sessionId, modelId: modelId, models: models,
                     agentCommand: target.agentCommand)
             }
             var acpx = state ?? SessionAcpxState()
-            ModelSupport.applyModelSelection(modelId, response: response, to: &acpx)
+            ModelSupport.applyModelSelection(modelId, resolvedTo: resolved, response: response, to: &acpx)
             state = acpx
             target.log?("replayed desired model \(modelId) on ACP session \(target.sessionId) "
                 + "(previous \(target.previousSessionId))")
@@ -331,9 +338,9 @@ public enum ReconnectReplay {
     /// acpx's `replayDesiredConfigOptions`: each saved option in turn, but for the one
     /// being replaced and one the last reply no longer accepts.
     ///
-    /// Only a list of options can accept a value. acpx checks any reply JavaScript reads
-    /// as true (`acceptedConfigOptions && …find(…)`), and one that is no list fails it
-    /// with a `TypeError`; here it accepts no value.
+    /// Only a list of options can retire a value: the model reply's, which acpx 0.19.4 keeps
+    /// only as a list (`normalizeConfigOptionAcknowledgement`, openclaw/acpx#809), and then
+    /// the record's, which holds a list or none.
     private static func replayOptions(
         _ options: [(id: String, value: String)], skipping replacingKey: String?, accepted: JSONValue?,
         state: inout SessionAcpxState?, on target: Target
@@ -344,17 +351,20 @@ public enum ReconnectReplay {
             // Each reply can retire a later selection; what the session started with
             // does not.
             if configId == replacingKey { continue }
-            if let accepted, accepted.isTruthyInJavaScript,
-               !acceptsSavedValue(value, of: configId, in: accepted.arrayValue ?? []) { continue }
+            if case .array(let listed)? = accepted, !acceptsSavedValue(value, of: configId, in: listed) { continue }
             do {
                 let models = ModelSupport.advertisedModelState(state)
+                // A model id goes out as the adapter's rules name it, and is kept so (openclaw/acpx#807).
+                let resolved = try ModelApplication.resolveRequestedConfigOption(
+                    configId, value: value, models: models, agentCommand: target.agentCommand)
                 let response = try await withTimeout(milliseconds: target.timeoutMilliseconds) {
                     try await ModelApplication.setConfigOption(
                         connection: target.connection, sessionId: target.sessionId, configId: configId, value: value,
                         models: models, agentCommand: target.agentCommand)
                 }
                 var acpx = state ?? SessionAcpxState()
-                ModelSupport.applyConfigOptionSelection(configId, value: value, response: response, to: &acpx)
+                ModelSupport.applyConfigOptionSelection(
+                    configId, value: value, resolvedTo: resolved, response: response, to: &acpx)
                 state = acpx
                 // Read back from the record, which keeps the options a reply reporting none
                 // left as they were (acpx 0.19.3, #778).

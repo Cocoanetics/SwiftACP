@@ -356,14 +356,14 @@ public struct SetSessionConfigOptionRequest: Codable, Sendable {
 /// reads it (see `SessionReplyCoding.swift`).
 public struct SetSessionConfigOptionResponse: Codable, Sendable {
     /// The config options, when the agent sent a list of them. `nil` when it sent none,
-    /// or something other than a list, which ``rawConfigOptions`` keeps.
+    /// or something other than a list.
     public var configOptions: [JSONValue]? {
         get { rawConfigOptions?.arrayValue }
         set { rawConfigOptions = newValue.map(JSONValue.array) }
     }
-    /// The reply's `configOptions` as the agent sent it, whatever it holds: `nil` when
-    /// the reply has none — it only acknowledges — and ``JSONValue/null`` when it is
-    /// `null`.
+    /// The reply's `configOptions` as the agent sent it: a reply read off the wire keeps
+    /// only a list, and is `nil` otherwise — it only acknowledges — as acpx reads one
+    /// (`normalizeConfigOptionAcknowledgement`, 0.19.4). Set in code, it holds whatever is set.
     public var rawConfigOptions: JSONValue?
     /// That `configOptions` as the agent wrote it — member order and all — when a wire tap read
     /// the reply, for it to be recorded so (#119). Never encoded.

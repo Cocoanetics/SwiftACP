@@ -93,13 +93,13 @@ public enum ModelSupport {
     }
 
     /// acpx's `applyConfigOptionsToRecord`: the config options a session reported, when
-    /// it reported any, on the block built anew (a clone) — with the model state they carry.
-    /// What it reported is taken as it is, but not when JavaScript reads it as false
-    /// (`if (!configOptions) return`): `null`, `false`, `0` or `""`.
+    /// it reported a list of them, on the block built anew (a clone) — with the model state
+    /// they carry. Anything else it reported is not recorded (`if (!Array.isArray(configOptions))
+    /// return`, acpx 0.19.4, openclaw/acpx#809); 0.19.3 recorded whatever JavaScript read as true.
     public static func applyConfigOptions(
         _ configOptions: JSONValue?, asSent: WireJSON? = nil, to state: inout SessionAcpxState
     ) {
-        guard let configOptions, configOptions.isTruthyInJavaScript else { return }
+        guard let configOptions, case .array = configOptions else { return }
         applyConfigOptionsToState(configOptions, asSent: asSent, to: &state)
     }
 
@@ -112,10 +112,12 @@ public enum ModelSupport {
         applyConfigOptionsModelState(configOptions, asSent: asSent, to: &state)
     }
 
-    /// acpx's `normalizeResponseConfigOptions`: a reply's `configOptions` as acpx takes
-    /// it — `null` as an empty list, anything else as it is, and none as none.
+    /// acpx's `normalizeResponseConfigOptions` (0.19.4, openclaw/acpx#809): a reply's
+    /// `configOptions` only when it is a list, and none otherwise — `null`, a string, a number
+    /// or an object, which 0.19.3 took as sent (`null` as an empty list).
     public static func normalizedResponseConfigOptions(_ raw: JSONValue?) -> JSONValue? {
-        raw == .null ? .array([]) : raw
+        guard case .array? = raw else { return nil }
+        return raw
     }
 
     /// acpx's `applyAdvertisedModelState`: the session's current model, the models it
@@ -145,16 +147,26 @@ public enum ModelSupport {
     /// options the agent reported back, with only the saved selections reconciled to
     /// them; the model pinned in `session_options`, and current; and no saved selection
     /// for the model's own option.
+    ///
+    /// The model is current, and the option's value, as the adapter's rules name it —
+    /// `resolvedModelId`, the id that went out: Cursor's `gpt-5[thinking]` for the alias
+    /// `gpt-5` — while `session_options` keeps the alias asked for, the preference a
+    /// reconnect replays (acpx 0.19.4, openclaw/acpx#807). Omitted, the model went out as asked.
     public static func applyModelSelection(
-        _ modelId: String, response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
+        _ modelId: String, resolvedTo resolvedModelId: String? = nil, response: SetSessionConfigOptionResponse?,
+        to state: inout SessionAcpxState
     ) {
+        let resolvedModelId = resolvedModelId ?? modelId
         let modelConfigId = advertisedModelState(state)?.configId
         applyAcceptedConfigOptions(response, to: &state)
-        if let modelConfigId { noteAccepted(modelConfigId, value: modelId, unreportedBy: response, in: &state) }
+        if let modelConfigId {
+            noteAccepted(modelConfigId, value: resolvedModelId, unreportedBy: response, in: &state)
+        }
         var options = state.sessionOptions ?? SessionAcpxState.SessionOptions()
         options.model = modelId
         state.sessionOptions = options
-        state.currentModelId = modelState(fromConfigOptions: response?.rawConfigOptions)?.currentModelId ?? modelId
+        state.currentModelId = modelState(fromConfigOptions: response?.rawConfigOptions)?.currentModelId
+            ?? resolvedModelId
         if let configId = modelConfigId ?? advertisedModelState(state)?.configId {
             state.desiredConfigOptions?.removeValue(forKey: configId)
             state.rebuiltOrders["desired_config_options"]?.removeAll { $0 == configId }
@@ -168,15 +180,16 @@ public enum ModelSupport {
 
     /// acpx's `applyConfigOptionSelection`: what setting option `configId` to `value`
     /// leaves in the record. The model's own option is a model selection — pinned, as
-    /// ``applyModelSelection(_:response:to:)`` pins it; any other is saved as a
-    /// selection to restore, with the options the agent reported back.
+    /// ``applyModelSelection(_:resolvedTo:response:to:)`` pins it, `resolvedValue` the
+    /// model id that went out (acpx 0.19.4's `resolvedValue`, openclaw/acpx#807); any other
+    /// is saved as a selection to restore, with the options the agent reported back.
     public static func applyConfigOptionSelection(
-        _ configId: String, value: String, response: SetSessionConfigOptionResponse,
-        to state: inout SessionAcpxState
+        _ configId: String, value: String, resolvedTo resolvedValue: String? = nil,
+        response: SetSessionConfigOptionResponse, to state: inout SessionAcpxState
     ) {
         let modelConfigId = advertisedModelState(state)?.configId
         if configId == modelConfigId || configId == modelState(fromConfigOptions: response.rawConfigOptions)?.configId {
-            applyModelSelection(value, response: response, to: &state)
+            applyModelSelection(value, resolvedTo: resolvedValue, response: response, to: &state)
             return
         }
         state = state.cloned()
@@ -190,16 +203,18 @@ public enum ModelSupport {
         noteAccepted(configId, value: value, unreportedBy: response, in: &state)
     }
 
-    /// A reply that does not report the options — `{}`, as SwiftACP's own agent bridge
-    /// answers — is an acknowledgement, not a withdrawal of the catalog, as acpx 0.19.3
-    /// takes it (`applyAcceptedConfigOptions`, #778): the record's options stay, the
-    /// first with the option's id at the value it was set to. Otherwise a later `--model`
-    /// for the old value would be skipped as already current.
+    /// A reply that does not list the options — `{}`, as SwiftACP's own agent bridge
+    /// answers, or one whose `configOptions` is no list — is an acknowledgement, not a
+    /// withdrawal of the catalog, as acpx 0.19.4 takes it (`applyAcceptedConfigOptions`,
+    /// #778, openclaw/acpx#809): the record's options stay, the first with the option's id at
+    /// the value it was set to. Otherwise a later `--model` for the old value would be skipped
+    /// as already current.
     private static func noteAccepted(
         _ configId: String, value: String, unreportedBy response: SetSessionConfigOptionResponse?,
         in state: inout SessionAcpxState
     ) {
-        guard response?.rawConfigOptions == nil, case .array(var options)? = state.configOptions else { return }
+        guard response?.rawConfigOptions?.arrayValue == nil, case .array(var options)? = state.configOptions
+        else { return }
         for (index, option) in options.enumerated() {
             guard case .object(var fields) = option, case .string(let id)? = fields["id"], id == configId
             else { continue }
@@ -210,24 +225,26 @@ public enum ModelSupport {
         state.configOptions = .array(options)
     }
 
-    /// acpx's `applyAcceptedConfigOptions`: the options a control's reply reported
+    /// acpx's `applyAcceptedConfigOptions`: the options a control's reply listed
     /// replace the record's, and saved selections follow what they now say — a reply
-    /// can change sibling options — keeping only those still reported, in the order the
+    /// can change sibling options — keeping only those still listed, in the order the
     /// reply lists them (`Object.fromEntries`).
     ///
-    /// Only a list reports any selections. acpx walks a string reply's characters, which
-    /// report none; any other reply that is no list fails it with a `TypeError`
-    /// (`configOptions is not iterable`), and reports none here.
+    /// Only a list can replace the catalog (`if (!Array.isArray(response?.configOptions))`,
+    /// acpx 0.19.4, openclaw/acpx#809): any other reply acknowledges the selection, the
+    /// catalog and the saved selections kept (``noteAccepted(_:value:unreportedBy:in:)``).
+    /// 0.19.3 took a string reply's characters as the options, and failed on anything else
+    /// that was no list with a `TypeError` (`configOptions is not iterable`).
     static func applyAcceptedConfigOptions(
         _ response: SetSessionConfigOptionResponse?, to state: inout SessionAcpxState
     ) {
         state = state.cloned()
-        guard let reported = response?.rawConfigOptions else { return }
+        guard let reported = response?.rawConfigOptions, case .array(let listed) = reported else { return }
         applyConfigOptionsModelState(reported, asSent: response?.configOptionsAsSent, to: &state)
         guard let desired = state.desiredConfigOptions else { return }
         var kept: [String: String] = [:]
         var order: [String] = []
-        for case .object(let option) in reported.arrayValue ?? [] {
+        for case .object(let option) in listed {
             if case .string(let id)? = option["id"], case .string(let value)? = option["currentValue"],
                desired[id] != nil {
                 kept[id] = value
@@ -253,17 +270,20 @@ public enum ModelSupport {
 
     /// acpx's `applyConfigOptionsModelState`: the config options the agent reported
     /// replace the record's, as it reported them, with the model state they carry. When
-    /// they carry none — what it reported is no list, say — a legacy model control is
-    /// kept, and any other model state is cleared. A reply's options, `asSent` as the agent
-    /// wrote them, keep its order when the record is written, as acpx records them (#119).
+    /// they carry none — an empty list, say — a legacy model control is kept, and any
+    /// other model state is cleared. Options that are no list change nothing
+    /// (`if (!Array.isArray(configOptions)) return`, acpx 0.19.4, openclaw/acpx#809). A
+    /// reply's options, `asSent` as the agent wrote them, keep its order when the record is
+    /// written, as acpx records them (#119).
     public static func applyConfigOptionsModelState(
         _ configOptions: JSONValue, asSent: WireJSON? = nil, to state: inout SessionAcpxState
     ) {
+        guard case .array = configOptions else { return }
         let preservesLegacyControl = state.modelControl == "legacy_set_model"
             || (state.modelControl == nil && modelState(fromConfigOptions: state.configOptions) == nil
                 && state.availableModels != nil)
         state.configOptions = configOptions
-        // The order they were sent in, when it is known — an object's members too (#268 review);
+        // The order they were sent in, when it is known — each entry's members too (#268 review);
         // the one they replace is not theirs.
         state.configOptionsOrder = asSent
         if let models = modelState(fromConfigOptions: configOptions) {
@@ -277,35 +297,21 @@ public enum ModelSupport {
 
     /// acpx's `applyInitialModelSelection`: what applying the requested model to a new
     /// session leaves in its record. The advertised model state is taken from the
-    /// options the agent's reply reported, when it reported any, else from what
-    /// `session/new` advertised; a model that was applied is selected, as
-    /// ``applyModelSelection(_:response:to:)`` selects one — a reply reporting no
-    /// options acknowledges it (acpx 0.19.3, #778).
+    /// options the agent's reply listed, when it listed any (`Array.isArray`, acpx 0.19.4),
+    /// else from what `session/new` advertised; a model that was applied is selected, as
+    /// ``applyModelSelection(_:resolvedTo:response:to:)`` selects one — a reply listing no
+    /// options acknowledges it (acpx 0.19.3, #778), and the id that went out is recorded
+    /// (openclaw/acpx#807).
     public static func applyInitialModelSelection(
         _ application: ModelApplication.Application, originalModels: ModelState?, to state: inout SessionAcpxState
     ) {
         let replied = application.response?.rawConfigOptions
         applyConfigOptions(replied, asSent: application.response?.configOptionsAsSent, to: &state)
-        if let models = replied != nil ? modelState(fromConfigOptions: replied) : originalModels {
-            applyAdvertisedModelState(models, to: &state)
-        }
+        let models: ModelState?
+        if case .array? = replied { models = modelState(fromConfigOptions: replied) } else { models = originalModels }
+        if let models { applyAdvertisedModelState(models, to: &state) }
         guard application.applied, let modelId = application.modelId else { return }
-        applyModelSelection(modelId, response: application.response, to: &state)
-    }
-}
-
-extension JSONValue {
-    /// Whether JavaScript reads the value as true: everything but `null`, `false`, `0`
-    /// and `""`.
-    var isTruthyInJavaScript: Bool {
-        switch self {
-        case .null: return false
-        case .bool(let value): return value
-        case .integer(let value): return value != 0
-        case .unsignedInteger(let value): return value != 0
-        case .double(let value): return value != 0 && !value.isNaN
-        case .string(let value): return !value.isEmpty
-        case .array, .object: return true
-        }
+        applyModelSelection(
+            modelId, resolvedTo: application.resolvedModelId, response: application.response, to: &state)
     }
 }

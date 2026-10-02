@@ -199,7 +199,8 @@ extension ACPXDaemonBackend {
 
     /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
     /// before the prompt — checked against what the session advertises, not sent when
-    /// it is already the current model — and is pinned in the record the turn saves.
+    /// it is already the current model — and is pinned in the record the turn saves, current
+    /// as the id that went out (acpx 0.19.4, openclaw/acpx#807).
     /// A model the session cannot take fails the turn before the prompt goes out.
     func applyPromptModel(
         _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String,
@@ -210,10 +211,10 @@ extension ACPXDaemonBackend {
             models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand,
             timeoutMilliseconds: timeoutMilliseconds)
         guard application.applied else { return }
-        let response = application.response
+        let (response, resolved) = (application.response, application.resolvedModelId)
         await persister.adopt { record in
             var acpx = record.acpx ?? SessionAcpxState()
-            ModelSupport.applyModelSelection(model, response: response, to: &acpx)
+            ModelSupport.applyModelSelection(model, resolvedTo: resolved, response: response, to: &acpx)
             record.acpx = acpx
         }
     }
