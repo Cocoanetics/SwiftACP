@@ -39,8 +39,14 @@ extension ACPXDaemonBackend {
     /// record filed under that id — one file read, no scan — else the one record whose id or ACP
     /// session id is `sessionId`, else the one record whose id or ACP session id ends with it.
     /// Two exact matches refuse the id, as records with ids of their own can share an agent's
-    /// session (#307); so do two suffix matches; and none is not found (#301).
+    /// session (#307); so do two suffix matches; and none is not found (#301). A blank id is
+    /// refused first: acpx never resolves one, its owner refusing it at input validation
+    /// (`owner-input.ts`, `sessionId.trim().length === 0`), and every id ends with the empty
+    /// string, which would hand a blank id the store's sole record.
     func resolveRecord(_ sessionId: String) throws -> SessionRecord {
+        guard !sessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DaemonError.emptySessionId
+        }
         if let record = SessionStore.loadRecord(sessionId) { return record }
         var exact: [SessionRecord] = []
         var suffix: [SessionRecord] = []

@@ -123,6 +123,33 @@ struct SessionResolutionTests {
         }
     }
 
+    /// Every id ends with the empty string: a blank id would resolve to a store's sole record by
+    /// suffix. acpx never gets that far, its owner refusing a blank id at input validation
+    /// (`owner-input.ts`); the daemon refuses it where it resolves ids (Codex on #310).
+    @Test func aBlankIdIsRefusedBeforeItCanMatchTheSoleRecord() async throws {
+        try await withIsolatedStore {
+            let now = nowISO()
+            try SessionStore.writeRecord(SessionRecord(
+                acpxRecordId: "only", acpSessionId: "native-only", agentCommand: "agent-a", cwd: "/tmp/repo",
+                createdAt: now, lastUsedAt: now))
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect(try await backend.resolveRecord("y").acpxRecordId == "only")
+            for blank in ["", "  ", "\n"] {
+                let refused = await refusal(backend, blank)
+                #expect(refused?.localizedDescription == DaemonError.emptySessionId.localizedDescription)
+            }
+            let shown = await #expect(throws: DaemonError.self) { try await backend.showSession(sessionId: "") }
+            #expect(shown?.localizedDescription == DaemonError.emptySessionId.localizedDescription)
+            let closed = await #expect(throws: DaemonError.self) { try await backend.closeSession(sessionId: "") }
+            #expect(closed?.localizedDescription == DaemonError.emptySessionId.localizedDescription)
+            let cancelled = await #expect(throws: DaemonError.self) {
+                try await backend.cancelSession(sessionId: "")
+            }
+            #expect(cancelled?.localizedDescription == DaemonError.emptySessionId.localizedDescription)
+            #expect(SessionStore.loadRecord("only")?.closed != true)
+        }
+    }
+
     @Test func anIdNoRecordHasIsNotFound() async throws {
         try await withIsolatedStore {
             _ = try seedRecords()
