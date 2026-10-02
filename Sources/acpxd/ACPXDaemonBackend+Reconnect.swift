@@ -102,7 +102,7 @@ extension ACPXDaemonBackend {
         let replacing = replacing ?? (requestedModel == nil ? nil : .configOption("model"))
         // For a caller under `--verbose`, whether the agent the record saved still runs, as acpx
         // notes it first thing as it connects a session — one held here too.
-        if let relay = settings.stderr, let saved = findRecord(recordId) { relay.noteReconnect(of: saved) }
+        if let relay = settings.stderr, let saved = reloadRecord(recordId) { relay.noteReconnect(of: saved) }
         // What the caller's config — its own, else the cwd's — gives its agent, to find whether an
         // agent held is the caller's. A config that does not read fails the call, held agent or not.
         let wanted = live[recordId] == nil ? nil : try agentConfiguration(settings.callerConfig, cwd: rawCwd)
@@ -118,7 +118,7 @@ extension ACPXDaemonBackend {
         let specs = try config.mcpServerSpecs()
         // What the caller offers — a turn's owner's, a direct turn's or control's own, as acpx
         // builds each client from its own flags: the record keeps none of it (#246).
-        let record = findRecord(recordId)
+        let record = reloadRecord(recordId)
         let capabilities = settings.capabilities ?? .acpx
         // What to put back is read now, before connecting changes anything — acpx takes
         // the desired mode, model and options at the start of `connectAndLoadSession`.
@@ -347,7 +347,7 @@ extension ACPXDaemonBackend {
 
     /// A reconnect's change, when no turn holds the record.
     private func recordChange(recordId: String, _ change: RecordChange) {
-        guard var record = findRecord(recordId) else { return }
+        guard var record = reloadRecord(recordId) else { return }
         change(&record)
         do {
             try SessionStore.writeRecord(record)
@@ -388,7 +388,7 @@ extension ACPXDaemonBackend {
                 sessionId: session.id, createdFreshSession: false, configOptions: session.rawConfigOptions,
                 models: session.models, configOptionsAsSent: session.configOptionsAsSent))
         } catch {
-            let record = findRecord(recordId)
+            let record = reloadRecord(recordId)
             switch ReconnectFallback.outcome(
                 after: error, sameSessionOnly: sameSessionOnly || record?.importedFrom != nil,
                 sessionHasAgentMessages: record?.hasAgentMessages ?? false) {

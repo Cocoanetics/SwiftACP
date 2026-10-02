@@ -61,7 +61,7 @@ extension ACPXDaemonBackend {
     /// ends as it begins, nothing sent — as acpx's flow runner closes the client a stopped
     /// direct turn would prompt on (#219 review).
     func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
-        guard let record = findRecord(sessionId) else { return false }
+        guard let record = try resolveRecordIfAny(sessionId) else { return false }
         let recordId = record.acpxRecordId
         if let turnToken {
             let owners = turns[recordId].flatMap { $0.token == turnToken ? $0 : nil }
@@ -81,7 +81,7 @@ extension ACPXDaemonBackend {
     /// cancel — as it is taken: whether an owner holds the session is read in the same step
     /// the cancel begins in, and names this daemon, whose owner took it (#237 review).
     func cancelSessionReportingOwner(sessionId: String, turnToken: String?) async throws -> SessionCancelResult {
-        let owned = turnToken == nil && findRecord(sessionId).map { owners[$0.acpxRecordId] != nil } == true
+        let owned = turnToken == nil && (try? resolveRecord(sessionId)).map { owners[$0.acpxRecordId] != nil } == true
         let cancelled = try await cancelSession(sessionId: sessionId, turnToken: turnToken)
         return SessionCancelResult(cancelled: cancelled, ownerPid: Self.pid(ifOwned: owned))
     }

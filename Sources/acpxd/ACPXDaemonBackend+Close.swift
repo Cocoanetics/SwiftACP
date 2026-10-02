@@ -25,7 +25,7 @@ extension ACPXDaemonBackend {
     /// - Parameter sessionId: the acpx record id or the ACP session id.
     /// - Returns: `false` if no such session exists.
     func closeSession(sessionId: String) async throws -> Bool {
-        guard let initial = findRecord(sessionId) else { return false }
+        guard let initial = try resolveRecordIfAny(sessionId) else { return false }
         let recordId = initial.acpxRecordId
         // Called off before it began, it does nothing at all: not even the prompt running is cancelled.
         try Task.checkCancellation()
@@ -40,7 +40,7 @@ extension ACPXDaemonBackend {
             // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
             // here to unblock) may have persisted changes meanwhile. Writing the
             // pre-suspension snapshot would silently revert them.
-            var record = findRecord(initial.acpxRecordId) ?? initial
+            var record = reloadRecord(initial.acpxRecordId) ?? initial
             record.pid = nil
             record.closed = true
             record.closedAt = nowISO()
@@ -59,7 +59,7 @@ extension ACPXDaemonBackend {
     /// closes the client its stopped turn was handed: a turn that has ended, or not begun,
     /// leaves the session as it is, for what came since (#219 review).
     func releaseSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
-        guard let initial = findRecord(sessionId) else { return false }
+        guard let initial = try resolveRecordIfAny(sessionId) else { return false }
         let recordId = initial.acpxRecordId
         if let turnToken {
             guard let turn = directTurn(recordId, token: turnToken), turn.running else { return false }
@@ -94,7 +94,7 @@ extension ACPXDaemonBackend {
             // A turn the close ends saves its record first.
             guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
             defer { Task { await turnQueue.release(recordId) } }
-            guard var record = findRecord(recordId) else { continue }
+            guard var record = reloadRecord(recordId) else { continue }
             record.applyLifecycle(entry.agent.lifecycle)
             try? SessionStore.writeRecord(record)
         }

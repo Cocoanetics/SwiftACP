@@ -41,7 +41,7 @@ extension ACPXDaemonBackend {
     ///   reason is streamed separately as a final ``TurnEndedEvent`` log
     ///   notification (sent after the last `session/update`, before this returns).
     func runPrompt(
-        sessionId rawSessionId: String, text: String,
+        sessionId: String, text: String,
         blocks: [PromptBlock]? = nil, content rawContent: [JSONValue]? = nil, wait: Bool = true,
         permissionMode: String? = nil, nonInteractivePermissions: String? = nil,
         streamWire: Bool = false, permissionPolicy: PermissionRules? = nil, terminalOutputCeiling: Int? = nil,
@@ -54,7 +54,7 @@ extension ACPXDaemonBackend {
         guard wait || direct else {
             return try await queuedWithoutWaiting { [self] in
                 try await runPrompt(
-                    sessionId: rawSessionId, text: text, blocks: blocks, content: rawContent,
+                    sessionId: sessionId, text: text, blocks: blocks, content: rawContent,
                     permissionMode: permissionMode, nonInteractivePermissions: nonInteractivePermissions,
                     streamWire: streamWire, permissionPolicy: permissionPolicy,
                     terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
@@ -62,8 +62,9 @@ extension ACPXDaemonBackend {
                     callerConfig: callerConfig, verbose: verbose, environment: environment, requestId: requestId)
             }
         }
-        let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sessionId.isEmpty else { throw DaemonError.emptySessionId }
+        // The id as the caller sent it, as acpx's owner takes one (`owner-input.ts`: refused when
+        // blank by `trim()`, used untrimmed): its resolution refuses a blank one, and `" id "`
+        // names no record `id` — Foundation's trim here took U+200B off a one-character id.
         let (retries, timeout) = try Self.checkedLimits(limits)
         // Checked before queueing, like the blocks: a bad mode is the caller's mistake,
         // not something to find out after waiting out another turn.
@@ -71,9 +72,7 @@ extension ACPXDaemonBackend {
             mode: permissionMode, nonInteractive: nonInteractivePermissions, rules: permissionPolicy)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let content = try Self.promptContent(text: text, blocks: blocks, content: rawContent)
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
+        let initial = try resolveRecord(sessionId)
         let recordId = initial.acpxRecordId
         // acpx's CLI checks, before it hands a prompt to the session's owner, that the prompt's MCP
         // config is the owner's: the owner's agent has the servers of the prompt that started it,
@@ -133,7 +132,7 @@ extension ACPXDaemonBackend {
         // the caller's id may be the one it replaced. A direct turn that finds it gone lets
         // its agent go, as acpx's closes the client it was handed however it ends (#219 review).
         let record = try await lettingDirectAgentGo(direct, recordId) {
-            guard let record = findRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
+            guard let record = reloadRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
             return record
         }
         // Cancelled as it took the session, it ends now, as acpx's prompt ends cancelled once

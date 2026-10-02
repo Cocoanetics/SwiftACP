@@ -37,7 +37,7 @@ extension ACPXDaemonBackend {
         _ = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         _ = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
-        if let record = findRecord(sessionId), let ticket = tickets[record.acpxRecordId], !ticket.sealed {
+        if let record = try? resolveRecord(sessionId), let ticket = tickets[record.acpxRecordId], !ticket.sealed {
             // Its failure is said as one between turns is (``AgentFailure/shown(_:)``), and
             // answered as the session's owner answers it (``OwnedControlFailure``).
             do {

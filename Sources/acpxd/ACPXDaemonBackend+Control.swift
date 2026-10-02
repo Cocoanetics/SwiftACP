@@ -56,9 +56,7 @@ extension ACPXDaemonBackend {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
+        let initial = try resolveRecord(sessionId)
         let recordId = initial.acpxRecordId
         let arrived = DispatchTime.now()
         do {
@@ -71,7 +69,7 @@ extension ACPXDaemonBackend {
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
         defer { Task { await turnQueue.release(recordId) } }
-        guard let current = findRecord(recordId) else {
+        guard let current = reloadRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let direct = owners[recordId] == nil

@@ -18,35 +18,90 @@ extension ACPXDaemonBackend {
 
     /// Show one persisted session's details — mirrors the CLI's `sessions show`.
     ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
+    /// - Parameter sessionId: the acpx record id or the ACP session id (``resolveRecord(_:)``).
     func showSession(sessionId: String) throws -> SessionDetail {
-        guard let record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        return SessionDetail(record: record)
+        SessionDetail(record: try resolveRecord(sessionId))
     }
 
     /// Return a session's conversation history (oldest-first) — mirrors the CLI's
     /// `sessions history`.
     ///
     /// - Parameters:
-    ///   - sessionId: the acpx record id or the ACP session id.
+    ///   - sessionId: the acpx record id or the ACP session id (``resolveRecord(_:)``).
     ///   - limit: keep only the last N entries; 0 / omitted = all.
     func sessionHistory(sessionId: String, limit: Int? = nil) throws -> [SessionStore.HistoryEntry] {
-        guard let record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let all = SessionStore.conversationHistoryEntries(record)
+        let all = SessionStore.conversationHistoryEntries(try resolveRecord(sessionId))
         guard let limit, limit > 0 else { return all }
         return Array(all.suffix(limit))
     }
 
-    /// Look up a persisted record by acpx record id, then by ACP session id.
-    func findRecord(_ id: String) -> SessionRecord? {
-        if let record = SessionStore.loadRecord(id) { return record }
-        return SessionStore.listSessions().first {
-            $0.acpSessionId == id || $0.acpxRecordId == id
+    /// The persisted record `sessionId` names, as acpx's `resolveSessionRecord` finds it: the
+    /// record filed under that id — one file read, no scan — else the one record whose id or ACP
+    /// session id is `sessionId`, else the one record whose id or ACP session id ends with it.
+    /// Two exact matches refuse the id, as records with ids of their own can share an agent's
+    /// session (#307); so do two suffix matches; and none is not found (#301). A blank id is
+    /// refused first: acpx never resolves one, its owner refusing it at input validation
+    /// (`owner-input.ts`, `sessionId.trim().length === 0`), and every id ends with the empty
+    /// string, which would hand a blank id the store's sole record. Blank by JavaScript's
+    /// `trim()` (``TerminalOutputLimit/javaScriptTrimmed(_:)``), not Foundation's whitespace: an
+    /// id of U+200B is an id to acpx, and one of U+FEFF is blank.
+    func resolveRecord(_ sessionId: String) throws -> SessionRecord {
+        guard !TerminalOutputLimit.javaScriptTrimmed(sessionId).isEmpty else {
+            throw DaemonError.emptySessionId
         }
+        if let record = SessionStore.loadRecord(sessionId) { return record }
+        var exact: [SessionRecord] = []
+        var suffix: [SessionRecord] = []
+        for record in SessionStore.scanRecords() {
+            let ids = [record.acpxRecordId, record.acpSessionId]
+            if ids.contains(where: { Self.sameUnits($0, sessionId) }) { Self.retainMatch(&exact, record) }
+            if ids.contains(where: { Self.endsWithUnits($0, sessionId) }) { Self.retainMatch(&suffix, record) }
+        }
+        if exact.count == 1 { return exact[0] }
+        if exact.count > 1 { throw DaemonError.multipleSessionsMatch(sessionId) }
+        if suffix.count == 1 { return suffix[0] }
+        if suffix.count > 1 { throw DaemonError.ambiguousSessionId(sessionId) }
+        throw DaemonError.sessionNotFound(sessionId)
+    }
+
+    /// JS `===` on the ids: equal UTF-16 code units. Swift's `==` compares by canonical
+    /// equivalence, which would let a caller's id in another normalization form — `e` plus a
+    /// combining accent for a record's precomposed `é` — match a record acpx would not find; the
+    /// file fast path cannot, since ``ACPXPaths/safeSessionId(_:)`` percent-encodes each byte.
+    private static func sameUnits(_ id: String, _ sessionId: String) -> Bool {
+        id.utf16.elementsEqual(sessionId.utf16)
+    }
+
+    /// JS `endsWith` on the ids: `id`'s last UTF-16 code units are `sessionId`'s, with the same
+    /// reservation as ``sameUnits(_:_:)`` against Swift's `hasSuffix`.
+    private static func endsWithUnits(_ id: String, _ sessionId: String) -> Bool {
+        let units = id.utf16
+        let wanted = sessionId.utf16
+        guard units.count >= wanted.count else { return false }
+        return units.suffix(wanted.count).elementsEqual(wanted)
+    }
+
+    /// acpx's `retainMatch`: two matches say all there is to say of an id.
+    private static func retainMatch(_ matches: inout [SessionRecord], _ record: SessionRecord) {
+        if matches.count < 2 { matches.append(record) }
+    }
+
+    /// ``resolveRecord(_:)`` for a tool that answers an id no record has with `false` rather than
+    /// a failure: nil then; an id that resolves to no one record still fails.
+    func resolveRecordIfAny(_ sessionId: String) throws -> SessionRecord? {
+        do {
+            return try resolveRecord(sessionId)
+        } catch DaemonError.sessionNotFound {
+            return nil
+        }
+    }
+
+    /// A record read again by its own id after this actor suspended — its file, and nothing else,
+    /// as acpx reloads one (`readSessionRecord(acpxRecordId)`): a file gone or unreadable
+    /// meanwhile is a miss, never another record whose id ends with this one, which the suffix
+    /// resolution of ``resolveRecord(_:)`` would hand a close or a turn (Codex on #310).
+    func reloadRecord(_ recordId: String) -> SessionRecord? {
+        SessionStore.loadRecord(recordId)
     }
 
     /// Trim a caller-supplied string, returning nil when it's blank — so an empty
