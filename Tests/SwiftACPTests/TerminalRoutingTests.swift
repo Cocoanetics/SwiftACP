@@ -233,6 +233,24 @@ struct TerminalRoutingTests {
         #expect(terminal.output == "\n[permission] Allow terminal command \"echo \"a b\"\"? (y/N) ")
     }
 
+    /// Control characters in the command are shown as `\xNN` (acpx 0.19.4,
+    /// openclaw/acpx#845). The arguments are already quoted as `JSON.stringify` quotes
+    /// them, which leaves no C0 control to escape — but U+007F…U+009F pass that quoting
+    /// and are escaped at the prompt. The request's command and arguments are untouched.
+    @Test func controlCharactersInACommandAreShownAsEscapes() async throws {
+        let terminal = TerminalPermissionPromptTests.Terminal()
+        terminal.type("y\n")
+        let approval = TerminalApproval(policy: .approveReads, terminal: terminal.prompt)
+        let request = CreateTerminalRequest(
+            sessionId: "s", command: "echo\r\u{1b}[2Khidden", args: ["a\u{1b}b", "c\u{7f}d"])
+        try await approval.authorize(request)
+        await terminal.waitFor("(y/N) ")
+        #expect(terminal.output
+            == "\n[permission] Allow terminal command \"echo\\x0d\\x1b[2Khidden \"a\\u001bb\" \"c\\x7fd\"\"? (y/N) ")
+        #expect(request.command == "echo\r\u{1b}[2Khidden")
+        #expect(request.args == ["a\u{1b}b", "c\u{7f}d"])
+    }
+
     // MARK: - The other methods
 
     @Test func everyMethodReachesTheHandler() async throws {
