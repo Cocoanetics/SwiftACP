@@ -22,7 +22,7 @@ import Testing
 
             let sessionId = try await daemon.newSession(
                 agentCommand: command, cwd: NSTemporaryDirectory())
-            #expect(sessionId == "mock-session-1")
+            #expect(SessionStore.loadRecord(sessionId)?.acpSessionId == "mock-session-1")
 
             // The tool result is the agent's text, not a status token. Agent + cwd
             // come from the persisted record — the caller passes only the id + text.
@@ -157,10 +157,10 @@ import Testing
             // The alias resolves + launches the mock, exactly like the CLI.
             let id = try await daemon.newSession(
                 agentCommand: "mockalias", cwd: NSTemporaryDirectory())
-            #expect(id == "mock-session-1")
 
             // The record stored the RESOLVED command, not the bare alias.
             let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.acpSessionId == "mock-session-1")
             #expect(record.agentCommand != "mockalias")
             #expect(record.agentCommand.contains("mock-agent.py"))
         }

@@ -22,7 +22,12 @@ public enum SessionEngine {
     ///   - meta: optional `_meta` for the `session/new` request (e.g. claude model), or
     ///     for the request that takes a session back.
     ///   - resumeSessionId: an ACP session to take back in place of a new one — acpx's
-    ///     `--resume-session`. The record is written under its id.
+    ///     `--resume-session`.
+    ///   - recordId: the id to write the record under: a resumed record's own, so that it
+    ///     keeps it (acpx's `resumedRecordId`). Else the record gets an id of its own, as acpx
+    ///     0.19.4 gives every new record one (`randomUUID()`), whatever id the agent gives the
+    ///     session: an agent that gives every session the same id gets a record for each
+    ///     (openclaw/acpx#825, #805).
     ///   - timeoutMilliseconds: acpx's `--timeout`: the agent's start, the request that gets
     ///     the session and the model's selection each get this long, as acpx's
     ///     `createSessionRecordWithClient` times them (``TimeoutError``). `nil` or not
@@ -43,6 +48,7 @@ public enum SessionEngine {
         mcpServers: [MCPServerSpec] = [],
         meta: JSONValue? = nil,
         resumeSessionId: String? = nil,
+        recordId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
         timeoutMilliseconds: Int? = nil,
@@ -61,7 +67,8 @@ public enum SessionEngine {
             agentCommand: agentCommand, agentArgv: agentArgv, cwd: cwd, name: name, permission: permission,
             permissionRules: permissionRules, authCredentials: authCredentials, authPolicy: authPolicy,
             mcpServers: mcpServers, meta: meta,
-            resumeSessionId: resumeSessionId, sessionOptions: sessionOptions, capabilities: capabilities,
+            resumeSessionId: resumeSessionId, recordId: recordId, sessionOptions: sessionOptions,
+            capabilities: capabilities,
             timeoutMilliseconds: timeoutMilliseconds, writesRecord: false, handlers: handlers,
             baseEnvironment: baseEnvironment,
             terminalOutputCeiling: terminalOutputCeiling, inheritStderr: inheritStderr, onStderr: onStderr,
@@ -100,10 +107,11 @@ public enum SessionEngine {
     /// acpx's `sessions new --no-fs` withholds it from its client: the record keeps none of it
     /// (#246). `handlers`, when given, answer the agent's requests in place of `permission`'s. With `writesRecord`
     /// false, the record is returned unwritten, for a caller that writes it once it keeps the
-    /// session — acpxd, where the id the agent gives may be another session's. The agent, and
-    /// the commands it runs through the client's terminals, start over `baseEnvironment` when
-    /// given — its caller's own — else this process's; its terminals are capped by
-    /// `terminalOutputCeiling`.
+    /// session — acpxd. The record is written under `recordId` when given, else under an id of
+    /// its own (see ``createSession(agentCommand:agentArgv:cwd:name:permission:permissionRules:authCredentials:authPolicy:mcpServers:meta:resumeSessionId:recordId:sessionOptions:capabilities:timeoutMilliseconds:handlers:baseEnvironment:terminalOutputCeiling:inheritStderr:onStderr:onLog:onModelWarning:)``).
+    /// The agent, and the commands it runs through the client's terminals, start over
+    /// `baseEnvironment` when given — its caller's own — else this process's; its terminals
+    /// are capped by `terminalOutputCeiling`.
     public static func createSessionHoldingAgent(
         agentCommand: String,
         agentArgv: [String]? = nil,
@@ -116,6 +124,7 @@ public enum SessionEngine {
         mcpServers: [MCPServerSpec] = [],
         meta: JSONValue? = nil,
         resumeSessionId: String? = nil,
+        recordId: String? = nil,
         sessionOptions: SessionAcpxState.SessionOptions? = nil,
         capabilities: ClientCapabilities = .acpx,
         timeoutMilliseconds: Int? = nil,
@@ -156,8 +165,10 @@ public enum SessionEngine {
             let advertised = created.models
             let application = created.application
             let started = nowISO()
+            // The record's own id, not the session's, as acpx 0.19.4 has it
+            // (`createSessionRecordWithClient`: `recordId: resumedRecordId ?? randomUUID()`).
             var record = SessionRecord(
-                acpxRecordId: created.sessionId, acpSessionId: created.sessionId,
+                acpxRecordId: recordId ?? UUID().uuidString.lowercased(), acpSessionId: created.sessionId,
                 agentCommand: agentCommand, cwd: cwd, name: name,
                 createdAt: started, lastUsedAt: started)
             record.agentSessionId = AgentSessionId.extract(from: created.meta)

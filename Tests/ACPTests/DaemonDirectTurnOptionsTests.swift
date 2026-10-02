@@ -215,12 +215,12 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A flow lets go only of the agent its own creation made: after another creation took its
-    /// session's place under the same id, neither a first turn that failed nor the run's end
-    /// lets go of the agent that replaced it (#219 review). The mock gives every session one id.
+    /// A flow lets go only of the agent its own creation made: once that agent has gone and a
+    /// turn has taken the session back on another, neither a first turn that failed nor the
+    /// run's end lets go of the agent now on it (#219 review).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aFlowLetsGoOnlyOfTheAgentItMade() async throws {
-        let command = try #require(mockCommand())
+        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok " + (try #require(mockCommand()))
         try await withIsolatedStore {
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
             let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
@@ -236,11 +236,12 @@ extension DaemonToolsTests {
             try await DaemonClient.$standIn.withValue(daemon) {
                 let id = try await sessions.createPersistent(
                     agent: agent, name: "flow-main", control: FlowTurnControl(attempt: creating)).acpxRecordId
-                // Another flow's creation takes the session's place under the same id.
-                let replaced = try await backend.newSession(
-                    agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
-                #expect(replaced == id)
+                let made = try #require(await backend.live[id]?.agent)
+                // The creation's agent goes, and a queued turn takes the session back on another.
+                #expect(try await backend.releaseSession(sessionId: id))
+                _ = try await backend.runPrompt(sessionId: id, text: "hi")
                 let kept = try #require(await backend.live[id]?.agent)
+                #expect(kept !== made)
                 await #expect(throws: FlowTimeoutError.self) {
                     try await sessions.runPersistent(FlowPersistentTurn(
                         recordId: id, prompt: [.text("hi")], onMessage: { _, _ in },

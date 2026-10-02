@@ -18,16 +18,17 @@ extension DaemonToolsTests {
         try await withLoggedMockRequests(loadMode: "gone", sessionIdPerProcess: true) { command, requests in
             let id = try await ACPXDaemonBackend(inheritAgentStderr: false)
                 .newSession(agentCommand: command, cwd: NSTemporaryDirectory())
+            let original = try #require(SessionStore.loadRecord(id)).acpSessionId
             _ = try await ACPXDaemonBackend(inheritAgentStderr: false).runPrompt(sessionId: id, text: "first")
 
             let record = try #require(SessionStore.loadRecord(id))
             #expect(record.acpxRecordId == id)
-            #expect(record.acpSessionId != id)
+            #expect(record.acpSessionId != original)
             #expect(record.hasAgentMessages)
 
             // A restarted daemon asks for the replacement, not the original.
             _ = try await ACPXDaemonBackend(inheritAgentStderr: false).runPrompt(sessionId: id, text: "second")
-            #expect(Self.loadedSessionIds(try requests()) == [id, record.acpSessionId])
+            #expect(Self.loadedSessionIds(try requests()) == [original, record.acpSessionId])
         }
     }
 
@@ -107,11 +108,12 @@ extension DaemonToolsTests {
                 record.acpx = acpx
             }
             let before = try methods().count
+            let original = try #require(SessionStore.loadRecord(id)).acpSessionId
             _ = try await ACPXDaemonBackend(inheritAgentStderr: false).runPrompt(sessionId: id, text: "hi")
 
             #expect(Array(try methods().dropFirst(before).prefix(2)) == ["session/load", "session/new"])
             let record = try #require(SessionStore.loadRecord(id))
-            #expect(record.acpSessionId == id)
+            #expect(record.acpSessionId == original)
             // The new session advertised no models, so none are known any more.
             #expect(record.acpx?.currentModelId == nil)
             #expect(record.acpx?.availableModels == nil)

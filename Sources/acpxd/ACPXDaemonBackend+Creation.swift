@@ -2,10 +2,9 @@ import ACPXCore
 import Foundation
 import SwiftACP
 
-// The sessions a flow makes, from their creation to their hold: a session the agent gives an
-// id acpxd holds already, and what a creation's call-off finds (#219 review). Split from
-// `ACPXDaemonBackend.swift` and `ACPXDaemonBackend+Cancel.swift` to keep each inside the
-// 500-line limit.
+// The sessions a flow makes, from their creation to their hold, and what a creation's call-off
+// finds (#219 review). Split from `ACPXDaemonBackend.swift` and `ACPXDaemonBackend+Cancel.swift`
+// to keep each inside the 500-line limit.
 extension ACPXDaemonBackend {
     /// A session a creation made, kept by its token for a call-off yet to come: its record, and
     /// the agent held for it — the one a call-off lets go, and no other.
@@ -37,46 +36,24 @@ extension ACPXDaemonBackend {
         return recordId
     }
 
-    /// Hold a new session's agent, and write its record: holding the session's turn slot, so
-    /// that creations under one id — an agent that gives every session the same id — take it
-    /// in turn, and no prompt starts an agent meanwhile. One acpxd holds under the id already —
-    /// another run's — is let go first, as `sessions new` retires a session it replaces under
-    /// the same id (`SessionLifecycle.retire`): with no `session/close`, which would reach the
-    /// new session too, once whatever turn it runs is over, and with the prompts meant for it
-    /// refused. A creation called off before it has the slot takes nobody's place: its own agent
-    /// goes, and a session held under the id stays as it is, its record too (#219 review).
+    /// Hold a new session's agent, and write its record. The record's id is its own, whatever id
+    /// the agent gave the session (acpx 0.19.4, for our openclaw/acpx#825): no session acpxd
+    /// holds is under it, and two runs whose agent gives both sessions one id each keep theirs.
+    /// A creation called off meanwhile keeps its record, as acpx's creation writes it, and its
+    /// own agent goes (#219 review).
     private func holdAsNew(
         _ held: SessionEngine.HeldSession, stderr: AgentStderrRelay?, token: String?,
         configuration: AgentConfiguration?
     ) async throws {
         let recordId = held.record.acpxRecordId
         await reconnected?(recordId)
-        do {
-            try await turnQueue.acquire(recordId, wait: true)
-        } catch {
-            try? await held.agent.close()
-            throw error
-        }
-        let taken = live[recordId] != nil || hasTurn(recordId) || owners[recordId] != nil
         let outcome: Result<Void, Error>
         if isCalledOff(token) {
-            // Its record kept when the id is new, as acpx's creation writes it — never over the
-            // record of a session on it already, held or not (#219 review).
-            if !taken, SessionStore.loadRecord(recordId) == nil { try? SessionStore.writeRecord(held.record) }
+            try? SessionStore.writeRecord(held.record)
             outcome = .failure(CancellationError())
         } else {
-            if taken {
-                // The prompts meant for the session it replaces are refused: those still in
-                // line, and one begun as the turn before it ended, yet to have the slot.
-                refusePromptsWaiting(recordId)
-                turns[recordId]?.refused = true
-                for turn in directTurns[recordId] ?? [] { changeTurn(recordId, turn.id) { $0.refused = true } }
-                forgetOwner(recordId)
-                await evict(recordId)
-            }
             outcome = Result { try keep(held, stderr: stderr, configuration: configuration) }
         }
-        await turnQueue.release(recordId)
         if case .failure(let error) = outcome {
             try? await held.agent.close()
             throw error

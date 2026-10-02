@@ -147,10 +147,16 @@ extension DaemonToolsTests {
         }
     }
 
-    /// The lowercase UUID in `output`.
+    /// The last lowercase UUID in `output`: the request's, which JSON output prints after the
+    /// record's own id.
     static func requestId(in output: String) -> String? {
-        output.range(of: "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", options: .regularExpression)
-            .map { String(output[$0]) }
+        var rest = output[...]
+        var last: String?
+        while let range = rest.range(of: "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", options: .regularExpression) {
+            last = String(rest[range])
+            rest = rest[range.upperBound...]
+        }
+        return last
     }
 
     /// Whether `output` is `prefix`, a lowercase UUID, then `suffix`.

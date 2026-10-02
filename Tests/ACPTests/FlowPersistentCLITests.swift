@@ -284,8 +284,8 @@ extension DaemonToolsTests {
     }
 
     /// A stopped turn's release that puts down the agent the turn is still connecting puts that
-    /// one down alone: the turn ends as it goes, and a session made under the same id, in line
-    /// behind the turn, is held by the time the put-down is done — and stays (#219 review).
+    /// one down alone: the turn ends as it goes, and a session made meanwhile on the same agent
+    /// id is held by the time the put-down is done — and stays (#219 review).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aTurnsReleaseLeavesTheSessionMadeAsItPutsTheTurnDown() async throws {
         let directory = try Self.scratchDirectory()
@@ -303,7 +303,7 @@ extension DaemonToolsTests {
             }
             let loading = await Self.openForWriting(gate)
             defer { close(loading) }
-            // The agent gives a session made meanwhile the same id, and it waits for the slot.
+            // The agent gives a session made meanwhile the same id; its record is its own.
             let kept = HoldGate()
             await daemon.setCreationKept { _ in kept.open() }
             let making = Task {
@@ -314,9 +314,11 @@ extension DaemonToolsTests {
                 try await daemon.releaseSession(sessionId: id, turnToken: "turn")
             }
             #expect(released)
-            #expect(try await making.value == id)
+            let made = try await making.value
+            #expect(made != id)
+            #expect(SessionStore.loadRecord(made)?.acpSessionId == SessionStore.loadRecord(id)?.acpSessionId)
             await #expect(throws: (any Error).self) { _ = try await turn.value }
-            let held = try #require(await daemon.live[id]?.agent)
+            let held = try #require(await daemon.live[made]?.agent)
             #expect(await !held.connection.isClosed)
             await daemon.releaseAll()
         }

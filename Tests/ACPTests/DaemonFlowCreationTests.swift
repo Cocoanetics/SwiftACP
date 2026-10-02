@@ -8,7 +8,7 @@ import Testing
 
 /// A flow's session as acpxd makes it (#202, step 3b, #219 review): called off as it is made
 /// — its caller's wait cut short, however the call-off and the creation cross, and however
-/// long either waits — and made under an id acpxd holds already.
+/// long either waits — and made on an agent that gives every session one id.
 extension DaemonToolsTests {
     /// A session called off as acpxd makes it is let go, as acpx's runner closes a client made
     /// after its attempt stopped: whether its token was called off before it was made, the
@@ -119,12 +119,11 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A session the agent gives an id acpxd holds already takes that one's place, as `sessions
-    /// new` retires one it replaces under the same id: the agent held before is let go, not left
-    /// running unheld, and the record is the new session's (#219 review). The mock answers every
-    /// launch with the same session id.
+    /// Two sessions whose agent gives both one id are each held, each under a record of its own
+    /// with its agent's pid, as acpx 0.19.4 keeps two flow runs' records apart
+    /// (openclaw/acpx#825). The mock answers every launch with the same session id.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aSessionUnderAHeldIdTakesItsPlace() async throws {
+    func sessionsOnOneAgentIdAreEachHeld() async throws {
         let command = try #require(mockCommand())
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
@@ -132,18 +131,21 @@ extension DaemonToolsTests {
             let first = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
             let before = try #require(await daemon.live[first]?.agent)
             let second = try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true)
-            #expect(second == first)
+            #expect(second != first)
             let after = try #require(await daemon.live[second]?.agent)
             #expect(after !== before)
-            #expect(await before.connection.isClosed)
+            #expect(await !before.connection.isClosed)
+            #expect(await daemon.live[first]?.agent === before)
+            #expect(SessionStore.loadRecord(first)?.acpSessionId == SessionStore.loadRecord(second)?.acpSessionId)
+            #expect(SessionStore.loadRecord(first)?.pid == before.lifecycle?.pid.map { Int($0) })
             #expect(SessionStore.loadRecord(second)?.pid == after.lifecycle?.pid.map { Int($0) })
             await daemon.releaseAll()
         }
     }
 
-    /// A creation called off before its agent is held takes nobody's place under the id it was
-    /// given: another flow's session held there stays, its agent untouched, and the creation's
-    /// own agent goes (#219 review). The mock gives every session the same id.
+    /// A creation called off before its agent is held takes nobody's place: another flow's
+    /// session stays, its agent untouched, and the creation's own agent goes (#219 review). The
+    /// mock gives every session the same id.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCalledOffCreationTakesNobodysPlace() async throws {
         let command = try #require(mockCommand())
@@ -169,61 +171,25 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A creation called off while it waits for the slot of the session held under its id — that
-    /// session's turn running — takes nobody's place either, once the turn is over (#219 review).
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aCreationCalledOffAsItWaitsTakesNobodysPlace() async throws {
-        let command = try #require(mockCommand())
-        let cwd = NSTemporaryDirectory()
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: cwd)
-            let (turnGoesOut, creationWaits) = (HoldGate(), HoldGate())
-            await daemon.setPromptGoingOut { _ in turnGoesOut.open() }
-            let turn = Task {
-                try await daemon.runPrompt(sessionId: id, text: "hold turn", permissionMode: "approve-all")
-            }
-            await turnGoesOut.wait()
-            let kept = try #require(await daemon.live[id]?.agent)
-            await daemon.turnQueue.setBeforeAcquire { _ in creationWaits.open() }
-            let creating = Task {
-                try await daemon.newSession(
-                    agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
-                    creation: SessionCreationMode(holdAgent: true, creationToken: "late"))
-            }
-            await creationWaits.wait()
-            let released = try await daemon.callOffCreation(creationToken: "late")
-            #expect(!released)
-            #expect(try await daemon.cancelSession(sessionId: id))
-            _ = try? await turn.value
-            await #expect(throws: CancellationError.self) { _ = try await creating.value }
-            #expect(await daemon.live[id]?.agent === kept)
-            #expect(await !kept.connection.isClosed)
-            await daemon.releaseAll()
-        }
-    }
-
-    /// A call-off lets go of the agent its creation made, and only that one: a session the
-    /// agent gave the same id since, which took its place, keeps its agent (#219 review).
+    /// A call-off lets go of the agent its creation made, and only that one: a session made since
+    /// on the same agent id keeps its agent (#219 review).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCallOffLetsGoOnlyOfTheAgentItsCreationMade() async throws {
         let command = try #require(mockCommand())
         let cwd = NSTemporaryDirectory()
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(
+            let first = try await daemon.newSession(
                 agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
                 creation: SessionCreationMode(holdAgent: true, creationToken: "first"))
-            let replaced = try await daemon.newSession(
+            let second = try await daemon.newSession(
                 agentCommand: command, agentArgv: nil, cwd: cwd, name: nil, mcpServers: nil, sessionOptions: nil,
                 creation: SessionCreationMode(holdAgent: true, creationToken: "second"))
-            #expect(replaced == id)
-            let kept = try #require(await daemon.live[id]?.agent)
-            // The first creation's agent went as the second took its place: nothing of it is kept.
-            #expect(await daemon.madeCreations["first"] == nil)
-            let releasedTheFirst = try await daemon.callOffCreation(creationToken: "first")
-            #expect(!releasedTheFirst)
-            #expect(await daemon.live[id]?.agent === kept)
+            #expect(second != first)
+            let kept = try #require(await daemon.live[second]?.agent)
+            #expect(try await daemon.callOffCreation(creationToken: "first"))
+            #expect(await daemon.live[first] == nil)
+            #expect(await daemon.live[second]?.agent === kept)
             #expect(await !kept.connection.isClosed)
             #expect(try await daemon.callOffCreation(creationToken: "second"))
             #expect(await daemon.live.isEmpty)
@@ -231,49 +197,8 @@ extension DaemonToolsTests {
         }
     }
 
-    /// A session made under an id acpxd holds takes its place once the turn running there is
-    /// over, and the prompts meant for the old session are refused — one begun as that turn
-    /// ended, one still in line — never run on the new session's agent (#219 review).
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func thePromptsOfAReplacedSessionAreRefused() async throws {
-        let directory = try Self.scratchDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let requests = directory.appendingPathComponent("requests.log")
-        let command = "/usr/bin/env MOCK_LOAD_SESSION=ok MOCK_REQUEST_LOG='\(requests.path)' "
-            + (try #require(mockCommand()))
-        let cwd = NSTemporaryDirectory()
-        try await withIsolatedStore {
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let id = try await daemon.newSession(agentCommand: command, cwd: cwd)
-            let prompt = { (text: String) in
-                Task { try await daemon.runPrompt(sessionId: id, text: text, permissionMode: "approve-all") }
-            }
-            let (running, secondWaits, thirdWaits, creationWaits) = (HoldGate(), HoldGate(), HoldGate(), HoldGate())
-            await daemon.setPromptGoingOut { _ in running.open() }
-            let first = prompt("hold turn")
-            await running.wait()
-            await daemon.setPromptWaits { _ in secondWaits.open() }
-            let second = prompt("second")
-            await secondWaits.wait()
-            await daemon.setPromptWaits { _ in thirdWaits.open() }
-            let third = prompt("third")
-            await thirdWaits.wait()
-            await daemon.turnQueue.setBeforeAcquire { _ in creationWaits.open() }
-            let creating = Task { try await daemon.newSession(agentCommand: command, cwd: cwd, holdAgent: true) }
-            await creationWaits.wait()
-            #expect(try await daemon.cancelSession(sessionId: id))
-            _ = try? await first.value
-            #expect(try await creating.value == id)
-            await #expect(throws: QueueOwnerShuttingDown.self) { _ = try await second.value }
-            await #expect(throws: QueueOwnerShuttingDown.self) { _ = try await third.value }
-            let logged = (try? String(contentsOf: requests, encoding: .utf8)) ?? ""
-            #expect(!logged.contains("second") && !logged.contains("third"), "\(logged)")
-            await daemon.releaseAll()
-        }
-    }
-
     /// A creation cancelled as its session is held lets go of its own agent, and no other: one
-    /// that took its place under the same id meanwhile keeps its agent (#219 review).
+    /// made on the same agent id meanwhile keeps its agent (#219 review).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aCancelledCreationLetsGoOnlyOfItsOwnAgent() async throws {
         let command = try #require(mockCommand())
