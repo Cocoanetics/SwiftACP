@@ -110,22 +110,57 @@ extension DaemonToolsTests {
     }
 
     /// So does putting the turn's `--model` on the session (`applyPromptModelIfAdvertised`),
-    /// on an agent held before, so that it is this step that runs over.
+    /// on an agent held before, so that it is this step that runs over — and that agent is
+    /// let go with the turn, as acpx 0.19.4 retires its adapter (`closeClientOnExit`,
+    /// openclaw/acpx#799): a late acknowledgement would switch its model under the next
+    /// turn, which runs on a fresh agent instead, on the session's own model.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func theTurnsModelPastTheTimeoutFailsTheTurn() async throws {
+    func theTurnsModelPastTheTimeoutFailsTheTurnAndLetsItsAgentGo() async throws {
         let directory = try Self.scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
+        let pidFile = directory.appendingPathComponent("pid")
         try await withIsolatedStore {
-            let session = try await retrySession(in: directory)
+            let session = try await retrySession(in: directory, environment: "RETRY_AGENT_PID='\(pidFile.path)' ")
             try session.set("hang-model")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             try await holdAgent(daemon, session.id)
+            let held = try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8)))
             let prompted = session.prompts
             await #expect(throws: TimeoutError(milliseconds: 300)) {
                 try await limitedPrompt(
                     daemon, session.id, limits: PromptLimits(timeoutMs: 300), model: "b", client: CallingClient())
             }
             #expect(session.prompts == prompted)
+            // Required: a held agent, asleep on its model request, would hold the next turn too.
+            try #require(await daemon.heldConnection(session.id) == nil)
+            #expect(kill(held, 0) != 0)
+            try session.set("ok")
+            let text = try await limitedPrompt(daemon, session.id, limits: PromptLimits(), client: CallingClient())
+            #expect(text == "hello")
+            #expect(try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8))) != held)
+            #expect(try #require(SessionStore.loadRecord(session.id)).acpx?.currentModelId == "a")
+            await daemon.releaseAll()
+        }
+    }
+
+    /// A model the agent refuses fails the turn before its prompt goes out too, but keeps
+    /// the held agent: acpx retires its adapter for a model request that timed out alone.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aModelTheAgentRefusesFailsTheTurnAndKeepsItsAgent() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withIsolatedStore {
+            let session = try await retrySession(in: directory)
+            try session.set("refuse-model")
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            let held = try await holdAgent(daemon, session.id)
+            let prompted = session.prompts
+            await #expect(throws: SessionControlError.self) {
+                try await limitedPrompt(
+                    daemon, session.id, limits: PromptLimits(timeoutMs: 300), model: "b", client: CallingClient())
+            }
+            #expect(session.prompts == prompted)
+            #expect(await daemon.heldConnection(session.id) === held)
             await daemon.releaseAll()
         }
     }
