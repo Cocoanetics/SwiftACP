@@ -1,7 +1,9 @@
 @testable import ACPXCore
+@testable import acpx
 @testable import acpxd
 import Foundation
 import SwiftACP
+import SwiftMCP
 import Testing
 
 /// A session's record has an id of its own, whatever id the agent gives the session, as acpx
@@ -61,6 +63,45 @@ extension DaemonToolsTests {
                 #expect(second == ["from-B-only"])
                 #expect(SessionStore.loadRecord(a)?.acpSessionId == SessionStore.loadRecord(b)?.acpSessionId)
             }
+        }
+    }
+
+    /// The CLI tells the daemon a session by its record's id, as acpx's CLI does: a prompt to a
+    /// scope whose session shares its ACP session with a newer one's lands on that scope's
+    /// record alone, where the ACP session would name the newest (Codex review on #307).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aPromptIsRoutedByTheRecordsOwnId() async throws {
+        let command = try #require(mockCommand())
+        let root = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (a, b) = (root.appendingPathComponent("a"), root.appendingPathComponent("b"))
+        for directory in [a, b] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            let acpx = { (args: [String], cwd: URL) async -> (code: Int32, out: String) in
+                let capture = Console.Capture()
+                let code = await onThreadOfItsOwn {
+                    DaemonClient.$standIn.withValue(daemon) {
+                        Console.$capture.withValue(capture) {
+                            runCommandLine(["--agent", command, "--cwd", cwd.path, "--format", "quiet"] + args)
+                        }
+                    }
+                }
+                return (code, capture.out.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            let first = await acpx(["sessions", "new"], a)
+            let second = await acpx(["sessions", "new"], b)
+            #expect(first.code == 0 && second.code == 0 && first.out != second.out)
+            let (recordA, recordB) = (SessionStore.loadRecord(first.out), SessionStore.loadRecord(second.out))
+            #expect(recordA?.acpSessionId == recordB?.acpSessionId)
+            #expect(await acpx(["--approve-all", "prompt", "to-a"], a).code == 0)
+            let (promptsA, promptsB) = (try Self.prompts(first.out), try Self.prompts(second.out))
+            #expect(promptsA == ["to-a"])
+            #expect(promptsB.isEmpty)
+            await backend.releaseAll()
         }
     }
 
