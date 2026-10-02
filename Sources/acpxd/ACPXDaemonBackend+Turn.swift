@@ -3,9 +3,9 @@ import Foundation
 import SwiftACP
 import SwiftMCP
 
-// A turn's exchange with the agent once connected: its prompt, the wait past the
-// agent's answer, and what the turn streams to the calling client meanwhile. Split from
-// `ACPXDaemonBackend+Prompt.swift` to keep that file inside the 500-line limit.
+// A turn's exchange with the agent once connected: its `--model`, its prompt, the wait
+// past the agent's answer, and what the turn streams to the calling client meanwhile.
+// Split from `ACPXDaemonBackend+Prompt.swift` to keep that file inside the 500-line limit.
 extension ACPXDaemonBackend {
     /// An attempt's prompt, and whether it was sent. A cancel asked before it went out
     /// ends the turn so, the prompt unsent, as acpx's attempt stops at its aborted turn
@@ -194,6 +194,27 @@ extension ACPXDaemonBackend {
                 LogMessage(
                     level: .info, logger: sessionId,
                     data: toJSONValue(TurnAnsweredEvent(answeredStopReason: response.stopReason.rawValue))))
+        }
+    }
+
+    /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
+    /// before the prompt — checked against what the session advertises, not sent when
+    /// it is already the current model — and is pinned in the record the turn saves.
+    /// A model the session cannot take fails the turn before the prompt goes out.
+    func applyPromptModel(
+        _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String,
+        timeoutMilliseconds: Int? = nil
+    ) async throws {
+        let application = try await ModelApplication.applyRequestedModel(
+            connection: entry.agent.connection, sessionId: entry.session.id, requestedModel: model,
+            models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand,
+            timeoutMilliseconds: timeoutMilliseconds)
+        guard application.applied else { return }
+        let response = application.response
+        await persister.adopt { record in
+            var acpx = record.acpx ?? SessionAcpxState()
+            ModelSupport.applyModelSelection(model, response: response, to: &acpx)
+            record.acpx = acpx
         }
     }
 }

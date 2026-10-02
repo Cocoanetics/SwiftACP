@@ -59,10 +59,10 @@ extension ACPXDaemonBackend {
         }
     }
 
-    /// Let a direct turn's agent go, as acpx closes its client: once the turn's messages are
-    /// written (`savePromptSuccess`, or a failed turn's own flush), which gives the agent a
-    /// moment before its stdin ends.
-    func letGoOfDirectAgent(_ recordId: String, persister: TurnPersister) async {
+    /// Let a turn's agent go, as acpx closes a direct turn's client, or an owner's under
+    /// `closeClientOnExit`: once the turn's messages are written (`savePromptSuccess`, or a
+    /// failed turn's own flush), which gives the agent a moment before its stdin ends.
+    func letGoOfAgent(_ recordId: String, persister: TurnPersister) async {
         await persister.checkpoint()
         await evict(recordId)
     }
@@ -78,10 +78,12 @@ extension ACPXDaemonBackend {
     ///   then on, to run on its agent: none runs on the agent given up meanwhile, as the
     ///   prompt they run beside is the retry's (Codex review on #174);
     /// - how the agent ended goes into the record the failure saves
-    ///   (``wrapUp(failedAttemptOn:error:retried:of:)``).
+    ///   (``wrapUp(failedAttemptOn:error:retired:retiresAgent:of:)``).
+    /// - Parameter retiresAgent: acpx's `closeClientOnExit` — the agent is let go with the
+    ///   failed turn, before the next turn could use it.
     func failedAttempt(
         _ error: Error, of turn: Turn, on entry: Live, wrote: WriteMark, retriesOnAFreshLaunch: Bool,
-        relay: TurnRelay, wireFeed: TurnWireFeed
+        retiresAgent: Bool, relay: TurnRelay, wireFeed: TurnWireFeed
     ) async -> Error {
         takePromptNote(of: turn, from: wrote)
         let failure = ACPAgentConnection.isConnectionClosed(error) && !wrote.happened
@@ -98,7 +100,7 @@ extension ACPXDaemonBackend {
         // How the agent ended, if it did, goes into the record the failure saves — once
         // it has: an agent whose connection is gone can still be running (its stdout
         // closed, say), and is ended before its pid would be kept.
-        await wrapUp(failedAttemptOn: entry, error: error, retried: retried, of: turn)
+        await wrapUp(failedAttemptOn: entry, error: error, retried: retried, retiresAgent: retiresAgent, of: turn)
         await wireFeed.finish(showingHeld: !retried)
         return retried ? RetriedOnAFreshLaunch(underlying: failure) : failure
     }
@@ -116,10 +118,14 @@ extension ACPXDaemonBackend {
     /// running still, its stdout closed, say, and is ended before its pid would be kept —
     /// the controls the turn took done if the turn ends here, and how the agent ended in the
     /// record the failure saves.
-    /// A direct turn's agent is let go however the attempt failed, as acpx closes its client.
-    func wrapUp(failedAttemptOn entry: Live, error: Error, retried: Bool, of turn: Turn) async {
-        if turn.direct {
-            await letGoOfDirectAgent(turn.recordId, persister: turn.persister)
+    /// A direct turn's agent is let go however the attempt failed, as acpx closes its client;
+    /// an owner's when the attempt `retiresAgent` — its `--model` request timed out, and a
+    /// late acknowledgement would switch the model under the next turn — as acpx 0.19.4's
+    /// `closeClientOnExit` closes it before the owner takes another task (openclaw/acpx#799).
+    /// Any other way the model fails keeps the agent, as acpx keeps its adapter.
+    func wrapUp(failedAttemptOn entry: Live, error: Error, retried: Bool, retiresAgent: Bool, of turn: Turn) async {
+        if turn.direct || retiresAgent {
+            await letGoOfAgent(turn.recordId, persister: turn.persister)
             try? await entry.agent.close()
         } else if ACPAgentConnection.endedTheConnection(error) {
             try? await entry.agent.close()

@@ -32,7 +32,8 @@
 `die-in-prompt`: sends an update, then exits with status 3 while the prompt is out.
 `die-after-new`: exits with status 3 once it has answered `session/new`.
 
-`refuse-set-mode`: answers `session/set_mode` with `Invalid params` (-32602).
+`refuse-set-mode`: answers `session/set_mode` with `Invalid params` (-32602). `refuse-model` and
+`refuse-effort` answer the `session/set_config_option` for that option so.
 
 `slow-set-mode`: answers `session/set_mode` only after `RETRY_AGENT_DELAY_MS`, or once
 the file `RETRY_AGENT_MODE_GATE` names exists, having first written a byte to the FIFO
@@ -270,7 +271,9 @@ for line in sys.stdin:
         if MODE == "hang-%s" % params.get("configId"):
             signal_ready()
             time.sleep(60)
-        if os.environ.get("RETRY_AGENT_ACK_CONFIG"):
+        if MODE == "refuse-%s" % params.get("configId"):
+            send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Invalid params"}})
+        elif os.environ.get("RETRY_AGENT_ACK_CONFIG"):
             send({"jsonrpc": "2.0", "id": req_id, "result": {}})
         else:
             send({"jsonrpc": "2.0", "id": req_id, "result": {"configOptions": OPTIONS}})

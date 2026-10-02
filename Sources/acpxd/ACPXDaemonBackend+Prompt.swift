@@ -326,11 +326,20 @@ extension ACPXDaemonBackend {
                 stream, of: boundSessionId, as: sessionId, into: persister, to: caller,
                 onAnswered: announceAnswer)
         }
+        // acpx's `closeClientOnExit`: whether the turn's agent goes with its failure.
+        var retiresAgent = false
         do {
             if let model = turn.model {
-                try await applyPromptModel(
-                    model, to: entry, persister: persister, agentCommand: turn.agentCommand,
-                    timeoutMilliseconds: turn.timeoutMilliseconds)
+                do {
+                    try await applyPromptModel(
+                        model, to: entry, persister: persister, agentCommand: turn.agentCommand,
+                        timeoutMilliseconds: turn.timeoutMilliseconds)
+                } catch let timedOut as TimeoutError {
+                    // A late acknowledgement would switch the agent's model under the next turn:
+                    // it goes with this one, as acpx 0.19.4 retires it (openclaw/acpx#799).
+                    retiresAgent = true
+                    throw timedOut
+                }
                 // The model's request is shown before what the prompt says, as acpx shows it.
                 await wireFeed.drain()
             }
@@ -356,7 +365,7 @@ extension ACPXDaemonBackend {
             // Code does; acpx misses this — it only reads usage_update._meta.usage).
             if let usage = response.usage { await persister.applyResponseUsage(usage) }
             // A direct turn's agent is let go with it, as acpx closes its client.
-            if turn.direct { await letGoOfDirectAgent(recordId, persister: persister) }
+            if turn.direct { await letGoOfAgent(recordId, persister: persister) }
             await persister.applyLifecycle(entry.agent.lifecycle)
             await persister.applyInitialize(of: entry.agent)
             // Final checkpoint: stamp timestamps and flush the completed turn —
@@ -382,7 +391,7 @@ extension ACPXDaemonBackend {
             let failure = await permissionFailure(of: turn, on: connection, boundSessionId) ?? error
             throw await failedAttempt(
                 failure, of: turn, on: entry, wrote: wrote, retriesOnAFreshLaunch: retriesOnAFreshLaunch,
-                relay: relay, wireFeed: wireFeed)
+                retiresAgent: retiresAgent, relay: relay, wireFeed: wireFeed)
         }
     }
 }
@@ -467,27 +476,6 @@ extension ACPXDaemonBackend {
                     recordId: recordId, turn: turnId, to: connection, sessionId: sessionId, note: wrote)
             }
             Task { if let noted { await noted(recordId, note) } else { await note() } }
-        }
-    }
-
-    /// acpx's `applyPromptModelIfAdvertised`: a turn's `--model` goes onto the session
-    /// before the prompt — checked against what the session advertises, not sent when
-    /// it is already the current model — and is pinned in the record the turn saves.
-    /// A model the session cannot take fails the turn before the prompt goes out.
-    func applyPromptModel(
-        _ model: String, to entry: Live, persister: TurnPersister, agentCommand: String,
-        timeoutMilliseconds: Int? = nil
-    ) async throws {
-        let application = try await ModelApplication.applyRequestedModel(
-            connection: entry.agent.connection, sessionId: entry.session.id, requestedModel: model,
-            models: ModelSupport.advertisedModelState(await persister.acpx), agentCommand: agentCommand,
-            timeoutMilliseconds: timeoutMilliseconds)
-        guard application.applied else { return }
-        let response = application.response
-        await persister.adopt { record in
-            var acpx = record.acpx ?? SessionAcpxState()
-            ModelSupport.applyModelSelection(model, response: response, to: &acpx)
-            record.acpx = acpx
         }
     }
 }
