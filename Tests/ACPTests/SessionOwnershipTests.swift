@@ -245,6 +245,69 @@ import Testing
         }
     }
 
+    /// Two `sessions ensure` for one scope — one by the current claude command, one by an earlier
+    /// built-in default, which the lookups read as the current one (openclaw/acpx#838) — hold one
+    /// ownership: the second waits for it and keeps the session the first makes. acpx keys the
+    /// ownership on the raw command and makes two (openclaw/acpx#851).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func ensuresByTheCurrentAndAnEarlierBuiltInCommandHoldOneOwnership() async throws {
+        let mock = try #require(mockArgv())
+        let directory = try DaemonToolsTests.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // An `npx` first on PATH that is the mock agent, so both claude commands launch it.
+        let bin = directory.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let npx = bin.appendingPathComponent("npx").path
+        try Data("#!/bin/sh\nexec '\(mock[0])' '\(mock[1])'\n".utf8).write(to: URL(fileURLWithPath: npx))
+        chmod(npx, 0o755)
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        setenv("PATH", "\(bin.path):\(path)", 1)
+        // Each mock names its session after its pid, so two made would be two records.
+        setenv("MOCK_SESSION_ID_PER_PROCESS", "1", 1)
+        defer {
+            setenv("PATH", path, 1)
+            unsetenv("MOCK_SESSION_ID_PER_PROCESS")
+        }
+        let current = try #require(AgentRegistry.builtIn["claude"])
+        let earlier = "npx -y @agentclientprotocol/claude-agent-acp@^0.76.0"
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+            let marker = SessionOwnership.scopeMarker(agentCommand: current, cwd: directory.path, name: "shared")
+            let race = EnsureRace()
+            // The first ensure, about to make its session, holds the scope until the second waits
+            // for it — or, holding another, has finished.
+            SessionLifecycle.creating = { command in
+                guard command == current else { return }
+                race.firstIsCreating.open()
+                _ = race.gate.wait(timeout: .now() + 30)
+            }
+            SessionOwnership.waiting = { path in
+                if path.hasSuffix(marker.lastPathComponent) { race.openGate() }
+            }
+            defer {
+                SessionLifecycle.creating = nil
+                SessionOwnership.waiting = nil
+            }
+            let ensure = ["--format", "json", "sessions", "ensure", "--name", "shared"]
+            async let first = Self.acpx(ensure, agent: current, cwd: directory, daemon: daemon)
+            await race.firstIsCreating.opened()
+            let second = await Self.acpx(ensure, agent: earlier, cwd: directory, daemon: daemon)
+            race.openGate()
+            let made = await first
+
+            #expect(made.code == 0)
+            #expect(second.code == 0)
+            let records = SessionStore.listSessions()
+            #expect(records.count == 1)
+            let id = records.first?.acpxRecordId ?? ""
+            #expect(made.out.contains(#""created":true,"acpxRecordId":"\#(id)""#))
+            #expect(second.out.contains(#""created":false,"acpxRecordId":"\#(id)""#))
+            #expect(records.first?.agentCommand == current)
+            await backend.releaseAll()
+        }
+    }
+
     // MARK: - Support
 
     /// `acpx --approve-all --agent <agent> --cwd <cwd> <args>` against the stand-in `daemon`: its
@@ -316,4 +379,49 @@ import Testing
 private final class ImportedBox: @unchecked Sendable {
     var done = false
     var recordId: String?
+}
+
+/// Two ensures staged against each other from the hooks: the first, about to make its session,
+/// says so and holds at the gate; the gate opens once.
+private final class EnsureRace: @unchecked Sendable {
+    let firstIsCreating = Latch()
+    let gate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var gateOpen = false
+
+    func openGate() {
+        let opens: Bool = lock.withLock {
+            if gateOpen { return false }
+            gateOpen = true
+            return true
+        }
+        if opens { gate.signal() }
+    }
+}
+
+/// Opened once, from any thread; awaited without blocking a pool thread, before or after.
+private final class Latch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiting: CheckedContinuation<Void, Never>?
+
+    func open() {
+        let resume: CheckedContinuation<Void, Never>? = lock.withLock {
+            isOpen = true
+            defer { waiting = nil }
+            return waiting
+        }
+        resume?.resume()
+    }
+
+    func opened() async {
+        await withCheckedContinuation { continuation in
+            let openAlready: Bool = lock.withLock {
+                if isOpen { return true }
+                waiting = continuation
+                return false
+            }
+            if openAlready { continuation.resume() }
+        }
+    }
 }
