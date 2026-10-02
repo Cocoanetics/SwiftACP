@@ -71,9 +71,7 @@ extension ACPXDaemonBackend {
             mode: permissionMode, nonInteractive: nonInteractivePermissions, rules: permissionPolicy)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let content = try Self.promptContent(text: text, blocks: blocks, content: rawContent)
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
+        let initial = try resolveRecord(sessionId)
         let recordId = initial.acpxRecordId
         // acpx's CLI checks, before it hands a prompt to the session's owner, that the prompt's MCP
         // config is the owner's: the owner's agent has the servers of the prompt that started it,

@@ -61,7 +61,7 @@ extension ACPXDaemonBackend {
     /// ends as it begins, nothing sent — as acpx's flow runner closes the client a stopped
     /// direct turn would prompt on (#219 review).
     func cancelSession(sessionId: String, turnToken: String? = nil) async throws -> Bool {
-        guard let record = findRecord(sessionId) else { return false }
+        guard let record = try resolveRecordIfAny(sessionId) else { return false }
         let recordId = record.acpxRecordId
         if let turnToken {
             let owners = turns[recordId].flatMap { $0.token == turnToken ? $0 : nil }

@@ -56,9 +56,7 @@ extension ACPXDaemonBackend {
         let permissions = try TurnPermissions(mode: "approve-reads", nonInteractive: nonInteractivePermissions)
         let ceiling = try Self.terminalOutputCeiling(terminalOutputCeiling)
         let timeout = try Self.controlTimeout(timeoutMs)
-        guard let initial = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
+        let initial = try resolveRecord(sessionId)
         let recordId = initial.acpxRecordId
         let arrived = DispatchTime.now()
         do {

@@ -18,35 +18,63 @@ extension ACPXDaemonBackend {
 
     /// Show one persisted session's details — mirrors the CLI's `sessions show`.
     ///
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
+    /// - Parameter sessionId: the acpx record id or the ACP session id (``resolveRecord(_:)``).
     func showSession(sessionId: String) throws -> SessionDetail {
-        guard let record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        return SessionDetail(record: record)
+        SessionDetail(record: try resolveRecord(sessionId))
     }
 
     /// Return a session's conversation history (oldest-first) — mirrors the CLI's
     /// `sessions history`.
     ///
     /// - Parameters:
-    ///   - sessionId: the acpx record id or the ACP session id.
+    ///   - sessionId: the acpx record id or the ACP session id (``resolveRecord(_:)``).
     ///   - limit: keep only the last N entries; 0 / omitted = all.
     func sessionHistory(sessionId: String, limit: Int? = nil) throws -> [SessionStore.HistoryEntry] {
-        guard let record = findRecord(sessionId) else {
-            throw DaemonError.sessionNotFound(sessionId)
-        }
-        let all = SessionStore.conversationHistoryEntries(record)
+        let all = SessionStore.conversationHistoryEntries(try resolveRecord(sessionId))
         guard let limit, limit > 0 else { return all }
         return Array(all.suffix(limit))
     }
 
-    /// Look up a persisted record by acpx record id, then by ACP session id.
-    func findRecord(_ id: String) -> SessionRecord? {
-        if let record = SessionStore.loadRecord(id) { return record }
-        return SessionStore.listSessions().first {
-            $0.acpSessionId == id || $0.acpxRecordId == id
+    /// The persisted record `sessionId` names, as acpx's `resolveSessionRecord` finds it: the
+    /// record filed under that id — one file read, no scan — else the one record whose id or ACP
+    /// session id is `sessionId`, else the one record whose id or ACP session id ends with it.
+    /// Two exact matches refuse the id, as records with ids of their own can share an agent's
+    /// session (#307); so do two suffix matches; and none is not found (#301).
+    func resolveRecord(_ sessionId: String) throws -> SessionRecord {
+        if let record = SessionStore.loadRecord(sessionId) { return record }
+        var exact: [SessionRecord] = []
+        var suffix: [SessionRecord] = []
+        for record in SessionStore.scanRecords() {
+            let ids = [record.acpxRecordId, record.acpSessionId]
+            if ids.contains(sessionId) { Self.retainMatch(&exact, record) }
+            if ids.contains(where: { $0.hasSuffix(sessionId) }) { Self.retainMatch(&suffix, record) }
         }
+        if exact.count == 1 { return exact[0] }
+        if exact.count > 1 { throw DaemonError.multipleSessionsMatch(sessionId) }
+        if suffix.count == 1 { return suffix[0] }
+        if suffix.count > 1 { throw DaemonError.ambiguousSessionId(sessionId) }
+        throw DaemonError.sessionNotFound(sessionId)
+    }
+
+    /// acpx's `retainMatch`: two matches say all there is to say of an id.
+    private static func retainMatch(_ matches: inout [SessionRecord], _ record: SessionRecord) {
+        if matches.count < 2 { matches.append(record) }
+    }
+
+    /// ``resolveRecord(_:)`` for a tool that answers an id no record has with `false` rather than
+    /// a failure: nil then; an id that resolves to no one record still fails.
+    func resolveRecordIfAny(_ sessionId: String) throws -> SessionRecord? {
+        do {
+            return try resolveRecord(sessionId)
+        } catch DaemonError.sessionNotFound {
+            return nil
+        }
+    }
+
+    /// ``resolveRecord(_:)`` where a miss is no failure: a record looked up by its own id, which
+    /// resolves by its file or is gone, and a tool that reports rather than fails.
+    func findRecord(_ id: String) -> SessionRecord? {
+        try? resolveRecord(id)
     }
 
     /// Trim a caller-supplied string, returning nil when it's blank — so an empty

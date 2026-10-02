@@ -14,6 +14,8 @@ enum DaemonError: LocalizedError {
     case invalidCwd(String)
     case emptySessionId
     case sessionNotFound(String)
+    case multipleSessionsMatch(String)
+    case ambiguousSessionId(String)
     case sessionBusy(String)
     case invalidPermissionMode(String)
     case invalidNonInteractivePermissions(String)
@@ -31,6 +33,11 @@ enum DaemonError: LocalizedError {
             return "sessionId must not be empty — create one with the newSession tool first"
         case .sessionNotFound(let id):
             return "no session found for id: \(id)"
+        case .multipleSessionsMatch(let id):
+            // acpx's SessionResolutionError wording (resolveSessionRecord).
+            return "Multiple sessions match id: \(id)"
+        case .ambiguousSessionId(let id):
+            return "Session id is ambiguous: \(id)"
         case .sessionBusy(let id):
             return "session is busy running another turn (use --wait to queue): \(id)"
         case .invalidPermissionMode(let mode):
@@ -63,7 +70,8 @@ extension DaemonError: ErrorWithCause {
 
 extension DaemonError: OutputErrorMeta {
     /// acpx's `SessionResumeRequiredError` carries its own codes; the rest are runtime
-    /// failures.
+    /// failures — its `SessionNotFoundError` and `SessionResolutionError` among them, which
+    /// name no code of their own.
     var outputCode: String? {
         if case .sessionResumeRequired = self { return "RUNTIME" }
         return nil
