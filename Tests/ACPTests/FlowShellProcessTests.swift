@@ -151,6 +151,49 @@ struct FlowShellProcessTests {
         #expect(error?.message.hasSuffix(": signal SIGTERM") == true, "\(error?.message ?? "")")
     }
 
+    /// acpx: "shell input and deadlines are validated before spawning" (openclaw/acpx#811,
+    /// openclaw/acpx#812): a `stdin` that is no string — a number, an object, `null`, a Buffer —
+    /// and a `timeoutMs` past Node's timer limit, `Infinity` or `NaN` are refused with acpx's
+    /// `TypeError` before anything is started: the command, run, would leave a mark. A string
+    /// is written as before.
+    @Test func stdinAndDeadlinesAreCheckedBeforeTheSpawn() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("flow-shell-admission-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let touch: [(String, WireJSON?)] = [
+            ("command", .text("/bin/sh")), ("args", .array([.text("-c"), .text("touch \(marker.path)")]))
+        ]
+        let command = { (more: [(String, WireJSON?)]) in
+            try await FlowShellProcess.runCommand(
+                self.spec(touch + more), cwd: NSTemporaryDirectory(), control: FlowShellControl())
+        }
+        let buffer: WireJSON = .object([
+            (FlowJS.markerKey, .text("instance")), ("text", .text("an instance of Buffer")), ("string", .text("hi")),
+            ("json", .object([("type", .text("Buffer")), ("data", .array([.number(104), .number(105)]))]))
+        ])
+        for stdin in [.number(5), .object([WireJSON.Member]()), .null, buffer] as [WireJSON] {
+            let error = await #expect(throws: FlowShellError.self, "\(stdin)") {
+                _ = try await command([("stdin", stdin)])
+            }
+            #expect(error?.message == "stdin must be a string", "\(stdin)")
+            #expect(error?.name == "TypeError", "\(stdin)")
+        }
+        let nonFinite = { (text: String) in
+            WireJSON.object([(FlowJS.markerKey, .text("number")), ("text", .text(text))])
+        }
+        for timeoutMs in [.number(2_147_483_648), nonFinite("Infinity"), nonFinite("NaN")] as [WireJSON] {
+            let error = await #expect(throws: FlowTimerLimitError.self, "\(timeoutMs)") {
+                _ = try await command([("timeoutMs", timeoutMs)])
+            }
+            #expect(error?.localizedDescription == "timeoutMs must be a finite number no greater than 2147483647")
+        }
+        #expect(!FileManager.default.fileExists(atPath: marker.path), "a refused command was started")
+        let written = try await FlowShellProcess.runCommand(
+            spec([("command", .text("/bin/cat")), ("stdin", .text("hi"))]), cwd: NSTemporaryDirectory(),
+            control: FlowShellControl())
+        #expect(written.stdout == "hi")
+    }
+
     /// acpx: "runShellAction does not crash the host when the child exits before reading
     /// stdin".
     @Test(.enabled(if: node != nil))

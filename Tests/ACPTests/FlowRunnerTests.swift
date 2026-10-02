@@ -378,4 +378,31 @@ struct FlowRunnerTests {
         #expect(heartbeats.count >= 2)
         #expect(heartbeats.allSatisfy { $0["payload"]?["statusDetail"] == .text("Working") })
     }
+
+    /// acpx: "flow loader resolves helper imports without rewriting data or writing beside
+    /// sources" (openclaw/acpx#810): "acpx/flows" resolves to the runtime for a helper the flow
+    /// imports as it does for the flow, whether loaded as an ES module or as CommonJS — and the
+    /// string "acpx/flows" in the flow's data stays what it is. Nothing is written beside the
+    /// flow: its directory cannot be written to, and holds its two files after the run.
+    @Test(.enabled(if: nodeAvailable), arguments: ["mjs", "cjs", "ts", "mts", "cts"])
+    func aHelpersImportOfTheRuntimeResolvesWithoutWritingBesideTheFlow(_ ext: String) async throws {
+        let commonjs = ext == "cjs" || ext == "cts"
+        let helper = commonjs
+            ? #"const {compute} = require("acpx/flows"); exports.node = compute({run: () => "acpx/flows"});"#
+            : #"import {compute} from "acpx/flows"; export const node = compute({run: () => "acpx/flows"});"#
+        let flow = commonjs
+            ? """
+            const {defineFlow} = require("acpx/flows"); const {node} = require("./helper.\(ext)");
+            module.exports = defineFlow({name:"loader",startAt:"ask",nodes:{ask:node},edges:[]});
+            """
+            : """
+            import {defineFlow} from "acpx/flows"; import {node} from "./helper.\(ext)";
+            export default defineFlow({name:"loader",startAt:"ask",nodes:{ask:node},edges:[]});
+            """
+        let run = try await FlowRunnerHarness.run(
+            flow, extension: ext, files: ["helper.\(ext)": helper + "\n"], prelude: false, readOnlyFlowDirectory: true)
+        #expect(run.code == 0, "\(ext): \(run.err)")
+        #expect(member(run.state, "outputs", "ask") == .text("acpx/flows"), "\(ext)")
+        #expect(run.flowDirContents == ["helper.\(ext)", "test.flow.\(ext)"], "\(ext)")
+    }
 }

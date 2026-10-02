@@ -30,7 +30,8 @@ final class FlowShellTermination: @unchecked Sendable {
     /// Where deadlines fire.
     private static let deadlines = DispatchQueue(label: "acpx.flow.shell.deadline")
 
-    private let child: ChildProcess
+    /// The command's process, the root of the tree a stop ends.
+    private let pid: pid_t
     private let closed: FlowShellEvent
     private let onCleanupFailure: @Sendable (Error) -> Void
     /// The attempt the command runs for: its own deadline, when no later than the command's
@@ -52,10 +53,10 @@ final class FlowShellTermination: @unchecked Sendable {
     private var hasOwner = false
 
     init(
-        child: ChildProcess, closed: FlowShellEvent, timeoutMs: Double?, control: FlowShellControl,
+        pid: pid_t, closed: FlowShellEvent, timeoutMs: Double?, control: FlowShellControl,
         onCleanupFailure: @escaping @Sendable (Error) -> Void
     ) {
-        self.child = child
+        self.pid = pid
         self.closed = closed
         self.onCleanupFailure = onCleanupFailure
         attempt = control.attempt
@@ -94,6 +95,9 @@ final class FlowShellTermination: @unchecked Sendable {
 
     var timedOut: Bool { lock.withLock { timedOutFlag } }
     var cancelled: Bool { lock.withLock { cancelledFlag } }
+    /// acpx's `cancelled()` and `timedOut()`, read together: whether a stop has begun, and
+    /// whether for the deadline.
+    var stopped: (cancelled: Bool, timedOut: Bool) { lock.withLock { (cancelledFlag, timedOutFlag) } }
 
     /// Stop the tree with `signal`, or wait for the stop under way.
     func cancel(_ signal: String) async throws {
@@ -129,7 +133,7 @@ final class FlowShellTermination: @unchecked Sendable {
         clearDeadline()
         cancelledFlag = true
         let number = FlowShellSignals.number(signal)
-        let (pid, closed, onCleanupFailure) = (child.pid, self.closed, self.onCleanupFailure)
+        let (pid, closed, onCleanupFailure) = (self.pid, self.closed, self.onCleanupFailure)
         let task = Task { [self] in
             defer { release() }
             await busyPool?.wait()
@@ -147,12 +151,9 @@ final class FlowShellTermination: @unchecked Sendable {
     /// The command's result is in: its deadline goes at once, as acpx's goes before its timer
     /// can fire — `dispose` runs in the microtasks that follow the result, and here it waits for
     /// the cooperative pool while the deadline fires on a queue of its own (#220 review). A stop
-    /// begun before stays under way. Returns whether one was, and whether for the deadline.
-    func resultIsIn() -> (cancelled: Bool, timedOut: Bool) {
-        lock.withLock {
-            clearDeadline()
-            return (cancelledFlag, timedOutFlag)
-        }
+    /// begun before stays under way.
+    func resultIsIn() {
+        lock.withLock { clearDeadline() }
     }
 
     /// acpx's `clearDeadline`. Called under the lock.
@@ -165,7 +166,6 @@ final class FlowShellTermination: @unchecked Sendable {
     func handleClose() {
         let start: Bool = lock.withLock { hasOwner && !released && stopping == nil }
         guard start else { return }
-        let pid = child.pid
         let watching = Task { [self] in
             while !Task.isCancelled {
                 let idle = lock.withLock { stopping == nil }

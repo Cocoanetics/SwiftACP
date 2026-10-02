@@ -3,7 +3,7 @@ import Foundation
 import SwiftACP
 
 // Shell actions and a function action's `ctx.runShell`, as acpx's runner runs them
-// (`executeShellNode`, `runCallbackShell`, `shellControl`, v0.19.3). Split from
+// (`executeShellNode`, `runCallbackShell`, `shellControl`, v0.19.4). Split from
 // `FlowRunner.swift` to keep each file inside the 500-line limit.
 extension FlowRunner {
     /// acpx's `executeShellNode`: the node's `exec`, its command run — the step showing it,
@@ -19,14 +19,14 @@ extension FlowRunner {
         }
         let spec = FlowShellExecution(json: execution.json ?? .object([WireJSON.Member]()))
         let cwd = try FlowShell.resolveCwd(options.defaultCwd, spec.cwd)
-        // `execution.timeoutMs ?? attempt.remainingTimeoutMs()`: the rest of the node's time
-        // only when the command gives none.
-        let timeout: WireJSON?
-        switch spec.timeoutMs {
-        case nil, .null?: timeout = FlowShell.resolveTimeout(try attempt.remainingTimeoutMs().map(WireJSON.number))
-        case let given?: timeout = FlowShell.resolveTimeout(given)
+        // `resolveShellActionTimeoutMs(execution.timeoutMs ?? attempt.remainingTimeoutMs())`:
+        // the rest of the node's time only when the command gives none; a deadline Node's
+        // timer cannot hold fails the step here (openclaw/acpx#812).
+        let timeout: Double? = switch spec.timeoutMs {
+        case nil, .null?: try FlowShell.resolveTimeout(try attempt.remainingTimeoutMs().map(WireJSON.number))
+        case let given?: try FlowShell.resolveTimeout(given)
         }
-        let effective = spec.with(cwd: cwd, timeoutMs: timeout)
+        let effective = spec.with(cwd: cwd, timeoutMs: timeout.map(WireJSON.number))
         state.updateStatusDetail(try FlowShell.summary(of: effective))
         let (nodeId, attemptId) = (attempt.nodeId, attempt.attemptId)
         try await attempt.own {

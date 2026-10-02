@@ -71,9 +71,11 @@ struct FlowShellSpecTests {
         #expect(seqs.count == 3 && seqs[1] == seqs[0] + 2 && seqs[2] == seqs[1] + 1, "\(seqs)")
     }
 
-    /// What JSON cannot carry reaches the runner as acpx's runner sees it: the bytes of a
-    /// Buffer, typed array or DataView as `stdin`; `maxBufferBytes: Infinity`, which acpx's
-    /// check refuses; a `timeoutMs` of `NaN`, which is no deadline; `NaN` as an argument.
+    /// What JSON cannot carry reaches the runner as acpx's runner sees it: a Buffer, typed
+    /// array or DataView as `stdin`, which acpx 0.19.4 refuses as it refuses any `stdin` that
+    /// is no string — `null`, a number, an object — before it spawns (openclaw/acpx#811);
+    /// `maxBufferBytes: Infinity`, which acpx's check refuses; a `timeoutMs` of `NaN`, refused
+    /// as a deadline Node's timer cannot hold (openclaw/acpx#812); `NaN` as an argument.
     @Test(.enabled(if: nodeAvailable))
     func runShellTakesWhatJSONCannotCarry() async throws {
         let run = try await runnerRun("""
@@ -86,6 +88,10 @@ struct FlowShellSpecTests {
                   await attempt(runShell, { command: "/bin/cat", stdin: Buffer.from("hi") }),
                   await attempt(runShell, { command: "/bin/cat", stdin: new Uint8Array([111, 107]) }),
                   await attempt(runShell, { command: "/bin/cat", stdin: new DataView(bytes.buffer, 1, 4) }),
+                  await attempt(runShell, { command: "/bin/cat", stdin: null }),
+                  await attempt(runShell, { command: "/bin/cat", stdin: 5 }),
+                  await attempt(runShell, { command: "/bin/cat", stdin: {} }),
+                  await attempt(runShell, { command: "/bin/cat", stdin: "text" }),
                   await attempt(runShell, { command: "/bin/echo", args: ["x"], maxBufferBytes: Infinity }),
                   await attempt(runShell, {
                     command: "/bin/sh", args: ["-c", "sleep 0.2; printf done"], timeoutMs: NaN }),
@@ -95,8 +101,10 @@ struct FlowShellSpecTests {
               edges: [] });
             """)
         #expect(run.code == 0, "\(run.err)")
-        #expect(member(run.state, "outputs", "a")?.stringified == #"["hi","ok","view","#
-            + #""Error: Shell action maxBufferBytes must be a non-negative safe integer","done","NaN -Infinity\n"]"#)
+        let stdin = #""TypeError: stdin must be a string","#
+        #expect(member(run.state, "outputs", "a")?.stringified == "[" + stdin + stdin + stdin + stdin + stdin + stdin
+            + #""text","Error: Shell action maxBufferBytes must be a non-negative safe integer","#
+            + #""TypeError: timeoutMs must be a finite number no greater than 2147483647","NaN -Infinity\n"]"#)
     }
 
     /// An object of a class as one of the spec's own members — a URL for `cwd` — is refused
@@ -212,9 +220,9 @@ struct FlowShellSpecTests {
 
     /// Node's options, when `args` is an object, as Node reads them: each value with its
     /// type, a file URL as its path, a Buffer `cwd` let through and then ignored; and what is
-    /// left of a spec: an inherited `args` gone with the spread, a `timeoutMs` object by its
-    /// number. The environment comes in Node's order: this process's variables, then the
-    /// spec's new ones in its order.
+    /// left of a spec: an inherited `args` gone with the spread, a `timeoutMs` object refused
+    /// (acpx 0.19.4, openclaw/acpx#812). The environment comes in Node's order: this
+    /// process's variables, then the spec's new ones in its order.
     @Test(.enabled(if: nodeAvailable))
     func optionsAndTheEnvironmentAreNodes() async throws {
         let run = try await runnerRun("""
@@ -241,7 +249,7 @@ struct FlowShellSpecTests {
                 + "Received an instance of Boolean"),
             .array([.text("/usr\n"), .bool(false)]),
             .text("ERR_INVALID_URL_SCHEME: The URL must be of scheme file"),
-            .array([.text(""), .bool(true)]),
+            .text("undefined: timeoutMs must be a finite number no greater than 2147483647"),
             .text("Z,A")
         ]))
     }

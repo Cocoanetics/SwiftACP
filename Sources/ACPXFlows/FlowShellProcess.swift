@@ -58,12 +58,13 @@ struct FlowShellSpawnError: Error, LocalizedError {
     var errorDescription: String? { "spawn \(file) \(ChildSpawn.SpawnError(code: code).name)" }
 }
 
-/// acpx's `src/flows/executors/shell.ts` (v0.19.3): a command run for a shell action, or
+/// acpx's `src/flows/executors/shell.ts` (v0.19.4): a command run for a shell action, or
 /// for a function action's `ctx.runShell`, in a session of its own — Node's `detached` —
 /// its pipes read as Node's `setEncoding("utf8")` reads them.
 enum FlowShellProcess {
-    /// A shell action's command resolves when the process exits (acpx's `"node"` mode);
-    /// `ctx.runShell`'s once its pipes have closed too (`"command"`).
+    /// A shell action's command resolves when the process exits, its pipes given up to
+    /// 100 ms more to close (acpx's `"node"` mode); `ctx.runShell`'s once its pipes have
+    /// closed (`"command"`).
     enum Mode: Sendable {
         case node
         case command
@@ -95,8 +96,14 @@ enum FlowShellProcess {
         -> FlowShellResult {
         if let reason = control.attempt?.abortReason { throw reason }
         let startMs = FlowShellClock.nowMs()
-        let timeoutMs = FlowShell.resolveTimeout(spec.timeoutMs).map(FlowShell.timerDelayMs)
+        let timeoutMs = try FlowShell.resolveTimeout(spec.timeoutMs).map(FlowShell.timerDelayMs)
         try FlowShell.validateMaxBufferBytes(spec.maxBufferBytes)
+        // acpx: `if (spec.stdin !== undefined && typeof spec.stdin !== "string") throw new
+        // TypeError(…)` — `null`, a number, an object and a Buffer alike, before anything is
+        // started (openclaw/acpx#811). `undefined` is no member of the spec the host sent.
+        if let stdin = spec.stdin, stdin.stringValue == nil {
+            throw FlowShellError("stdin must be a string", name: "TypeError")
+        }
         let spawn = try spec.spawnPlan(cwd: cwd, inheriting: FlowShellExecution.processEnvironment)
         let child: ChildProcess
         do {
@@ -114,7 +121,7 @@ enum FlowShellProcess {
             let result: FlowShellResult = try await withCheckedThrowingContinuation { continuation in
                 let first = FirstResult(continuation)
                 let stopper = FlowShellTermination(
-                    child: child, closed: closed, timeoutMs: timeoutMs, control: control,
+                    pid: child.pid, closed: closed, timeoutMs: timeoutMs, control: control,
                     onCleanupFailure: { first.settle(.failure($0)) })
                 termination = stopper
                 let run = FlowShellRun(
@@ -122,47 +129,37 @@ enum FlowShellProcess {
                     termination: stopper, first: first)
                 child.start(
                     onChunk: { run.chunk($0, $1) }, onClose: { run.streamClosed($0) }, onExit: { run.exited($0) })
-                do {
-                    try writeStdin(child, spec.stdin)
-                } catch {
-                    first.settle(.failure(error))
-                    Task { try? await stopper.cancel("SIGTERM") }
-                }
+                writeStdin(child, spec.stdin?.stringValue)
             }
             try throwIfCancelled(control.attempt, mode: mode)
             outcome = .success(result)
         } catch {
-            outcome = .failure(error)
+            // acpx's `catch (error) { await termination.cancel("SIGTERM"); throw error; }`: a
+            // command that failed on its way out is stopped, and the stop — the one under
+            // way, for an attempt cancelled — waited for before the failure is reported; a
+            // stop that fails is the failure (openclaw/acpx#811).
+            var failure = error
+            do {
+                try await termination?.cancel("SIGTERM")
+            } catch let stopping {
+                failure = stopping
+            }
+            outcome = .failure(failure)
         }
         try await termination?.dispose()
         return try outcome.get()
     }
 
-    /// acpx's `writeShellStdin`: what the spec gives — a string as UTF-8, or the bytes of a
-    /// Buffer, typed array or DataView — then the pipe's end. A child that closed it early
-    /// is no matter, its exit tells.
-    private static func writeStdin(_ child: ChildProcess, _ stdin: WireJSON?) throws {
-        if let stdin, case .bytes(let bytes)? = FlowJS.marker(stdin) {
-            write(bytes, to: child)
+    /// acpx's `writeShellStdin`: the string the spec gives as UTF-8, written on a thread of
+    /// its own, as Node writes without waiting, then the pipe's end. A child that closed it
+    /// early is no matter, its exit tells.
+    private static func writeStdin(_ child: ChildProcess, _ stdin: String?) {
+        guard let stdin else {
+            child.closeInput()
             return
         }
-        switch stdin {
-        case nil, .null?:
-            child.closeInput()
-        case .string(let units)?:
-            write(Array(String(decoding: units, as: UTF16.self).utf8), to: child)
-        case let other?:
-            child.closeInput()
-            throw FlowShellError.invalidArgType(NodeArgumentError.type(
-                "chunk", "of type string or an instance of Buffer, TypedArray, or DataView", other))
-        }
-    }
-
-    /// `bytes` written on a thread of their own, as Node writes without waiting, then the
-    /// pipe's end.
-    private static func write(_ bytes: [UInt8], to child: ChildProcess) {
         Thread {
-            try? child.write(bytes)
+            try? child.write(Array(stdin.utf8))
             child.closeInput()
         }.start()
     }
@@ -177,9 +174,18 @@ enum FlowShellProcess {
 }
 
 /// acpx's `waitForShellResult`: the command's output captured as it comes, and its result
-/// once it exits (a shell action) or closes (`runShell`). Output past the capture limit
-/// fails it and stops the tree.
-private final class FlowShellRun: @unchecked Sendable {
+/// once it closes (`runShell`) — or, for a shell action, once it exits and its pipes have
+/// closed or ``drainWindow`` has passed since: what the wrapper wrote last is drained,
+/// while a descendant that inherited the pipes does not hold the step (openclaw/acpx#813).
+/// Output past the capture limit fails it and stops the tree.
+final class FlowShellRun: @unchecked Sendable {
+    /// acpx's 100 ms `drainDeadline` after a shell action's exit; a test may lengthen it.
+    @TaskLocal static var drainWindow: Duration = .milliseconds(100)
+
+    /// Where the drain's deadline fires: not the cooperative pool, which a busy machine can
+    /// hold past it.
+    private static let drains = DispatchQueue(label: "acpx.flow.shell.drain")
+
     private let spec: FlowShellExecution
     private let args: [WireJSON]
     private let cwd: String
@@ -194,6 +200,9 @@ private final class FlowShellRun: @unchecked Sendable {
     private var status: Int32?
     private var hasExited = false
     private var closedStreams = 0
+    /// The drain's deadline, armed at a shell action's exit until it closes or settles.
+    private var drainDeadline: DispatchWorkItem?
+    private let drainWindow = FlowShellRun.drainWindow
     /// For tests: how long the exit takes to be taken in past its first step (``FlowShellTermination/exitIsTakenInLateBy``).
     private let exitIsTakenInLateBy = FlowShellTermination.exitIsTakenInLateBy
 
@@ -242,33 +251,54 @@ private final class FlowShellRun: @unchecked Sendable {
         checkClosed()
     }
 
-    /// A shell action's result is its exit: the deadline goes first, as the exit is taken in, in
-    /// one step with whether a stop had begun — acpx takes both in one callback, which its timer
-    /// cannot come between (#220 review).
+    /// Node's `exit`. A shell action's deadline goes first, as its exit is taken in: a
+    /// command that exited in time has not timed out, though its drain is still to come —
+    /// acpx's timer, cleared only with the result, can fire within it (#220 review). Its
+    /// result follows at `close`, or ``drainWindow`` after the exit, whichever comes first
+    /// (acpx's `drainDeadline`, openclaw/acpx#813).
     func exited(_ status: Int32?) {
-        let stopped = mode == .node ? termination.resultIsIn() : nil
+        if mode == .node { termination.resultIsIn() }
         if let late = exitIsTakenInLateBy { Thread.sleep(forTimeInterval: Double(late / .milliseconds(1)) / 1000) }
-        lock.withLock {
+        let drain: DispatchWorkItem? = lock.withLock {
             hasExited = true
             self.status = status
+            guard mode == .node, !settled, closedStreams < 2 else { return nil }
+            // Held by its deadline, as acpx's promise is by its timer, until it fires or is cancelled.
+            let deadline = DispatchWorkItem { self.finish() }
+            drainDeadline = deadline
+            return deadline
         }
-        if let stopped { settle(stopped) }
+        if let drain {
+            Self.drains.asyncAfter(deadline: .now() + .nanoseconds(Int(drainWindow / .nanoseconds(1))), execute: drain)
+        }
         checkClosed()
     }
 
-    /// Node's `close`: exited, and both pipes at their end — `runShell`'s result, its deadline
-    /// gone as it is taken in.
+    /// Node's `close`: exited, and both pipes at their end — the result, `runShell`'s
+    /// deadline gone as it is taken in.
     private func checkClosed() {
         let closedNow: Bool = lock.withLock { hasExited && closedStreams == 2 && !closed.hasHappened }
         guard closedNow else { return }
-        let stopped = mode == .command ? termination.resultIsIn() : nil
+        if mode == .command { termination.resultIsIn() }
         closed.fire()
         termination.handleClose()
-        if let stopped { settle(stopped) }
+        finish()
     }
 
-    /// The result, with whether the command was stopped — and for its deadline — as it was taken in.
-    private func settle(_ stopped: (cancelled: Bool, timedOut: Bool)) {
+    /// acpx's `finish`: the result, once; the drain's deadline is no more.
+    private func finish() {
+        let drain: DispatchWorkItem? = lock.withLock {
+            defer { drainDeadline = nil }
+            return drainDeadline
+        }
+        drain?.cancel()
+        settle()
+    }
+
+    /// The result, with whether the command was stopped — and for its deadline — as acpx
+    /// reads both when it resolves.
+    private func settle() {
+        let stopped = termination.stopped
         let result: FlowShellResult? = lock.withLock {
             guard !settled else { return nil }
             settled = true
@@ -282,7 +312,12 @@ private final class FlowShellRun: @unchecked Sendable {
     }
 
     private func fail(_ error: Error) {
-        lock.withLock { settled = true }
+        let drain: DispatchWorkItem? = lock.withLock {
+            settled = true
+            defer { drainDeadline = nil }
+            return drainDeadline
+        }
+        drain?.cancel()
         first.settle(.failure(error))
     }
 }

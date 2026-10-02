@@ -37,7 +37,7 @@ struct FlowShellTests {
 
     /// The markers for what JSON cannot carry, read as acpx's JavaScript reads the values:
     /// a non-finite number written as `null` and converted by `String`, refused as a
-    /// capture limit, taken as a timeout; the bytes of a binary `stdin`.
+    /// capture limit and as a timeout.
     @Test func whatJSONCannotCarryReadsAsJavaScriptReadsIt() throws {
         let marker = { (kind: String, text: String) in
             WireJSON.object([(FlowJS.markerKey, .text(kind)), ("text", .text(text))])
@@ -48,12 +48,11 @@ struct FlowShellTests {
         #expect(FlowJS.string(marker("number", "-Infinity")) == "-Infinity")
         #expect(FlowJS.string(marker("number", "NaN")) == "NaN")
         #expect(NodeArgumentError.received(marker("number", "NaN")) == "type number (NaN)")
-        #expect(FlowShell.resolveTimeout(infinity) == infinity)
-        #expect(FlowShell.resolveTimeout(marker("number", "NaN")) == nil)
+        #expect(throws: FlowTimerLimitError()) { try FlowShell.resolveTimeout(infinity) }
+        #expect(throws: FlowTimerLimitError()) { try FlowShell.resolveTimeout(marker("number", "NaN")) }
         let limit = FlowShellExecution(json: .object([("maxBufferBytes", infinity)])).maxBufferBytes
         #expect(limit == .infinity)
         #expect(throws: FlowShellError.self) { try FlowShell.validateMaxBufferBytes(limit) }
-        #expect(FlowJS.marker(marker("bytes", "aGk=")) == .bytes([104, 105]))
     }
 
     /// Node's `util.inspect` of a string, as its `ERR_INVALID_ARG_VALUE` shows one: the
@@ -107,46 +106,59 @@ struct FlowShellTests {
         #expect(refusal([echo, ("args", .array([.text("fine")]))]) == nil)
     }
 
-    /// acpx: "resolveShellActionTimeoutMs treats non-positive as no deadline" — and, as its
-    /// JavaScript compares `timeoutMs > 0`, a string, boolean or list that converts to a
-    /// positive number is a deadline too, kept as given.
-    @Test func onlyAPositiveTimeoutIsADeadline() {
-        for none in [nil, .null, .number(0), .number(-1), .number(.nan), .text(""), .text("abc"), .text("-5"),
-                     .bool(false), .array([]), .array([.number(1), .number(2)]), .object([WireJSON.Member]())]
-            as [WireJSON?] {
-            #expect(FlowShell.resolveTimeout(none) == nil, "\(String(describing: none))")
+    /// acpx: "resolveShellActionTimeoutMs treats non-positive as no deadline", and 0.19.4's
+    /// `resolveFlowTimeoutMs` (openclaw/acpx#812): a positive number within Node's timer
+    /// limit is the deadline; `undefined`, 0 and a negative number are none; anything else —
+    /// a number past the limit, `NaN`, an infinity, a string that reads as one, `null`, a
+    /// boolean, a list, an object — is refused with acpx's `TypeError`, in its words.
+    @Test func onlyAPositiveNumberWithinNodesTimerLimitIsADeadline() throws {
+        for none in [nil, .number(0), .number(-1)] as [WireJSON?] {
+            #expect(try FlowShell.resolveTimeout(none) == nil, "\(String(describing: none))")
         }
-        for deadline in [.number(50), .number(.infinity), .number(0.5), .text("100"), .text(" 0x10 "), .bool(true),
-                         .array([.number(150)]), .array([.text("7")])] as [WireJSON] {
-            #expect(FlowShell.resolveTimeout(deadline) == deadline, "\(deadline)")
+        for (deadline, resolved) in [(.number(50), 50), (.number(0.5), 0.5), (.number(2_147_483_647), 2_147_483_647)]
+            as [(WireJSON, Double)] {
+            #expect(try FlowShell.resolveTimeout(deadline) == resolved, "\(deadline)")
+        }
+        let marker = { (text: String) in WireJSON.object([(FlowJS.markerKey, .text("number")), ("text", .text(text))]) }
+        for refused in [.number(2_147_483_648), marker("Infinity"), marker("NaN"), .text("100"), .text(""), .null,
+                        .bool(true), .bool(false), .array([.number(150)]), .object([WireJSON.Member]())] as [WireJSON] {
+            let error = #expect(throws: FlowTimerLimitError.self, "\(refused)") {
+                try FlowShell.resolveTimeout(refused)
+            }
+            #expect(error?.localizedDescription == "timeoutMs must be a finite number no greater than 2147483647")
+        }
+        #expect(try FlowTimer.resolveTimeoutMs(nil) == nil)
+        #expect(try FlowTimer.resolveTimeoutMs(0) == nil)
+        #expect(try FlowTimer.resolveTimeoutMs(2_147_483_647) == 2_147_483_647)
+        for refused in [2_147_483_648, 1e24, .infinity, .nan] as [Double] {
+            #expect(throws: FlowTimerLimitError()) { try FlowTimer.resolveTimeoutMs(refused) }
         }
     }
 
-    /// Node's `setTimeout` delay for a deadline: its number, at least 1 ms; and the message
-    /// acpx's `TimeoutError` gives, the value as `${…}` writes it.
+    /// Node's `setTimeout` delay for a deadline: as given, at least 1 ms; and the message
+    /// acpx's `TimeoutError` gives — the deadline, or the non-positive `timeoutMs` the command
+    /// was given, or 0.
     @Test func aDeadlineRunsAsNodesTimerRunsIt() {
-        #expect(FlowShell.timerDelayMs(.text("100")) == 100)
-        #expect(FlowShell.timerDelayMs(.bool(true)) == 1)
-        #expect(FlowShell.timerDelayMs(.number(0.5)) == 1)
-        #expect(FlowShell.timerDelayMs(.array([.number(150)])) == 150)
-        let message = { (json: WireJSON) in
-            FlowShell.timeoutError(FlowShellExecution(json: .object([("timeoutMs", json)]))).localizedDescription
+        #expect(FlowShell.timerDelayMs(100) == 100)
+        #expect(FlowShell.timerDelayMs(0.5) == 1)
+        let message = { (json: WireJSON?) in
+            FlowShell.timeoutError(FlowShellExecution(json: .object(json.map { [("timeoutMs", $0)] } ?? [])))
+                .localizedDescription
         }
-        #expect(message(.text("100")) == "Timed out after 100ms")
-        #expect(message(.bool(true)) == "Timed out after truems")
-        #expect(message(.array([.number(150)])) == "Timed out after 150ms")
+        #expect(message(.number(150)) == "Timed out after 150ms")
         #expect(message(.number(2.5)) == "Timed out after 2.5ms")
-        #expect(message(.text("abc")) == "Timed out after abcms")
+        #expect(message(.number(0)) == "Timed out after 0ms")
+        #expect(message(.number(-5)) == "Timed out after -5ms")
         #expect(message(.null) == "Timed out after 0ms")
+        #expect(message(nil) == "Timed out after 0ms")
     }
 
-    /// A delay no clock can hold is no timer: one past ``FlowTimer/maxDelayMs`` outlives any
-    /// run, and much further `Duration.milliseconds` traps.
-    @Test func aDelayNoClockCanHoldIsNoTimer() {
+    /// A delay past Node's timer limit is no timer: a deadline never is, once resolved; a
+    /// heartbeat past it is none (openclaw/acpx#812).
+    @Test func aDelayPastNodesTimerLimitIsNoTimer() {
         #expect(FlowTimer.duration(milliseconds: 50) == .nanoseconds(50_000_000))
-        #expect(FlowTimer.duration(milliseconds: 3_000_000_000) == .nanoseconds(3_000_000_000_000_000))
-        #expect(FlowTimer.duration(milliseconds: FlowTimer.maxDelayMs) == .nanoseconds(1_000_000_000_000_000_000))
-        for none in [1e13, 1e24, 1e308, .infinity, .nan] as [Double] {
+        #expect(FlowTimer.duration(milliseconds: FlowTimer.maxDelayMs) == .nanoseconds(2_147_483_647_000_000))
+        for none in [2_147_483_648, 1e13, 1e24, 1e308, .infinity, .nan] as [Double] {
             #expect(FlowTimer.duration(milliseconds: none) == nil, "\(none)")
         }
         #expect(FlowTimer.duration(milliseconds: -5) == .zero)
