@@ -230,8 +230,11 @@ public enum TerminalOutputLimit {
         min(max(0, requested ?? defaultBytes), ceiling ?? Int.max)
     }
 
-    /// JavaScript's `trim()`.
-    static func javaScriptTrimmed(_ text: String) -> String {
+    /// JavaScript's `trim()` (ECMA-262 `String.prototype.trim`): the leading and trailing
+    /// ``isJavaScriptWhitespace(_:)`` scalars gone. Not Foundation's `.whitespacesAndNewlines`,
+    /// which differs both ways — it holds U+200B, which JavaScript keeps, and lacks U+FEFF, which
+    /// JavaScript trims.
+    public static func javaScriptTrimmed(_ text: String) -> String {
         let scalars = text.unicodeScalars
         guard let first = scalars.firstIndex(where: { !isJavaScriptWhitespace($0) }),
             let last = scalars.lastIndex(where: { !isJavaScriptWhitespace($0) })
@@ -239,8 +242,9 @@ public enum TerminalOutputLimit {
         return String(scalars[first...last])
     }
 
-    /// JavaScript's `WhiteSpace` and `LineTerminator` — what `trim()` and `\s` match.
-    static func isJavaScriptWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+    /// JavaScript's `WhiteSpace` and `LineTerminator` — what `trim()` and `\s` match: TAB, LF,
+    /// VT, FF, CR, SPACE, NBSP, ZWNBSP (U+FEFF), LS, PS and every `Space_Separator` (Zs).
+    public static func isJavaScriptWhitespace(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
         case 0x09...0x0D, 0x20, 0xA0, 0xFEFF, 0x2028, 0x2029: return true
         default: return scalar.properties.generalCategory == .spaceSeparator

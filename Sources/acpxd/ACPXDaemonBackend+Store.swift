@@ -42,9 +42,11 @@ extension ACPXDaemonBackend {
     /// session (#307); so do two suffix matches; and none is not found (#301). A blank id is
     /// refused first: acpx never resolves one, its owner refusing it at input validation
     /// (`owner-input.ts`, `sessionId.trim().length === 0`), and every id ends with the empty
-    /// string, which would hand a blank id the store's sole record.
+    /// string, which would hand a blank id the store's sole record. Blank by JavaScript's
+    /// `trim()` (``TerminalOutputLimit/javaScriptTrimmed(_:)``), not Foundation's whitespace: an
+    /// id of U+200B is an id to acpx, and one of U+FEFF is blank.
     func resolveRecord(_ sessionId: String) throws -> SessionRecord {
-        guard !sessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !TerminalOutputLimit.javaScriptTrimmed(sessionId).isEmpty else {
             throw DaemonError.emptySessionId
         }
         if let record = SessionStore.loadRecord(sessionId) { return record }

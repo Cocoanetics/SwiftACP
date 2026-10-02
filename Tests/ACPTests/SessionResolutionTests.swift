@@ -197,6 +197,30 @@ struct SessionResolutionTests {
         }
     }
 
+    /// Blank is blank by JavaScript's `trim()` (acpx's `sessionId.trim().length === 0`), whose
+    /// set differs from Foundation's `.whitespacesAndNewlines` both ways: U+200B (a format
+    /// character) is an id to acpx, and U+FEFF is blank (Codex on #310).
+    @Test func aBlankIdIsBlankByJavaScriptsTrim() async throws {
+        try await withIsolatedStore {
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            for blank in ["\u{FEFF}", "\u{2028}", " \u{3000} ", "\u{A0}\t"] {
+                let refused = await refusal(backend, blank)
+                #expect(refused?.localizedDescription == DaemonError.emptySessionId.localizedDescription)
+            }
+            // A one-character id, not a blank one: no record has it yet.
+            #expect(await refusal(backend, "\u{200B}")?.localizedDescription == "no session found for id: \u{200B}")
+
+            let now = nowISO()
+            try SessionStore.writeRecord(SessionRecord(
+                acpxRecordId: "x\u{200B}", acpSessionId: "native-x\u{200B}", agentCommand: "agent-a", cwd: "/tmp/repo",
+                createdAt: now, lastUsedAt: now))
+            #expect(try await backend.resolveRecord("x\u{200B}").acpxRecordId == "x\u{200B}")
+            #expect(try await backend.resolveRecord("native-x\u{200B}").acpxRecordId == "x\u{200B}")
+            #expect(try await backend.showSession(sessionId: "x\u{200B}").id == "x\u{200B}")
+            #expect(try await backend.resolveRecord("\u{200B}").acpxRecordId == "x\u{200B}")
+        }
+    }
+
     @Test func anIdNoRecordHasIsNotFound() async throws {
         try await withIsolatedStore {
             _ = try seedRecords()
