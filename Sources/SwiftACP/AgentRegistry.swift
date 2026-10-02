@@ -9,7 +9,11 @@ import JSONRPCWire
 /// npx resolution step. Ported from acpx's `agent-registry.ts`.
 public enum AgentRegistry {
     /// Pinned adapter package ranges, mirroring upstream acpx's
-    /// `ACP_ADAPTER_PACKAGE_RANGES` (v0.19.1).
+    /// `ACP_ADAPTER_PACKAGE_RANGES` (v0.19.4).
+    ///
+    /// Changing a range changes the built-in command saved in session records: add the
+    /// previous command to `BuiltInCommandMigration.legacyCommands` (ACPXCore), or the
+    /// sessions saved under it drop out of the agent's scope (openclaw/acpx#838).
     ///
     /// `codex` used to be pinned ahead of acpx deliberately: at the 0.11.0 port
     /// baseline acpx still pinned `^0.0.44`, whose bundled `@openai/codex` (0.128.0)
@@ -20,7 +24,7 @@ public enum AgentRegistry {
     /// ``launch(for:cwd:environment:inheritStderr:overrides:)`` `CODEX_PATH` fallback
     /// covers a flagged bundle independently whenever a system `codex` is installed.
     public enum PackageRange {
-        public static let claude = "^0.76.0"
+        public static let claude = "^0.81.2"
         public static let codex = "^1.1.5"
         public static let mux = "^0.28.0"
         public static let pi = "^0.0.33"

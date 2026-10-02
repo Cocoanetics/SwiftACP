@@ -173,9 +173,12 @@ public enum SessionStore {
         scanRecords().sorted { $0.lastUsedAt > $1.lastUsedAt }
     }
 
+    /// The records in `agentCommand`'s scope (``BuiltInCommandMigration/scope(_:)``): acpx's
+    /// `listSessionsForAgent`, and what its prune takes its candidates from.
     public static func listSessions(forAgent agentCommand: String) -> [SessionRecord] {
-        scanRecords()
-            .filter { $0.agentCommand == agentCommand }
+        let scope = BuiltInCommandMigration.scope(agentCommand)
+        return scanRecords()
+            .filter { scope.contains($0.agentCommand) }
             .sorted { $0.lastUsedAt > $1.lastUsedAt }
     }
 
@@ -192,10 +195,13 @@ public enum SessionStore {
         return trimmed
     }
 
+    /// acpx's `matchesSession`: `scope` is the query's (``BuiltInCommandMigration/scope(_:)``),
+    /// so `--agent <earlier built-in default>` finds a record still saved under it and one
+    /// read as the current default alike (openclaw/acpx#838).
     private static func matches(
-        _ record: SessionRecord, agentCommand: String, name: String?, includeClosed: Bool
+        _ record: SessionRecord, scope: Set<String>, name: String?, includeClosed: Bool
     ) -> Bool {
-        guard record.agentCommand == agentCommand else { return false }
+        guard scope.contains(record.agentCommand) else { return false }
         if !includeClosed && record.closed == true { return false }
         let normalizedName = normalizeName(name)
         if normalizedName == nil { return normalizeName(record.name) == nil }
@@ -214,11 +220,10 @@ public enum SessionStore {
         agentCommand: String, cwd: String, name: String?, includeClosed: Bool = false
     ) -> SessionRecord? {
         let abs = absolute(cwd)
+        let scope = BuiltInCommandMigration.scope(agentCommand)
         var match: SessionRecord?
         for record in scanRecords() where record.cwd == abs {
-            guard matches(
-                record, agentCommand: agentCommand, name: name, includeClosed: includeClosed)
-            else { continue }
+            guard matches(record, scope: scope, name: name, includeClosed: includeClosed) else { continue }
             if isNewer(record, than: match) { match = record }
         }
         return match
@@ -230,11 +235,11 @@ public enum SessionStore {
         agentCommand: String, cwd: String, name: String?, boundary: String?
     ) -> SessionRecord? {
         let distances = walkDistances(cwd: cwd, boundary: boundary)
+        let scope = BuiltInCommandMigration.scope(agentCommand)
         var match: SessionRecord?
         var nearest = Int.max
         for record in scanRecords() {
-            guard let distance = distances[record.cwd],
-                matches(record, agentCommand: agentCommand, name: name, includeClosed: false)
+            guard let distance = distances[record.cwd], matches(record, scope: scope, name: name, includeClosed: false)
             else { continue }
             if distance < nearest || (distance == nearest && isNewer(record, than: match)) {
                 match = record
