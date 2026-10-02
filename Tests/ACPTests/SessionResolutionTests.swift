@@ -172,6 +172,31 @@ struct SessionResolutionTests {
         }
     }
 
+    /// acpx compares ids with JS `===` and `endsWith`: UTF-16 code units. Swift's `==` and
+    /// `hasSuffix` compare by canonical equivalence, under which `e` plus a combining acute is
+    /// the precomposed `é`, so a caller's id in the other normalization form would resolve a
+    /// record acpx would not find (Codex on #310). The record's file, named by
+    /// `safeSessionId`'s percent-encoding of each byte, never matched either way.
+    @Test func anIdInAnotherNormalizationFormIsNotFound() async throws {
+        try await withIsolatedStore {
+            let now = nowISO()
+            try SessionStore.writeRecord(SessionRecord(
+                acpxRecordId: "record-caf\u{e9}", acpSessionId: "native-caf\u{e9}", agentCommand: "agent-a",
+                cwd: "/tmp/repo", createdAt: now, lastUsedAt: now))
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect("caf\u{e9}" == "cafe\u{301}", "the two forms are one string to Swift")
+            // Precomposed, as the record has it: by file, exact ACP id and suffix.
+            #expect(try await backend.resolveRecord("record-caf\u{e9}").acpxRecordId == "record-caf\u{e9}")
+            #expect(try await backend.resolveRecord("native-caf\u{e9}").acpxRecordId == "record-caf\u{e9}")
+            #expect(try await backend.resolveRecord("caf\u{e9}").acpxRecordId == "record-caf\u{e9}")
+            // Decomposed: other code units, so no match, as acpx finds none.
+            for other in ["record-cafe\u{301}", "native-cafe\u{301}", "cafe\u{301}"] {
+                let refused = await refusal(backend, other)
+                #expect(refused?.localizedDescription == "no session found for id: \(other)")
+            }
+        }
+    }
+
     @Test func anIdNoRecordHasIsNotFound() async throws {
         try await withIsolatedStore {
             _ = try seedRecords()

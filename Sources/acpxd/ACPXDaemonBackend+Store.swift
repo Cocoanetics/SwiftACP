@@ -52,14 +52,31 @@ extension ACPXDaemonBackend {
         var suffix: [SessionRecord] = []
         for record in SessionStore.scanRecords() {
             let ids = [record.acpxRecordId, record.acpSessionId]
-            if ids.contains(sessionId) { Self.retainMatch(&exact, record) }
-            if ids.contains(where: { $0.hasSuffix(sessionId) }) { Self.retainMatch(&suffix, record) }
+            if ids.contains(where: { Self.sameUnits($0, sessionId) }) { Self.retainMatch(&exact, record) }
+            if ids.contains(where: { Self.endsWithUnits($0, sessionId) }) { Self.retainMatch(&suffix, record) }
         }
         if exact.count == 1 { return exact[0] }
         if exact.count > 1 { throw DaemonError.multipleSessionsMatch(sessionId) }
         if suffix.count == 1 { return suffix[0] }
         if suffix.count > 1 { throw DaemonError.ambiguousSessionId(sessionId) }
         throw DaemonError.sessionNotFound(sessionId)
+    }
+
+    /// JS `===` on the ids: equal UTF-16 code units. Swift's `==` compares by canonical
+    /// equivalence, which would let a caller's id in another normalization form — `e` plus a
+    /// combining accent for a record's precomposed `é` — match a record acpx would not find; the
+    /// file fast path cannot, since ``ACPXPaths/safeSessionId(_:)`` percent-encodes each byte.
+    private static func sameUnits(_ id: String, _ sessionId: String) -> Bool {
+        id.utf16.elementsEqual(sessionId.utf16)
+    }
+
+    /// JS `endsWith` on the ids: `id`'s last UTF-16 code units are `sessionId`'s, with the same
+    /// reservation as ``sameUnits(_:_:)`` against Swift's `hasSuffix`.
+    private static func endsWithUnits(_ id: String, _ sessionId: String) -> Bool {
+        let units = id.utf16
+        let wanted = sessionId.utf16
+        guard units.count >= wanted.count else { return false }
+        return units.suffix(wanted.count).elementsEqual(wanted)
     }
 
     /// acpx's `retainMatch`: two matches say all there is to say of an id.
