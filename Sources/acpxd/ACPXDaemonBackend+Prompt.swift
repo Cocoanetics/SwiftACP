@@ -131,7 +131,7 @@ extension ACPXDaemonBackend {
         // the caller's id may be the one it replaced. A direct turn that finds it gone lets
         // its agent go, as acpx's closes the client it was handed however it ends (#219 review).
         let record = try await lettingDirectAgentGo(direct, recordId) {
-            guard let record = findRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
+            guard let record = reloadRecord(recordId) else { throw DaemonError.sessionNotFound(sessionId) }
             return record
         }
         // Cancelled as it took the session, it ends now, as acpx's prompt ends cancelled once

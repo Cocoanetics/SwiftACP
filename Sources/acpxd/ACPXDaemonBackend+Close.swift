@@ -40,7 +40,7 @@ extension ACPXDaemonBackend {
             // tool (e.g. `setSessionMcpServers`, which the conflict message sends callers
             // here to unblock) may have persisted changes meanwhile. Writing the
             // pre-suspension snapshot would silently revert them.
-            var record = findRecord(initial.acpxRecordId) ?? initial
+            var record = reloadRecord(initial.acpxRecordId) ?? initial
             record.pid = nil
             record.closed = true
             record.closedAt = nowISO()
@@ -94,7 +94,7 @@ extension ACPXDaemonBackend {
             // A turn the close ends saves its record first.
             guard (try? await turnQueue.acquire(recordId, wait: true)) != nil else { continue }
             defer { Task { await turnQueue.release(recordId) } }
-            guard var record = findRecord(recordId) else { continue }
+            guard var record = reloadRecord(recordId) else { continue }
             record.applyLifecycle(entry.agent.lifecycle)
             try? SessionStore.writeRecord(record)
         }

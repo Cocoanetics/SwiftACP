@@ -69,7 +69,7 @@ extension ACPXDaemonBackend {
         // `defer` can't await; the hop to the queue actor is safe because release
         // hands the slot to the next FIFO waiter regardless of when it lands.
         defer { Task { await turnQueue.release(recordId) } }
-        guard let current = findRecord(recordId) else {
+        guard let current = reloadRecord(recordId) else {
             throw DaemonError.sessionNotFound(sessionId)
         }
         let direct = owners[recordId] == nil

@@ -117,7 +117,7 @@ extension ACPXDaemonBackend {
         let entry = live.removeValue(forKey: recordId)
         // As acpx's owner shutting down swallows its client's close.
         try? await entry?.agent.close()
-        if var record = findRecord(recordId) {
+        if var record = reloadRecord(recordId) {
             record.applyLifecycle(entry?.agent.lifecycle)
             try? SessionStore.writeRecord(record)
         }

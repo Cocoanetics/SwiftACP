@@ -77,10 +77,12 @@ extension ACPXDaemonBackend {
         }
     }
 
-    /// ``resolveRecord(_:)`` where a miss is no failure: a record looked up by its own id, which
-    /// resolves by its file or is gone, and a tool that reports rather than fails.
-    func findRecord(_ id: String) -> SessionRecord? {
-        try? resolveRecord(id)
+    /// A record read again by its own id after this actor suspended — its file, and nothing else,
+    /// as acpx reloads one (`readSessionRecord(acpxRecordId)`): a file gone or unreadable
+    /// meanwhile is a miss, never another record whose id ends with this one, which the suffix
+    /// resolution of ``resolveRecord(_:)`` would hand a close or a turn (Codex on #310).
+    func reloadRecord(_ recordId: String) -> SessionRecord? {
+        SessionStore.loadRecord(recordId)
     }
 
     /// Trim a caller-supplied string, returning nil when it's blank — so an empty

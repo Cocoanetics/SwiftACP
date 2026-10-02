@@ -411,7 +411,10 @@ actor ACPXDaemonBackend: ACPXBackend {
     /// agent has exited, or whose connection has closed, is only kept until the next turn
     /// replaces it.
     func sessionStatus(sessionId: String) async -> LiveSessionStatus {
-        guard let record = findRecord(sessionId) else { return LiveSessionStatus(live: false) }
+        // A caller's id: one that resolves to no one record is no session this daemon holds.
+        guard let record = try? resolveRecord(sessionId) else {
+            return LiveSessionStatus(live: false)
+        }
         let owned = owners[record.acpxRecordId] != nil
         guard let entry = live[record.acpxRecordId] else { return LiveSessionStatus(live: owned) }
         let lifecycle = entry.agent.lifecycle

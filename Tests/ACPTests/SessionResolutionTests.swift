@@ -150,12 +150,34 @@ struct SessionResolutionTests {
         }
     }
 
+    /// A record read again by its own id after the actor suspended — a close's re-read, a turn's
+    /// once it holds the slot — is its file and nothing else, as acpx's `readSessionRecord` reads
+    /// one: a file gone meanwhile is a miss, not the record whose id ends with the missing one,
+    /// which the close would otherwise mark closed and the turn go on under (Codex on #310). A
+    /// caller's id still resolves the survivor by suffix, as acpx's `resolveSessionRecord` does.
+    @Test func aReloadByARecordsOwnIdReadsItsFileAlone() async throws {
+        try await withIsolatedStore {
+            let now = nowISO()
+            for id in ["first", "the-first"] {
+                try SessionStore.writeRecord(SessionRecord(
+                    acpxRecordId: id, acpSessionId: "native-\(id)", agentCommand: "agent-a", cwd: "/tmp/repo",
+                    createdAt: now, lastUsedAt: now))
+            }
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            #expect(await backend.reloadRecord("first")?.acpxRecordId == "first")
+            try FileManager.default.removeItem(at: ACPXPaths.sessionRecordPath("first"))
+            #expect(await backend.reloadRecord("first") == nil)
+            #expect(try await backend.resolveRecord("first").acpxRecordId == "the-first")
+            #expect(SessionStore.loadRecord("the-first")?.closed != true)
+        }
+    }
+
     @Test func anIdNoRecordHasIsNotFound() async throws {
         try await withIsolatedStore {
             _ = try seedRecords()
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
             #expect(await refusal(backend, "nowhere")?.localizedDescription == "no session found for id: nowhere")
-            #expect(await backend.findRecord("nowhere") == nil)
+            #expect(await backend.reloadRecord("nowhere") == nil)
             #expect(try await backend.resolveRecordIfAny("nowhere") == nil)
         }
     }
