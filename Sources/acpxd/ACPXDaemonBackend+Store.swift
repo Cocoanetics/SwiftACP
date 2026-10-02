@@ -59,12 +59,15 @@ extension ACPXDaemonBackend {
 
     /// Persisted sessions matching an optional agent filter. A short name and its
     /// expanded registry command compare equal, so `claude` matches sessions
-    /// created with either form. Blank / omitted returns every session.
+    /// created with either form; an earlier built-in default matches the records
+    /// still saved under it and those read as the current default, as acpx's
+    /// `agentScope` does (``BuiltInCommandMigration/scope(_:)``, openclaw/acpx#838).
+    /// Blank / omitted returns every session.
     func sessions(matchingAgent rawFilter: String?) -> [SessionRecord] {
         let all = SessionStore.listSessions()
         guard let filter = nonBlank(rawFilter) else { return all }
-        let target = canonicalAgent(filter)
-        return all.filter { canonicalAgent($0.agentCommand) == target }
+        let scope = BuiltInCommandMigration.scope(canonicalAgent(filter))
+        return all.filter { scope.contains(canonicalAgent($0.agentCommand)) }
     }
 
     /// Resolve a short agent name (e.g. `claude`) to its registry launch command;

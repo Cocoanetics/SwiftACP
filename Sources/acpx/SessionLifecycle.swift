@@ -43,6 +43,10 @@ enum SessionLifecycle {
         return ExitCodes.success
     }
 
+    /// Told, for tests, the agent command of an ensure that has found no session and is about
+    /// to make one, with the scope's ownership still held.
+    nonisolated(unsafe) static var creating: (@Sendable (_ agentCommand: String) -> Void)?
+
     static func ensure(_ context: CommandContext) throws -> Int32 {
         let scan = context.options
         let flags = try context.globalFlags()
@@ -67,6 +71,7 @@ enum SessionLifecycle {
                 }
                 return (reused, false)
             }
+            creating?(agent.agentCommand)
             let record = try createSession(
                 agent: agent, name: name, flags: flags, config: context.config, permissions: permissions,
                 resumeSessionId: scan.string("resume-session"))

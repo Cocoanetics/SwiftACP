@@ -41,15 +41,24 @@ public final class SessionOwnership: @unchecked Sendable {
     /// acpx's `acquireSessionScope`: the marker `ensure%3A<key>.stream.lock` in the sessions
     /// directory, `key` the SHA-256 of `JSON.stringify([agentCommand, cwd, name])` — `cwd`
     /// absolute and `name` trimmed, `null` when it has nothing left.
+    ///
+    /// `agentCommand` is keyed as the current built-in command when it is an earlier built-in
+    /// default (``BuiltInCommandMigration/canonicalAgentCommand(_:)``): the lookups made under
+    /// the ownership match that command's whole scope (openclaw/acpx#838), so two ensures for
+    /// one scope, one by the current command and one by an earlier default, would otherwise
+    /// hold different ownerships, each find no session, and both make one. For the current
+    /// command the marker is acpx's, file for file; for an earlier default it is not — acpx
+    /// keys it on the raw command (openclaw/acpx#851).
     public static func scope(agentCommand: String, cwd: String, name: String?) throws -> SessionOwnership {
         try acquire(scopeMarker(agentCommand: agentCommand, cwd: cwd, name: name))
     }
 
     /// Where the marker of a scope's ownership is.
     static func scopeMarker(agentCommand: String, cwd: String, name: String?) -> URL {
+        let command = BuiltInCommandMigration.canonicalAgentCommand(agentCommand)
         let trimmed = name.map { SessionRecordParser.javaScriptTrimmed(Array($0.utf16)) } ?? []
         let key = WireJSON.array([
-            .text(agentCommand), .text(NodePath.resolve(cwd)), trimmed.isEmpty ? .null : .string(trimmed)
+            .text(command), .text(NodePath.resolve(cwd)), trimmed.isEmpty ? .null : .string(trimmed)
         ]).stringified
         let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return ACPXPaths.sessionStreamLockPath("ensure:\(digest)")

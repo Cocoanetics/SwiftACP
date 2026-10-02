@@ -51,13 +51,14 @@ public enum SessionRecordParser {
         guard !fields.contains(.invalid), hasValidCore(raw), let conversation = conversation(raw) else {
             return nil
         }
+        let agent = agentIdentity(raw)
         return object([
             ("schema", .text(SESSION_RECORD_SCHEMA)),
             ("acpxRecordId", raw["acpx_record_id"]),
             ("acpSessionId", raw["acp_session_id"]),
             ("agentSessionId", nonEmptyString(raw["agent_session_id"])),
-            ("agentCommand", raw["agent_command"]),
-            ("agentArgv", agentArgv(raw)),
+            ("agentCommand", agent.command),
+            ("agentArgv", agent.argv),
             ("cwd", raw["cwd"]),
             ("name", name.value),
             ("createdAt", raw["created_at"]),
@@ -156,55 +157,33 @@ public enum SessionRecordParser {
         return trimmed.isEmpty ? nil : .string(trimmed)
     }
 
-    // MARK: - Agent argv and event log
+    // MARK: - Agent identity and event log
 
-    /// `parsePersistedAgentArgv`: the stored argv, or the one acpx knows for a built-in
-    /// command line the record names (`resolveAgentArgvForCommand`).
-    static func agentArgv(_ raw: WireJSON) -> WireJSON? {
-        if case .array(let items)? = raw["agent_argv"], !items.isEmpty,
-            items.allSatisfy({ $0.stringValue != nil }), case .string(let first) = items[0], !first.isEmpty {
-            return .array(items)
+    /// `parsePersistedAgentIdentity`: the record's command and argv. A record saved under an
+    /// earlier built-in default is read as the current one (``BuiltInCommandMigration``,
+    /// acpx 0.19.4, openclaw/acpx#838); otherwise the command is kept as stored, with the
+    /// stored argv or the one acpx knows for a built-in command line the record names
+    /// (`resolveAgentArgvForCommand`).
+    static func agentIdentity(_ raw: WireJSON) -> (command: WireJSON?, argv: WireJSON?) {
+        guard let command = raw["agent_command"]?.stringValue else { return (raw["agent_command"], nil) }
+        let stored = optionalAgentArgv(raw["agent_argv"])
+        let identity = BuiltInCommandMigration.migrated(command: command, argv: stored)
+        if identity.command != command {
+            return (.text(identity.command), identity.argv.map { .array($0.map(WireJSON.text)) })
         }
-        guard let command = raw["agent_command"]?.stringValue,
-            let argv = builtInArgv(forCommand: command)
-        else { return nil }
-        return .array(argv.map(WireJSON.text))
+        if stored != nil { return (raw["agent_command"], raw["agent_argv"]) }
+        let argv = BuiltInCommandMigration.argv(forCommand: command).map { WireJSON.array($0.map(WireJSON.text)) }
+        return (raw["agent_command"], argv)
     }
 
-    /// `resolveAgentArgvForCommand`: the argv of the built-in agent `command` launches,
-    /// under its current command line or one it had before.
-    static func builtInArgv(forCommand command: String) -> [String]? {
-        let name =
-            AgentRegistry.ordered.first { $0.command == command }?.name
-            ?? legacyCommands.first { $0.commands.contains(command) }?.name
-        return name.flatMap { AgentRegistry.builtIn[$0] }.map { $0.split(separator: " ").map(String.init) }
+    /// `parseOptionalAgentArgv`: strings, at least one, the first not empty.
+    static func optionalAgentArgv(_ value: WireJSON?) -> [String]? {
+        guard case .array(let items)? = value, case .string(let first)? = items.first, !first.isEmpty else {
+            return nil
+        }
+        let strings = items.compactMap(\.stringValue)
+        return strings.count == items.count ? strings : nil
     }
-
-    /// acpx's `legacyFallbackCommands` and `LEGACY_AGENT_COMMANDS`: command lines built-in
-    /// agents were launched with before, which records can still name.
-    static let legacyCommands: [(name: String, commands: [String])] = [
-        ("claude", ["npm exec @agentclientprotocol/claude-agent-acp@\(AgentRegistry.PackageRange.claude)"]),
-        ("pi", ["npx pi-acp", "npx pi-acp@^0.0.22", "npx pi-acp@^0.0.26"]),
-        ("codex", [
-            "npx @zed-industries/codex-acp", "npx @zed-industries/codex-acp@^0.9.5",
-            "npx @zed-industries/codex-acp@^0.10.0", "npx @zed-industries/codex-acp@^0.11.1",
-            "npx @zed-industries/codex-acp@^0.12.0", "npx -y @agentclientprotocol/codex-acp@^0.0.44",
-            "npx -y @agentclientprotocol/codex-acp@^1.1.4"
-        ]),
-        ("claude", [
-            "npx @zed-industries/claude-agent-acp", "npx -y @zed-industries/claude-agent-acp",
-            "npx -y @zed-industries/claude-agent-acp@^0.21.0", "npx -y @zed-industries/claude-agent-acp@^0.23.1",
-            "npx -y @zed-industries/claude-agent-acp@^0.24.2", "npx -y @zed-industries/claude-agent-acp@^0.25.0",
-            "npx -y @zed-industries/claude-agent-acp@^0.31.0", "npx -y @agentclientprotocol/claude-agent-acp@^0.36.1",
-            "npx -y @agentclientprotocol/claude-agent-acp@^0.37.0",
-            "npm exec @agentclientprotocol/claude-agent-acp@^0.36.1",
-            "npm exec @agentclientprotocol/claude-agent-acp@^0.37.0"
-        ]),
-        ("gemini", ["gemini", "gemini --experimental-acp"]),
-        ("kiro", ["kiro-cli acp"]),
-        ("mux", ["npx -y mux@^0.27.0 acp"]),
-        ("opencode", ["npx opencode-ai"])
-    ]
 
     /// `parseEventLog`: the stored log when its core is valid, else acpx's default.
     static func eventLog(_ value: WireJSON?, recordId: String) -> WireJSON {
@@ -244,6 +223,10 @@ public enum SessionRecordParser {
     /// trimmed, an unreadable event log is the default one. Every other member,
     /// SwiftACP's own included, is left as stored.
     ///
+    /// The agent's command and argv are the parser's: a record saved under an earlier
+    /// built-in default reads as the current one, launched as the current one is
+    /// (``BuiltInCommandMigration``), and a built-in's missing argv is filled in.
+    ///
     /// - Parameter parsed: what ``parse(_:)`` made of `raw`.
     public static func normalizedForModel(_ raw: WireJSON, parsed: WireJSON) -> WireJSON {
         guard case .object(let members) = raw else { return raw }
@@ -255,6 +238,8 @@ public enum SessionRecordParser {
         let normalized: [String: WireJSON?] = [
             "name": parsed["name"],
             "agent_session_id": parsed["agentSessionId"],
+            "agent_command": parsed["agentCommand"],
+            "agent_argv": parsed["agentArgv"],
             "last_seq": modelInteger(raw["last_seq"]),
             "pid": modelInteger(raw["pid"]),
             "last_agent_exit_code": modelInteger(raw["last_agent_exit_code"]),
@@ -270,12 +255,17 @@ public enum SessionRecordParser {
             // A block that does not read at all is dropped, as acpx drops it.
             "acpx": parsed["acpx"].map(withModelIntegers)
         ]
-        return .object(members.compactMap { member in
+        var model = members.compactMap { member in
             guard let replacement = normalized[String(decoding: member.key, as: UTF16.self)] else {
                 return member
             }
             return replacement.map { WireJSON.Member(key: member.key, value: $0) }
-        })
+        }
+        // An argv the record did not store, filled in for its built-in command.
+        if raw["agent_argv"] == nil, let argv = parsed["agentArgv"] {
+            model.append(WireJSON.Member("agent_argv", argv))
+        }
+        return .object(model)
     }
 
     /// An integer beyond what the model's `Int` holds — acpx takes any finite integral
