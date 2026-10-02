@@ -26,6 +26,9 @@ import ucrt
 ///   arrive (acpx 0.18.0, "deny waiting questions when stdin closes").
 /// - A caller cancelled while queued leaves at once without disturbing the question on
 ///   screen; one cancelled while its own question is up stops reading stdin.
+/// - Control characters in the header, details and question are shown as `\xNN`, so
+///   a tool title, command, path or write preview cannot erase or overwrite the
+///   question (acpx 0.19.4, openclaw/acpx#845). The request itself is untouched.
 public final class TerminalPermissionPrompt: @unchecked Sendable {
     /// The process's own terminal: stdin for answers, stderr for questions.
     public static let shared = TerminalPermissionPrompt(
@@ -85,11 +88,14 @@ public final class TerminalPermissionPrompt: @unchecked Sendable {
         guard canPrompt else { return false }
 
         var text = ""
-        if let header { text += "\n\(header)\n" }
+        if let header { text += "\n\(Self.visiblePromptText(header))\n" }
         if let details, !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            text += "\(details)\n"
+            // Line by line, so a write preview keeps its line breaks (acpx splits the
+            // details on "\n" and escapes each piece).
+            let lines = details.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false)
+            text += lines.map { Self.visiblePromptText($0) }.joined(separator: "\n") + "\n"
         }
-        text += prompt
+        text += Self.promptForDisplay(prompt)
         let restoreEcho = suppressControlEcho()
         defer { restoreEcho() }
         output.write(Data(text.utf8))
@@ -101,6 +107,37 @@ public final class TerminalPermissionPrompt: @unchecked Sendable {
         }
         let normalized = answer.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "y" || normalized == "yes"
+    }
+
+    /// acpx 0.19.4's `visiblePromptText` (openclaw/acpx#845): every C0 control
+    /// (U+0000…U+001F) and U+007F…U+009F is shown as `\xNN`, two lowercase hex digits,
+    /// so a tool title, command, path or write preview cannot move the cursor or erase
+    /// the question. Applied to what is displayed only; the request's command, path and
+    /// bytes are untouched. Per code point, as JavaScript iterates a string — a control
+    /// inside a combining sequence is escaped on its own, not with its base character.
+    static func visiblePromptText<Scalars: Sequence>(_ scalars: Scalars) -> String
+        where Scalars.Element == Unicode.Scalar {
+        var rendered = ""
+        for scalar in scalars {
+            if scalar.value <= 0x1f || (0x7f...0x9f).contains(scalar.value) {
+                let hex = String(scalar.value, radix: 16)
+                rendered += "\\x" + (hex.count < 2 ? "0" : "") + hex
+            } else {
+                rendered.unicodeScalars.append(scalar)
+            }
+        }
+        return rendered
+    }
+
+    static func visiblePromptText(_ text: String) -> String {
+        visiblePromptText(text.unicodeScalars)
+    }
+
+    /// acpx's `promptForDisplay`: the question templates start with a newline, which
+    /// stays a line break; every control after it is escaped.
+    static func promptForDisplay(_ prompt: String) -> String {
+        guard prompt.unicodeScalars.first == "\n" else { return visiblePromptText(prompt) }
+        return "\n" + visiblePromptText(prompt.unicodeScalars.dropFirst())
     }
 
     /// Stop the terminal echoing control characters (`^D`) while the question is up,

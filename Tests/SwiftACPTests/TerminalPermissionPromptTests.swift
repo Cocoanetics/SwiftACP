@@ -159,6 +159,51 @@ struct TerminalPermissionPromptTests {
         #expect(try await terminal.prompt.ask(prompt: "A? "))
         #expect(try await terminal.prompt.ask(prompt: "B? ") == false)
     }
+
+    // MARK: - Control characters (acpx 0.19.4, openclaw/acpx#845)
+
+    /// Control characters in the header, the details and the question are shown as
+    /// `\xNN`; the details keep their line breaks, and the question its leading one.
+    /// acpx's `permission-prompt-controls.test.ts`, with its texts.
+    @Test(arguments: ["n", "yes"])
+    func controlCharactersAreShownAsEscapes(_ typed: String) async throws {
+        let terminal = Terminal()
+        terminal.type(typed + "\n")
+        let answer = try await terminal.prompt.ask(
+            header: "[permission] Allow write to notes\rHIDDEN.txt?",
+            details: "first\r\u{1b}[1Ahidden\nsecond\tline\u{7f}\u{9f}",
+            prompt: "\n[permission] Allow command \"echo\r\u{1b}[2Khidden\nnext\"? (y/N) ")
+        #expect(answer == (typed == "yes"))
+        await terminal.waitFor("(y/N) ")
+        #expect(terminal.output
+            == "\n[permission] Allow write to notes\\x0dHIDDEN.txt?\n"
+            + "first\\x0d\\x1b[1Ahidden\nsecond\\x09line\\x7f\\x9f\n"
+            + "\n[permission] Allow command \"echo\\x0d\\x1b[2Khidden\\x0anext\"? (y/N) ")
+    }
+
+    /// Ordinary text, non-ASCII included, is printed as it is.
+    @Test func ordinaryUnicodeTextIsUnchanged() async throws {
+        let terminal = Terminal()
+        terminal.type("n\n")
+        #expect(try await terminal.prompt.ask(prompt: "Allow café 🦞? ") == false)
+        await terminal.waitFor("? ")
+        #expect(terminal.output == "Allow café 🦞? ")
+    }
+
+    /// The escaped ranges are U+0000…U+001F and U+007F…U+009F, exactly: a space and a
+    /// no-break space are not controls, and a control inside a combining sequence is
+    /// escaped on its own, as JavaScript iterates code points.
+    @Test func theEscapedRangesAreAcpxs() {
+        let visible = TerminalPermissionPrompt.visiblePromptText
+        #expect(visible("\u{00}\u{1f}") == "\\x00\\x1f")
+        #expect(visible("\u{20}\u{7e}") == " ~")
+        #expect(visible("\u{7f}\u{80}\u{9f}") == "\\x7f\\x80\\x9f")
+        #expect(visible("\u{a0}\u{a1}") == "\u{a0}\u{a1}")
+        #expect(visible("e\u{301}\u{08}\u{301}") == "e\u{301}\\x08\u{301}")
+        #expect(visible("\r\n") == "\\x0d\\x0a")
+        #expect(TerminalPermissionPrompt.promptForDisplay("\n\nA? ") == "\n\\x0aA? ")
+        #expect(TerminalPermissionPrompt.promptForDisplay("\rA? ") == "\\x0dA? ")
+    }
 }
 
 private extension Array {

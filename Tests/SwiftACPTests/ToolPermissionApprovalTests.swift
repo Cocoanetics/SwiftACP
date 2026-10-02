@@ -178,4 +178,14 @@ struct ToolPermissionApprovalTests {
         await terminal.waitFor("(y/N) ")
         #expect(terminal.output == "\n[permission] Allow tool [other]? (y/N) ")
     }
+
+    /// A title's control characters are shown as `\xNN` (acpx 0.19.4, openclaw/acpx#845).
+    @Test func controlCharactersInATitleAreShownAsEscapes() async throws {
+        let terminal = TerminalPermissionPromptTests.Terminal()
+        terminal.type("n\n")
+        _ = try await ToolPermissionApproval(policy: .approveReads, terminal: terminal.prompt)
+            .resolve(Self.request(title: "Edit notes\r\u{1b}[2KHIDDEN.txt"))
+        await terminal.waitFor("(y/N) ")
+        #expect(terminal.output == "\n[permission] Allow Edit notes\\x0d\\x1b[2KHIDDEN.txt [edit]? (y/N) ")
+    }
 }

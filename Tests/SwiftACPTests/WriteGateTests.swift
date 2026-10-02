@@ -75,6 +75,24 @@ struct WriteGateTests {
         try await approval(.approveReads, .fail, confirm: { _, _ in true }).authorize(write)
     }
 
+    /// On a terminal, control characters in the path and the preview are shown as
+    /// `\xNN`, and the preview keeps its line breaks (acpx 0.19.4, openclaw/acpx#845).
+    /// The request's path and content are untouched.
+    @Test func controlCharactersInAPathAndPreviewAreShownAsEscapes() async throws {
+        let terminal = TerminalPermissionPromptTests.Terminal()
+        terminal.type("y\n")
+        let request = WriteTextFileRequest(
+            sessionId: "s", path: "/w/notes\rHIDDEN.txt", content: "first\r\u{1b}[1Ahidden\nsecond\tline\u{7f}\u{9f}\n")
+        try await WriteApproval(policy: .approveReads, nonInteractive: .deny, confirm: nil, prompt: terminal.prompt)
+            .authorize(request)
+        await terminal.waitFor("(y/N) ")
+        #expect(terminal.output
+            == "\n[permission] Allow write to /w/notes\\x0dHIDDEN.txt?\n"
+            + "first\\x0d\\x1b[1Ahidden\nsecond\\x09line\\x7f\\x9f\n\nAllow write? (y/N) ")
+        #expect(request.path == "/w/notes\rHIDDEN.txt")
+        #expect(request.content == "first\r\u{1b}[1Ahidden\nsecond\tline\u{7f}\u{9f}\n")
+    }
+
     @Test func refusalsCarryAcpxsWording() {
         #expect(FileSystemPermissionError.denied.description == "Permission denied for fs/write_text_file")
         #expect(FileSystemPermissionError.promptUnavailable.description
