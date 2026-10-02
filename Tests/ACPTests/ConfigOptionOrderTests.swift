@@ -248,17 +248,19 @@ import Testing
         #expect(session.configOptionsAsSent?.stringified == Self.optionsAsSent)
     }
 
-    /// Options that are no list are kept as sent too — an object's members in the agent's order
+    /// Options that are no list — an object, say — are not recorded (acpx 0.19.4,
+    /// openclaw/acpx#809); 0.19.3 kept them as sent, an object's members in the agent's order
     /// (#268 review).
     @Test(.enabled(if: mockPythonAvailable))
-    func aReplysOptionsObjectKeepsItsOrder() async throws {
+    func aReplysOptionsObjectIsNotRecorded() async throws {
         let options = #"{"z":1,"a":{"y":2,"b":3}}"#
         let command = try Self.modelAgent("'MODEL_AGENT_NEW_REPLY={\"configOptions\":\(options)}'")
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             await daemon.releaseAll()
-            #expect(try Self.writtenOptions(id).stringified == options)
+            let record = try #require(WireJSON(parsing: try Data(contentsOf: ACPXPaths.sessionRecordPath(id))))
+            #expect(record["acpx"]?["config_options"] == nil)
         }
     }
 

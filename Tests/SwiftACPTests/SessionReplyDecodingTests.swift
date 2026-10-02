@@ -5,8 +5,10 @@ import Testing
 
 /// The replies that open a session and set an option are read as acpx reads them: its ACP
 /// SDK checks no reply, so a member the schema would not take fails nothing.
-/// `configOptions` and `models` are kept as sent, `null` apart from none, and `modes` is
-/// read as the ACP schema reads it (`zSessionModeState`), left out when it doesn't fit.
+/// A session reply's `configOptions` and `models` are kept as sent, `null` apart from none;
+/// an option reply's `configOptions` only when it is a list (acpx 0.19.4, openclaw/acpx#809);
+/// and `modes` is read as the ACP schema reads it (`zSessionModeState`), left out when it
+/// doesn't fit.
 struct SessionReplyDecodingTests {
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         try JSONDecoder().decode(type, from: Data(json.utf8))
@@ -27,8 +29,9 @@ struct SessionReplyDecodingTests {
             #expect(reply.configOptions == raw?.arrayValue, "\(json)")
             let loaded = try decode(LoadSessionResponse.self, json)
             #expect(loaded.rawConfigOptions == raw, "\(json)")
+            // An option reply keeps only a list.
             let set = try decode(SetSessionConfigOptionResponse.self, json)
-            #expect(set.rawConfigOptions == raw, "\(json)")
+            #expect(set.rawConfigOptions == (raw?.arrayValue == nil ? nil : raw), "\(json)")
         }
     }
 
@@ -86,16 +89,29 @@ struct SessionReplyDecodingTests {
         }
     }
 
+    /// acpx 0.19.4's `normalizeConfigOptionAcknowledgement` (openclaw/acpx#809): a reply whose
+    /// `configOptions` is no list only acknowledges too — read with that member deleted — while
+    /// a list is kept as sent.
+    @Test func anOptionReplyWhoseOptionsAreNoListOnlyAcknowledges() throws {
+        for options in ["null", "5", #""oops""#, "{}", "true"] {
+            let reply = #"{"configOptions":\#(options)}"#
+            #expect(try decode(SetSessionConfigOptionResponse.self, reply).rawConfigOptions == nil, "\(reply)")
+        }
+        #expect(try decode(SetSessionConfigOptionResponse.self, #"{"configOptions":[null,"x"]}"#).rawConfigOptions
+            == .array([.null, .string("x")]))
+    }
+
     @Test func aNullListIsWrittenAsSent() throws {
         var reply = NewSessionResponse(sessionId: "s")
         #expect(try JSONValue(encoding: reply) == .object(["sessionId": .string("s")]))
         reply.rawConfigOptions = .null
         #expect(try JSONValue(encoding: reply) == .object(["sessionId": .string("s"), "configOptions": .null]))
+        // An option reply's options go out as set, and come back only as a list.
         var set = SetSessionConfigOptionResponse()
         set.rawConfigOptions = .string("oops")
         let written = try JSONEncoder().encode(set)
-        #expect(try JSONDecoder().decode(SetSessionConfigOptionResponse.self, from: written).rawConfigOptions
-            == .string("oops"))
+        #expect(String(decoding: written, as: UTF8.self) == #"{"configOptions":"oops"}"#)
+        #expect(try JSONDecoder().decode(SetSessionConfigOptionResponse.self, from: written).rawConfigOptions == nil)
     }
 
     /// The daemon hands the CLI the reply's options as sent, for it echoes them.

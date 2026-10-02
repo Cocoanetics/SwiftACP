@@ -6,9 +6,10 @@ import JSONFoundation
 import SwiftACP
 import Testing
 
-/// A `set` whose reply reports no options is an acknowledgement, as acpx 0.19.3 takes it
-/// (#778): the record keeps its catalog, the option at its new value, and `set` reports
-/// that catalog (`printSetConfigOptionResultByFormat`) rather than none.
+/// A `set` whose reply lists no options is an acknowledgement, as acpx 0.19.4 takes it
+/// (#778, openclaw/acpx#809): the record keeps its catalog, the option at its new value —
+/// a model's as the id that went out (openclaw/acpx#807) — and `set` reports that catalog
+/// (`printSetConfigOptionResultByFormat`) rather than none.
 extension DaemonToolsTests {
     private func field(_ option: JSONValue, _ key: String) -> JSONValue? {
         guard case .object(let fields) = option else { return nil }
@@ -48,23 +49,102 @@ extension DaemonToolsTests {
             SessionControlResult(resumed: false, configOptions: reported), record: record) == .array(reported))
         #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false), record: record)
             .arrayValue?.first.flatMap { field($0, "id") } == .string("saved"))
-        // `null`, as acpx's `??` takes it, falls back to the record too.
-        #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false, rawConfigOptions: .null),
-            record: record).arrayValue?.first.flatMap { field($0, "id") } == .string("saved"))
-        #expect(ControlCommand.reportedOptions(
-            SessionControlResult(resumed: false, rawConfigOptions: .string("oops")), record: record) == .string("oops"))
+        // Options that are no list are none (`Array.isArray`, acpx 0.19.4, openclaw/acpx#809):
+        // the record's again.
+        for raw in [JSONValue.null, .string("oops"), .integer(5)] {
+            #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false, rawConfigOptions: raw),
+                record: record).arrayValue?.first.flatMap { field($0, "id") } == .string("saved"), "\(raw)")
+        }
         record.acpx = nil
         #expect(ControlCommand.reportedOptions(SessionControlResult(resumed: false), record: record) == .array([]))
     }
 
-    /// The count `set` prints is the options' `length`: a string's UTF-16 code units, as
-    /// acpx counts a string reply, and none for anything else that is no list.
+    /// The count `set` prints is the options' `length`: a list's entries, and none for
+    /// anything else — which `set` no longer reports (acpx 0.19.4, openclaw/acpx#809).
     @Test func aSetCountsTheOptionsAsAcpxDoes() {
         #expect(ControlCommand.optionCount(.array([.null, .null])) == 2)
-        #expect(ControlCommand.optionCount(.string("oops")) == 4)
-        #expect(ControlCommand.optionCount(.string("é😀")) == 3)
+        #expect(ControlCommand.optionCount(.string("oops")) == 0)
         #expect(ControlCommand.optionCount(.integer(5)) == 0)
         #expect(ControlCommand.optionCount(.object([:])) == 0)
+    }
+
+    /// acpx 0.19.4's `opaque-config.test.ts` (openclaw/acpx#809): a reply whose options are no
+    /// list — none (a `null` or `{}` reply), `null`, a number, a string, an object —
+    /// acknowledges a selection without replacing the catalog or dropping the saved
+    /// selections, for a plain option and then for the model.
+    @Test(arguments: [nil, JSONValue.null, .integer(5), .string("oops"), .object([:])])
+    func optionsThatAreNoListAcknowledgeWithoutReplacingTheCatalog(_ raw: JSONValue?) {
+        var state = SessionAcpxState()
+        state.configOptions = .array([
+            .object([
+                "id": .string("model"), "type": .string("select"), "category": .string("model"),
+                "currentValue": .string("m1"),
+                "options": .array([
+                    .object(["value": .string("m1"), "name": .string("One")]),
+                    .object(["value": .string("m2"), "name": .string("Two")])
+                ])
+            ]),
+            .object(["id": .string("effort"), "type": .string("select"), "currentValue": .string("low")])
+        ])
+        state.desiredConfigOptions = ["effort": "low"]
+        var response = SetSessionConfigOptionResponse()
+        response.rawConfigOptions = raw
+        ModelSupport.applyConfigOptionSelection("effort", value: "high", response: response, to: &state)
+        #expect(state.configOptions?.arrayValue?.map { field($0, "currentValue") } == [.string("m1"), .string("high")])
+        #expect(state.desiredConfigOptions == ["effort": "high"])
+        ModelSupport.applyModelSelection("m2", response: response, to: &state)
+        #expect(state.currentModelId == "m2")
+        #expect(state.configOptions?.arrayValue?.map { field($0, "currentValue") } == [.string("m2"), .string("high")])
+        #expect(state.desiredConfigOptions == ["effort": "high"])
+    }
+
+    /// A session on `model-agent.py` started through a program named `cursor-agent`, so the
+    /// adapter's alias rule applies, advertising `gpt-5[thinking]` beside `m1` and answering
+    /// each selection with `{}`. Returns the session's id and the request log, emptied.
+    private func cursorSession() async throws -> (id: String, log: URL) {
+        let python = try #require(AgentRegistry.which("python3"))
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/model-agent.py")
+        try FileManager.default.createDirectory(at: ACPXPaths.baseDir, withIntermediateDirectories: true)
+        let log = ACPXPaths.baseDir.appendingPathComponent("requests.ndjson")
+        let wrapper = ACPXPaths.baseDir.appendingPathComponent("cursor-agent")
+        try """
+            #!/bin/sh
+            exec /usr/bin/env MODEL_AGENT_LOG='\(log.path)' MODEL_AGENT_MODELS='m1,gpt-5[thinking]' \
+              MODEL_AGENT_EMPTY_REPLIES=1 '\(python)' '\(fixture.path)'
+
+            """.write(to: wrapper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+        let record = try await SessionEngine.createSession(
+            agentCommand: wrapper.path, cwd: NSTemporaryDirectory(), name: nil, permission: .approveAll,
+            authCredentials: [:], authPolicy: "skip")
+        try "".write(to: log, atomically: true, encoding: .utf8)
+        return (record.acpxRecordId, log)
+    }
+
+    /// acpx 0.19.4 (openclaw/acpx#807, `owned-controls.test.ts`): a model set by a Cursor alias
+    /// and acknowledged with `{}` goes out as the advertised id, which the record keeps current
+    /// and as the option's value, while `session_options` keeps the alias — through the model
+    /// control and through its option alike.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)), arguments: [false, true])
+    func anAcknowledgedAliasKeepsTheResolvedId(throughOption: Bool) async throws {
+        try await withIsolatedStore {
+            let (id, log) = try await cursorSession()
+            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
+            if throughOption {
+                _ = try await daemon.setConfigOption(sessionId: id, configId: "model", value: "gpt-5")
+            } else {
+                _ = try await daemon.setModel(sessionId: id, modelId: "gpt-5")
+            }
+            let acpx = try #require(SessionStore.loadRecord(id)?.acpx)
+            await daemon.releaseAll()
+            #expect(try Self.modelAgentRequests(log)
+                == ["session/new", "session/set_config_option model=gpt-5[thinking]"])
+            #expect(acpx.currentModelId == "gpt-5[thinking]")
+            #expect(acpx.configOptions?.arrayValue?.first.flatMap { field($0, "currentValue") }
+                == .string("gpt-5[thinking]"))
+            #expect(acpx.sessionOptions?.model == "gpt-5")
+        }
     }
 
     /// acpx's acknowledgement sets the first option with the id (`find`), not every one.

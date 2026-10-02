@@ -6,12 +6,14 @@ import JSONFoundation
 import SwiftACP
 import Testing
 
-/// Session replies whose members the ACP schema would not take are taken as acpx 0.19.3
-/// takes them. Its ACP SDK checks no reply, so acpx records `configOptions` as the agent
-/// sent them — `null` as an empty list, and nothing JavaScript reads as false — reads
-/// model state only from a list, and never reads `modes`. A `null` load reports nothing,
-/// and a `null` option reply acknowledges. Where acpx fails with a `TypeError` instead
-/// (an option reply that is neither a list nor a string), SwiftACP carries on.
+/// Session replies whose members the ACP schema would not take are taken as acpx 0.19.4
+/// takes them. Its ACP SDK checks no reply, so acpx reads a reply's members off whatever the
+/// agent sent — and reads `configOptions` only when it is a list (`normalizeResponseConfigOptions`,
+/// `normalizeConfigOptionAcknowledgement`, openclaw/acpx#809): anything else a `session/new` or
+/// load reply holds is not recorded, and an option reply holding one only acknowledges. Model
+/// state is read only from a list, and `modes` never. A `null` load reports nothing, and a
+/// `null` option reply acknowledges. acpx 0.19.3 recorded whatever JavaScript read as true, and
+/// failed on most option replies that were no list with a `TypeError` (#201).
 ///
 /// Each test reads the record before the daemon lets the agent go: it records the agent's
 /// exit on the record it reads back, as acpx's owner does at shutdown
@@ -52,33 +54,23 @@ import Testing
         String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
     }
 
+    /// Each option's `currentValue`, in the catalog's order.
+    private func currentValues(_ options: JSONValue?) -> [JSONValue?]? {
+        options?.arrayValue?.map { $0.dictionaryValue?["currentValue"] }
+    }
+
+    /// acpx's `applyConfigOptionsToRecord` returns early for these (`if (!Array.isArray(configOptions))`),
+    /// and reads no model state from them.
     @Test(.enabled(if: mockPythonAvailable), arguments: [
-        JSONValue.string("oops"), .integer(5), .object(["a": .integer(1)]), .bool(true)
+        JSONValue.string("oops"), .integer(5), .object(["a": .integer(1)]), .bool(true), .null, .string(""),
+        .integer(0), .bool(false)
     ])
-    func optionsThatAreNoListAreRecordedAsSent(_ options: JSONValue) async throws {
-        try await withIsolatedStore {
-            let reply = try json(.object(["configOptions": options]))
-            let acpx = try written(try await session(["MODEL_AGENT_NEW_REPLY": reply]))
-            #expect(acpx["config_options"] == options)
-            #expect(acpx["current_model_id"] == nil)
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func aNullListIsAnEmptyOne() async throws {
-        try await withIsolatedStore {
-            let acpx = try written(try await session(["MODEL_AGENT_NEW_REPLY": #"{"configOptions":null}"#]))
-            #expect(acpx["config_options"] == .array([]))
-        }
-    }
-
-    /// acpx's `applyConfigOptionsToRecord` returns early for these (`if (!configOptions)`).
-    @Test(.enabled(if: mockPythonAvailable), arguments: [JSONValue.string(""), .integer(0), .bool(false)])
-    func optionsJavaScriptReadsAsFalseAreNotRecorded(_ options: JSONValue) async throws {
+    func optionsThatAreNoListAreNotRecorded(_ options: JSONValue) async throws {
         try await withIsolatedStore {
             let reply = try json(.object(["configOptions": options]))
             let acpx = try written(try await session(["MODEL_AGENT_NEW_REPLY": reply]))
             #expect(acpx["config_options"] == nil)
+            #expect(acpx["current_model_id"] == nil)
         }
     }
 
@@ -106,55 +98,47 @@ import Testing
         }
     }
 
+    /// The catalog stays, the model's option at the model set; acpx 0.19.3 recorded the string
+    /// as the catalog and lost the model control.
     @Test(.enabled(if: mockPythonAvailable))
-    func aModelReplyThatIsNoListIsRecordedAsSent() async throws {
+    func aModelReplyWhoseOptionsAreNoListAcknowledges() async throws {
         try await withIsolatedStore {
             let id = try await session(["MODEL_AGENT_SET_RESULT": #"{"configOptions":"oops"}"#])
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             _ = try await daemon.setModel(sessionId: id, modelId: "m2")
             let acpx = try written(id)
             await daemon.releaseAll()
-            #expect(acpx["config_options"] == .string("oops"))
+            #expect(currentValues(acpx["config_options"]) == [.string("m2"), .string("low")])
             #expect(acpx["current_model_id"] == .string("m2"))
-            #expect(acpx["model_control"] == nil)
+            #expect(acpx["model_control"] == .string("config_option"))
             #expect(acpx["session_options"] == .object(["model": .string("m2")]))
         }
     }
 
-    /// acpx walks a string reply's characters for the selections it reports, finding
-    /// none, and counts its UTF-16 code units as the options.
-    @Test(.enabled(if: mockPythonAvailable))
-    func anOptionReplyThatIsAStringIsCountedAsAcpxCountsIt() async throws {
+    /// The daemon hands the CLI no options for such a reply, and `set` reports the record's
+    /// (`printSetConfigOptionResultByFormat`). acpx 0.19.3 counted a string reply's characters,
+    /// and failed on a number or an object with `configOptions is not iterable`.
+    @Test(.enabled(if: mockPythonAvailable), arguments: [
+        JSONValue.string("oops"), .integer(5), .object([:]), .null
+    ])
+    func anOptionReplyWhoseOptionsAreNoListAcknowledges(_ options: JSONValue) async throws {
         try await withIsolatedStore {
-            let id = try await session(["MODEL_AGENT_SET_RESULT": #"{"configOptions":"oops"}"#])
+            let reply = try json(.object(["configOptions": options]))
+            let id = try await session(["MODEL_AGENT_SET_RESULT": reply])
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let result = try await daemon.setConfigOption(sessionId: id, configId: "effort", value: "high")
             let acpx = try written(id)
             let record = try #require(SessionStore.loadRecord(id))
             await daemon.releaseAll()
-            #expect(ControlCommand.optionCount(ControlCommand.reportedOptions(result, record: record)) == 4)
-            #expect(acpx["config_options"] == .string("oops"))
-            #expect(acpx["desired_config_options"] == nil)
+            #expect(result.rawConfigOptions == nil)
+            #expect(ControlCommand.optionCount(ControlCommand.reportedOptions(result, record: record)) == 2)
+            #expect(currentValues(acpx["config_options"]) == [.string("m1"), .string("high")])
+            #expect(acpx["desired_config_options"] == .object(["effort": .string("high")]))
         }
     }
 
-    /// Here acpx fails with `configOptions is not iterable`.
-    @Test(.enabled(if: mockPythonAvailable))
-    func anOptionReplyThatIsNeitherAListNorAStringCarriesOn() async throws {
-        try await withIsolatedStore {
-            let id = try await session(["MODEL_AGENT_SET_RESULT": #"{"configOptions":5}"#])
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            let result = try await daemon.setConfigOption(sessionId: id, configId: "effort", value: "high")
-            let acpx = try written(id)
-            await daemon.releaseAll()
-            #expect(result.rawConfigOptions == .integer(5))
-            #expect(acpx["config_options"] == .integer(5))
-            #expect(acpx["desired_config_options"] == nil)
-        }
-    }
-
-    /// acpx reads a `null` reply's `configOptions` as undefined for a model; for any other
-    /// option it fails with a `TypeError`.
+    /// acpx reads a `null` reply as `{}` (`normalizeConfigOptionAcknowledgement`): an
+    /// acknowledgement, for the model and for any other option.
     @Test(.enabled(if: mockPythonAvailable))
     func aNullReplyAcknowledges() async throws {
         try await withIsolatedStore {
@@ -167,33 +151,19 @@ import Testing
             #expect(result.rawConfigOptions == nil)
             #expect(record.acpx?.currentModelId == "m2")
             #expect(record.acpx?.desiredConfigOptions == ["effort": "high"])
-            guard case .array(let options)? = record.acpx?.configOptions else {
-                Issue.record("the catalog is gone")
-                return
-            }
-            #expect(options.map { $0.dictionaryValue?["currentValue"] } == [.string("m2"), .string("high")])
+            #expect(currentValues(record.acpx?.configOptions) == [.string("m2"), .string("high")])
         }
     }
 
-    @Test(.enabled(if: mockPythonAvailable))
-    func aLoadReplyWithOptionsThatAreNoListIsRecordedAsSent() async throws {
+    /// A load reply listing no options — none, `null`, or something that is no list — leaves
+    /// the record's catalog and model state as they were (`configOptionsPresent` is false for
+    /// all of them); acpx 0.19.3 recorded a string as the catalog, and `null` as an empty one.
+    @Test(.enabled(if: mockPythonAvailable), arguments: [
+        "null", #"{"configOptions":"oops"}"#, #"{"configOptions":null}"#, #"{"configOptions":5}"#
+    ])
+    func aLoadReplyListingNoOptionsLeavesTheRecord(_ reply: String) async throws {
         try await withIsolatedStore {
-            let id = try await session([
-                "MODEL_AGENT_LOAD": "1", "MODEL_AGENT_LOAD_RESULT": #"{"configOptions":"oops"}"#
-            ])
-            let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
-            _ = try await daemon.runPrompt(sessionId: id, text: "hi")
-            let acpx = try written(id)
-            await daemon.releaseAll()
-            #expect(acpx["config_options"] == .string("oops"))
-            #expect(acpx["current_model_id"] == nil)
-        }
-    }
-
-    @Test(.enabled(if: mockPythonAvailable))
-    func aNullLoadReplyReportsNothing() async throws {
-        try await withIsolatedStore {
-            let id = try await session(["MODEL_AGENT_LOAD": "1", "MODEL_AGENT_LOAD_RESULT": "null"])
+            let id = try await session(["MODEL_AGENT_LOAD": "1", "MODEL_AGENT_LOAD_RESULT": reply])
             let before = try written(id)
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             _ = try await daemon.runPrompt(sessionId: id, text: "hi")

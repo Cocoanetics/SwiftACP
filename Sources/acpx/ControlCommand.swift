@@ -165,24 +165,20 @@ enum ControlCommand {
         return ExitCodes.success
     }
 
-    /// The options a `set` reports: the agent's reply's, as it sent them, or — for a reply
-    /// that only acknowledges, or reports `null` — the record's, as acpx 0.19.3 falls back
-    /// (`response.configOptions ?? record.acpx?.config_options ?? []`,
-    /// `printSetConfigOptionResultByFormat`, #778).
+    /// The options a `set` reports: the agent's reply's, when it listed them, or else — for
+    /// a reply that only acknowledges — the record's, as acpx 0.19.4 falls back
+    /// (`Array.isArray(options) ? options : record.acpx?.config_options ?? []`,
+    /// `printSetConfigOptionResultByFormat`, #778, openclaw/acpx#809).
     static func reportedOptions(_ result: SessionControlResult, record: SessionRecord) -> JSONValue {
-        if let reported = result.rawConfigOptions, reported != .null { return reported }
+        if let reported = result.rawConfigOptions, case .array = reported { return reported }
         if let recorded = record.acpx?.configOptions, recorded != .null { return recorded }
         return .array([])
     }
 
-    /// How many options acpx says `options` holds: their `length` — a list's entries, and
-    /// a string's UTF-16 code units, as acpx counts a string reply. Anything else holds none.
+    /// How many options `options` holds: a list's entries (acpx's `length`); anything else
+    /// holds none.
     static func optionCount(_ options: JSONValue) -> Int {
-        switch options {
-        case .array(let entries): return entries.count
-        case .string(let text): return text.utf16.count
-        default: return 0
-        }
+        options.arrayValue?.count ?? 0
     }
 
     private static func printSetConfig(

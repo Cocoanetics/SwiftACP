@@ -51,19 +51,26 @@ public enum ModelApplication {
         public var errorDescription: String? { message }
     }
 
-    /// What applying a requested model came to — acpx's `{ applied, modelId, response }`.
+    /// What applying a requested model came to — acpx's `{ applied, modelId, resolvedModelId, response }`.
     public struct Application: Sendable {
         /// Whether the session is on the requested model now: it was asked for it, or
         /// was on it already. `false` when none was requested or none is advertised.
         public var applied: Bool
         /// The model it is on, when applied: the one requested, trimmed.
         public var modelId: String?
+        /// That model as the adapter's rules name it — Cursor's alias resolved — which is
+        /// what went out, and what the record keeps current (acpx 0.19.4, openclaw/acpx#807).
+        public var resolvedModelId: String?
         /// The agent's reply, when the model went by its config option.
         public var response: SetSessionConfigOptionResponse?
 
-        public init(applied: Bool, modelId: String? = nil, response: SetSessionConfigOptionResponse? = nil) {
+        public init(
+            applied: Bool, modelId: String? = nil, resolvedModelId: String? = nil,
+            response: SetSessionConfigOptionResponse? = nil
+        ) {
             self.applied = applied
             self.modelId = modelId
+            self.resolvedModelId = resolvedModelId
             self.response = response
         }
     }
@@ -121,18 +128,24 @@ public enum ModelApplication {
             models: ModelSupport.advertisedModelState(control.state), agentCommand: agentCommand,
             timeoutMilliseconds: timeoutMilliseconds, onWarning: onWarning)
         if application.applied, let modelId = application.modelId {
-            control.update { ModelSupport.applyModelSelection(modelId, response: application.response, to: &$0) }
+            control.update {
+                ModelSupport.applyModelSelection(
+                    modelId, resolvedTo: application.resolvedModelId, response: application.response, to: &$0)
+            }
         }
         let sessionId = session.sessionId
         for option in configOptions {
             let models = ModelSupport.advertisedModelState(control.state)
+            let resolved = try resolveRequestedConfigOption(
+                option.configId, value: option.value, models: models, agentCommand: agentCommand)
             let result = try await withTimeout(milliseconds: timeoutMilliseconds) {
                 try await setConfigOption(
                     connection: connection, sessionId: sessionId, configId: option.configId,
                     value: option.value, models: models, agentCommand: agentCommand)
             }
             control.update {
-                ModelSupport.applyConfigOptionSelection(option.configId, value: option.value, response: result, to: &$0)
+                ModelSupport.applyConfigOptionSelection(
+                    option.configId, value: option.value, resolvedTo: resolved, response: result, to: &$0)
             }
         }
     }
@@ -237,30 +250,15 @@ public enum ModelApplication {
         }
     }
 
-    /// Apply `requestedModel` to `sessionId` when the agent advertises it,
-    /// returning the `session/set_config_option` response when one was sent.
+    /// acpx's `applyRequestedModelIfAdvertised`: apply `requestedModel` to `sessionId` when
+    /// the agent advertises it, with whether the model was applied, the id it went out as,
+    /// and the `session/set_config_option` response when one was sent.
     ///
     /// Nothing is sent when no model was requested, when the agent advertises no
     /// models, or when the session is already on that model — acpx skips the
     /// request in that last case rather than re-selecting the current model.
     /// A non-fatal mismatch (a Cursor alias, or a model Claude Code may still
     /// accept) is reported through `onWarning`; an unusable one throws.
-    public static func applyRequestedModelIfAdvertised(
-        connection: ACPAgentConnection,
-        sessionId: SessionId,
-        requestedModel: String?,
-        models: ModelSupport.ModelState?,
-        agentCommand: String?,
-        onWarning: ((String) -> Void)? = nil
-    ) async throws -> SetSessionConfigOptionResponse? {
-        try await applyRequestedModel(
-            connection: connection, sessionId: sessionId, requestedModel: requestedModel, models: models,
-            agentCommand: agentCommand, onWarning: onWarning
-        ).response
-    }
-
-    /// ``applyRequestedModelIfAdvertised(connection:sessionId:requestedModel:models:agentCommand:onWarning:)``
-    /// with whether the model was applied, as acpx's function returns it.
     ///
     /// The request goes within `timeoutMilliseconds` (acpx's `--timeout`), when given.
     public static func applyRequestedModel(
@@ -279,13 +277,18 @@ public enum ModelApplication {
             onWarning?(warning)
         }
         guard let models else { return Application(applied: false) }
-        guard models.currentModelId != requested else { return Application(applied: true, modelId: requested) }
+        // The session is on the model when it is on the id the adapter's rules name — Cursor's
+        // alias resolved — not only when it is on the id as asked (acpx 0.19.4, openclaw/acpx#807).
+        let resolved = try resolveRequestedModelId(requested, models: models, agentCommand: agentCommand)
+        guard models.currentModelId != resolved else {
+            return Application(applied: true, modelId: requested, resolvedModelId: resolved)
+        }
         let response = try await withTimeout(milliseconds: timeoutMilliseconds) {
             try await setModel(
                 connection: connection, sessionId: sessionId, modelId: requested,
                 models: models, agentCommand: agentCommand)
         }
-        return Application(applied: true, modelId: requested, response: response)
+        return Application(applied: true, modelId: requested, resolvedModelId: resolved, response: response)
     }
 
     /// Select `modelId`, through whichever control the agent advertises.
@@ -419,6 +422,17 @@ public enum ModelApplication {
                 reason: .unadvertisedModel, ambiguous: true)
         }
         return candidates.first ?? requestedModel
+    }
+
+    /// acpx 0.19.4's `resolveRequestedConfigOption` (openclaw/acpx#807): the value a
+    /// selection of `configId` goes out as, for the record to keep — a model id, resolved as
+    /// ``resolveRequestedModelId(_:models:agentCommand:)`` resolves one, when the option is
+    /// the model's; otherwise the value itself.
+    public static func resolveRequestedConfigOption(
+        _ configId: String, value: String, models: ModelSupport.ModelState?, agentCommand: String?
+    ) throws -> String {
+        guard let models, models.configId == configId else { return value }
+        return try resolveRequestedModelId(value, models: models, agentCommand: agentCommand)
     }
 
     /// acpx's `formatAvailableModelIds`: a comma-separated list, or the literal

@@ -5,8 +5,9 @@ import JSONFoundation
 // them. Its ACP SDK (1.5.0) checks what an agent asks and announces, but no reply, so acpx
 // reads a reply's members off whatever the agent sent. A malformed member fails nothing:
 //
-// - `configOptions` is kept as sent (``NewSessionResponse/rawConfigOptions``), for acpx
-//   records it whatever it holds. Only a list of them is read as options.
+// - A session reply's `configOptions` is kept as sent (``NewSessionResponse/rawConfigOptions``);
+//   acpx reads only a list of them as options (`normalizeResponseConfigOptions`, 0.19.4), and
+//   records only that. An option reply's is kept only when it is a list.
 // - `models`, the legacy model list, is kept as sent too: acpx tells a `null` one from
 //   none (`hasResponseField`).
 // - `modes`, which acpx never reads, is read as the ACP schema reads it
@@ -81,13 +82,15 @@ extension LoadSessionResponse {
 }
 
 extension SetSessionConfigOptionResponse {
-    /// A reply that is no object only acknowledges: acpx reads its `configOptions` as
-    /// undefined (a `null` reply included, which acpx reads that way for a model, while
-    /// for any other option a `TypeError` fails it).
+    /// acpx's `normalizeConfigOptionAcknowledgement` (0.19.4, openclaw/acpx#809): a reply
+    /// that is no object only acknowledges, read as `{}`, and so does one whose
+    /// `configOptions` is no list — `null`, a string, a number, an object — read with that
+    /// member deleted. 0.19.3 took such a member as sent, and failed on most with a `TypeError`.
     public init(from decoder: Decoder) throws {
         self.init()
         guard let container = try? decoder.container(keyedBy: CodingKeys.self) else { return }
-        rawConfigOptions = try container.raw(forKey: .configOptions)
+        let sent = try container.raw(forKey: .configOptions)
+        if case .array? = sent { rawConfigOptions = sent }
     }
 
     public func encode(to encoder: Encoder) throws {
