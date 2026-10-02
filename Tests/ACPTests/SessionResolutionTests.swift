@@ -221,6 +221,33 @@ struct SessionResolutionTests {
         }
     }
 
+    /// `runPrompt` takes the id as sent, as acpx's owner does (`owner-input.ts` refuses a blank
+    /// one by `trim()` and passes it on untrimmed): a one-character id of U+200B reaches its
+    /// record, and `" id "` names no record `id`. A Foundation pre-trim did the opposite of both
+    /// (Codex on #310).
+    @Test(.timeLimit(.minutes(1))) func aPromptsSessionIdIsTakenAsSent() async throws {
+        try await withIsolatedStore {
+            let now = nowISO()
+            for id in ["x\u{200B}", "id"] {
+                try SessionStore.writeRecord(SessionRecord(
+                    acpxRecordId: id, acpSessionId: "native-\(id)", agentCommand: "/nonexistent/agent",
+                    cwd: NSTemporaryDirectory(), createdAt: now, lastUsedAt: now))
+            }
+            let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+            // Past resolution: the only thing left to fail is the record's agent, which cannot start.
+            let past = await #expect(throws: (any Error).self) {
+                try await backend.runPrompt(sessionId: "\u{200B}", text: "hi")
+            }
+            #expect(past.map { $0 is DaemonError } == false, "\(String(describing: past))")
+            #expect(past?.localizedDescription.contains("/nonexistent/agent") == true)
+            // Not trimmed to `id`: no record's id is, or ends with, `" id "`.
+            let padded = await #expect(throws: DaemonError.self) {
+                try await backend.runPrompt(sessionId: " id ", text: "hi")
+            }
+            #expect(padded?.localizedDescription == "no session found for id:  id ")
+        }
+    }
+
     @Test func anIdNoRecordHasIsNotFound() async throws {
         try await withIsolatedStore {
             _ = try seedRecords()
