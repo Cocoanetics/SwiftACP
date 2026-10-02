@@ -4,7 +4,7 @@ import Testing
 
 /// How a launch probe (#265) and a terminal (#272) start their commands on Windows, checked on every
 /// platform. acpx's side is checked against acpx's own code (`acpx-windows-spawn.json`, made by
-/// `scripts/windows-spawn-vectors`): 0.19.3's `buildAgentSpawnCommand` and
+/// `scripts/windows-spawn-vectors`): 0.19.4's `buildAgentSpawnCommand` and
 /// `resolveWindowsCommand`, and its terminal launch with what Node's `spawn` makes of it, run with
 /// Node's `path.win32` and a Windows file system of each case's files, and `path.win32` itself.
 /// libuv's side, what Node then starts, is checked against libuv's own examples and rules.
@@ -145,6 +145,26 @@ struct WindowsSpawnCommandTests {
             let resolved = WindowsSpawnCommand.resolve(
                 spawn.command, environment: spawn.env, cwd: spawn.cwd, fileSystem: files)
             #expect(resolved == spawn.resolved, "\(spawn.name)")
+        }
+    }
+
+    /// A run of backslashes before a quote or at an argument's end, doubled whole, as acpx 0.19.4's
+    /// `escapeBackslashesForQuoting` doubles it (openclaw/acpx#830): acpx's own three cases and three
+    /// more, with what its `escapeCmdArgument` makes of each, once and for a shim.
+    @Test func backslashRunsAreDoubledWholeAsAcpxDoublesThem() {
+        let cases: [String: (escaped: String, shim: String)] = [
+            #"a\\"b"#: (#"^"a\\\\\^"b^""#, #"^^^"a\\\\\^^^"b^^^""#),
+            #"a\\"#: (#"^"a\\\\^""#, #"^^^"a\\\\^^^""#),
+            #"\\""#: (#"^"\\\\\^"^""#, #"^^^"\\\\\^^^"^^^""#),
+            #"a\b"#: (#"^"a\b^""#, #"^^^"a\b^^^""#),
+            #"t\\"#: (#"^"t\\\\^""#, #"^^^"t\\\\^^^""#),
+            #"a\\\"b"#: (#"^"a\\\\\\\^"b^""#, #"^^^"a\\\\\\\^^^"b^^^""#)
+        ]
+        for (argument, expected) in cases {
+            let once = WindowsSpawnCommand.escapeArgument(argument, doubleEscape: false)
+            let twice = WindowsSpawnCommand.escapeArgument(argument, doubleEscape: true)
+            #expect(once == expected.escaped, "\(argument)")
+            #expect(twice == expected.shim, "\(argument)")
         }
     }
 

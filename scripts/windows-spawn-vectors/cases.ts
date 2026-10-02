@@ -14,7 +14,7 @@ import { buildTerminalFallbackSpawnCommand, buildTerminalSpawnOptions } from "./
 Object.defineProperty(process, "platform", { value: "win32" });
 process.cwd = () => "C:\\work";
 // Read before the terminals' cases stand a Windows environment in for `process.env`.
-const tag = process.env.ACPX_TAG ?? "v0.19.3";
+const tag = process.env.ACPX_TAG ?? "v0.19.4";
 
 const win = nodePath.win32;
 const npm = "C:\\Users\\me\\AppData\\Roaming\\npm";
@@ -120,8 +120,10 @@ const escapes = [
   ["!x!"], ["a^b"], ['say "hi"'], ["trail\\"], ['back\\"slash'], ["C:\\dir with space\\"],
   ["semi;colon"], ["comma,x"], ["star*"], ["q?"], ["(paren)"], ["[br]"], ["`tick`"], ["tab\tx"],
   ["new\nline"], ["unicode é ✓"], ["--flag", "value with space", "x&y"], [],
-  // Runs of backslashes before a quote and at the end: acpx doubles only the last of each.
+  // Runs of backslashes before a quote and at the end: acpx 0.19.4 doubles the whole run, where
+  // 0.19.3 doubled only its last (openclaw/acpx#830); the first three are acpx's own cases.
   ['a\\\\"b'], ['a\\\\\\"b'], ["t\\\\"], ["t\\\\\\"], ["x\\\\\\y"], ["\\\\"], ['\\"'],
+  ["a\\\\"], ["\\\\\""], ["a\\b"],
 ];
 for (const args of escapes) {
   const label = JSON.stringify(args);

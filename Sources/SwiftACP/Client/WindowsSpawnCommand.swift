@@ -310,26 +310,26 @@ extension WindowsSpawnCommand {
         escapeMeta(command)
     }
 
-    /// acpx's `escapeCmdArgument`, cross-spawn's: the backslash before a quote and the one at the
-    /// end doubled, quotes escaped, the whole quoted, and each metacharacter escaped — twice for
-    /// a `node_modules\.bin` shim, which cmd.exe reads a second time. As acpx's lookahead matches,
-    /// only the last backslash of a run is doubled, where the rule it follows doubles them all
+    /// acpx's `escapeCmdArgument`, cross-spawn's rule: each run of backslashes before a quote
+    /// doubled and the quote escaped, a run at the end doubled, the whole quoted, and each
+    /// metacharacter escaped — twice for a `node_modules\.bin` shim, which cmd.exe reads a second
+    /// time. The runs are doubled whole, as acpx 0.19.4's `escapeBackslashesForQuoting` doubles them
+    /// in one pass over the code points; 0.19.3's lookahead doubled only each run's last backslash
     /// (openclaw/acpx#830).
     static func escapeArgument(_ argument: String, doubleEscape: Bool) -> String {
-        let scalars = Array(argument.unicodeScalars)
         var doubled = String.UnicodeScalarView()
-        var index = 0
-        while index < scalars.count {
-            if scalars[index] == "\\", index + 1 < scalars.count, scalars[index + 1] == "\"" {
-                doubled.append(contentsOf: #"\\\""#.unicodeScalars)
-                index += 2
-            } else {
-                if scalars[index] == "\"" { doubled.append("\\") }
-                doubled.append(scalars[index])
-                index += 1
+        var backslashes = 0
+        for scalar in argument.unicodeScalars {
+            if scalar == "\\" {
+                backslashes += 1
+                continue
             }
+            let count = scalar == "\"" ? backslashes * 2 + 1 : backslashes
+            doubled.append(contentsOf: repeatElement("\\", count: count))
+            doubled.append(scalar)
+            backslashes = 0
         }
-        if doubled.last == "\\" { doubled.append("\\") }
+        doubled.append(contentsOf: repeatElement("\\", count: backslashes * 2))
         let escaped = escapeMeta("\"" + String(doubled) + "\"")
         return doubleEscape ? escapeMeta(escaped) : escaped
     }

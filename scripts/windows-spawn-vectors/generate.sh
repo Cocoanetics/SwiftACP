@@ -3,13 +3,13 @@
 # resolution (src/spawn-command-options.ts) and terminal launch (src/acp/terminal-manager.ts), run
 # with Node's path.win32 and a fake Windows file system (#265, #272).
 #   ACPX_CHECKOUT  an acpx clone (required)
-#   ACPX_TAG       the tag to take the resolution from (default: v0.19.3)
+#   ACPX_TAG       the tag to take the resolution from (default: v0.19.4)
 #   NODE           the node to run it with; 23.6 or later runs the TypeScript as it is
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 : "${ACPX_CHECKOUT:?set ACPX_CHECKOUT to an acpx clone}"
-ACPX_TAG=${ACPX_TAG:-v0.19.3}
+ACPX_TAG=${ACPX_TAG:-v0.19.4}
 export ACPX_TAG
 work=$(mktemp -d "${TMPDIR:-/tmp}/windows-spawn-vectors.XXXXXX")
 trap 'rm -rf "$work"' EXIT
