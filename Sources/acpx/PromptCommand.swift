@@ -38,7 +38,10 @@ enum PromptCommand {
         var options = renderOptions(flags)
         options.streamsWire = true
         let renderer = OutputRenderer(options: options)
-        let sessionId = record.acpSessionId
+        // The daemon is told the record by its id, as acpx's CLI submits a prompt
+        // (`sessionId: record.acpxRecordId`): no other record has it, where records can share
+        // an ACP session (openclaw/acpx#825).
+        let sessionId = record.acpxRecordId
 
         // The acpxd daemon owns turn persistence: by the time `runPrompt` returns it
         // has written the prompt, streamed updates, token usage, and event log to the

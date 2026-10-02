@@ -47,8 +47,10 @@ extension DaemonToolsTests {
             }
             #expect(error?.cause is DaemonError)
             #expect(error?.detailCode == "SESSION_RESUME_REQUIRED" && error?.origin == "acp")
+            // Named by its ACP session, as acpx's `reconnect.ts` names it, not the record.
+            let session = try #require(SessionStore.loadRecord(id)?.acpSessionId)
             #expect(error?.localizedDescription.hasPrefix(
-                "Persistent ACP session \(id) could not be resumed") == true)
+                "Persistent ACP session \(session) could not be resumed") == true)
             // What refused it is the agent's error, which acpx's output reports (#290).
             #expect(error?.acp?.code == -32002)
             #expect(try methods().filter { $0 == "session/new" }.count == sessionsBefore)

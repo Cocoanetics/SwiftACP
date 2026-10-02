@@ -79,12 +79,13 @@ extension DaemonToolsTests {
         try await withIsolatedStore {
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let id = try await daemon.newSession(agentCommand: command, cwd: NSTemporaryDirectory(), holdAgent: true)
+            let session = SessionStore.loadRecord(id)?.acpSessionId
             try await directTurn(daemon, id, "one")
             await #expect(throws: (any Error).self) { try await directTurn(daemon, id, "two") }
             let kinds = try Self.journalKinds(id)
             #expect(kinds.contains("session/load"), "\(kinds)")
             #expect(!kinds.contains("session/new"), "\(kinds)")
-            #expect(SessionStore.loadRecord(id)?.acpSessionId == id)
+            #expect(SessionStore.loadRecord(id)?.acpSessionId == session)
         }
     }
 }

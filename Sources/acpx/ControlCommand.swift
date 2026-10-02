@@ -18,9 +18,11 @@ enum ControlCommand {
         // An in-flight prompt is held by the daemon, so route the cancel there. If no
         // daemon is reachable (or the session isn't live) there's nothing to cancel; a
         // cancel the daemon could not send fails, as acpx's owner reports one.
+        // By the record's id, as acpx's CLI routes every control (`sessionId: record.acpxRecordId`):
+        // no other record has it, where records can share an ACP session (openclaw/acpx#825).
         var cancelled = false
         if let record {
-            let result = try runBlocking { try await DaemonClient.cancelSession(sessionId: record.acpSessionId) }
+            let result = try runBlocking { try await DaemonClient.cancelSession(sessionId: record.acpxRecordId) }
             cancelled = result.cancelled
             // Under `--verbose`, acpx's line once the session's running owner took the cancel.
             if flags.verbose, let pid = result.ownerPid {
@@ -54,7 +56,7 @@ enum ControlCommand {
         // The parse has checked `<mode>` is there and not blank.
         let modeId = try parseNonEmptyValue("Mode", context.positionals[0])
         let record = try PromptCommand.findRoutedSessionOrThrow(agent: agent, name: name)
-        let sessionId = record.acpSessionId
+        let sessionId = record.acpxRecordId
         // Checked here, as acpx checks it building its client; the daemon caps terminal
         // output by it while the agent answers.
         let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
@@ -117,7 +119,7 @@ enum ControlCommand {
         // (config_option control); other keys get the config-id compatibility
         // aliases applied + validated against the session's advertised options.
         let operation = resolveSetOperation(key: key, agentCommand: agent.agentCommand)
-        let sessionId = record.acpSessionId
+        let sessionId = record.acpxRecordId
         let terminalOutputCeiling = try TerminalOutputLimit.ceiling()
 
         // Route through acpxd — the single manager that holds the live agent and owns

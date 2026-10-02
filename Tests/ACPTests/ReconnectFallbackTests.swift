@@ -138,13 +138,14 @@ extension DaemonToolsTests {
             let id = try await ACPXDaemonBackend(inheritAgentStderr: false)
                 .newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             try markImported(id)
+            let session = try #require(SessionStore.loadRecord(id)?.acpSessionId)
 
             let error = await #expect(throws: DaemonError.self) {
                 _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
                     .runPrompt(sessionId: id, text: "ping")
             }
             #expect(error?.localizedDescription.hasPrefix(
-                "Persistent ACP session \(id) could not be resumed: Resource not found") == true)
+                "Persistent ACP session \(session) could not be resumed: Resource not found") == true)
             #expect((try methods()).filter { $0 == "session/new" }.count == 1)
             // The agent's answer is final: the refusal reads like a gone session, but
             // it must not send the turn round again to launch and ask a second time.
@@ -160,12 +161,13 @@ extension DaemonToolsTests {
             let id = try await ACPXDaemonBackend(inheritAgentStderr: false)
                 .newSession(agentCommand: command, cwd: NSTemporaryDirectory())
             try markImported(id)
+            let session = try #require(SessionStore.loadRecord(id)?.acpSessionId)
 
             let error = await #expect(throws: DaemonError.self) {
                 _ = try await ACPXDaemonBackend(inheritAgentStderr: false)
                     .runPrompt(sessionId: id, text: "ping")
             }
-            #expect(error?.localizedDescription == "Persistent ACP session \(id) could not be resumed: "
+            #expect(error?.localizedDescription == "Persistent ACP session \(session) could not be resumed: "
                 + "agent does not support session/resume or session/load")
             #expect(try methods() == ["session/new"])
         }

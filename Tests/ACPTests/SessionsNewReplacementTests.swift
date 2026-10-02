@@ -9,8 +9,9 @@ import Testing
 
 /// `sessions new` creates the new session first and only then closes the one it replaces,
 /// as acpx 0.19.3 does (#778, for our openclaw/acpx#767): a creation that fails leaves the
-/// old session open. A new session under the replaced one's id is spared the close that
-/// would end it (openclaw/acpx#805).
+/// old session open. The new record has an id of its own, as acpx 0.19.4 gives it one, so the
+/// close reaches the replaced record whatever id the agent gave the new session
+/// (openclaw/acpx#805).
 @Suite(.serialized, .agentLane) struct SessionsNewReplacementTests {
     /// The mock agent behind a wrapper whose command never changes, so every run is the
     /// same scope: a `fail` file makes it refuse `session/new`, a `same-id` file makes it
@@ -87,32 +88,12 @@ import Testing
         }
     }
 
-    /// A replaced record that moved to another ACP session (a reconnect's fallback, an
-    /// import) keeps its own id: when the new session gets the ACP id it moved to, the
-    /// replaced record is the one closed, and the new one stays open (Codex review on #184).
+    /// An agent that gives every session the same id: the new session gets a record of its
+    /// own all the same, the replaced one is closed, and the new one stays open — acpx
+    /// 0.19.4's `sessions new leaves the replacement open when the adapter repeats its ID`
+    /// (openclaw/acpx#805).
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aReplacedRecordThatMovedIsClosedByItsOwnId() async throws {
-        let directory = try DaemonToolsTests.scratchDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try await withIsolatedStore {
-            let agent = try Self.agent(in: directory)
-            let first = await Self.sessionsNew(agent, in: directory)
-            var moved = try #require(SessionStore.loadRecord(first.id))
-            moved.acpSessionId = "mock-session-1"
-            try SessionStore.writeRecord(moved)
-            Self.touch("same-id", in: directory)
-            let second = await Self.sessionsNew(agent, in: directory)
-            #expect(second.code == 0)
-            #expect(second.id == "mock-session-1" && second.id != first.id)
-            #expect(try #require(SessionStore.loadRecord(first.id)).closed == true)
-            #expect(try #require(SessionStore.loadRecord(second.id)).closed != true)
-        }
-    }
-
-    /// An agent that gives every session the same id makes the new session the replaced
-    /// record anew; it stays open, where acpx 0.19.3 closes it (openclaw/acpx#805).
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aNewSessionUnderTheReplacedIdStaysOpen() async throws {
+    func aNewSessionUnderTheReplacedIdGetsARecordOfItsOwn() async throws {
         let directory = try DaemonToolsTests.scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try await withIsolatedStore {
@@ -121,16 +102,20 @@ import Testing
             let first = await Self.sessionsNew(agent, in: directory)
             let second = await Self.sessionsNew(agent, in: directory)
             #expect(first.code == 0 && second.code == 0)
-            #expect(first.id == second.id)
-            #expect(try #require(SessionStore.loadRecord(second.id)).closed != true)
+            #expect(first.id != second.id)
+            let prior = try #require(SessionStore.loadRecord(first.id))
+            let current = try #require(SessionStore.loadRecord(second.id))
+            #expect(prior.acpSessionId == "mock-session-1" && current.acpSessionId == "mock-session-1")
+            #expect(prior.closed == true)
+            #expect(current.closed != true)
         }
     }
 
-    /// A daemon holding the replaced session lets its agent go when the new session takes
-    /// the session's id, and the session stays open: the new one, with none of the
-    /// conversation the old agent had.
+    /// A daemon holding the replaced session closes it when the new session takes the same
+    /// id: its agent goes, its record is closed with the conversation it had, and the new
+    /// session's record is open, with none of it.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aHeldSessionReplacedUnderItsOwnIdLetsItsAgentGo() async throws {
+    func aHeldSessionReplacedUnderItsOwnIdIsClosed() async throws {
         let directory = try DaemonToolsTests.scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try await withIsolatedStore {
@@ -150,20 +135,22 @@ import Testing
             #expect(try #require(SessionStore.loadRecord(first.id)).messages.isEmpty == false)
 
             let second = await Self.sessionsNew(agent, in: directory, daemon: daemon)
-            #expect(second.code == 0 && second.id == first.id)
+            #expect(second.code == 0 && second.id != first.id, "\(second.err)")
             let letGo = await (try? withTimeout(milliseconds: 10_000) { await held.waitUntilClosed() }) != nil
             #expect(letGo, "the replaced session's agent is still running")
             #expect(await backend.heldConnection(first.id) == nil)
-            let kept = try #require(SessionStore.loadRecord(second.id))
-            #expect(kept.closed != true)
-            #expect(kept.messages.isEmpty)
+            let prior = try #require(SessionStore.loadRecord(first.id))
+            #expect(prior.closed == true && prior.messages.isEmpty == false)
+            let current = try #require(SessionStore.loadRecord(second.id))
+            #expect(current.closed != true && current.messages.isEmpty)
+            #expect(current.acpSessionId == prior.acpSessionId)
             await backend.releaseAll()
         }
     }
 
-    /// A daemon of another version — here one from before `releaseSession` — is not worked
-    /// through (#162): nothing is done, neither the new session made nor the one it would
-    /// replace closed, and the user is told how to restart the daemon.
+    /// A daemon of another version is not worked through (#162): nothing is done, neither the
+    /// new session made nor the one it would replace closed, and the user is told how to
+    /// restart the daemon.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func aDaemonOfAnotherVersionHasNothingDone() async throws {
         let directory = try DaemonToolsTests.scratchDirectory()
@@ -171,7 +158,7 @@ import Testing
         try await withIsolatedStore {
             let agent = try Self.agent(in: directory)
             let first = await Self.sessionsNew(agent, in: directory)
-            let daemon = DaemonBeforeRelease()
+            let daemon = DaemonOfAnotherVersion()
 
             let second = await Self.sessionsNew(agent, in: directory, daemon: .stdioHandles(server: daemon))
             #expect(second.code != 0)
@@ -181,33 +168,12 @@ import Testing
             #expect(SessionStore.listSessions().count == 1)
         }
     }
-
-    /// A daemon that fails to let the replaced session's agent go may still hold it: that
-    /// is an error, and the session is not closed in its place, which could end the new
-    /// session too.
-    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
-    func aDaemonThatFailsToLetTheAgentGoIsReported() async throws {
-        let directory = try DaemonToolsTests.scratchDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try await withIsolatedStore {
-            Self.touch("same-id", in: directory)
-            let agent = try Self.agent(in: directory)
-            let first = await Self.sessionsNew(agent, in: directory)
-            let daemon = DaemonFailingRelease()
-
-            let second = await Self.sessionsNew(agent, in: directory, daemon: .stdioHandles(server: daemon))
-            #expect(second.code != 0)
-            #expect(second.err.contains("acpxd could not let go of session \(first.id)'s agent"))
-            #expect(await daemon.closed.isEmpty)
-            #expect(try #require(SessionStore.loadRecord(first.id)).closed != true)
-        }
-    }
 }
 
-/// An acpxd from before `releaseSession` (#162), as `sessions new` meets one: it closes a
-/// session as that daemon did, noting the record as it was when closed.
+/// An acpxd of another version, as `sessions new` meets one: it closes a session as that daemon
+/// did, noting the record as it was when closed.
 @MCPServer(name: "acpx")
-actor DaemonBeforeRelease {
+actor DaemonOfAnotherVersion {
     private(set) var closed: [SessionRecord] = []
 
     /// Close a session.
@@ -220,32 +186,6 @@ actor DaemonBeforeRelease {
         record.closed = true
         record.closedAt = nowISO()
         try SessionStore.writeRecord(record)
-        return true
-    }
-}
-
-/// An acpxd whose `releaseSession` fails, noting any session it is asked to close. It reports
-/// this CLI's version, which it is worked through as.
-@MCPServer(name: "acpx")
-actor DaemonFailingRelease {
-    private(set) var closed: [String] = []
-
-    nonisolated var serverVersion: String { ACPXDaemon.version }
-
-    struct Failure: LocalizedError {
-        var errorDescription: String? { "the agent would not go" }
-    }
-
-    /// Let a session's agent go.
-    /// - Parameter sessionId: the acpx record id.
-    @MCPTool
-    func releaseSession(sessionId: String) throws -> Bool { throw Failure() }
-
-    /// Close a session.
-    /// - Parameter sessionId: the acpx record id or the ACP session id.
-    @MCPTool
-    func closeSession(sessionId: String) -> Bool {
-        closed.append(sessionId)
         return true
     }
 }

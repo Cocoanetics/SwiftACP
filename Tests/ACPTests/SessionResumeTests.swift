@@ -10,8 +10,10 @@ import Testing
 /// `sessions new --resume-session <id>` and `sessions ensure --resume-session <id>` take
 /// the session back instead of starting one, as acpx's `createSession` does: with
 /// `session/resume` when the agent advertises it, else `session/load`, refused by an agent
-/// that can do neither. An open record under that id is closed first (acpx 0.19.3, #782).
-/// Each output is what acpx printed for the same steps on `mock-agent.py`.
+/// that can do neither. A record under that id, of the same agent, is the one taken back: closed
+/// first when open (acpx 0.19.3, #782), its ACP session loaded, and kept under its own id (acpx
+/// 0.19.4, openclaw/acpx#825). Each output is what acpx printed for the same steps on
+/// `mock-agent.py`.
 @Suite(.serialized, .agentLane) struct SessionResumeTests {
     struct Run {
         var code: Int32
@@ -61,7 +63,8 @@ import Testing
         return (root.appendingPathComponent("a"), root.appendingPathComponent("b"))
     }
 
-    /// Resuming the scope's own session takes it back under its id: one record, open.
+    /// Resuming the scope's own session takes it back under its id: one record, open. The
+    /// agent is asked for the record's ACP session, not the record's id, which is its own.
     @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
     func theScopesOwnSessionIsTakenBack() async throws {
         let (a, _) = try Self.directories()
@@ -71,12 +74,41 @@ import Testing
         try await withIsolatedStore {
             let first = await Self.acpx(["--format", "quiet", "sessions", "new"], agent: agent, cwd: a)
             let id = first.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            let session = try #require(SessionStore.loadRecord(id)?.acpSessionId)
+            #expect(session != id)
             let resumed = await Self.acpx(["sessions", "new", "--resume-session", id], agent: agent, cwd: a)
             #expect(resumed.code == 0)
             #expect(resumed.out == "\(id)\t(replaced \(id))\n")
-            #expect(Self.requests(log) == ["session/new", "session/load \(id)"])
+            #expect(Self.requests(log) == ["session/new", "session/load \(session)"])
             #expect(SessionStore.listSessions().map(\.acpxRecordId) == [id])
-            #expect(SessionStore.loadRecord(id)?.closed != true)
+            let record = try #require(SessionStore.loadRecord(id))
+            #expect(record.closed != true && record.acpSessionId == session)
+        }
+    }
+
+    /// Another agent's record under the id is left as it is: the id is taken as an ACP
+    /// session's, and the session taken back gets a record of its own (acpx 0.19.4).
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func anotherAgentsRecordUnderTheIdIsLeftAsItIs() async throws {
+        let (a, b) = try Self.directories()
+        defer { try? FileManager.default.removeItem(at: a.deletingLastPathComponent()) }
+        let log = a.appendingPathComponent("requests.ndjson")
+        let agentA = try Self.agent(load: "ok", log: log)
+        let agentB = try Self.agent(load: "ok", log: log, environment: "MOCK_AGENT=b ")
+        try await withIsolatedStore {
+            let id = await Self.acpx(
+                ["--format", "quiet", "sessions", "new", "--name", "original"], agent: agentA, cwd: a
+            ).out.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resumed = await Self.acpx(
+                ["--format", "quiet", "sessions", "new", "--resume-session", id], agent: agentB, cwd: b)
+            #expect(resumed.code == 0, "\(resumed.err)")
+            let resumedId = resumed.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            #expect(resumedId != id)
+            #expect(Self.requests(log).last == "session/load \(id)")
+            let original = try #require(SessionStore.loadRecord(id))
+            #expect(original.agentCommand == agentA && original.name == "original" && original.closed != true)
+            let record = try #require(SessionStore.loadRecord(resumedId))
+            #expect(record.agentCommand == agentB && record.acpSessionId == id)
         }
     }
 
@@ -110,7 +142,10 @@ import Testing
         try await withIsolatedStore {
             let run = await Self.acpx(["sessions", "ensure", "--resume-session", "kept-1"], agent: agent, cwd: a)
             #expect(run.code == 0)
-            #expect(run.out == "kept-1\t(created)\n")
+            // Under a record of its own: `kept-1` is no record's id, so it is the ACP session's.
+            let id = String(run.out.prefix { $0 != "\t" })
+            #expect(run.out == "\(id)\t(created)\n" && id != "kept-1")
+            #expect(SessionStore.loadRecord(id)?.acpSessionId == "kept-1")
             #expect(Self.requests(log) == ["session/load kept-1"])
         }
     }
@@ -239,6 +274,7 @@ import Testing
         try await withIsolatedStore {
             let id = await Self.acpx(["--format", "quiet", "sessions", "new"], agent: agent, cwd: a).out
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let session = try #require(SessionStore.loadRecord(id)?.acpSessionId)
             let backend = ACPXDaemonBackend(inheritAgentStderr: false)
             _ = try await backend.runPrompt(sessionId: id, text: "hi")
             let held = try #require(await backend.heldConnection(id))
@@ -250,7 +286,8 @@ import Testing
             #expect(resumed.code == 0)
             let letGo = await (try? withTimeout(milliseconds: 10_000) { await held.waitUntilClosed() }) != nil
             #expect(letGo, "the resumed session's old agent is still running")
-            #expect(Array(Self.requests(log).dropFirst(before)) == ["session/close \(id)", "session/load \(id)"])
+            let afterwards = Array(Self.requests(log).dropFirst(before))
+            #expect(afterwards == ["session/close \(session)", "session/load \(session)"])
             #expect(SessionStore.loadRecord(id)?.closed != true)
             await backend.releaseAll()
         }

@@ -49,13 +49,10 @@ extension ACPXDaemonBackend {
         }
     }
 
-    /// Let go of the session's live agent without closing the session, for `sessions new`
-    /// when the agent gave the new session the replaced one's id (openclaw/acpx#805): the
-    /// prompt running cancelled, the owner retired and its agent ended, as
-    /// ``closeSession(sessionId:)`` does — but no `session/close`, which could end the new
-    /// session under the same id, and the record, now the new session's, left as it is.
-    /// Returns whether the daemon had anything of the session's: an agent held or still
-    /// connecting, a turn, or an owner.
+    /// Let go of the session's live agent without closing the session: the prompt running
+    /// cancelled, the owner retired and its agent ended, as ``closeSession(sessionId:)`` does —
+    /// but no `session/close`, and the record left as it is. Returns whether the daemon had
+    /// anything of the session's: an agent held or still connecting, a turn, or an owner.
     ///
     /// Given the `turnToken` its caller gave a turn, only the agent that turn connects or runs
     /// on is put down, and only while the turn has the session's slot, as acpx's flow runner

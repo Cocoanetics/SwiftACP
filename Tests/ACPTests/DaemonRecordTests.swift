@@ -11,8 +11,9 @@ extension DaemonToolsTests {
     /// them, the tool results in the order their tools came, a thinking block's `null`
     /// signature, the usage by turn. What differs from run to run is left as a
     /// placeholder, and so are the event log's sequence and the last request's id, which
-    /// SwiftACP does not keep as acpx does (#89, #64). How the agent is doing is left out
-    /// (#87), and so is `agent_argv`: acpx ran the agent from its config.
+    /// SwiftACP does not keep as acpx does (#89, #64), and the record's id: its own since acpx
+    /// 0.19.4, where the fixtures' acpx keyed it by the session (#301). How the agent is doing
+    /// is left out (#87), and so is `agent_argv`: acpx ran the agent from its config.
     @Test(.enabled(if: mockPythonAvailable))
     func twoTurnsLeaveTheRecordAcpxLeaves() async throws {
         let python = try #require(AgentRegistry.which("python3"))
@@ -56,7 +57,7 @@ extension DaemonToolsTests {
     private static func comparable(_ record: Data) throws -> String {
         var json = try #require(WireJSON(parsing: record))
         for key in [
-            "agent_command", "cwd", "created_at", "last_used_at", "last_seq", "last_request_id",
+            "acpx_record_id", "agent_command", "cwd", "created_at", "last_used_at", "last_seq", "last_request_id",
             "agent_started_at", "last_prompt_at", "updated_at"
         ] {
             json = json.replacing(key, with: .text("<\(key)>"))
