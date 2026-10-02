@@ -32,9 +32,35 @@ struct SkillWizardTests {
         #expect(run.code == 0 && run.err == "Installed acpx to \(destination) (codex/user)\n")
         let ending = "\u{1B}[90m\u{2502}\u{1B}[39m\r\n\u{1B}[32m\u{25C7}\u{1B}[39m  Install complete.\r\n\u{1B}[?25h"
             + "\u{1B}[90m\u{2502}\u{1B}[39m\r\n\u{1B}[90m\u{2514}\u{1B}[39m  Done.\r\n\r\n"
-        #expect(run.tail.hasSuffix(ending), "\(run.tail.debugDescription)")
+        #expect(Self.withoutSpinnerFrames(run.tail).hasSuffix(ending), "\(run.tail.debugDescription)")
         #expect(run.tail.contains("Planned combinations (1):") && run.tail.contains("Force: no"))
         #expect(FileManager.default.fileExists(atPath: destination + "/SKILL.md"))
+    }
+
+    /// The frames the install's spinner drew, and took back, left out of `shown`: there are none
+    /// when the install is over within the spinner's first 80 ms, as it was when acpx's ending was
+    /// recorded, and one or more when it is not — on a slow CI runner, say — each cleared with
+    /// `ESC[1G ESC[J`, after a line break under `CI=true`, as clack's spinner draws and clears them
+    /// (``ClackSpinner``). acpx's would draw the same, so the ending is the same either way.
+    static func withoutSpinnerFrames(_ shown: String) -> String {
+        let frame = "\u{1B}\\[35m[\u{25D2}\u{25D0}\u{25D3}\u{25D1}\u{2022}oO0]\u{1B}\\[39m  Installing 1 target\\.{0,3}"
+        let cleared = "(\r\n)?\u{1B}\\[1G\u{1B}\\[J"
+        return shown.replacingOccurrences(of: "(\(frame)\(cleared))+", with: "", options: .regularExpression)
+    }
+
+    /// One frame drawn under `CI=true`, or three drawn without it, leave acpx's ending; what
+    /// drew none is left as it is.
+    @Test func spinnerFramesAreLeftOutOfTheEnding() {
+        let ending = "\u{1B}[90m\u{2502}\u{1B}[39m\r\n\u{1B}[32m\u{25C7}\u{1B}[39m  Install complete.\r\n\u{1B}[?25h"
+        let bar = "\u{1B}[90m\u{2502}\u{1B}[39m\r\n"
+        let rest = "\u{1B}[32m\u{25C7}\u{1B}[39m  Install complete.\r\n\u{1B}[?25h"
+        let frame = "\u{1B}[35m\u{25D2}\u{1B}[39m  Installing 1 target"
+        let onCI = bar + frame + "...\r\n\u{1B}[1G\u{1B}[J" + rest
+        #expect(Self.withoutSpinnerFrames(onCI) == ending)
+        let frames = frame + "\u{1B}[1G\u{1B}[J\u{1B}[35m\u{25D0}\u{1B}[39m  Installing 1 target\u{1B}[1G\u{1B}[J"
+            + "\u{1B}[35m\u{25D3}\u{1B}[39m  Installing 1 target.\u{1B}[1G\u{1B}[J"
+        #expect(Self.withoutSpinnerFrames(bar + frames + rest) == ending)
+        #expect(Self.withoutSpinnerFrames(ending) == ending)
     }
 
     /// Ctrl-C at the agents, escape at the scopes: "Install cancelled.", exit code 1, nothing
