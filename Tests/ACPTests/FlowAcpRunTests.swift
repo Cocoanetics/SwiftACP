@@ -150,13 +150,13 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
           edges: [] });
         """
 
-    /// acpx's flow runner passes the agent neither `--no-terminal` nor a system prompt:
-    /// the turn advertises a terminal, and its session has no system prompt.
+    /// acpx's flow runner passes the agent no `--no-terminal`: the turn advertises a terminal;
+    /// `--no-fs` it keeps, and with no session options its `session/new` has no `_meta`.
     @Test(.enabled(if: nodeAvailable && pythonAvailable))
     func aTurnTakesOnlyTheFlagsAcpxsFlowRunnerPassesOn() async throws {
         let run = try await flowRun(
             "flags.flow.mjs", body: Self.held.replacingOccurrences(of: "\"hold\"", with: "\"hi\""),
-            options: ["--no-terminal", "--system-prompt", "be brief", "--no-fs"])
+            options: ["--no-terminal", "--no-fs"])
         #expect(run.code == 0, "\(run.err)")
         let sent = events(run, "isolated-ask-1").filter { $0["direction"] == .text("outbound") }
         let capabilities = sent.first?["message"]?["params"]?["clientCapabilities"]
@@ -164,6 +164,25 @@ let pythonAvailable = AgentRegistry.which("python3") != nil
         #expect(capabilities?["fs"] == .object([("readTextFile", .bool(false)), ("writeTextFile", .bool(false))]))
         let new = sent.first { $0["message"]?["method"] == .text("session/new") }
         #expect(new?["message"]?["params"]?.hasMember("_meta") == false)
+    }
+
+    /// A flow's `--system-prompt` or `--append-system-prompt` reaches an isolated node's
+    /// `session/new`, as acpx 0.19.4's runner passes it on with the model, tools and turns
+    /// (`sessionOptionsFromGlobalFlags`, openclaw/acpx#815): `_meta.systemPrompt`, the text or
+    /// `{ "append": text }`.
+    @Test(.enabled(if: nodeAvailable && pythonAvailable))
+    func aFlowsSystemPromptReachesAnIsolatedSession() async throws {
+        for (flag, expected) in [
+            ("--system-prompt", WireJSON.text("Be precise")),
+            ("--append-system-prompt", .object([("append", .text("Be precise"))]))
+        ] {
+            let run = try await flowRun(
+                "prompt.flow.mjs", body: Self.held.replacingOccurrences(of: "\"hold\"", with: "\"hi\""),
+                options: [flag, "Be precise"])
+            #expect(run.code == 0, "\(run.err)")
+            let new = events(run, "isolated-ask-1").first { $0["message"]?["method"] == .text("session/new") }
+            #expect(member(new, "message", "params", "_meta") == .object([("systemPrompt", expected)]), "\(flag)")
+        }
     }
 
     /// An interrupt while the agent holds its prompt: the prompt is cancelled, and once the

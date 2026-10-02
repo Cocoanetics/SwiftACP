@@ -6,9 +6,9 @@ import SwiftACP
 
 /// The CLI's part of a flow's ACP turns (``FlowSessionRunner``): acpx's `runOnce` with the
 /// options acpx's flow runner gives it — its `connectionOptions` and `sessionOptions`. So
-/// the turn has no timeout of its own and no prompt retries, advertises a terminal whatever
-/// `--no-terminal` says, and sends no system prompt: acpx's flow runner passes none of
-/// those on.
+/// the turn has no timeout of its own and no prompt retries, and advertises a terminal
+/// whatever `--no-terminal` says: acpx's flow runner passes none of those on. The system
+/// prompt it does pass on, since 0.19.4 (openclaw/acpx#815).
 struct FlowAgentSessions: FlowSessionRunner {
     let flags: GlobalFlags
     let config: ResolvedAcpxConfig
@@ -81,11 +81,9 @@ struct FlowAgentSessions: FlowSessionRunner {
         try turn.control.check()
         let invocation = AgentInvocation(
             agentName: agent.agentName, agentCommand: agent.agentCommand, agentArgv: agent.agentArgv, cwd: agent.cwd)
-        // acpx's flow runner's `sessionOptions`: the model, allowed tools and turns.
-        var options = SessionAcpxState.SessionOptions()
-        options.model = flags.model
-        options.allowedTools = flags.allowedTools
-        options.maxTurns = flags.maxTurns
+        // acpx's flow runner's `sessionOptions`, the CLI's `sessionOptionsFromGlobalFlags`: the
+        // model, allowed tools and turns, and the system prompt (openclaw/acpx#815).
+        let options = SessionAcpxState.SessionOptions(turnModel: flags.model, flags.promptSessionOptions)
         // acpx's `runOnce` `controlState`, as `exec` keeps it.
         let control = ModelApplication.ControlState()
         await handle.connection.setWireMessageObserver { control.observe($0, $1) }

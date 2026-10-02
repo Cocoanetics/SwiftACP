@@ -3,6 +3,7 @@
 @testable import acpx
 @testable import acpxd
 import Foundation
+import JSONFoundation
 @testable import SwiftACP
 import SwiftMCP
 import Testing
@@ -191,6 +192,47 @@ extension DaemonToolsTests {
             let terminals = try #require(agent.terminals as? TerminalManager)
             #expect(await terminals.outputCeiling == 4096)
             await daemon.releaseAll()
+        }
+    }
+
+    /// A flow's `--system-prompt` or `--append-system-prompt` reaches its persistent session's
+    /// `session/new`, as acpx 0.19.4's runner gives `createSessionWithClient` the flags' session
+    /// options (`sessionOptionsFromGlobalFlags`, openclaw/acpx#815): acpxd makes the session with
+    /// `_meta.systemPrompt` — the text, or `{ "append": text }` — and its record keeps it.
+    @Test(.enabled(if: mockPythonAvailable), .timeLimit(.minutes(1)))
+    func aFlowsSystemPromptReachesAPersistentSession() async throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let prompts: [(SystemPromptOption, String)] = [
+            (.replace("Be precise"), #""Be precise""#), (.append("Be precise"), #"{"append":"Be precise"}"#)
+        ]
+        for (index, (prompt, expected)) in prompts.enumerated() {
+            let sent = try WireJSON.parse(expected)
+            let kept = try JSONDecoder().decode(JSONValue.self, from: Data(expected.utf8))
+            let log = directory.appendingPathComponent("requests-\(index).ndjson")
+            let command = "/usr/bin/env MOCK_REQUEST_LOG='\(log.path)' " + (try #require(mockCommand()))
+            try await withIsolatedStore {
+                let backend = ACPXDaemonBackend(inheritAgentStderr: false)
+                let config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
+                var flags = try Flags.resolveGlobalFlags(ScannedArgs(), config: config)
+                flags.systemPrompt = prompt
+                let sessions = FlowAgentSessions(
+                    flags: flags, config: config, permission: .approveAll, permissionRules: nil, mcpServers: [])
+                let attempt = FlowAttempt(nodeId: "ask", attemptId: "ask-1", startedAt: nowISO(), timeoutMs: nil)
+                let agent = FlowAgent(
+                    agentName: "mock", agentCommand: command, agentArgv: nil, cwd: NSTemporaryDirectory())
+                let daemon = MCPServerConfig.stdioHandles(server: ACPXDaemon(backend: backend))
+                let record = try await DaemonClient.$standIn.withValue(daemon) {
+                    try await sessions.createPersistent(
+                        agent: agent, name: "flow-main", control: FlowTurnControl(attempt: attempt))
+                }
+                await backend.releaseAll()
+                let requests = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+                    .compactMap { try? WireJSON.parse(String($0)) }
+                let new = try #require(requests.first { $0["method"] == .text("session/new") })
+                #expect(new["params"]?["_meta"] == .object([("systemPrompt", sent)]))
+                #expect(record.acpx?.sessionOptions?.systemPrompt == kept)
+            }
         }
     }
 

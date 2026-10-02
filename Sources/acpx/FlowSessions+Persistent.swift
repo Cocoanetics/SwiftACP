@@ -172,10 +172,13 @@ extension FlowAgentSessions {
     /// servers, read once, as the run began.
     var callerConfig: CallerConfig { config.callerConfig }
 
-    /// acpx's flow runner's `sessionOptions`: the model, allowed tools and turns.
+    /// acpx's flow runner's `sessionOptions`, the CLI's `sessionOptionsFromGlobalFlags`: the
+    /// model, allowed tools and turns, and the system prompt (openclaw/acpx#815).
     var flowSessionOptions: PromptSessionOptions? {
-        guard flags.model != nil || flags.allowedTools != nil || flags.maxTurns != nil else { return nil }
-        return PromptSessionOptions(model: flags.model, allowedTools: flags.allowedTools, maxTurns: flags.maxTurns)
+        guard flags.model != nil || flags.promptSessionOptions != nil else { return nil }
+        var options = flags.promptSessionOptions ?? PromptSessionOptions()
+        options.model = flags.model
+        return options
     }
 
     /// The permission mode acpxd takes, for the flow's permissions.

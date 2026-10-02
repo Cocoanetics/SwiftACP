@@ -332,7 +332,8 @@ extension GlobalFlags {
     }
 
     /// The session options a prompt sends acpxd beside its `--model`, as acpx's CLI sends
-    /// them with each prompt (`sessionOptionsFromGlobalFlags`); `nil` when it gives none.
+    /// them with each prompt and gives a flow's runner (`sessionOptionsFromGlobalFlags`);
+    /// `nil` when it gives none.
     var promptSessionOptions: PromptSessionOptions? {
         guard allowedTools != nil || maxTurns != nil || systemPrompt != nil else { return nil }
         var options = PromptSessionOptions(allowedTools: allowedTools, maxTurns: maxTurns)
