@@ -1,5 +1,5 @@
 {
-  "generatedBy": "acpx v0.19.3 src/spawn-command-options.ts and src/acp/terminal-manager.ts, path.win32, Node v25.9.0",
+  "generatedBy": "acpx v0.19.4 src/spawn-command-options.ts and src/acp/terminal-manager.ts, path.win32, Node v25.9.0",
   "spawns": [
     {
       "name": "an npm shim on PATH",
@@ -2137,7 +2137,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\npm\\tool.cmd ^\"a\\\\\\\\^\"b^\"\""
+          "\"C:\\npm\\tool.cmd ^\"a\\\\\\\\\\^\"b^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2164,7 +2164,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"a\\\\\\\\^^^\"b^^^\"\""
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"a\\\\\\\\\\^^^\"b^^^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2191,7 +2191,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\npm\\tool.cmd ^\"a\\\\\\\\\\^\"b^\"\""
+          "\"C:\\npm\\tool.cmd ^\"a\\\\\\\\\\\\\\^\"b^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2218,7 +2218,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"a\\\\\\\\\\^^^\"b^^^\"\""
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"a\\\\\\\\\\\\\\^^^\"b^^^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2245,7 +2245,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\npm\\tool.cmd ^\"t\\\\\\^\"\""
+          "\"C:\\npm\\tool.cmd ^\"t\\\\\\\\^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2272,7 +2272,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"t\\\\\\^^^\"\""
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"t\\\\\\\\^^^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2299,7 +2299,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\npm\\tool.cmd ^\"t\\\\\\\\^\"\""
+          "\"C:\\npm\\tool.cmd ^\"t\\\\\\\\\\\\^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2326,7 +2326,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"t\\\\\\\\^^^\"\""
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"t\\\\\\\\\\\\^^^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2407,7 +2407,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\npm\\tool.cmd ^\"\\\\\\^\"\""
+          "\"C:\\npm\\tool.cmd ^\"\\\\\\\\^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2434,7 +2434,7 @@
           "/d",
           "/s",
           "/c",
-          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"\\\\\\^^^\"\""
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"\\\\\\\\^^^\"\""
         ],
         "windowsVerbatimArguments": true
       }
@@ -2489,6 +2489,168 @@
           "/s",
           "/c",
           "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"\\\\\\^^^\"^^^\"\""
+        ],
+        "windowsVerbatimArguments": true
+      }
+    },
+    {
+      "name": "escaped [\"a\\\\\\\\\"]",
+      "command": "C:\\npm\\tool.cmd",
+      "args": [
+        "a\\\\"
+      ],
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\npm\\tool.cmd"
+      ],
+      "resolved": "C:\\npm\\tool.cmd",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\npm\\tool.cmd ^\"a\\\\\\\\^\"\""
+        ],
+        "windowsVerbatimArguments": true
+      }
+    },
+    {
+      "name": "escaped for a shim [\"a\\\\\\\\\"]",
+      "command": "C:\\proj\\node_modules\\.bin\\tool.cmd",
+      "args": [
+        "a\\\\"
+      ],
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\proj\\node_modules\\.bin\\tool.cmd"
+      ],
+      "resolved": "C:\\proj\\node_modules\\.bin\\tool.cmd",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"a\\\\\\\\^^^\"\""
+        ],
+        "windowsVerbatimArguments": true
+      }
+    },
+    {
+      "name": "escaped [\"\\\\\\\\\\\"\"]",
+      "command": "C:\\npm\\tool.cmd",
+      "args": [
+        "\\\\\""
+      ],
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\npm\\tool.cmd"
+      ],
+      "resolved": "C:\\npm\\tool.cmd",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\npm\\tool.cmd ^\"\\\\\\\\\\^\"^\"\""
+        ],
+        "windowsVerbatimArguments": true
+      }
+    },
+    {
+      "name": "escaped for a shim [\"\\\\\\\\\\\"\"]",
+      "command": "C:\\proj\\node_modules\\.bin\\tool.cmd",
+      "args": [
+        "\\\\\""
+      ],
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\proj\\node_modules\\.bin\\tool.cmd"
+      ],
+      "resolved": "C:\\proj\\node_modules\\.bin\\tool.cmd",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"\\\\\\\\\\^^^\"^^^\"\""
+        ],
+        "windowsVerbatimArguments": true
+      }
+    },
+    {
+      "name": "escaped [\"a\\\\b\"]",
+      "command": "C:\\npm\\tool.cmd",
+      "args": [
+        "a\\b"
+      ],
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\npm\\tool.cmd"
+      ],
+      "resolved": "C:\\npm\\tool.cmd",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\npm\\tool.cmd ^\"a\\b^\"\""
+        ],
+        "windowsVerbatimArguments": true
+      }
+    },
+    {
+      "name": "escaped for a shim [\"a\\\\b\"]",
+      "command": "C:\\proj\\node_modules\\.bin\\tool.cmd",
+      "args": [
+        "a\\b"
+      ],
+      "env": {
+        "Path": "C:\\Users\\me\\AppData\\Roaming\\npm;C:\\WINDOWS\\system32",
+        "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+      },
+      "cwd": "C:\\work",
+      "files": [
+        "C:\\proj\\node_modules\\.bin\\tool.cmd"
+      ],
+      "resolved": "C:\\proj\\node_modules\\.bin\\tool.cmd",
+      "expected": {
+        "command": "C:\\WINDOWS\\system32\\cmd.exe",
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\proj\\node_modules\\.bin\\tool.cmd ^^^\"a\\b^^^\"\""
         ],
         "windowsVerbatimArguments": true
       }
