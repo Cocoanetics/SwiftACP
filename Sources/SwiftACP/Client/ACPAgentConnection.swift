@@ -455,7 +455,7 @@ public actor ACPAgentConnection {
                 return .failure(.internalError(error.localizedDescription))
             }
         default:
-            return .failure(Self.methodNotFound(method))
+            return await serveExtensionMethod(method: method, params: params)
         }
     }
 

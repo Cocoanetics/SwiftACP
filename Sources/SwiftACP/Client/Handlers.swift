@@ -51,6 +51,11 @@ public struct ACPClientHandlers: Sendable {
     /// turn, whether one may start. Throw to refuse (a ``TerminalError`` reaches the
     /// agent in acpx's words). `nil` approves every command.
     public var authorizeTerminal: (@Sendable (CreateTerminalRequest) async throws -> Void)?
+    /// Agent-specific client methods outside the core ACP schema (for example
+    /// Cursor's `cursor/ask_question`). When set, it is tried for any inbound
+    /// request the connection does not serve itself; return `nil` to answer
+    /// method-not-found.
+    public var extensionMethod: (@Sendable (String, JSONValue?) async throws -> JSONValue?)?
 
     public init(
         requestPermission: (@Sendable (RequestPermissionRequest) async throws -> RequestPermissionResponse)? = nil,
@@ -58,7 +63,8 @@ public struct ACPClientHandlers: Sendable {
         writeTextFile: (@Sendable (WriteTextFileRequest) async throws -> WriteTextFileResponse)? = nil,
         authorizeWrite: (@Sendable (WriteTextFileRequest) async throws -> Void)? = nil,
         authorizeRead: (@Sendable (ReadTextFileRequest) async throws -> Void)? = nil,
-        authorizeTerminal: (@Sendable (CreateTerminalRequest) async throws -> Void)? = nil
+        authorizeTerminal: (@Sendable (CreateTerminalRequest) async throws -> Void)? = nil,
+        extensionMethod: (@Sendable (String, JSONValue?) async throws -> JSONValue?)? = nil
     ) {
         self.requestPermission = requestPermission
         self.readTextFile = readTextFile
@@ -66,6 +72,7 @@ public struct ACPClientHandlers: Sendable {
         self.authorizeWrite = authorizeWrite
         self.authorizeRead = authorizeRead
         self.authorizeTerminal = authorizeTerminal
+        self.extensionMethod = extensionMethod
     }
 
     /// Sensible defaults for a headless controller: a permission policy plus real

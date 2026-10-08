@@ -46,4 +46,24 @@ extension ACPAgentConnection {
     /// `Invalid params` without issues, for params the schema takes that still cannot be
     /// read.
     static let invalidParams = JSONRPCErrorBody(code: -32602, message: "Invalid params")
+
+    /// Agent-specific client methods outside the core ACP schema (see
+    /// ``ACPClientHandlers/extensionMethod``).
+    func serveExtensionMethod(
+        method: String, params: JSONValue?
+    ) async -> Result<JSONValue, JSONRPCErrorBody> {
+        guard let handler = handlers.extensionMethod else {
+            return .failure(Self.methodNotFound(method))
+        }
+        do {
+            if let result = try await handler(method, params) {
+                return .success(result)
+            }
+        } catch let error as JSONRPCErrorBody {
+            return .failure(error)
+        } catch {
+            return .failure(.internalError(error.localizedDescription))
+        }
+        return .failure(Self.methodNotFound(method))
+    }
 }
