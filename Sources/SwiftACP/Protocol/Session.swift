@@ -194,10 +194,19 @@ public struct PromptResponse: Codable, Sendable {
     /// Code populates this (Codex doesn't). Note: this is where the breakdown
     /// actually rides — *not* `usage_update._meta.usage`, which agents leave empty.
     public var usage: PromptUsage?
+    /// Extension metadata on the response (`_meta`). Claude Code attaches per-model
+    /// quota under `_meta.quota`, including `model_usage`.
+    public var meta: JSONValue?
 
-    public init(stopReason: StopReason, usage: PromptUsage? = nil) {
+    public init(stopReason: StopReason, usage: PromptUsage? = nil, meta: JSONValue? = nil) {
         self.stopReason = stopReason
         self.usage = usage
+        self.meta = meta
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stopReason, usage
+        case meta = "_meta"
     }
 }
 
