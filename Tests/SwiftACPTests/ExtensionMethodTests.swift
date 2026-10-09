@@ -6,7 +6,7 @@ import Testing
 @Test func extensionMethodAnswersUnknownClientRequests() async throws {
     let (clientEnd, agentEnd) = try LoopbackTransport.pair()
     let connection = ACPAgentConnection(
-        transport: JSONRPCMessageTransport(agentEnd),
+        transport: agentEnd,
         handlers: ACPClientHandlers(
             extensionMethod: { method, _ in
                 guard method == "cursor/ask_question" else { return nil }
