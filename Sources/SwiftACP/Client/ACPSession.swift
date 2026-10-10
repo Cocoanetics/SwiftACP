@@ -183,7 +183,7 @@ public struct ACPSession: Sendable {
             await consumer.value
             return await PromptOutcome(
                 stopReason: response.stopReason, text: collector.text, usage: response.usage,
-                clientOperations: collector.operations)
+                clientOperations: collector.operations, meta: response.meta)
         } catch {
             // A failed turn hands on what it did too before it throws: whatever reports
             // the failure then comes after it.
@@ -214,15 +214,19 @@ public struct PromptOutcome: Sendable {
     /// The client operations the connection reported during the turn, in order —
     /// a permission refusal that may end the turn (see ``CodexCompat``); usually empty.
     public var clientOperations: [ClientOperation]
+    /// The prompt response's `_meta` (``PromptResponse/meta``) — Claude Code attaches
+    /// per-model quota under `meta["quota"]`, including `model_usage`.
+    public var meta: JSONValue?
 
     public init(
         stopReason: StopReason, text: String, usage: PromptUsage? = nil,
-        clientOperations: [ClientOperation] = []
+        clientOperations: [ClientOperation] = [], meta: JSONValue? = nil
     ) {
         self.stopReason = stopReason
         self.text = text
         self.usage = usage
         self.clientOperations = clientOperations
+        self.meta = meta
     }
 }
 
