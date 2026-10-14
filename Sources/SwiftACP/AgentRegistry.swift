@@ -9,23 +9,32 @@ import JSONRPCWire
 /// npx resolution step. Ported from acpx's `agent-registry.ts`.
 public enum AgentRegistry {
     /// Pinned adapter package ranges, mirroring upstream acpx's
-    /// `ACP_ADAPTER_PACKAGE_RANGES` (v0.19.4).
+    /// `ACP_ADAPTER_PACKAGE_RANGES` (v0.19.4) where upstream has caught up to the
+    /// adapter's latest major/minor line.
     ///
     /// Changing a range changes the built-in command saved in session records: add the
     /// previous command to `BuiltInCommandMigration.legacyCommands` (ACPXCore), or the
     /// sessions saved under it drop out of the agent's scope (openclaw/acpx#838).
     ///
-    /// `codex` used to be pinned ahead of acpx deliberately: at the 0.11.0 port
-    /// baseline acpx still pinned `^0.0.44`, whose bundled `@openai/codex` (0.128.0)
-    /// fails `initialize` with an opaque "Codex process has exited with code 1"
-    /// because macOS XProtect (def 5347) quarantines that build as a false positive
-    /// (issue #11 / openclaw/acpx#434). Upstream has since moved to `^1.1.5`, past
-    /// the flagged build, so these simply track upstream again. The
+    /// `codex` and `claude` are pinned ahead of acpx deliberately again (acpx v0.19.5
+    /// still pins `^1.1.5` / `^0.81.2`, openclaw/acpx#838): `^2.2.2` is the first codex-acp
+    /// line to carry a `codex` new enough to offer GPT 6.1 as a model (issue #317), and
+    /// `^0.90.0` picks up claude-agent-acp's current release. Both adapters' 1.x→2.x /
+    /// 0.81→0.90 changelogs only reshape output for a client that opts into the
+    /// `_meta.jetbrains.air` AIR capability (exact diff/git patches, `rawInput`-only tool
+    /// input, subagent session reporting); a plain ACP client gets the same `tool_call`
+    /// and `tool_call_update` shape as before, including the pre-existing ACP merge
+    /// semantics (an omitted field means "unchanged", not "cleared") that
+    /// `ConversationModel.applyToolCall` (ACPXCore) already implements. `codex` was
+    /// pinned ahead of acpx once before too: at the 0.11.0 port baseline acpx still
+    /// pinned `^0.0.44`, whose bundled `@openai/codex` (0.128.0) fails `initialize` with
+    /// an opaque "Codex process has exited with code 1" because macOS XProtect (def 5347)
+    /// quarantines that build as a false positive (issue #11 / openclaw/acpx#434); the
     /// ``launch(for:cwd:environment:inheritStderr:overrides:)`` `CODEX_PATH` fallback
     /// covers a flagged bundle independently whenever a system `codex` is installed.
     public enum PackageRange {
-        public static let claude = "^0.81.2"
-        public static let codex = "^1.1.5"
+        public static let claude = "^0.90.0"
+        public static let codex = "^2.2.2"
         public static let mux = "^0.28.0"
         public static let pi = "^0.0.33"
     }
