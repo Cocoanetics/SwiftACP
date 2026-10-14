@@ -90,11 +90,12 @@ struct AgentRegistryTests {
         #expect(codexCommand?.contains("^0.0.44") == false)
     }
 
-    /// acpx's `claude built-in uses the current ACP adapter package range`: the pin acpx
-    /// 0.19.4 moved to (openclaw/acpx#838); the previous one is a legacy command now.
+    /// The claude built-in's pinned range: moved ahead of acpx (still `^0.81.2` as of
+    /// acpx v0.19.5) for GPT 6.1 / current-adapter support (issue #317); the previous
+    /// range is a legacy command now.
     @Test func claudeAdapterPinnedToAcpxsRange() {
-        #expect(AgentRegistry.PackageRange.claude == "^0.81.2")
-        #expect(AgentRegistry.builtIn["claude"] == "npx -y @agentclientprotocol/claude-agent-acp@^0.81.2")
+        #expect(AgentRegistry.PackageRange.claude == "^0.90.0")
+        #expect(AgentRegistry.builtIn["claude"] == "npx -y @agentclientprotocol/claude-agent-acp@^0.90.0")
     }
 
     // MARK: - registry parity

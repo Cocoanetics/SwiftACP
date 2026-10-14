@@ -21,7 +21,7 @@ public enum BuiltInCommandMigration {
             "npx @zed-industries/codex-acp", "npx @zed-industries/codex-acp@^0.9.5",
             "npx @zed-industries/codex-acp@^0.10.0", "npx @zed-industries/codex-acp@^0.11.1",
             "npx @zed-industries/codex-acp@^0.12.0", "npx -y @agentclientprotocol/codex-acp@^0.0.44",
-            "npx -y @agentclientprotocol/codex-acp@^1.1.4"
+            "npx -y @agentclientprotocol/codex-acp@^1.1.4", "npx -y @agentclientprotocol/codex-acp@^1.1.5"
         ]),
         ("claude", [
             "npx @zed-industries/claude-agent-acp", "npx -y @zed-industries/claude-agent-acp",
@@ -35,12 +35,14 @@ public enum BuiltInCommandMigration {
             "npx -y @agentclientprotocol/claude-agent-acp@^0.37.0",
             "npx -y @agentclientprotocol/claude-agent-acp@^0.60.0",
             "npx -y @agentclientprotocol/claude-agent-acp@^0.76.0",
+            "npx -y @agentclientprotocol/claude-agent-acp@^0.81.2",
             "npm exec @agentclientprotocol/claude-agent-acp@^0.25.0",
             "npm exec @agentclientprotocol/claude-agent-acp@^0.31.0",
             "npm exec @agentclientprotocol/claude-agent-acp@^0.36.1",
             "npm exec @agentclientprotocol/claude-agent-acp@^0.37.0",
             "npm exec @agentclientprotocol/claude-agent-acp@^0.60.0",
-            "npm exec @agentclientprotocol/claude-agent-acp@^0.76.0"
+            "npm exec @agentclientprotocol/claude-agent-acp@^0.76.0",
+            "npm exec @agentclientprotocol/claude-agent-acp@^0.81.2"
         ]),
         ("gemini", ["gemini", "gemini --experimental-acp"]),
         ("kiro", ["kiro-cli acp"]),
