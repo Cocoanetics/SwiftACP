@@ -226,14 +226,21 @@ enum SessionsCommand {
         if dryRun || !scan.flag("yes") {
             printPruneResult(candidates, bytesFreed: 0, dryRun: true, format: flags.format)
             if dryRun || candidates.isEmpty { return ExitCodes.success }
-            Console.errLine("No sessions deleted. Review the candidates and rerun sessions prune with --yes to delete.")
+            // `--json-strict` promises no non-JSON stderr; keep the JSON dry-run result only.
+            if !flags.jsonStrict {
+                Console.errLine(
+                    "No sessions deleted. Review the candidates and rerun sessions prune with --yes to delete.")
+            }
             return ExitCodes.error
         }
         // Keep stdout's single JSON result (or quiet ID list) while showing the
-        // exact candidates before touching disk, even with --yes.
-        Console.errLine("Will prune \(candidates.count) closed session\(candidates.count == 1 ? "" : "s"):")
-        for record in candidates {
-            Console.errLine("  \(record.acpxRecordId)\t\(record.closedAt ?? record.lastUsedAt)")
+        // exact candidates before touching disk, even with --yes — unless
+        // `--json-strict` suppresses the banner.
+        if !flags.jsonStrict {
+            Console.errLine("Will prune \(candidates.count) closed session\(candidates.count == 1 ? "" : "s"):")
+            for record in candidates {
+                Console.errLine("  \(record.acpxRecordId)\t\(record.closedAt ?? record.lastUsedAt)")
+            }
         }
         let bytesFreed = SessionStore.deleteRecords(candidates.map(\.acpxRecordId), includeHistory: includeHistory)
         printPruneResult(candidates, bytesFreed: bytesFreed, dryRun: false, format: flags.format)

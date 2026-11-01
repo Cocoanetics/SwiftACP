@@ -31,8 +31,12 @@ struct SessionsPruneSafetyTests {
         return try Dictionary(uniqueKeysWithValues: files.map { ($0.lastPathComponent, try Data(contentsOf: $0)) })
     }
 
-    private func run(_ arguments: [String], format: String = "json") async -> CLIParityTests.Run {
-        await CLIParityTests.run(["--agent", Self.agent, "--format", format, "sessions"] + arguments)
+    private func run(
+        _ arguments: [String], format: String = "json", jsonStrict: Bool = false
+    ) async -> CLIParityTests.Run {
+        var leading = ["--agent", Self.agent, "--format", format]
+        if jsonStrict { leading.append("--json-strict") }
+        return await CLIParityTests.run(leading + ["sessions"] + arguments)
     }
 
     @Test func pruneWithoutYesDeletesNothing() async throws {
@@ -75,6 +79,32 @@ struct SessionsPruneSafetyTests {
             #expect(result.err.contains("fallback"))
             let expected = before.filter { !$0.key.hasPrefix("selected.") && !$0.key.hasPrefix("fallback.") }
             #expect(try snapshot() == expected)
+        }
+    }
+
+    /// `--json-strict` must suppress prune's candidate / confirmation banners on stderr
+    /// while still emitting the JSON result on stdout (Codex review on #320).
+    @Test(arguments: [false, true])
+    func jsonStrictPruneEmitsNoNonJSONStderr(confirmed: Bool) async throws {
+        try await withIsolatedStore {
+            try seed()
+            let before = try snapshot()
+            let result = await run(
+                ["prune", "--include-history", "--before", "2021-01-01"] + (confirmed ? ["--yes"] : []),
+                jsonStrict: true)
+            #expect(result.err.isEmpty, "strict mode leaked stderr: \(result.err)")
+            let json = try #require(try JSONSerialization.jsonObject(with: Data(result.out.utf8)) as? [String: Any])
+            #expect(Set(json["pruned"] as? [String] ?? []) == ["selected", "fallback"])
+            if confirmed {
+                #expect(result.code == ExitCodes.success)
+                #expect(json["dryRun"] as? Bool == false)
+                let expected = before.filter { !$0.key.hasPrefix("selected.") && !$0.key.hasPrefix("fallback.") }
+                #expect(try snapshot() == expected)
+            } else {
+                #expect(result.code == ExitCodes.error)
+                #expect(json["dryRun"] as? Bool == true)
+                #expect(try snapshot() == before)
+            }
         }
     }
 
