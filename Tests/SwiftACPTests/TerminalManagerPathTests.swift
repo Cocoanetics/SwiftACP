@@ -17,10 +17,10 @@ extension TerminalManagerTests {
     @Test func aRelativePathEntryIsFoundFromTheCommandsDirectory() async throws {
         let root = try workspace()
         try FileManager.default.createDirectory(atPath: root + "/sub/bin", withIntermediateDirectories: true)
-        // A link to `pwd` rather than a script written here: a command another test
-        // starts meanwhile can hold a file being written open for an instant, and
-        // running it then is `ETXTBSY`.
-        try FileManager.default.createSymbolicLink(atPath: root + "/sub/bin/tool", withDestinationPath: "/bin/pwd")
+        // A test-owned helper via `TestScripts.write` (install, not a direct write): another
+        // test's child can hold a file open for an instant, and running it then is `ETXTBSY`.
+        // Not a symlink to `/bin/pwd`: uutils rejects a foreign argv0; GNU accepts it (#322).
+        try await TestScripts.write("#!/bin/sh\npwd\n", to: root + "/sub/bin/tool")
         // `sub`, as seen from this process's own directory: a relative `cwd` is resolved
         // from there, as in Node. (Changing this process's directory would race the
         // tests running beside this one.)
@@ -48,7 +48,8 @@ extension TerminalManagerTests {
         try files.createDirectory(atPath: root + "/dir/tool", withIntermediateDirectories: true)
         try files.createDirectory(atPath: root + "/dir/my tool", withIntermediateDirectories: true)
         try files.createDirectory(atPath: root + "/bin", withIntermediateDirectories: true)
-        try files.createSymbolicLink(atPath: root + "/bin/tool", withDestinationPath: "/bin/echo")
+        // Test-owned echo stand-in: not a symlink to `/bin/echo` (uutils rejects foreign argv0, #322).
+        try await TestScripts.write("#!/bin/sh\necho \"$@\"\n", to: root + "/bin/tool")
         try files.createDirectory(atPath: root + "/loop", withIntermediateDirectories: true)
         try files.createSymbolicLink(atPath: root + "/loop/tool", withDestinationPath: root + "/loop/tool")
         try "x".write(toFile: root + "/file", atomically: true, encoding: .utf8)
