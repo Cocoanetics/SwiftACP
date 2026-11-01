@@ -19,7 +19,7 @@ extension TerminalManagerTests {
         try FileManager.default.createDirectory(atPath: root + "/sub/bin", withIntermediateDirectories: true)
         // A test-owned helper via `TestScripts.write` (install, not a direct write): another
         // test's child can hold a file open for an instant, and running it then is `ETXTBSY`.
-        // Not a symlink to `/bin/pwd`: uutils rejects a foreign argv0; GNU accepts it (#322).
+        // Not a symlink to a multicall coreutils binary: uutils rejects a foreign argv0 (#322).
         try await TestScripts.write("#!/bin/sh\npwd\n", to: root + "/sub/bin/tool")
         // `sub`, as seen from this process's own directory: a relative `cwd` is resolved
         // from there, as in Node. (Changing this process's directory would race the
@@ -48,7 +48,7 @@ extension TerminalManagerTests {
         try files.createDirectory(atPath: root + "/dir/tool", withIntermediateDirectories: true)
         try files.createDirectory(atPath: root + "/dir/my tool", withIntermediateDirectories: true)
         try files.createDirectory(atPath: root + "/bin", withIntermediateDirectories: true)
-        // Test-owned echo stand-in: not a symlink to `/bin/echo` (uutils rejects foreign argv0, #322).
+        // Test-owned echo stand-in: not a symlink to a multicall coreutils binary (#322).
         try await TestScripts.write("#!/bin/sh\necho \"$@\"\n", to: root + "/bin/tool")
         try files.createDirectory(atPath: root + "/loop", withIntermediateDirectories: true)
         try files.createSymbolicLink(atPath: root + "/loop/tool", withDestinationPath: root + "/loop/tool")

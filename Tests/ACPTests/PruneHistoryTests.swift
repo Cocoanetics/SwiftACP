@@ -75,7 +75,7 @@ import Testing
             let expected = counted.map(Self.size).reduce(0, +)
 
             let run = await CLIParityTests.run(
-                ["--agent", Self.agent, "--format", "json", "sessions", "prune", "--include-history"])
+                ["--agent", Self.agent, "--format", "json", "sessions", "prune", "--yes", "--include-history"])
             #expect(run.code == ExitCodes.success, "\(run.err)")
             let result = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [String: Any])
             #expect(result["bytesFreed"] as? Int == expected)
@@ -92,7 +92,8 @@ import Testing
             try Self.writeHistory(history)
             let expected = Self.size("gone.json")
 
-            let run = await CLIParityTests.run(["--agent", Self.agent, "--format", "json", "sessions", "prune"])
+            let run = await CLIParityTests.run(
+                ["--agent", Self.agent, "--format", "json", "sessions", "prune", "--yes"])
             #expect(run.code == ExitCodes.success, "\(run.err)")
             let result = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [String: Any])
             #expect(result["bytesFreed"] as? Int == expected)
