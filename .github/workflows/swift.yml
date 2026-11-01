@@ -86,7 +86,11 @@ jobs:
         run: swift build --target SwiftACP --disable-default-traits
 
   build-linux:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: ubuntu-latest is now 26.04, whose Rust coreutils (uutils)
+    # reject argv0 `tool` for the pwd/echo symlinks TerminalManagerPathTests runs.
+    # Move back to ubuntu-latest once the tests no longer depend on GNU coreutils
+    # (uutils compatibility is tracked separately).
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -135,7 +139,9 @@ jobs:
         timeout-minutes: 25
         uses: skiptools/swift-android-action@v2
         with:
-          swift-version: "6.3.1"
+          # 6.4.2: ubuntu-latest is now 26.04, and 6.3.1 has no ubuntu26.04 host
+          # toolchain (the download 404s).
+          swift-version: "6.4.2"
           free-disk-space: true
           swift-build-flags: --disable-default-traits
           build-tests: false
