@@ -154,6 +154,9 @@ enum CommandTree {
             CommandSpec(name: "new", options: sessionCreateOptions),
             CommandSpec(name: "ensure", options: sessionCreateOptions),
             CommandSpec(name: "close", arguments: [nameArgument]),
+            CommandSpec(
+                name: "remove", options: [OptionSpec("include-history")],
+                arguments: [.init(name: "id", required: true, validate: nonEmpty("Session record id"))]),
             CommandSpec(name: "show", arguments: [nameArgument]),
             CommandSpec(
                 name: "history",
@@ -196,6 +199,7 @@ enum CommandTree {
                 name: "prune",
                 options: [
                     OptionSpec("dry-run"),
+                    OptionSpec("yes"),
                     OptionSpec("before", takesValue: true, value: "date", validate: { _ = try parseBeforeDate($0) }),
                     OptionSpec(
                         "older-than", takesValue: true, value: "days", validate: { _ = try parseDaysOlderThan($0) }),

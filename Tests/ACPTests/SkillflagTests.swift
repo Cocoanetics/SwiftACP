@@ -4,14 +4,13 @@ import CryptoKit
 import Foundation
 import Testing
 
-/// acpx's `--skill` (#249) as acpx 0.19.3 runs it with skillflag 0.2.1. The digests are what acpx
-/// 0.19.3 installed from npm gives: `--skill list --json`, and the SHA-256 of `--skill show acpx`.
+/// acpx's `--skill` (#249) as acpx 0.19.3 runs it with skillflag 0.2.1, with SwiftACP's
+/// deliberate session-cleanup safety documentation (#319).
 @Suite struct SkillflagTests {
-    /// `acpx --skill list --json`'s digest of the skill acpx 0.19.3 bundles: the SHA-256 of its
-    /// `--skill export acpx`.
-    static let digest = "sha256:afd95cab8d375c14c1c1304cef1bedafc795c2a85f42afd9b86574272175e9b9"
-    /// The SHA-256 of acpx 0.19.3's `skills/acpx/SKILL.md`.
-    static let skillSHA256 = "9b3b6ec4fd10455028799a182c31b71b75d35590f7bdcd1d80f45717d6044845"
+    /// The SHA-256 of SwiftACP's `--skill export acpx`, including the safety documentation.
+    static let digest = "sha256:fd3953acb091e8c6187537ed52bb949c695eecfb10a996bc67251d321826f0f6"
+    /// The SHA-256 of the bundled `SKILL.md` with the same documentation.
+    static let skillSHA256 = "662c10e7224a1320abc73df066c1f250413ef91a9ddbe71290aab354bb69fb81"
     static let summary = "Use acpx as a headless ACP CLI for agent-to-agent communication, including "
         + "installed-agent inspection, prompt/exec/sessions workflows, session scoping, queueing, permissions, "
         + "output formats, system-prompt overrides, and multi-agent flows authored with "
@@ -27,12 +26,12 @@ import Testing
             + Self.digest + #"","files":1,"summary":""# + Self.summary + #""}]}"#)
     }
 
-    @Test func showAndExportGiveAcpxsBytes() {
+    @Test func showAndExportGiveTheDocumentedSafetyBehavior() {
         let scratch = Scratch()
         let shown = scratch.acpx(["--skill", "show", "acpx"])
         #expect(shown.code == 0 && Self.sha256(shown.outBytes) == Self.skillSHA256)
         let exported = scratch.acpx(["--skill", "export", "acpx"])
-        #expect(exported.code == 0 && exported.outBytes.count == 41_472)
+        #expect(exported.code == 0 && exported.outBytes.count == 42_496)
         #expect("sha256:" + Self.sha256(exported.outBytes) == Self.digest)
         // The skill's directory found in any case, as on a Mac's file system: named as given.
         let mixed = scratch.acpx(["--skill", "export", "Acpx"])
