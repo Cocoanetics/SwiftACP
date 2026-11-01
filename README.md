@@ -115,6 +115,26 @@ As in acpx, the global options (`--approve-reads`, `--format`, `--cwd`, …) go 
 the agent or command; after it, each command takes only its own. Everything after an
 agent's first prompt word is prompt text.
 
+Session cleanup deliberately departs from acpx for safety: `sessions prune` lists
+matching closed sessions and requires `--yes` before deleting anything, including
+on a terminal. Without it, the command previews candidates and fails without writes;
+`--dry-run` is a successful preview and never deletes, even with `--yes`.
+Prune is scoped to the selected agent (the default agent when omitted), across
+working directories; `--before <date>` or `--older-than <days>` narrows it by age.
+
+```sh
+swift run acpx codex sessions prune --dry-run --older-than 30
+swift run acpx codex sessions prune --yes --older-than 30 --include-history
+swift run acpx sessions remove <record-id> --include-history
+```
+
+`sessions remove <id>` deletes exactly the full local record ID shown by
+`sessions list --local`, across agents and directories. Names, provider session IDs
+and abbreviated IDs are refused. An open session is closed through the existing
+session lifecycle first. Both cleanup commands preserve event streams unless
+`--include-history` is supplied; use `ACPX_HOME` pointing at a temporary directory
+for smoke tests so they never write into your real session store.
+
 `acpxd` is the session daemon: an MCP server (Bonjour + local TCP) holding live ACP
 sessions, with an optional outward HTTP+SSE transport.
 
