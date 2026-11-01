@@ -13,6 +13,7 @@ enum SessionsCommand {
         case "history": return try history(context, defaultLimit: DEFAULT_HISTORY_LIMIT, tail: false)
         case "read": return try history(context, defaultLimit: 0, tail: true)
         case "close": return try close(context)
+        case "remove": return try remove(context)
         case "prune": return try prune(context)
         case "new": return try SessionLifecycle.new(context)
         case "ensure": return try SessionLifecycle.ensure(context)
@@ -167,6 +168,35 @@ enum SessionsCommand {
         return ExitCodes.success
     }
 
+    // MARK: remove
+
+    private static func remove(_ context: CommandContext) throws -> Int32 {
+        let flags = try context.globalFlags()
+        // Destructive lookup uses only the record's own file. Never fall back to a
+        // provider id, name or suffix: several local records can share those.
+        guard let id = context.positionals.first, let record = SessionStore.loadRecord(id) else {
+            throw CLIError("No session found for exact record id: \(context.positionals.first ?? "")")
+        }
+        // Retire a live owner through the same lifecycle as `sessions close` before
+        // removing its record, so its final checkpoint precedes deletion.
+        if record.closed != true { _ = try SessionLifecycle.close(record) }
+        let bytesFreed = SessionStore.deleteRecords(
+            [record.acpxRecordId], includeHistory: context.options.flag("include-history"))
+        switch flags.format {
+        case "json":
+            Console.out(jsonObject([
+                ("action", .string("session_removed")),
+                ("acpxRecordId", .string(record.acpxRecordId)),
+                ("bytesFreed", .integer(bytesFreed))
+            ]).compact() + "\n")
+        case "quiet":
+            Console.out("\(record.acpxRecordId)\n")
+        default:
+            Console.out("Removed \(record.acpxRecordId)\n")
+        }
+        return ExitCodes.success
+    }
+
     // MARK: prune
 
     private static func prune(_ context: CommandContext) throws -> Int32 {
@@ -191,9 +221,22 @@ enum SessionsCommand {
             return (record.closedAt ?? record.lastUsedAt) < cutoff
         }
 
-        let bytesFreed =
-            dryRun ? 0 : SessionStore.deleteRecords(candidates.map(\.acpxRecordId), includeHistory: includeHistory)
-        printPruneResult(candidates, bytesFreed: bytesFreed, dryRun: dryRun, format: flags.format)
+        // Deliberate departure from acpx: every deletion requires explicit consent.
+        // Dry-run always wins, even when --yes was supplied.
+        if dryRun || !scan.flag("yes") {
+            printPruneResult(candidates, bytesFreed: 0, dryRun: true, format: flags.format)
+            if dryRun || candidates.isEmpty { return ExitCodes.success }
+            Console.errLine("No sessions deleted. Review the candidates and rerun sessions prune with --yes to delete.")
+            return ExitCodes.error
+        }
+        // Keep stdout's single JSON result (or quiet ID list) while showing the
+        // exact candidates before touching disk, even with --yes.
+        Console.errLine("Will prune \(candidates.count) closed session\(candidates.count == 1 ? "" : "s"):")
+        for record in candidates {
+            Console.errLine("  \(record.acpxRecordId)\t\(record.closedAt ?? record.lastUsedAt)")
+        }
+        let bytesFreed = SessionStore.deleteRecords(candidates.map(\.acpxRecordId), includeHistory: includeHistory)
+        printPruneResult(candidates, bytesFreed: bytesFreed, dryRun: false, format: flags.format)
         return ExitCodes.success
     }
 

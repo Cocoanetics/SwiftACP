@@ -86,10 +86,20 @@ struct CommanderTests {
                 #expect(code == testCase.exitCode, "\(label)")
                 // SwiftACP answers `--version` with its own version.
                 let stdout = testCase.stdout == "0.19.1\n" ? ACPVersion.current + "\n" : testCase.stdout
-                #expect(capture.out.replacingOccurrences(of: cwd, with: "<cwd>") == stdout, "\(label)")
-                #expect(capture.err.replacingOccurrences(of: cwd, with: "<cwd>") == testCase.stderr, "\(label)")
+                #expect(Self.upstreamHelp(capture.out).replacingOccurrences(of: cwd, with: "<cwd>") == stdout,
+                        "\(label)")
+                #expect(Self.upstreamHelp(capture.err).replacingOccurrences(of: cwd, with: "<cwd>") == testCase.stderr,
+                        "\(label)")
             }
         }
+    }
+
+    /// Keep the recorded upstream oracle intact. SwiftACP deliberately adds only these
+    /// cleanup help lines (#319); their behavior is covered by SessionsPruneSafetyTests.
+    private static func upstreamHelp(_ output: String) -> String {
+        output.components(separatedBy: "\n").filter {
+            !$0.hasPrefix("  remove [options] <id>") && !$0.hasPrefix("  --yes ")
+        }.joined(separator: "\n")
     }
 
     @Test func suggestsAsCommanderSuggests() {

@@ -211,6 +211,7 @@ enum HelpCatalog {
         HelpSubcommand("new [options]", "Create a fresh session for current cwd"),
         HelpSubcommand("ensure [options]", "Ensure a session exists for current cwd or ancestor"),
         HelpSubcommand("close [name]", "Close session for current cwd"),
+        HelpSubcommand("remove [options] <id>", "Remove one session by full local record ID"),
         HelpSubcommand("show [name]", "Show session metadata for current cwd"),
         HelpSubcommand("history [options] [name]", "Show recent session history entries"),
         HelpSubcommand("read [options] [name]", "Read full session history"),
@@ -250,6 +251,11 @@ enum HelpCatalog {
         case "close":
             return HelpScreen(
                 usagePath: path, description: "Close session for current cwd", arguments: [nameArg])
+        case "remove":
+            return HelpScreen(
+                usagePath: path, description: "Remove exactly one session by full local record ID",
+                arguments: [HelpArgument("id", "<id>", "Full local record ID (no names or abbreviations)")],
+                options: [HelpOption("--include-history", "Also delete event stream files (.stream.ndjson)")])
         case "show":
             return HelpScreen(
                 usagePath: path, description: "Show session metadata for current cwd", arguments: [nameArg])
@@ -290,6 +296,7 @@ enum HelpCatalog {
                 usagePath: path, description: "Delete closed sessions and free disk space",
                 options: [
                     HelpOption("--dry-run", "Preview what would be pruned without deleting anything"),
+                    HelpOption("--yes", "Confirm deletion of the listed closed sessions (required)"),
                     HelpOption("--before <date>", "Prune sessions closed before this date"),
                     HelpOption("--older-than <days>", "Prune sessions closed more than N days ago"),
                     HelpOption("--include-history", "Also delete event stream files (.stream.ndjson)")
