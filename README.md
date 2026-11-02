@@ -35,6 +35,13 @@ disable it for a swift-nio-free graph:
 .package(url: "https://github.com/Cocoanetics/SwiftACP.git", from: "0.1.0", traits: []),
 ```
 
+## Toolchain
+
+CI builds every lane with Swift 6.4: Xcode 27.1 on macOS and iOS, and the swift.org
+6.4.2 toolchain on Linux, Windows and Android. Tests run on macOS, Linux and Windows;
+iOS and Android are build-only. This is the CI setup, not a minimum for consumers — the
+package keeps `swift-tools-version: 6.1`.
+
 ## Expose an agent (server)
 
 ```swift
