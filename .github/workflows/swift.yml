@@ -40,7 +40,7 @@ jobs:
   # transports drop out when this package's `Server` trait is disabled, which is what
   # an iOS (or Android) consumer does.
   build-ios:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -162,7 +162,8 @@ jobs:
           build-package: false
       - name: Verify Swift version
         run: |
-          swift="${{ steps.android.outputs.swift-install }}/bin/swift"
+          swift="$SWIFT_INSTALLATION/bin/swift"
+          [ -x "$swift" ] || { echo "::error::action-installed swift not found at $swift"; exit 1; }
           v="$("$swift" --version 2>&1)" || { echo "$v"; echo "::error::host swift --version failed"; exit 1; }
           echo "$v"
           echo "$v" | grep -Eq 'Swift version 6\.4(\.[0-9]+)?([^0-9.]|$)' || { echo "::error::Expected host Swift 6.4.x"; exit 1; }
