@@ -14,7 +14,7 @@ enum LeadingFlags {
     /// `TOP_LEVEL_VERSION_BOOLEAN_FLAGS`: the global flags the command scan steps over.
     static let booleanFlags: Set<String> = [
         "--approve-all", "--approve-reads", "--deny-all", "--suppress-reads", "--json-strict",
-        "--no-fs", "--no-terminal", "--verbose"
+        "--no-fs", "--no-terminal", "--session-failures", "--verbose"
     ]
 
     /// `compare`'s own options that take the next word as their value.

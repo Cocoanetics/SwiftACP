@@ -178,12 +178,15 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var verbose: Bool
     public var environment: [String: String]?
     public var requestId: String?
+    /// `true` asks the Codex adapter for typed session failures (``ClientOptions/sessionFailures``).
+    public var sessionFailures: Bool?
 
     public init(
         streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, terminal: Bool? = nil,
         authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false,
-        environment: [String: String]? = nil, requestId: String? = nil
+        environment: [String: String]? = nil, requestId: String? = nil, sessionFailures: Bool? = nil
     ) {
+        self.sessionFailures = sessionFailures
         self.streamWire = streamWire
         self.direct = direct
         self.fs = fs

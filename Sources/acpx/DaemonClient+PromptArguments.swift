@@ -31,6 +31,7 @@ extension DaemonClient {
         if let callerConfig = mode.callerConfig {
             arguments["callerConfig"] = try MCPClientArgumentEncoder.encode(callerConfig)
         }
+        if let sessionFailures = mode.sessionFailures { arguments["sessionFailures"] = .bool(sessionFailures) }
         if mode.verbose { arguments["verbose"] = .bool(true) }
         if let environment = mode.environment {
             arguments["environment"] = .object(environment.mapValues { .string($0) })

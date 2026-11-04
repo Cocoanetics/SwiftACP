@@ -64,6 +64,55 @@ struct SessionFailureTests {
         #expect(declared.withoutSessionFailures().meta == nil)
     }
 
+    private func flags(_ args: [String], config: ResolvedAcpxConfig? = nil) async throws -> GlobalFlags {
+        guard case .run(let levels, _) = try Commander.parse(args + ["codex", "hi"], root: CommandTree.acpx(
+            agents: ["codex"]))
+        else { throw CancellationError() }
+        return try await withIsolatedStore {
+            let loaded = try config ?? ConfigLoader.load(cwd: NSTemporaryDirectory())
+            return try Flags.resolveGlobalFlags(levels.first?.options ?? ScannedArgs(), config: loaded)
+        }
+    }
+
+    @Test func theFlagAndTheConfigKeyReachTheClientOptions() async throws {
+        let off = try await flags([])
+        let loaded = try ConfigLoader.load(cwd: "/")
+        #expect(!off.sessionFailures && off.clientOptions(config: loaded).sessionFailures == nil)
+        #expect(!off.clientCapabilities.declaresSessionFailures)
+
+        let flagged = try await flags(["--session-failures"])
+        #expect(flagged.clientOptions(config: loaded).sessionFailures == true)
+        #expect(flagged.clientCapabilities.declaresSessionFailures)
+
+        var config = try ConfigLoader.load(cwd: NSTemporaryDirectory())
+        config.sessionFailures = true
+        #expect(try await flags([], config: config).sessionFailures)
+    }
+
+    @Test func theDaemonWireCarriesTheOptIn() throws {
+        let on = try DaemonClient.promptArguments(
+            sessionId: "s", content: [], wait: true, permissionMode: "approve-all", nonInteractivePermissions: "deny",
+            permissionPolicy: nil, terminalOutputCeiling: 0, model: nil, sessionOptions: nil, limits: nil,
+            mode: PromptTurnMode(sessionFailures: true))
+        #expect(on["sessionFailures"] == .bool(true))
+        let off = try DaemonClient.promptArguments(
+            sessionId: "s", content: [], wait: true, permissionMode: "approve-all", nonInteractivePermissions: "deny",
+            permissionPolicy: nil, terminalOutputCeiling: 0, model: nil, sessionOptions: nil, limits: nil,
+            mode: PromptTurnMode())
+        #expect(off["sessionFailures"] == nil)
+    }
+
+    @Test func gatingStripsTheFlagForOtherAgents() async throws {
+        let loaded = try ConfigLoader.load(cwd: "/")
+        let capabilities = ClientCapabilities.acpx(
+            try await flags(["--session-failures"]).clientOptions(config: loaded))
+        var spec = ProcessLaunch(executable: "claude-agent-acp", arguments: [])
+        let plan = await AgentLaunchCompat.Plan(
+            &spec, limits: nil, clientInfo: .acpx, capabilities: capabilities, callerEnvironment: [:],
+            probe: { _, _, _ in nil })
+        #expect(!plan.capabilities.declaresSessionFailures)
+    }
+
     @Test func onlyTheCodexAdapterIsToldOfIt() async {
         let capabilities = ClientCapabilities.acpx.reportingSessionFailures()
         func plan(_ executable: String, _ arguments: [String]) async -> ClientCapabilities {

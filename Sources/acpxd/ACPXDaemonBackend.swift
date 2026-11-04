@@ -440,7 +440,7 @@ actor ACPXDaemonBackend: ACPXBackend {
             direct: mode.direct, fs: mode.fs, terminal: mode.terminal, authPolicy: mode.authPolicy,
             turnToken: mode.turnToken,
             callerConfig: mode.callerConfig, verbose: mode.verbose, environment: mode.environment,
-            requestId: mode.requestId)
+            requestId: mode.requestId, sessionFailures: mode.sessionFailures)
     }
 
     /// Drop a live session — by its acpx record id — and terminate its agent (so the

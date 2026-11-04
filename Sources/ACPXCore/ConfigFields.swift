@@ -79,6 +79,14 @@ enum ConfigFields {
         return text.javaScriptTrimmed.lowercased()
     }
 
+    static func sessionFailures(_ value: WireJSON?, _ path: String) throws -> Bool? {
+        if isUnset(value) { return nil }
+        guard case .bool(let flag)? = value else {
+            throw ConfigError("Invalid config sessionFailures in \(path): expected boolean")
+        }
+        return flag
+    }
+
     static func disableExec(_ value: WireJSON?, _ path: String) throws -> Bool? {
         if isUnset(value) { return nil }
         guard case .bool(let flag)? = value else {

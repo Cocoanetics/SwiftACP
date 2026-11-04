@@ -396,6 +396,8 @@ public actor ACPXDaemon {
     ///   - requestId: the caller's name for a queued turn, which its journal records are keyed by
     ///     (`turn_started`, `turn_result`, `last_request_id`), as acpx's owner keys them by the
     ///     request id its CLI sent — the id `--no-wait` prints. Omitted, one of the daemon's own.
+    ///   - sessionFailures: `true` asks the Codex adapter for typed session failures, so a provider
+    ///     error fails the turn (``ClientOptions/sessionFailures``, #300). Omitted, off.
     ///   - environment: the environment an agent the turn connects starts over — the caller's
     ///     own, as `newSession`'s. A queued turn's agents start over the environment of the
     ///     prompt that started the session's owner, as acpx's queue owner starts its agent in
@@ -411,7 +413,7 @@ public actor ACPXDaemon {
         model: String? = nil, sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil,
         direct: Bool? = nil, fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil,
         turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool? = nil,
-        environment: [String: String]? = nil, requestId: String? = nil
+        environment: [String: String]? = nil, requestId: String? = nil, sessionFailures: Bool? = nil
     ) async throws -> String {
         let options = Self.turnOptions(sessionOptions, model: model)
         return try await admitted { [backend] in
@@ -421,7 +423,7 @@ public actor ACPXDaemon {
                 mode: PromptTurnMode(
                     streamWire: streamWire ?? false, direct: direct ?? false, fs: fs, terminal: terminal,
                     authPolicy: authPolicy, turnToken: turnToken, callerConfig: callerConfig, verbose: verbose ?? false,
-                    environment: environment, requestId: requestId),
+                    environment: environment, requestId: requestId, sessionFailures: sessionFailures),
                 permissionPolicy: permissionPolicy, terminalOutputCeiling: terminalOutputCeiling,
                 sessionOptions: options, limits: limits)
         }

@@ -190,7 +190,8 @@ enum DaemonClient {
             sessionOptions: sessionOptions, limits: limits, mode: PromptTurnMode(
                 streamWire: renderer.streamsWireJSON, fs: client.fs, terminal: client.terminal,
                 authPolicy: client.authPolicy, callerConfig: client.config,
-                environment: ProcessInfo.processInfo.environment, requestId: requestId))
+                environment: ProcessInfo.processInfo.environment, requestId: requestId,
+                sessionFailures: client.sessionFailures))
         turn.ownerPid = daemon.pid
         return turn
     }
