@@ -105,7 +105,8 @@ extension DaemonToolsTests {
             try session.set("air-quota")
             let daemon = ACPXDaemonBackend(inheritAgentStderr: false)
             let error = await #expect(throws: SessionFailureError.self) {
-                try await limitedPrompt(daemon, session.id, limits: PromptLimits(promptRetries: 2), client: CallingClient())
+                try await limitedPrompt(
+                    daemon, session.id, limits: PromptLimits(promptRetries: 2), client: CallingClient())
             }
             #expect(error?.failure.kind == "quota_exhausted")
             #expect(session.prompts == 1)
