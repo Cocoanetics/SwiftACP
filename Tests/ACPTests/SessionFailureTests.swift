@@ -49,6 +49,13 @@ struct SessionFailureTests {
         #expect(!PromptRetry.isRetryable(SessionFailureError(SessionFailure(actions: ["upgrade"]))))
     }
 
+    @Test func theFailureEventCarriesTheRetryGuidance() {
+        let retryable = SessionFailureError(SessionFailure(title: "Busy", actions: ["retry"]))
+        #expect(TurnFailure.event(for: retryable, shown: nil, sessionId: "s").retryable == true)
+        let final = SessionFailureError(SessionFailure(title: "Quota", actions: []))
+        #expect(TurnFailure.event(for: final, shown: nil, sessionId: "s").retryable == false)
+    }
+
     @Test func theDeclarationIsMergedAndOnlyOptedIn() {
         #expect(ClientCapabilities.acpx(ClientOptions()).meta == nil)
         let declared = ClientCapabilities.acpx(ClientOptions(sessionFailures: true))

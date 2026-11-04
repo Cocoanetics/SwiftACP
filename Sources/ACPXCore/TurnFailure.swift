@@ -23,6 +23,14 @@ public protocol AcpErrorCarrier: Error {
     var acp: AcpErrorPayload? { get }
 }
 
+/// A typed session failure says whether the agent offered a retry (#300).
+extension SessionFailureError: OutputErrorMeta {
+    public var outputCode: String? { nil }
+    public var detailCode: String? { nil }
+    public var origin: String? { nil }
+    public var retryable: Bool? { failure.isRetryable }
+}
+
 /// acpx's `normalizeOutputError` as its queue owner applies it to a failed turn
 /// (`sendQueuedTaskError`): origin `runtime` and detail code
 /// `QUEUE_RUNTIME_PROMPT_FAILED` unless the error names its own, and as its `acp` the
