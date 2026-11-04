@@ -132,13 +132,24 @@ struct FlowShellProcessTests {
 
     /// A shell action that exits before its deadline has finished, though the deadline passes
     /// while its exit is still being taken in: the deadline goes as the exit is first seen, as
-    /// acpx takes the exit in one callback its timer cannot come between (#220 review).
+    /// acpx takes the exit in one callback its timer cannot come between (#220 review). The
+    /// deadline is passed at that point by the test, not by the clock.
     @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
     func anExitSeenBeforeTheDeadlineStands() async throws {
-        let result = try await FlowShellTermination.$exitIsTakenInLateBy.withValue(.milliseconds(2500)) {
-            try await self.runAction(self.nodeSpec("", [("timeoutMs", .number(2000))]))
+        let result = try await FlowShellTermination.$deadlinePassesDuringExit.withValue(.afterTheExitIsSeen) {
+            try await self.runAction(self.nodeSpec("", [("timeoutMs", .number(30_000))]))
         }
         #expect(!result.timedOut)
+    }
+
+    /// The control: the same deadline, passing before the exit is seen, times the command out.
+    @Test(.enabled(if: node != nil), .timeLimit(.minutes(1)))
+    func aDeadlinePassingBeforeTheExitIsSeenTimesItOut() async throws {
+        await #expect(throws: FlowTimeoutError(timeoutMs: 30_000)) {
+            try await FlowShellTermination.$deadlinePassesDuringExit.withValue(.beforeTheExitIsSeen) {
+                _ = try await self.runAction(self.nodeSpec("", [("timeoutMs", .number(30_000))]))
+            }
+        }
     }
 
     /// acpx: "runShellAction rejects commands terminated by signal".

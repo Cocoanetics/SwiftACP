@@ -23,9 +23,16 @@ final class FlowShellTermination: @unchecked Sendable {
     /// For tests: the task awaiting the command's result gets to ``dispose()`` only this long
     /// past the command's deadline, as on a pool too busy to resume it before the timer fires.
     @TaskLocal static var disposeIsLateBy: Duration?
-    /// For tests: the exit thread takes this long to take the exit in past its first step, as a
-    /// thread a busy machine does not run.
-    @TaskLocal static var exitIsTakenInLateBy: Duration?
+    /// For tests: where, in taking a shell action's exit in, its deadline passes.
+    enum DeadlineDuringExit: Sendable {
+        /// Before the exit is first seen: the command timed out.
+        case beforeTheExitIsSeen
+        /// Just after: the exit stands.
+        case afterTheExitIsSeen
+    }
+    /// For tests: the command's deadline passes while its exit is taken in, at a set point, as
+    /// a timer a busy machine runs at that moment.
+    @TaskLocal static var deadlinePassesDuringExit: DeadlineDuringExit?
 
     /// Where deadlines fire.
     private static let deadlines = DispatchQueue(label: "acpx.flow.shell.deadline")
@@ -123,6 +130,11 @@ final class FlowShellTermination: @unchecked Sendable {
             timedOutFlag = true
             _ = stopTask("SIGTERM")
         }
+    }
+
+    /// For tests: the deadline passes now, on the queue its timer fires on.
+    func deadlinePassesNow() {
+        Self.deadlines.sync { deadlinePassed() }
     }
 
     /// The stop under way, or one begun with `signal` — none once let go. Called under the
