@@ -203,8 +203,9 @@ final class FlowShellRun: @unchecked Sendable {
     /// The drain's deadline, armed at a shell action's exit until it closes or settles.
     private var drainDeadline: DispatchWorkItem?
     private let drainWindow = FlowShellRun.drainWindow
-    /// For tests: how long the exit takes to be taken in past its first step (``FlowShellTermination/exitIsTakenInLateBy``).
-    private let exitIsTakenInLateBy = FlowShellTermination.exitIsTakenInLateBy
+    /// For tests: where the deadline passes as the exit is taken in
+    /// (``FlowShellTermination/deadlinePassesDuringExit``), read here: the exit thread sees no task-locals.
+    private let deadlinePassesDuringExit = FlowShellTermination.deadlinePassesDuringExit
 
     init(
         spec: FlowShellExecution, args: [WireJSON], cwd: String, startMs: Int64, mode: FlowShellProcess.Mode,
@@ -257,8 +258,9 @@ final class FlowShellRun: @unchecked Sendable {
     /// result follows at `close`, or ``drainWindow`` after the exit, whichever comes first
     /// (acpx's `drainDeadline`, openclaw/acpx#813).
     func exited(_ status: Int32?) {
+        if deadlinePassesDuringExit == .beforeTheExitIsSeen { termination.deadlinePassesNow() }
         if mode == .node { termination.resultIsIn() }
-        if let late = exitIsTakenInLateBy { Thread.sleep(forTimeInterval: Double(late / .milliseconds(1)) / 1000) }
+        if deadlinePassesDuringExit == .afterTheExitIsSeen { termination.deadlinePassesNow() }
         let drain: DispatchWorkItem? = lock.withLock {
             hasExited = true
             self.status = status
