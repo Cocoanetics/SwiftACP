@@ -101,7 +101,7 @@ struct FlowAgentSessions: FlowSessionRunner {
         let unavailable = { FlowPromptUnavailable(acp: errors.match(FlowPromptUnavailable.message)) }
         errors.reset()
         do {
-            _ = try await session.prompt(turn.prompt)
+            _ = try await session.prompt(turn.prompt).throwingSessionFailure()
         } catch {
             if await connection.permissionStats(for: session.id).promptUnavailable { throw unavailable() }
             throw error

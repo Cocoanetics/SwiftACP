@@ -23,6 +23,14 @@ public protocol AcpErrorCarrier: Error {
     var acp: AcpErrorPayload? { get }
 }
 
+/// A typed session failure says whether the agent offered a retry (#300).
+extension SessionFailureError: OutputErrorMeta {
+    public var outputCode: String? { nil }
+    public var detailCode: String? { nil }
+    public var origin: String? { nil }
+    public var retryable: Bool? { failure.isRetryable }
+}
+
 /// acpx's `normalizeOutputError` as its queue owner applies it to a failed turn
 /// (`sendQueuedTaskError`): origin `runtime` and detail code
 /// `QUEUE_RUNTIME_PROMPT_FAILED` unless the error names its own, and as its `acp` the
@@ -70,6 +78,11 @@ public enum TurnFailure {
 
     private static func payload(of error: Error, depth: Int) -> AcpErrorPayload? {
         if let carrier = error as? AcpErrorCarrier { return carrier.acp }
+        if let failed = error as? SessionFailureError {
+            return AcpErrorPayload(
+                code: -32603, message: failed.failure.message,
+                data: .object([WireJSON.Member("sessionFailure", WireJSON(failed.failure.raw))]))
+        }
         if let control = error as? SessionControlError { return control.acp }
         if let rpc = error as? JSONRPCErrorBody {
             guard !rpc.message.isEmpty else { return nil }

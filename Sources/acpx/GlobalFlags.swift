@@ -20,6 +20,9 @@ struct GlobalFlags {
     /// `nil` means the flag was not given, so the default applies.
     var fs: Bool?
     var terminal: Bool?
+    /// `--session-failures` (or `sessionFailures` in the config): asks the Codex adapter for typed
+    /// session failures, so an overloaded or exhausted turn fails rather than ending `end_turn` (#300).
+    var sessionFailures = false
     var timeoutMs: Int?
     var ttlMs: Int
     var verbose: Bool
@@ -77,6 +80,7 @@ enum Flags {
         OptionSpec("json-strict"),
         OptionSpec("no-fs"),
         OptionSpec("no-terminal"),
+        OptionSpec("session-failures"),
         OptionSpec("timeout", takesValue: true, value: "seconds", validate: { _ = try parseTimeoutSeconds($0) }),
         OptionSpec("ttl", takesValue: true, value: "seconds", validate: { _ = try parseTtlSeconds($0) }),
         // Read before the parse too (``LeadingFlags``): the config it names is loaded first.
@@ -110,6 +114,7 @@ enum Flags {
             suppressReads: args.flag("suppress-reads"),
             fs: args.flag("no-fs") ? false : nil,
             terminal: args.flag("no-terminal") ? false : nil,
+            sessionFailures: args.flag("session-failures") || config.sessionFailures,
             timeoutMs: try args.parsed("timeout", parseTimeoutSeconds) ?? config.timeoutMs,
             ttlMs: try args.parsed("ttl", parseTtlSeconds) ?? config.ttlMs,
             verbose: verbose,
@@ -313,6 +318,7 @@ extension GlobalFlags {
             capabilities.fs = FileSystemCapability(readTextFile: false, writeTextFile: false)
         }
         if terminal == false { capabilities.terminal = false }
+        if sessionFailures { capabilities = capabilities.reportingSessionFailures() }
         return capabilities
     }
 
@@ -321,7 +327,9 @@ extension GlobalFlags {
     /// acpx's `sessionConnectionOptions` gives them to the owner a prompt starts and to a
     /// control's own client (#246, #245).
     func clientOptions(config: ResolvedAcpxConfig) -> ClientOptions {
-        ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy, config: config.callerConfig)
+        ClientOptions(
+            fs: fs, terminal: terminal, authPolicy: authPolicy, config: config.callerConfig,
+            sessionFailures: sessionFailures ? true : nil)
     }
 
     /// Under `--verbose`, where what the client notes of an agent this process starts goes —

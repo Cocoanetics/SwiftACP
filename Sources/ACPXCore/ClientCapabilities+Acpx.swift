@@ -15,6 +15,7 @@ extension ClientCapabilities {
         var capabilities = ClientCapabilities.acpx
         if client.fs == false { capabilities.fs = FileSystemCapability(readTextFile: false, writeTextFile: false) }
         if client.terminal == false { capabilities.terminal = false }
+        if client.sessionFailures == true { capabilities = capabilities.reportingSessionFailures() }
         return capabilities
     }
 }

@@ -63,12 +63,16 @@ extension ACPXDaemonBackend {
         to blocks: [ContentBlock], on entry: Live, recordId: String, within timeout: Int?
     ) async throws -> (response: PromptResponse, recovered: Bool) {
         let session = entry.session
-        guard let timeout, timeout > 0 else { return (try await session.prompt(blocks), false) }
+        guard let timeout, timeout > 0 else {
+            return (try await session.prompt(blocks).throwingSessionFailure(), false)
+        }
         let settled = SettledAnswer()
         let prompting = Task {
+            // Settled as the agent answered it, so that a failure it reports past the deadline keeps
+            // its own outcome in the recovery below.
             let response = try await session.prompt(blocks)
             settled.settle(response)
-            return response
+            return try response.throwingSessionFailure()
         }
         do {
             let response = try await withTaskCancellationHandler {
@@ -84,7 +88,7 @@ extension ACPXDaemonBackend {
             try? await connection.waitForSessionUpdateDrain(
                 sessionId: session.id, idleMilliseconds: drain.idleMilliseconds,
                 timeoutMilliseconds: drain.timeoutMilliseconds)
-            if let response = settled.response { return (response, true) }
+            if let response = settled.response { return (try response.throwingSessionFailure(), true) }
             try? await connection.cancel(sessionId: session.id)
             _ = try? await withTimeout(milliseconds: Self.cancelWaitMilliseconds) { try await prompting.value }
             if live[recordId]?.agent === entry.agent { live.removeValue(forKey: recordId) }

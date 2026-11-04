@@ -10,6 +10,8 @@ public enum PromptRetry {
     /// which usually wraps a model API's failure) or `-32700` (parse error). Nothing
     /// else — not a timeout, nor any failure of the client's own.
     public static func isRetryable(_ error: Error) -> Bool {
+        // A typed session failure (#300) is retried when the agent offers the retry.
+        if let failure = error as? SessionFailureError { return failure.failure.isRetryable }
         guard let rpc = error as? JSONRPCErrorBody else { return false }
         return rpc.code == -32603 || rpc.code == -32700
     }
@@ -76,7 +78,8 @@ public final class PromptSideEffects: @unchecked Sendable {
             guard active else { return }
             switch (direction, message) {
             case (.inbound, .notification(let note)) where note.method == "session/update":
-                happened = true
+                // The agent reporting the failure that ends the turn (#300) is not an effect.
+                if !Self.reportsSessionFailure(note.params) { happened = true }
             case (.inbound, .request(let request)) where Self.operations.contains(request.method):
                 serving[request.id] = request.method
             case (.inbound, .request(let request)) where request.method == "session/request_permission":
@@ -99,6 +102,14 @@ public final class PromptSideEffects: @unchecked Sendable {
     public func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
         guard let message = try? JSONDecoder().decode(JSONRPCMessage.self, from: body) else { return }
         observe(direction, message)
+    }
+
+    /// Whether a `session/update`'s params are a `session_info_update` carrying a session failure.
+    static func reportsSessionFailure(_ params: JSONValue?) -> Bool {
+        guard case .object(let members)? = params, let update = members["update"],
+              let decoded = try? update.decoded(SessionUpdate.self)
+        else { return false }
+        return decoded.sessionFailure != nil
     }
 
     /// Whether a permission answer carries the notice acpx reports as a client operation

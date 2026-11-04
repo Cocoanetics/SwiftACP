@@ -31,6 +31,11 @@ enum AgentLaunchCompat {
         token(command) == "claude-agent-acp" || arguments.contains { $0.contains("claude-agent-acp") }
     }
 
+    /// Codex's adapter (`@agentclientprotocol/codex-acp`), run directly or through a package runner.
+    static func isCodex(_ command: String, _ arguments: [String]) -> Bool {
+        token(command) == "codex-acp" || arguments.contains { $0.contains("codex-acp") }
+    }
+
     /// acpx's `isDevinAcpCommand`.
     static func isDevin(_ command: String, _ arguments: [String]) -> Bool {
         token(command) == "devin"
@@ -74,6 +79,10 @@ enum AgentLaunchCompat {
             if isDevin(spec.executable, spec.arguments) {
                 self.clientInfo = devinClientInfo(environment: callerEnvironment)
                 self.capabilities.meta = devinMeta(merging: capabilities.meta)
+            }
+            // The AIR `sessionFailure` declaration (#300) is for the Codex adapter alone.
+            if !isCodex(spec.executable, spec.arguments) {
+                self.capabilities = self.capabilities.withoutSessionFailures()
             }
             copilot = isCopilot(spec.executable, spec.arguments)
             claude = isClaude(spec.executable, spec.arguments)

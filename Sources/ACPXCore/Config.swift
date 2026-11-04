@@ -113,6 +113,9 @@ public struct ResolvedAcpxConfig: Sendable {
     public var agentOrder: [String]
     public var auth: [String: String]
     public var disableExec: Bool
+    /// `sessionFailures: true` in a config file: asks the Codex adapter for typed session failures
+    /// (``ClientOptions/sessionFailures``), as `--session-failures` does. An opt-in (#300).
+    public var sessionFailures: Bool = false
     public var mcpServers: [McpServerConfig]
     public var globalPath: String
     public var projectPath: String
@@ -231,6 +234,7 @@ public enum ConfigLoader {
             mcpServers = []
         }
         let disableExec = try scalar("disableExec", Fields.disableExec) ?? false
+        let sessionFailures = try scalar("sessionFailures", Fields.sessionFailures) ?? false
 
         return ResolvedAcpxConfig(
             defaultAgent: defaultAgent,
@@ -246,6 +250,7 @@ public enum ConfigLoader {
             agentOrder: WireJSON.propertyOrder(agentNames),
             auth: auth,
             disableExec: disableExec,
+            sessionFailures: sessionFailures,
             mcpServers: mcpServers,
             globalPath: globalPath.path,
             projectPath: projectPath.path,

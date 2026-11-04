@@ -48,7 +48,7 @@ extension ACPXDaemonBackend {
         sessionOptions: PromptSessionOptions? = nil, limits: PromptLimits? = nil, direct: Bool = false,
         fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil, turnToken: String? = nil,
         callerConfig: CallerConfig? = nil, verbose: Bool = false, environment: [String: String]? = nil,
-        requestId: String? = nil
+        requestId: String? = nil, sessionFailures: Bool? = nil
     ) async throws -> String {
         // acpx's `--no-wait`: queued as any prompt, the call over once the owner's line has it (#239).
         guard wait || direct else {
@@ -59,7 +59,8 @@ extension ACPXDaemonBackend {
                     streamWire: streamWire, permissionPolicy: permissionPolicy,
                     terminalOutputCeiling: terminalOutputCeiling, sessionOptions: sessionOptions, limits: limits,
                     fs: fs, terminal: terminal, authPolicy: authPolicy, turnToken: turnToken,
-                    callerConfig: callerConfig, verbose: verbose, environment: environment, requestId: requestId)
+                    callerConfig: callerConfig, verbose: verbose, environment: environment, requestId: requestId,
+                    sessionFailures: sessionFailures)
             }
         }
         // The id as the caller sent it, as acpx's owner takes one (`owner-input.ts`: refused when
@@ -122,7 +123,8 @@ extension ACPXDaemonBackend {
         // The session is held from here on, as acpx's queue owner holds it: until it has
         // had no prompt for its TTL once this turn is over. A direct turn has no owner, as
         // acpx's `sendSessionDirect` has none: its agent goes with it.
-        let own = ClientOptions(fs: fs, terminal: terminal, authPolicy: authPolicy, config: callerConfig)
+        let own = ClientOptions(
+            fs: fs, terminal: terminal, authPolicy: authPolicy, config: callerConfig, sessionFailures: sessionFailures)
         if !direct { turnStarts(recordId, limits: limits, environment: environment, client: own) }
 
         // Reload the record *after* acquiring the slot: a turn we queued behind has

@@ -64,7 +64,7 @@ extension ExecCommand {
             events.render(with: renderer)
             do {
                 let response = try await withTimeout(milliseconds: policy.timeoutMilliseconds) {
-                    try await session.prompt(prompt)
+                    try await session.prompt(prompt).throwingSessionFailure()
                 }
                 await events.finish()
                 let permissions = await connection.permissionTotals(for: session.id).counted(since: countedBefore)

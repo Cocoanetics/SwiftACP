@@ -94,8 +94,15 @@ public struct ClientOptions: Codable, Sendable, Equatable {
     public var terminal: Bool?
     public var authPolicy: String?
     public var config: CallerConfig?
+    /// `true` asks the Codex adapter for typed session failures (``ClientCapabilities/reportingSessionFailures()``).
+    /// An opt-in — it changes codex-acp's event stream beyond failure reporting; `nil`, off (#300).
+    public var sessionFailures: Bool?
 
-    public init(fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil, config: CallerConfig? = nil) {
+    public init(
+        fs: Bool? = nil, terminal: Bool? = nil, authPolicy: String? = nil, config: CallerConfig? = nil,
+        sessionFailures: Bool? = nil
+    ) {
+        self.sessionFailures = sessionFailures
         self.fs = fs
         self.terminal = terminal
         self.authPolicy = authPolicy
@@ -171,12 +178,15 @@ public struct PromptTurnMode: Sendable, Equatable {
     public var verbose: Bool
     public var environment: [String: String]?
     public var requestId: String?
+    /// `true` asks the Codex adapter for typed session failures (``ClientOptions/sessionFailures``).
+    public var sessionFailures: Bool?
 
     public init(
         streamWire: Bool = false, direct: Bool = false, fs: Bool? = nil, terminal: Bool? = nil,
         authPolicy: String? = nil, turnToken: String? = nil, callerConfig: CallerConfig? = nil, verbose: Bool = false,
-        environment: [String: String]? = nil, requestId: String? = nil
+        environment: [String: String]? = nil, requestId: String? = nil, sessionFailures: Bool? = nil
     ) {
+        self.sessionFailures = sessionFailures
         self.streamWire = streamWire
         self.direct = direct
         self.fs = fs
