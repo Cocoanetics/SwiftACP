@@ -70,6 +70,11 @@ public enum TurnFailure {
 
     private static func payload(of error: Error, depth: Int) -> AcpErrorPayload? {
         if let carrier = error as? AcpErrorCarrier { return carrier.acp }
+        if let failed = error as? SessionFailureError {
+            return AcpErrorPayload(
+                code: -32603, message: failed.failure.message,
+                data: .object([WireJSON.Member("sessionFailure", WireJSON(failed.failure.raw))]))
+        }
         if let control = error as? SessionControlError { return control.acp }
         if let rpc = error as? JSONRPCErrorBody {
             guard !rpc.message.isEmpty else { return nil }

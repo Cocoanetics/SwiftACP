@@ -217,6 +217,9 @@ public struct PromptOutcome: Sendable {
     /// The prompt response's `_meta` (``PromptResponse/meta``) — Claude Code attaches
     /// per-model quota under `meta["quota"]`, including `model_usage`.
     public var meta: JSONValue?
+    /// The terminal ``SessionFailure`` the agent reported on the response (codex-acp's AIR
+    /// `sessionFailure`), when the client declared it takes them; `nil` for any other turn.
+    public var sessionFailure: SessionFailure? { SessionFailure(meta: meta) }
 
     public init(
         stopReason: StopReason, text: String, usage: PromptUsage? = nil,

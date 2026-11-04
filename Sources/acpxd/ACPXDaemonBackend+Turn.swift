@@ -63,10 +63,12 @@ extension ACPXDaemonBackend {
         to blocks: [ContentBlock], on entry: Live, recordId: String, within timeout: Int?
     ) async throws -> (response: PromptResponse, recovered: Bool) {
         let session = entry.session
-        guard let timeout, timeout > 0 else { return (try await session.prompt(blocks), false) }
+        guard let timeout, timeout > 0 else {
+            return (try await session.prompt(blocks).throwingSessionFailure(), false)
+        }
         let settled = SettledAnswer()
         let prompting = Task {
-            let response = try await session.prompt(blocks)
+            let response = try await session.prompt(blocks).throwingSessionFailure()
             settled.settle(response)
             return response
         }

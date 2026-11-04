@@ -23,6 +23,10 @@
 - `stall-prompt`: answers a prompt only once it is cancelled, with `cancelled`;
   `fail-on-cancel` fails it then, as `fail-once` does. `slow-prompt` answers `hello`
   after `RETRY_AGENT_DELAY_MS` (400 by default).
+- `air-overloaded-once`: its first prompt reports a retryable AIR `sessionFailure` (overloaded) in a
+  `session_info_update` and on a response that says `end_turn`, as codex-acp does; later prompts
+  answer. `air-quota` reports a non-retryable one (`quota_exhausted`) every time, and
+  `air-warning` a `willRetry` warning before answering `hello`.
 - `usage-meta`: reports its usage in a `usage_update`'s `_meta.usage`, then answers.
 - `usage-nosize`: the same, in a `usage_update` without `used` and `size`.
 - `meta-answer`: answers with a `_meta` of `{"z": 1, "a": "\u00e9"}`.
@@ -195,6 +199,21 @@ def prompt(req_id, session_id):
                 ask("fs/write_text_file", {"sessionId": session_id, "path": os.path.join(cwd, "out.txt"),
                                            "content": "x"})
             return
+    if MODE in ("air-overloaded-once", "air-quota", "air-warning"):
+        retryable = MODE == "air-overloaded-once"
+        failure = {"id": "f1", "revision": 1, "category": "service" if retryable else "quota",
+                   "severity": "warning" if MODE == "air-warning" else "error",
+                   "title": "Selected model is at capacity" if retryable else "Usage limit reached",
+                   "kind": "overloaded" if retryable else "quota_exhausted",
+                   "actions": ["retry"] if retryable else ["upgrade"]}
+        meta = {"jetbrains": {"air": {"version": 1, "sessionFailure": failure}}}
+        if MODE == "air-warning":
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
+                "sessionUpdate": "session_info_update", "_meta": meta}}})
+        elif first or MODE == "air-quota":
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
+                "sessionUpdate": "session_info_update", "_meta": meta}}})
+            return send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn", "_meta": meta}})
     if MODE in ("usage-meta", "usage-nosize"):
         sizes = {"used": 5, "size": 100} if MODE == "usage-meta" else {}
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": {
