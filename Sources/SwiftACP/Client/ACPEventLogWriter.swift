@@ -43,18 +43,36 @@ public struct ACPEventLogWriter: Sendable {
         let descriptor = Foundation.open(path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         #endif
         guard descriptor >= 0 else {
-            throw Failure(message: String(cString: strerror(errno)), code: errno)
+            throw Failure(message: Self.errnoMessage("open"), code: errno)
         }
         defer { close(descriptor) }
         var bytes = Array(text.utf8)[...]
         while !bytes.isEmpty {
-            let written = bytes.withUnsafeBytes { Foundation.write(descriptor, $0.baseAddress, $0.count) }
+            // Windows `write` takes `UInt32` for the length; POSIX takes `Int`.
+            #if os(Windows)
+            let written = bytes.withUnsafeBytes {
+                Foundation.write(descriptor, $0.baseAddress, UInt32($0.count))
+            }
+            #else
+            let written = bytes.withUnsafeBytes {
+                Foundation.write(descriptor, $0.baseAddress, $0.count)
+            }
+            #endif
             if written < 0 {
                 if errno == EINTR { continue }
-                throw Failure(message: String(cString: strerror(errno)), code: errno)
+                throw Failure(message: Self.errnoMessage("write"), code: errno)
             }
-            bytes = bytes.dropFirst(written)
+            bytes = bytes.dropFirst(Int(written))
         }
+    }
+
+    /// errno text for failures: avoid Windows-deprecated `strerror`.
+    private static func errnoMessage(_ syscall: String) -> String {
+        #if os(Windows)
+        return "\(syscall) failed"
+        #else
+        return String(cString: strerror(errno))
+        #endif
     }
 
     /// A file operation the event log could not complete.
