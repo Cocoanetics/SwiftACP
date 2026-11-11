@@ -83,6 +83,39 @@ import Testing
         }
     }
 
+    /// ``RawWireTap/set(_:)`` replaces the caller's callback, not the launch-time event log.
+    @Test(.enabled(if: mockPythonAvailable))
+    func replacingOnRawWireDoesNotStopEventLog() async throws {
+        try await withTempLog { url in
+            let overrides = try #require(mockOverride())
+            let agent = try await ACPAgent.launch(
+                agent: "mock", cwd: NSTemporaryDirectory(), permission: .approveAll,
+                inheritStderr: false, overrides: overrides, eventLog: url)
+            let before = try lines(at: url)
+            #expect(before.contains { $0.contains(#""method":"initialize""#) })
+
+            agent.rawWire.set(nil)
+            _ = try await agent.newSession()
+            try await agent.close()
+
+            let after = try lines(at: url)
+            #expect(after.count > before.count)
+            #expect(after.contains { $0.contains(#""method":"session/new""#) })
+        }
+    }
+
+    /// Direct unit coverage of the side channel: ``set(_:)`` must not clear ``setEventLog``.
+    @Test func setDoesNotClearEventLogObserver() throws {
+        try withTempLog { url in
+            let tap = RawWireTap { _, _ in }
+            tap.setEventLog(ACPEventLogWriter(url).observer)
+            tap.set(nil)
+            tap.observe(.outbound, Data(prompt.utf8))
+            let written = try lines(at: url)
+            #expect(written == [prompt])
+        }
+    }
+
     private func mockOverride() -> [String: String]? {
         guard let python = mockPython else { return nil }
         let fixtures = URL(fileURLWithPath: #filePath)

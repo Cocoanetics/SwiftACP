@@ -60,7 +60,8 @@ public final class ACPAgent: Sendable {
     public let transport: any JSONRPCMessageTransport
     /// Every message body exchanged with the agent, as raw bytes in both directions —
     /// from the `initialize` handshake on when `launch` was given `onRawWire`.
-    /// Re-point it with ``RawWireTap/set(_:)``.
+    /// Re-point the caller's callback with ``RawWireTap/set(_:)``; a launch-time
+    /// `eventLog` keeps writing independently of that.
     public let rawWire: RawWireTap
     /// The agent's `initialize` response (capabilities, auth methods, info).
     public let initializeResult: InitializeResponse
@@ -149,9 +150,10 @@ public final class ACPAgent: Sendable {
         // Tapped from the start, so an observer given here sees the handshake too — and
         // whatever the agent writes to stderr as it starts, and what the client notes of it,
         // the command it spawns first: acpx's `logAgentLaunch`, before the spawn can fail.
-        // An `eventLog` composes with `onRawWire` the same way: both see every body from
-        // handshake on; omit it and nothing is written.
-        let rawWire = RawWireTap(Self.both(onRawWire, eventLog.map { ACPEventLogWriter($0).observer }))
+        // An `eventLog` is installed beside `onRawWire`, not composed into it: ``RawWireTap/set(_:)``
+        // may replace the caller's callback without stopping the log. Omit it and nothing is written.
+        let rawWire = RawWireTap(onRawWire)
+        if let eventLog { rawWire.setEventLog(ACPEventLogWriter(eventLog).observer) }
         rawWire.onStderr(onStderr)
         rawWire.onLog(onLog)
         rawWire.log("spawning agent: \(spec.executable) \(spec.arguments.joined(separator: " "))")
@@ -295,16 +297,6 @@ public final class ACPAgent: Sendable {
             inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
             terminalEnvironment: terminalEnvironment, limits: limits, onClientRequest: onClientRequest,
             onRawWire: onRawWire, onStderr: onStderr, onLog: onLog, eventLog: eventLog)
-    }
-
-    /// One observer that hands each message to `first`, then `second`, of those given.
-    private static func both(_ first: RawWireTap.Observer?, _ second: RawWireTap.Observer?) -> RawWireTap.Observer? {
-        guard let first else { return second }
-        guard let second else { return first }
-        return { direction, body in
-            first(direction, body)
-            second(direction, body)
-        }
     }
 
     /// Authenticate using one of the agent's advertised auth methods.
