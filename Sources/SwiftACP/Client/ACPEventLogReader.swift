@@ -35,40 +35,59 @@ public struct ACPEventLogReader: Sendable {
 
     /// The typed entries of NDJSON `data`.
     public static func entries(in data: Data) -> [ACPEventLogEntry] {
-        var replay = Replay()
-        for line in data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true) {
-            guard let message = WireJSON(parsing: String(decoding: line, as: UTF8.self)),
-                  WireJSON.isACPMessage(message)
-            else { continue }
-            if let entry = replay.entry(for: message) {
-                replay.entries.append(entry)
+        let messages = data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
+            .compactMap { line -> WireJSON? in
+                guard let message = WireJSON(parsing: String(decoding: line, as: UTF8.self)),
+                      WireJSON.isACPMessage(message)
+                else { return nil }
+                return message
             }
-        }
-        return replay.entries
+        var replay = Replay(messages: messages)
+        return messages.indices.compactMap { replay.entry(at: $0) }
     }
 
-    /// The requests still unanswered, so that a response is told apart by what it answers:
-    /// the client's and the agent's ids are separate spaces and may coincide, so a
-    /// response goes to the latest open request with its id.
+    /// The requests still unanswered, by side. The log does not say which peer wrote a
+    /// message, and the client's and the agent's ids are separate spaces that may
+    /// coincide, so a request's side is told by its method (``agentMethod(_:)``) and a
+    /// response's, when its id is open on both, by what it answers (``answersClient(at:)``).
     private struct Replay {
-        var entries: [ACPEventLogEntry] = []
-        private var open: [(id: JSONRPCID, isPrompt: Bool)] = []
+        let messages: [WireJSON]
+        /// The client's open requests by id: whether each is a `session/prompt` replayed.
+        private var client: [JSONRPCID: Bool] = [:]
+        private var agent: Set<JSONRPCID> = []
 
-        mutating func entry(for message: WireJSON) -> ACPEventLogEntry? {
-            let id = message["id"].flatMap { try? $0.jsonValue.decoded(JSONRPCID.self) }
+        init(messages: [WireJSON]) {
+            self.messages = messages
+        }
+
+        mutating func entry(at index: Int) -> ACPEventLogEntry? {
+            let message = messages[index]
+            let id = Self.id(of: message)
             if let method = message["method"]?.stringValue {
                 return request(method, id: id, params: message["params"])
             }
-            guard let id, let index = open.lastIndex(where: { $0.id == id }) else { return nil }
-            guard open.remove(at: index).isPrompt else { return nil }
-            if let result = message["result"] {
-                return (try? result.jsonValue.decoded(PromptResponse.self)).map {
-                    .promptResponse(id: id, response: $0)
-                }
+            guard let id else { return nil }
+            if let isPrompt = client[id], !agent.contains(id) || answersClient(at: index) {
+                client[id] = nil
+                return isPrompt ? Self.promptAnswer(message, id: id) : nil
             }
-            return message["error"].flatMap { try? $0.jsonValue.decoded(JSONRPCError.self) }.map {
-                .promptError(id: id, error: $0)
-            }
+            agent.remove(id)
+            return nil
+        }
+
+        /// Whether the response at `index`, whose id both sides have open, answers the
+        /// client's request: a result that is a `PromptResponse` does; any other result
+        /// answers the agent's. An error is the client's when the other answer to that id
+        /// later in the log is not a `PromptResponse` (the agent's request answered after
+        /// the prompt failed), else the agent's — as it is when no other answer follows.
+        private func answersClient(at index: Int) -> Bool {
+            let message = messages[index]
+            if message["result"] != nil { return Self.isPromptResponse(message) }
+            let id = Self.id(of: message)
+            guard let next = messages[(index + 1)...].first(where: {
+                $0["method"] == nil && Self.id(of: $0) == id
+            }) else { return false }
+            return !Self.isPromptResponse(next)
         }
 
         private mutating func request(_ method: String, id: JSONRPCID?, params: WireJSON?) -> ACPEventLogEntry? {
@@ -78,15 +97,42 @@ public struct ACPEventLogReader: Sendable {
                 else { return nil }
                 notification.rawUpdate = params["update"]
                 return .update(notification)
+            case (_, let id?) where Self.agentMethod(method):
+                agent.insert(id)
+                return nil
             case ("session/prompt", let id?):
                 let request = params.flatMap { try? $0.jsonValue.decoded(PromptRequest.self) }
-                open.append((id, request != nil))
+                client[id] = request != nil
                 return request.map { .prompt(id: id, request: $0) }
             case (_, let id?):
-                open.append((id, false))
+                client[id] = false
                 return nil
             default:
                 return nil
+            }
+        }
+
+        /// The ACP methods the agent calls on the client.
+        private static func agentMethod(_ method: String) -> Bool {
+            method == "session/request_permission" || method.hasPrefix("fs/") || method.hasPrefix("terminal/")
+        }
+
+        private static func id(of message: WireJSON) -> JSONRPCID? {
+            message["id"].flatMap { try? $0.jsonValue.decoded(JSONRPCID.self) }
+        }
+
+        private static func isPromptResponse(_ message: WireJSON) -> Bool {
+            message["result"].map { (try? $0.jsonValue.decoded(PromptResponse.self)) != nil } ?? false
+        }
+
+        private static func promptAnswer(_ message: WireJSON, id: JSONRPCID) -> ACPEventLogEntry? {
+            if let result = message["result"] {
+                return (try? result.jsonValue.decoded(PromptResponse.self)).map {
+                    .promptResponse(id: id, response: $0)
+                }
+            }
+            return message["error"].flatMap { try? $0.jsonValue.decoded(JSONRPCError.self) }.map {
+                .promptError(id: id, error: $0)
             }
         }
     }

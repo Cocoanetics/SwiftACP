@@ -65,6 +65,36 @@ import Testing
         #expect(body.message == "boom")
     }
 
+    /// The prompt answered while the agent's same-id permission request is still open: the
+    /// answer is the prompt's, and the permission's cancellation after it is not (#337).
+    @Test func aPromptAnsweredBeforeTheAgentsSameIdRequestKeepsItsAnswer() {
+        let entries = ACPEventLogReader.entries(in: ndjson([prompt, permission, answer, permissionAnswer]))
+        #expect(entries.count == 2)
+        guard entries.count == 2, case .promptResponse(let id, let response) = entries[1] else {
+            Issue.record("expected the prompt's response, got \(entries)")
+            return
+        }
+        #expect(id == .integer(1))
+        #expect(response.stopReason == .endTurn)
+    }
+
+    /// An error with the id open on both sides: the prompt's when what answers the other
+    /// request after it is no prompt response, the agent's request's when it is.
+    @Test func anErrorOpenOnBothSidesGoesByTheAnswerAfterIt() {
+        let error = #"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"boom"}}"#
+        let failed = ACPEventLogReader.entries(in: ndjson([prompt, permission, error, permissionAnswer]))
+        #expect(failed.count == 2)
+        if failed.count == 2, case .promptError = failed[1] {} else {
+            Issue.record("expected the prompt's error, got \(failed)")
+        }
+
+        let readFailed = ACPEventLogReader.entries(in: ndjson([prompt, permission, error, answer]))
+        #expect(readFailed.count == 2)
+        if readFailed.count == 2, case .promptResponse = readFailed[1] {} else {
+            Issue.record("expected the prompt's response, got \(readFailed)")
+        }
+    }
+
     @Test func eventLogReaderToleratesPartialLastLine() throws {
         try withTempLog { url in
             let writer = ACPEventLogWriter(url)
@@ -87,6 +117,10 @@ import Testing
     @Test func aMissingLogThrows() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID().uuidString)")
         #expect(throws: (any Error).self) { _ = try ACPEventLogReader(url).entries() }
+    }
+
+    private func ndjson(_ lines: [String]) -> Data {
+        Data(lines.map { $0 + "\n" }.joined().utf8)
     }
 
     private func withTempLog(_ body: (URL) throws -> Void) throws {
