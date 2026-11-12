@@ -32,6 +32,9 @@ public final class RawWireTap: @unchecked Sendable {
 
     private let lock = NSLock()
     private var observer: Observer?
+    /// Launch-time event log: not replaced by ``set(_:)``, so ``ACPAgent/launch``'s
+    /// `eventLog` keeps writing for the agent's life.
+    private var eventLogObserver: Observer?
     private var deliveryObserver: DeliveryObserver?
     private var stderrObserver: StderrObserver?
     private var logObserver: LogObserver?
@@ -57,6 +60,12 @@ public final class RawWireTap: @unchecked Sendable {
 
     public func set(_ observer: Observer?) {
         lock.withLock { self.observer = observer }
+    }
+
+    /// Install the launch-time event-log observer. Unlike ``set(_:)``, this is not cleared
+    /// when the caller replaces its raw-wire callback.
+    func setEventLog(_ observer: Observer?) {
+        lock.withLock { eventLogObserver = observer }
     }
 
     /// Tell `observer` of each outbound body as it starts to be written to the agent, and
@@ -117,14 +126,15 @@ public final class RawWireTap: @unchecked Sendable {
         }
         lock.lock()
         let current = self.observer
+        let eventLog = self.eventLogObserver
         let suppressed = replaySuppressed
         lock.unlock()
-        guard let observer = current else { return }
         if direction == .inbound, !suppressed.isEmpty,
             let sessionId = Self.sessionUpdateSessionId(body), suppressed[sessionId] != nil {
             return
         }
-        observer(direction, body)
+        current?(direction, body)
+        eventLog?(direction, body)
     }
 
     /// Keep the bodies of inbound `session/update`s from now on, for the connection that handles
