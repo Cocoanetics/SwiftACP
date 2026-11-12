@@ -35,10 +35,11 @@ public struct ACPEventLogWriter: Sendable {
     }
 
     /// Durable append: open `O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW|O_CLOEXEC` (no-follow
-    /// omitted on Windows), owner-only, write the line whole, close — one flush per message.
+    /// and close-on-exec omitted on Windows — ucrt has neither), owner-only, write the
+    /// line whole, close — one flush per message.
     private func appendLine(_ text: String) throws {
         #if os(Windows)
-        let descriptor = Foundation.open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
+        let descriptor = Foundation.open(path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
         #else
         let descriptor = Foundation.open(path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         #endif
