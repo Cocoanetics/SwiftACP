@@ -95,6 +95,20 @@ import Testing
         }
     }
 
+    /// An agent request of a method the reader does not know, with the open prompt's id,
+    /// is the agent's: it neither replaces the prompt nor takes the prompt's answer.
+    @Test func anUnknownRequestWithThePromptsIdIsTheAgents() {
+        let vendor = #"{"jsonrpc":"2.0","id":1,"method":"_vendor/foo","params":{}}"#
+        let notFound = #"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#
+        let entries = ACPEventLogReader.entries(in: ndjson([prompt, vendor, notFound, answer]))
+        #expect(entries.count == 2)
+        if entries.count == 2, case .promptResponse(let id, _) = entries[1] {
+            #expect(id == .integer(1))
+        } else {
+            Issue.record("expected the prompt's response, got \(entries)")
+        }
+    }
+
     @Test func eventLogReaderToleratesPartialLastLine() throws {
         try withTempLog { url in
             let writer = ACPEventLogWriter(url)

@@ -48,7 +48,8 @@ public struct ACPEventLogReader: Sendable {
 
     /// The requests still unanswered, by side. The log does not say which peer wrote a
     /// message, and the client's and the agent's ids are separate spaces that may
-    /// coincide, so a request's side is told by its method (``agentMethod(_:)``) and a
+    /// coincide, so a request's side is told by its method (``agentMethod(_:)``) or by its
+    /// id being one of the client's open ones, and a
     /// response's, when its id is open on both, by what it answers (``answersClient(at:)``).
     private struct Replay {
         let messages: [WireJSON]
@@ -97,7 +98,9 @@ public struct ACPEventLogReader: Sendable {
                 else { return nil }
                 notification.rawUpdate = params["update"]
                 return .update(notification)
-            case (_, let id?) where Self.agentMethod(method):
+            // A peer does not reuse an id it has open, so a request with the id of one of the
+            // client's open requests is the agent's — an `_` extension method, say.
+            case (_, let id?) where Self.agentMethod(method) || client[id] != nil:
                 agent.insert(id)
                 return nil
             case ("session/prompt", let id?):
