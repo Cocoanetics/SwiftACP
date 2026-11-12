@@ -1,4 +1,4 @@
-#if os(macOS) || os(Linux)
+#if os(macOS) || os(Linux) || os(Windows)
 import Foundation
 @testable import SwiftACP
 import Testing
@@ -16,6 +16,8 @@ import Testing
             try writer.append(Data(prompt.utf8))
             try writer.append(Data(answer.utf8))
             #expect(try lines(at: url) == [prompt, answer])
+            // Byte-identical NDJSON: LF only — Windows text-mode open would write CRLF.
+            #expect(try Data(contentsOf: url) == Data((prompt + "\n" + answer + "\n").utf8))
         }
     }
 
