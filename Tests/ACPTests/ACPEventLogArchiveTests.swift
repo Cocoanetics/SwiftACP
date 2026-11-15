@@ -36,6 +36,14 @@ import Testing
             #expect(history == lines.map { try? WireJSON.parse($0) })
             #expect(history.allSatisfy(SessionArchive.isACPMessage))
             #expect(try ACPEventLogReader(url).entries().count == 3)
+            let replay = try ACPEventLogReader(url, timestampIndex: index).messagesWithTimes()
+            #expect(replay.map(\.message) == history)
+            #expect(replay.allSatisfy { ($0.timestamp != nil) == indexed })
+            let raw = try Data(contentsOf: url)
+            #expect(raw == Data(lines.map { $0 + "\n" }.joined().utf8))
+            // Archive history carries raw ACP only; no sidecar metadata is embedded.
+            let exported = Data(history.map { $0.stringified + "\n" }.joined().utf8)
+            #expect(ACPEventLogReader.messagesWithTimes(in: exported).allSatisfy { $0.timestamp == nil })
         }
     }
 }

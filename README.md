@@ -154,6 +154,55 @@ metadata: closing per append is neither a two-file transaction nor an `fsync`
 guarantee. Archive/copy the files together and discard the index when replacing
 the raw log. Existing replay and raw-only archive exports are unchanged.
 
+### Replay with observation times
+
+`ACPEventLogReader(logURL).entries()` and `entries(in: data)` retain their original
+typed replay and never read an index. Opt into metadata explicitly:
+
+```swift
+let reader = ACPEventLogReader(
+    logURL, timestampIndex: logURL.appendingPathExtension("timestamps.ndjson"))
+let entries = try reader.entriesWithTimes() // ACPEventLogTimedEntry: entry + metadata
+let messages = try reader.messagesWithTimes() // ACPEventLogTimedMessage: message + metadata
+// Snapshot equivalents: entriesWithTimes(in: rawData, timestampIndex: indexData)
+// and messagesWithTimes(in: rawData, timestampIndex: indexData).
+```
+
+Each envelope exposes `timestamp: Date?`, client-relative `direction`, and
+`byteOffset: UInt64`. Raw replay includes initialize and permission requests/replies
+that typed replay filters out. For example, when recording a permission refusal
+independently, retain its local `Date`, request id and session id. During replay,
+find the corresponding raw request and its cancellation reply:
+
+```swift
+let permissionRequests = messages.filter {
+    $0.message["method"]?.stringValue == "session/request_permission"
+}
+for request in permissionRequests {
+    let requestID = request.message["id"]
+    let cancellation = messages.first {
+        $0.byteOffset > request.byteOffset && $0.direction == .outbound &&
+        $0.message["id"] == requestID &&
+        $0.message["result"]?["outcome"]?["outcome"]?.stringValue == "cancelled"
+    }
+    // Match your refusal's request/session ids; use request.timestamp and
+    // cancellation?.timestamp as local observations alongside the refusal's Date.
+}
+```
+
+Use request/session identity and direction when correlating: both peers can use
+the same JSON-RPC id. A cancellation alone does not prove a policy refusal.
+Times have millisecond precision, can tie or move backwards, and cannot establish
+an exact order with independently recorded events. Keep ACP messages in file order
+using byte offsets; choose and document an external-event tie policy (for example,
+display a matched refusal beside its request when their times tie).
+
+The reader snapshots raw bytes before reading the index. Missing or unusable index
+records yield nil time/direction only at affected offsets, including stale checksums
+and conflicting duplicates. A valid final JSON line without LF still replays with
+nil metadata. `SessionArchive` history remains raw ACP: archives alone do not
+preserve this optional sidecar. Copy both files to retain observation metadata.
+
 ## The `acpx` CLI and `acpxd` daemon (macOS)
 
 The same package ships a headless CLI and a session daemon built on the library — a
