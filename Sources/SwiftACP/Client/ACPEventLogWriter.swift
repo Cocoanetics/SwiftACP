@@ -134,32 +134,32 @@ public struct ACPEventLogWriter: Sendable {
         func append(_ bytes: Data, timestamp: Date, direction: ACPEventLogDirection?) throws {
             try validate(eventLog: url, timestampIndex: timestampIndex)
             let raw = try Self.open(url)
-            defer { try? raw.close() }
+            defer { try? raw.handle.close() }
             guard let timestampIndex else {
                 try appendAll(bytes, to: raw)
-                try raw.close()
+                try raw.handle.close()
                 return
             }
             // FileHandle uses 64-bit offsets on POSIX and Windows. Never cache the end.
-            let offset = try raw.seekToEnd()
+            let offset = try raw.handle.seekToEnd()
             // A metadata inspection error must still leave raw logging working.
             let boundary = Result {
                 guard offset > 0 else { return true }
                 let reader = try Self.open(url, access: O_RDONLY, create: false)
-                defer { try? reader.close() }
-                return try Self.endsWithLF(reader, at: offset)
+                defer { try? reader.handle.close() }
+                return try Self.endsWithLF(reader.handle, at: offset)
             }
             try appendAll(bytes, to: raw)
-            try raw.close()
+            try raw.handle.close()
             guard try boundary.get() else { return }
             let record = ACPEventLogIndexRecord(
                 offset: offset, bytes: bytes, timestamp: timestamp, direction: direction)
             let index = try Self.open(timestampIndex, access: O_RDWR)
-            defer { try? index.close() }
-            let end = try index.seekToEnd()
-            if try !Self.endsWithLF(index, at: end) { try appendAll(Data([0x0A]), to: index) }
+            defer { try? index.handle.close() }
+            let end = try index.handle.seekToEnd()
+            if try !Self.endsWithLF(index.handle, at: end) { try appendAll(Data([0x0A]), to: index) }
             try appendAll(record.line(), to: index)
-            try index.close()
+            try index.handle.close()
         }
 
         private static func endsWithLF(_ file: FileHandle, at end: UInt64) throws -> Bool {
@@ -168,8 +168,14 @@ public struct ACPEventLogWriter: Sendable {
             return try file.read(upToCount: 1) == Data([0x0A])
         }
 
+        /// Keep the CRT descriptor because `FileHandle.fileDescriptor` is unavailable on Windows.
+        private struct OpenFile {
+            let handle: FileHandle
+            let descriptor: Int32
+        }
+
         /// Secure append/create; binary mode prevents Windows from translating LF to CRLF.
-        private static func open(_ url: URL, access: Int32 = O_WRONLY, create: Bool = true) throws -> FileHandle {
+        private static func open(_ url: URL, access: Int32 = O_WRONLY, create: Bool = true) throws -> OpenFile {
             let flags = access | O_APPEND | (create ? O_CREAT : 0)
             #if os(Windows)
             let descriptor = Foundation.open(url.path, flags | O_BINARY, 0o600)
@@ -177,15 +183,17 @@ public struct ACPEventLogWriter: Sendable {
             let descriptor = Foundation.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC, 0o600)
             #endif
             guard descriptor >= 0 else { throw ioFailure("open") }
-            return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            return OpenFile(
+                handle: FileHandle(fileDescriptor: descriptor, closeOnDealloc: true),
+                descriptor: descriptor)
         }
 
-        private func appendAll(_ data: Data, to file: FileHandle) throws {
+        private func appendAll(_ data: Data, to file: OpenFile) throws {
             try data.withUnsafeBytes { buffer in
                 var offset = 0
                 while offset < buffer.count {
                     let remaining = UnsafeRawBufferPointer(rebasing: buffer[offset...])
-                    let count = try write(file.fileDescriptor, remaining)
+                    let count = try write(file.descriptor, remaining)
                     guard count > 0, count <= remaining.count else {
                         throw Failure(message: "write made no progress", code: EIO)
                     }
