@@ -34,7 +34,8 @@ public final class RawWireTap: @unchecked Sendable {
     private var observer: Observer?
     /// Launch-time event log: not replaced by ``set(_:)``, so ``ACPAgent/launch``'s
     /// `eventLog` keeps writing for the agent's life.
-    private var eventLogObserver: Observer?
+    typealias TimestampedObserver = @Sendable (JSONRPCPeer.WireDirection, Data, Date) -> Void
+    private var eventLogObserver: TimestampedObserver?
     private var deliveryObserver: DeliveryObserver?
     private var stderrObserver: StderrObserver?
     private var logObserver: LogObserver?
@@ -64,7 +65,7 @@ public final class RawWireTap: @unchecked Sendable {
 
     /// Install the launch-time event-log observer. Unlike ``set(_:)``, this is not cleared
     /// when the caller replaces its raw-wire callback.
-    func setEventLog(_ observer: Observer?) {
+    func setEventLog(_ observer: TimestampedObserver?) {
         lock.withLock { eventLogObserver = observer }
     }
 
@@ -120,6 +121,7 @@ public final class RawWireTap: @unchecked Sendable {
     }
 
     func observe(_ direction: JSONRPCPeer.WireDirection, _ body: Data) {
+        let timestamp = Date()
         if direction == .inbound {
             keepIfUpdate(body)
             keepIfAwaited(body)
@@ -134,7 +136,7 @@ public final class RawWireTap: @unchecked Sendable {
             return
         }
         current?(direction, body)
-        eventLog?(direction, body)
+        eventLog?(direction, body, timestamp)
     }
 
     /// Keep the bodies of inbound `session/update`s from now on, for the connection that handles

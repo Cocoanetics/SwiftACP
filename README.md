@@ -101,6 +101,59 @@ response. The `acpx` CLI shows the notice as `[permission] …` (text), as
 `[acpx] permission: …` on stderr (quiet), or as a JSON line. No operation is ever
 approved to keep a turn running.
 
+### Record optional observation times
+
+Both `ACPAgent.launch` overloads accept `eventLog: URL? = nil` and
+`eventLogTimestampIndex: URL? = nil`. Opt into the companion index explicitly:
+
+```swift
+let logURL = runFolder.appendingPathComponent("events.ndjson")
+let agent = try await ACPAgent.launch(
+    agent: "claude", cwd: repoPath, permission: .approveReads,
+    eventLog: logURL,
+    eventLogTimestampIndex: logURL.appendingPathExtension("timestamps.ndjson"))
+```
+
+The raw log remains exactly `WireJSON.stringified + "\n"` per accepted ACP body.
+Without an index URL no sidecar is created. An index requires a raw log and a
+different target, including equivalent paths, symlinks and existing hard links;
+invalid launch pairs fail before spawning. Recording starts with `initialize`,
+survives `agent.rawWire.set(nil)`, and respects replay suppression.
+
+The companion is UTF-8 NDJSON with one LF after each JSON object, for example:
+
+```json
+{"crc32":516806862,"direction":"outbound","length":63,"offset":0,"timestamp":"2023-11-14T22:13:20.125Z","version":1}
+```
+
+This example matches `{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{}}`
+plus LF at the start of the raw log. `version` is the integer `1`. `offset` is a
+zero-based UInt64 byte position in the raw file; `length` is a UInt64 byte count
+including the final LF. `crc32` is an
+unsigned UInt32 JSON integer in decimal: CRC-32/IEEE over those exact bytes
+(reflected polynomial `0xEDB88320`, initial and final XOR `0xFFFFFFFF`).
+`timestamp` is UTC ISO-8601 with exactly three fractional digits.
+`direction`, when known, is `inbound` or `outbound` relative to the client;
+otherwise the key is absent. JSON key order is not significant.
+
+Launch captures local wall-clock time on entry to `RawWireTap.observe`, before
+parsing or caller callbacks. Outbound observation can precede delivery; inbound
+means a body is available. These are neither agent times nor delivery
+acknowledgements. Times can tie or move backwards; raw byte offsets retain order.
+Direct `ACPEventLogWriter(logURL, timestampIndex: indexURL)` appends capture `Date()`;
+`append(body, timestamp: date, direction: .inbound)` permits explicit values.
+
+Copies and observer closures share one synchronized writer. One logical writer
+owns the pair; simultaneous independent writers or processes are unsupported.
+Each append reads the actual file end and writes the complete raw line before its
+metadata. Torn raw tails are preserved; an append starting inside an unterminated
+line gets no metadata. A torn index tail is separated by LF before later records.
+Index errors preserve raw output and never fail transport; direct appends report
+the error after any successful raw write. A crash can leave raw lines without
+metadata: closing per append is neither a two-file transaction nor an `fsync`
+guarantee. Archive/copy the files together and discard the index when replacing
+the raw log. Existing replay and raw-only archive exports are unchanged.
+
 ## The `acpx` CLI and `acpxd` daemon (macOS)
 
 The same package ships a headless CLI and a session daemon built on the library — a

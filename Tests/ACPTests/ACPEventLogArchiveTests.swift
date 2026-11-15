@@ -15,13 +15,15 @@ import Testing
         #"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}"#
     ]
 
-    @Test func aWrittenEventLogIsAnArchiveHistory() async throws {
+    @Test(arguments: [false, true])
+    func aWrittenEventLogIsAnArchiveHistory(indexed: Bool) async throws {
         try await withIsolatedStore {
             let id = "event-log-archive"
             let url = ACPXPaths.sessionStreamPath(id)
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let writer = ACPEventLogWriter(url)
+            let index = indexed ? url.appendingPathExtension("timestamps.ndjson") : nil
+            let writer = ACPEventLogWriter(url, timestampIndex: index)
             for line in lines {
                 try writer.append(Data(line.utf8))
             }

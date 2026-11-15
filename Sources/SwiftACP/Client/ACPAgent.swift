@@ -105,6 +105,14 @@ public final class ACPAgent: Sendable {
     /// The commands the agent runs through the client's terminals start over
     /// `terminalEnvironment` — the client's own environment, for a host running agents for
     /// other processes — as acpx's client spawns them in its process; `nil`, this process's.
+    ///
+    /// `eventLog` records raw ACP NDJSON from `initialize` onward. Optionally pass
+    /// `eventLogTimestampIndex: logURL.appendingPathExtension("timestamps.ndjson")` to
+    /// record observation times and client-relative directions without changing raw bytes.
+    /// The index requires a distinct event-log target (existing aliases are rejected).
+    /// Times are captured before caller callbacks: outbound can precede delivery, inbound
+    /// means a body is available, and neither is an agent time or delivery acknowledgement.
+    /// See ``ACPEventLogWriter`` for ownership and crash semantics.
     public static func launch(
         agent name: String,
         argv: [String]? = nil,
@@ -124,8 +132,10 @@ public final class ACPAgent: Sendable {
         onRawWire: RawWireTap.Observer? = nil,
         onStderr: RawWireTap.StderrObserver? = nil,
         onLog: RawWireTap.LogObserver? = nil,
-        eventLog: URL? = nil
+        eventLog: URL? = nil,
+        eventLogTimestampIndex: URL? = nil
     ) async throws -> ACPAgent {
+        try ACPEventLogWriter.validate(eventLog: eventLog, timestampIndex: eventLogTimestampIndex)
         // Build the agent's environment exactly like acpx: inherit the parent
         // environment, promote `ACPX_AUTH_*`, and inject configured `auth`
         // credentials. An explicit `environment` is used as-is.
@@ -153,7 +163,9 @@ public final class ACPAgent: Sendable {
         // An `eventLog` is installed beside `onRawWire`, not composed into it: ``RawWireTap/set(_:)``
         // may replace the caller's callback without stopping the log. Omit it and nothing is written.
         let rawWire = RawWireTap(onRawWire)
-        if let eventLog { rawWire.setEventLog(ACPEventLogWriter(eventLog).observer) }
+        if let eventLog {
+            rawWire.setEventLog(ACPEventLogWriter(eventLog, timestampIndex: eventLogTimestampIndex).timestampedObserver)
+        }
         rawWire.onStderr(onStderr)
         rawWire.onLog(onLog)
         rawWire.log("spawning agent: \(spec.executable) \(spec.arguments.joined(separator: " "))")
@@ -264,6 +276,8 @@ public final class ACPAgent: Sendable {
     /// the agent asks for are gated by it too — see ``WriteApproval`` — with
     /// `nonInteractivePermissions` deciding what a write needing confirmation does
     /// when there is no terminal to ask on.
+    /// `eventLogTimestampIndex` opts into the same companion index as the handlers overload;
+    /// it requires `eventLog` and must target a different file.
     public static func launch(
         agent name: String,
         argv: [String]? = nil,
@@ -285,7 +299,8 @@ public final class ACPAgent: Sendable {
         onRawWire: RawWireTap.Observer? = nil,
         onStderr: RawWireTap.StderrObserver? = nil,
         onLog: RawWireTap.LogObserver? = nil,
-        eventLog: URL? = nil
+        eventLog: URL? = nil,
+        eventLogTimestampIndex: URL? = nil
     ) async throws -> ACPAgent {
         try await launch(
             agent: name, argv: argv, cwd: cwd,
@@ -296,7 +311,8 @@ public final class ACPAgent: Sendable {
             authCredentials: authCredentials, authPolicy: authPolicy,
             inheritStderr: inheritStderr, overrides: overrides, terminalOutputCeiling: terminalOutputCeiling,
             terminalEnvironment: terminalEnvironment, limits: limits, onClientRequest: onClientRequest,
-            onRawWire: onRawWire, onStderr: onStderr, onLog: onLog, eventLog: eventLog)
+            onRawWire: onRawWire, onStderr: onStderr, onLog: onLog, eventLog: eventLog,
+            eventLogTimestampIndex: eventLogTimestampIndex)
     }
 
     /// Authenticate using one of the agent's advertised auth methods.
