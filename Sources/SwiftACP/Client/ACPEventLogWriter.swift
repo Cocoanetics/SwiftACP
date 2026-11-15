@@ -61,9 +61,28 @@ public struct ACPEventLogWriter: Sendable {
         guard let eventLog else { throw Failure(message: "A timestamp index requires an event log") }
         let raw = eventLog.standardizedFileURL.resolvingSymlinksInPath()
         let index = timestampIndex.standardizedFileURL.resolvingSymlinksInPath()
-        if raw == index || sameFile(raw, index) {
+        if equivalentPaths(raw, index) || sameFile(raw, index) {
             throw Failure(message: "The event log and timestamp index must target different files")
         }
+    }
+
+    private static func equivalentPaths(_ lhs: URL, _ rhs: URL) -> Bool {
+        if lhs.path == rhs.path { return true }
+        #if os(Windows)
+        let caseSensitive = false
+        #else
+        // Compare new filenames using their volume's rules too: EVENTS and events can
+        // target the same file even when neither exists yet. Find an existing ancestor.
+        var ancestor = lhs.deletingLastPathComponent()
+        while !FileManager.default.fileExists(atPath: ancestor.path) {
+            let parent = ancestor.deletingLastPathComponent()
+            if parent == ancestor { break }
+            ancestor = parent
+        }
+        let values = try? ancestor.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        let caseSensitive = values?.volumeSupportsCaseSensitiveNames ?? true
+        #endif
+        return !caseSensitive && lhs.path.caseInsensitiveCompare(rhs.path) == .orderedSame
     }
 
     private static func sameFile(_ lhs: URL, _ rhs: URL) -> Bool {

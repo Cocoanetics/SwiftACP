@@ -195,6 +195,21 @@ import Testing
         }
     }
 
+    #if os(macOS) || os(Windows)
+    @Test func caseEquivalentNewTargetsAreRejectedBeforeSpawn() async throws {
+        try await withPair { raw, _ in
+            #if os(macOS)
+            let values = try raw.deletingLastPathComponent()
+                .resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+            guard values.volumeSupportsCaseSensitiveNames == false else { return }
+            #endif
+            let alias = raw.deletingLastPathComponent().appendingPathComponent("EVENTS.NDJSON")
+            await expectRejectedLaunch(raw: raw, index: alias)
+            #expect(!FileManager.default.fileExists(atPath: raw.path))
+        }
+    }
+    #endif
+
     #if !os(Windows)
     @Test func symlinkAliasesAreRejectedBeforeSpawnAndWriterDoesNotFollowLinks() async throws {
         try await withPair { raw, index in
