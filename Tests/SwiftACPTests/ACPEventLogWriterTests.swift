@@ -32,6 +32,24 @@ import Testing
         }
     }
 
+    #if !os(Windows)
+    @Test func rawOnlyLoggingSupportsANamedPipe() throws {
+        try withTempLog { url in
+            try #require(mkfifo(url.path, 0o600) == 0)
+            // A nonblocking reader lets the writer open the FIFO and receives its bytes
+            // once the per-message write closes. Seeking this target would fail with ESPIPE.
+            let descriptor = Foundation.open(url.path, O_RDONLY | O_NONBLOCK)
+            try #require(descriptor >= 0)
+            let reader = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            defer { try? reader.close() }
+
+            try ACPEventLogWriter(url).append(Data(prompt.utf8))
+
+            #expect(try reader.readToEnd() == Data((prompt + "\n").utf8))
+        }
+    }
+    #endif
+
     /// A write cut short leaves its partial last line for the reader — this writer has
     /// no rotation or recovery that would discard it.
     @Test func aPartialLastLineIsLeftForTheReader() throws {

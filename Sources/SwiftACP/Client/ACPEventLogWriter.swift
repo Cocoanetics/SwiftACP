@@ -135,18 +135,23 @@ public struct ACPEventLogWriter: Sendable {
             try validate(eventLog: url, timestampIndex: timestampIndex)
             let raw = try Self.open(url)
             defer { try? raw.close() }
+            guard let timestampIndex else {
+                try appendAll(bytes, to: raw)
+                try raw.close()
+                return
+            }
             // FileHandle uses 64-bit offsets on POSIX and Windows. Never cache the end.
             let offset = try raw.seekToEnd()
             // A metadata inspection error must still leave raw logging working.
             let boundary = Result {
-                guard timestampIndex != nil, offset > 0 else { return true }
+                guard offset > 0 else { return true }
                 let reader = try Self.open(url, access: O_RDONLY, create: false)
                 defer { try? reader.close() }
                 return try Self.endsWithLF(reader, at: offset)
             }
             try appendAll(bytes, to: raw)
             try raw.close()
-            guard let timestampIndex, try boundary.get() else { return }
+            guard try boundary.get() else { return }
             let record = ACPEventLogIndexRecord(
                 offset: offset, bytes: bytes, timestamp: timestamp, direction: direction)
             let index = try Self.open(timestampIndex, access: O_RDWR)
