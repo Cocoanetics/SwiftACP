@@ -13,6 +13,24 @@ public enum ACPEventLogEntry: Sendable {
     case update(SessionNotification)
 }
 
+/// A typed entry with its physical position and optional local observation metadata.
+public struct ACPEventLogTimedEntry: Sendable {
+    public let entry: ACPEventLogEntry
+    public let timestamp: Date?
+    public let direction: ACPEventLogDirection?
+    /// Zero-based byte offset in the raw log, including any preceding skipped lines.
+    public let byteOffset: UInt64
+}
+
+/// An accepted ACP message, including messages omitted from typed replay.
+public struct ACPEventLogTimedMessage: Sendable {
+    public let message: WireJSON
+    public let timestamp: Date?
+    public let direction: ACPEventLogDirection?
+    /// Zero-based byte offset in the raw log, stable even when observation times tie.
+    public let byteOffset: UInt64
+}
+
 /// Replays an NDJSON event log — as ``ACPEventLogWriter`` appends it — into typed
 /// `session/prompt`, prompt-answer and `session/update` entries, in file order.
 ///
@@ -23,9 +41,12 @@ public enum ACPEventLogEntry: Sendable {
 /// the file but are left out of the typed sequence.
 public struct ACPEventLogReader: Sendable {
     private let url: URL
+    private let timestampIndex: URL?
 
-    public init(_ url: URL) {
+    /// The index is explicit; ordinary ``entries()`` never reads it.
+    public init(_ url: URL, timestampIndex: URL? = nil) {
         self.url = url
+        self.timestampIndex = timestampIndex
     }
 
     /// The log's typed entries; throws only when the file cannot be read.
@@ -35,15 +56,102 @@ public struct ACPEventLogReader: Sendable {
 
     /// The typed entries of NDJSON `data`.
     public static func entries(in data: Data) -> [ACPEventLogEntry] {
-        let messages = data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
-            .compactMap { line -> WireJSON? in
-                guard let message = WireJSON(parsing: String(decoding: line, as: UTF8.self)),
-                      WireJSON.isACPMessage(message)
-                else { return nil }
-                return message
-            }
+        let messages = parsedMessages(in: data).map(\.message)
         var replay = Replay(messages: messages)
         return messages.indices.compactMap { replay.entry(at: $0) }
+    }
+
+    /// Typed replay in file order. Only raw-log read failures throw; unusable index
+    /// records leave metadata nil. The raw snapshot is read before the optional index.
+    public func entriesWithTimes() throws -> [ACPEventLogTimedEntry] {
+        let data = try Data(contentsOf: url)
+        return Self.entriesWithTimes(in: data, timestampIndex: readIndex())
+    }
+
+    /// Typed replay of a raw snapshot and optional companion index snapshot.
+    /// Direction is metadata only; request/response classification matches ``entries(in:)``.
+    public static func entriesWithTimes(in data: Data, timestampIndex: Data? = nil) -> [ACPEventLogTimedEntry] {
+        let messages = messagesWithTimes(in: data, timestampIndex: timestampIndex)
+        var replay = Replay(messages: messages.map(\.message))
+        return messages.indices.compactMap { index in
+            guard let entry = replay.entry(at: index) else { return nil }
+            let message = messages[index]
+            return ACPEventLogTimedEntry(entry: entry, timestamp: message.timestamp,
+                                         direction: message.direction, byteOffset: message.byteOffset)
+        }
+    }
+
+    /// Every accepted ACP message in file order, including initialize and permission
+    /// requests/replies. Times may tie or move backwards; replay never sorts by time.
+    public func messagesWithTimes() throws -> [ACPEventLogTimedMessage] {
+        let data = try Data(contentsOf: url)
+        return Self.messagesWithTimes(in: data, timestampIndex: readIndex())
+    }
+
+    /// Raw replay of snapshots. A parseable final line without LF replays with nil
+    /// metadata; incomplete raw or index tails are ignored. Legacy logs need no index.
+    public static func messagesWithTimes(in data: Data, timestampIndex: Data? = nil) -> [ACPEventLogTimedMessage] {
+        let records = indexRecords(in: timestampIndex)
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return parsedMessages(in: data).map { parsed in
+            let offset = UInt64(parsed.bytes.startIndex - data.startIndex)
+            var timestamp: Date?
+            var direction: ACPEventLogDirection?
+            if let record = records[offset], record.version == 1,
+               parsed.bytes.last == 0x0A, record.length == UInt64(parsed.bytes.count),
+               record.crc32 == ACPEventLogIndexRecord.checksum(parsed.bytes),
+               record.timestamp.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"#,
+                                      options: .regularExpression) != nil,
+               let date = formatter.date(from: record.timestamp),
+               formatter.string(from: date) == record.timestamp {
+                timestamp = date
+                direction = record.direction
+            }
+            return ACPEventLogTimedMessage(message: parsed.message, timestamp: timestamp,
+                                           direction: direction, byteOffset: offset)
+        }
+    }
+
+    private func readIndex() -> Data? {
+        timestampIndex.flatMap { try? Data(contentsOf: $0) }
+    }
+
+    /// Slice before filtering, retaining the physical line (including LF when present).
+    /// Exact slice-length matching validates bounds, both boundaries and a single line
+    /// without arithmetic on untrusted UInt64 offsets/lengths or searching by body text.
+    private static func parsedMessages(in data: Data) -> [(message: WireJSON, bytes: Data)] {
+        data.split(separator: 0x0A, omittingEmptySubsequences: false).compactMap { line in
+            guard let message = WireJSON(parsing: String(decoding: line, as: UTF8.self)),
+                  WireJSON.isACPMessage(message) else { return nil }
+            let end = line.endIndex < data.endIndex ? line.endIndex + 1 : line.endIndex
+            return (message, data[line.startIndex..<end])
+        }
+    }
+
+    private struct IndexOffset: Decodable {
+        let offset: UInt64
+    }
+
+    /// Conflicts poison only their exact offset, including syntactically invalid records
+    /// whose offset can still be decoded. Only complete, LF-terminated records count.
+    private static func indexRecords(in data: Data?) -> [UInt64: ACPEventLogIndexRecord] {
+        guard let data else { return [:] }
+        let decoder = JSONDecoder()
+        var records: [UInt64: ACPEventLogIndexRecord] = [:]
+        var invalid: Set<UInt64> = []
+        for line in data.split(separator: 0x0A) where line.endIndex < data.endIndex {
+            guard let offset = try? decoder.decode(IndexOffset.self, from: line).offset else { continue }
+            guard let record = try? decoder.decode(ACPEventLogIndexRecord.self, from: line),
+                  records[offset] == nil || records[offset] == record else {
+                invalid.insert(offset)
+                continue
+            }
+            records[offset] = record
+        }
+        for offset in invalid { records[offset] = nil }
+        return records
     }
 
     /// The requests still unanswered, by side. The log does not say which peer wrote a
