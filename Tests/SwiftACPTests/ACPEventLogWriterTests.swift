@@ -18,6 +18,7 @@ import Testing
             #expect(try lines(at: url) == [prompt, answer])
             // Byte-identical NDJSON: LF only — Windows text-mode open would write CRLF.
             #expect(try Data(contentsOf: url) == Data((prompt + "\n" + answer + "\n").utf8))
+            #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("timestamps.ndjson").path))
         }
     }
 
@@ -106,11 +107,80 @@ import Testing
         }
     }
 
+    /// Both public launch entry points must index from initialize, independently of set(nil).
+    @Test(.enabled(if: mockPythonAvailable), arguments: [false, true])
+    func indexedLaunchIncludesHandshakeAndSurvivesSetNil(useHandlers: Bool) async throws {
+        try await withTempLog { url in
+            let index = url.appendingPathExtension("timestamps.ndjson")
+            let overrides = try #require(mockOverride())
+            let agent: ACPAgent
+            if useHandlers {
+                agent = try await ACPAgent.launch(
+                    agent: "mock", cwd: NSTemporaryDirectory(), handlers: .standard(permission: .approveAll),
+                    inheritStderr: false, overrides: overrides, eventLog: url, eventLogTimestampIndex: index)
+            } else {
+                agent = try await ACPAgent.launch(
+                    agent: "mock", cwd: NSTemporaryDirectory(), permission: .approveAll,
+                    inheritStderr: false, overrides: overrides, eventLog: url, eventLogTimestampIndex: index)
+            }
+            let before = try lines(at: index).count
+            agent.rawWire.set(nil)
+            _ = try await agent.newSession()
+            try await agent.close()
+
+            let records = try checkedIndex(raw: url, index: index)
+            #expect(records.count > before)
+            #expect(records.first?.direction == .outbound)
+            #expect(try lines(at: url).first?.contains(#""method":"initialize""#) == true)
+            #expect(records.contains { $0.direction == .inbound })
+            #expect(records.allSatisfy { $0.direction != nil })
+        }
+    }
+
+    @Test(.enabled(if: mockPythonAvailable))
+    func indexFailureDoesNotFailTransportOrRawLogging() async throws {
+        try await withTempLog { url in
+            let index = url.appendingPathExtension("timestamps.ndjson")
+            try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false)
+            let overrides = try #require(mockOverride())
+            let agent = try await ACPAgent.launch(
+                agent: "mock", cwd: NSTemporaryDirectory(), permission: .approveAll,
+                inheritStderr: false, overrides: overrides, eventLog: url, eventLogTimestampIndex: index)
+            _ = try await agent.newSession()
+            try await agent.close()
+            #expect(try lines(at: url).contains { $0.contains(#""method":"session/new""#) })
+        }
+    }
+
+    @Test func concurrentCopiesAndObserverCallbacksKeepCompletePairs() throws {
+        try withTempLog { url in
+            let index = url.appendingPathExtension("timestamps.ndjson")
+            let writer = ACPEventLogWriter(url, timestampIndex: index)
+            let copy = writer
+            let observer = writer.observer
+            let tap = RawWireTap()
+            tap.setEventLog(writer.timestampedObserver)
+            let body = Data(prompt.utf8)
+            DispatchQueue.concurrentPerform(iterations: 120) { iteration in
+                switch iteration % 4 {
+                case 0: try? writer.append(body)
+                case 1: try? copy.append(body)
+                case 2: observer(.inbound, body)
+                default: tap.observe(.outbound, body)
+                }
+            }
+            let records = try checkedIndex(raw: url, index: index)
+            let raw = try Data(contentsOf: url)
+            #expect(records.count == 120)
+            #expect(raw == Data(String(repeating: prompt + "\n", count: 120).utf8))
+        }
+    }
+
     /// Direct unit coverage of the side channel: ``set(_:)`` must not clear ``setEventLog``.
     @Test func setDoesNotClearEventLogObserver() throws {
         try withTempLog { url in
             let tap = RawWireTap { _, _ in }
-            tap.setEventLog(ACPEventLogWriter(url).observer)
+            tap.setEventLog(ACPEventLogWriter(url).timestampedObserver)
             tap.set(nil)
             tap.observe(.outbound, Data(prompt.utf8))
             let written = try lines(at: url)
@@ -148,5 +218,29 @@ import Testing
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map(String.init)
     }
+}
+
+/// Validate every record against physical raw bytes, including LF and cumulative offsets.
+func checkedIndex(raw: URL, index: URL) throws -> [ACPEventLogIndexRecord] {
+    let bytes = try Data(contentsOf: raw)
+    let metadata = try Data(contentsOf: index)
+    #expect(metadata.last == 0x0A)
+    let records = try metadata.split(separator: 0x0A).map {
+        try JSONDecoder().decode(ACPEventLogIndexRecord.self, from: Data($0))
+    }
+    var offset: UInt64 = 0
+    for record in records {
+        #expect(record.version == 1)
+        #expect(record.offset == offset)
+        let end = record.offset + record.length
+        try #require(end <= UInt64(bytes.count))
+        let line = bytes.subdata(in: Int(record.offset)..<Int(end))
+        #expect(line.last == 0x0A)
+        #expect(line.dropLast().contains(0x0A) == false)
+        #expect(ACPEventLogIndexRecord.checksum(line) == record.crc32)
+        offset = end
+    }
+    #expect(offset == UInt64(bytes.count))
+    return records
 }
 #endif
