@@ -119,6 +119,12 @@ public struct ACPEventLogWriter: Sendable {
     typealias Write = @Sendable (Int32, UnsafeRawBufferPointer) throws -> Int
 
     /// NSLock guards each complete raw/index append pair, including across writer copies.
+    ///
+    /// All I/O goes through one CRT/POSIX descriptor per file, never a `FileHandle`: on
+    /// Windows, `FileHandle(fileDescriptor:closeOnDealloc: true)` duplicates the OS handle and
+    /// closes the CRT descriptor at once, so a later `write` on that descriptor trips the
+    /// CRT's invalid-parameter handler and aborts the process (the Windows test run died
+    /// without recording a failure).
     private final class State: @unchecked Sendable {
         let lock = NSLock()
         let url: URL
@@ -133,49 +139,41 @@ public struct ACPEventLogWriter: Sendable {
 
         func append(_ bytes: Data, timestamp: Date, direction: ACPEventLogDirection?) throws {
             try validate(eventLog: url, timestampIndex: timestampIndex)
-            let raw = try Self.open(url)
-            defer { try? raw.handle.close() }
             guard let timestampIndex else {
-                try appendAll(bytes, to: raw)
-                try raw.handle.close()
+                // Raw-only never seeks, so a non-seekable target (a FIFO) keeps working.
+                try Self.withOpen(url) { raw in try appendAll(bytes, to: raw) }
                 return
             }
-            // FileHandle uses 64-bit offsets on POSIX and Windows. Never cache the end.
-            let offset = try raw.handle.seekToEnd()
-            // A metadata inspection error must still leave raw logging working.
-            let boundary = Result {
-                guard offset > 0 else { return true }
-                let reader = try Self.open(url, access: O_RDONLY, create: false)
-                defer { try? reader.handle.close() }
-                return try Self.endsWithLF(reader.handle, at: offset)
+            let (offset, boundary) = try Self.withOpen(url) { raw in
+                // Never cache the end: the file's physical size decides the record's offset.
+                let offset = try Self.seekToEnd(raw)
+                // A metadata inspection error must still leave raw logging working.
+                let boundary = Result {
+                    guard offset > 0 else { return true }
+                    return try Self.withOpen(url, access: O_RDONLY, create: false) { reader in
+                        try Self.endsWithLF(reader, at: offset)
+                    }
+                }
+                try appendAll(bytes, to: raw)
+                return (offset, boundary)
             }
-            try appendAll(bytes, to: raw)
-            try raw.handle.close()
             guard try boundary.get() else { return }
             let record = ACPEventLogIndexRecord(
                 offset: offset, bytes: bytes, timestamp: timestamp, direction: direction)
-            let index = try Self.open(timestampIndex, access: O_RDWR)
-            defer { try? index.handle.close() }
-            let end = try index.handle.seekToEnd()
-            if try !Self.endsWithLF(index.handle, at: end) { try appendAll(Data([0x0A]), to: index) }
-            try appendAll(record.line(), to: index)
-            try index.handle.close()
+            try Self.withOpen(timestampIndex, access: O_RDWR) { index in
+                let end = try Self.seekToEnd(index)
+                if try !Self.endsWithLF(index, at: end) { try appendAll(Data([0x0A]), to: index) }
+                try appendAll(record.line(), to: index)
+            }
         }
 
-        private static func endsWithLF(_ file: FileHandle, at end: UInt64) throws -> Bool {
-            guard end > 0 else { return true }
-            try file.seek(toOffset: end - 1)
-            return try file.read(upToCount: 1) == Data([0x0A])
-        }
-
-        /// Keep the CRT descriptor because `FileHandle.fileDescriptor` is unavailable on Windows.
-        private struct OpenFile {
-            let handle: FileHandle
-            let descriptor: Int32
-        }
-
+        /// Open `url` for `body`, then close the descriptor exactly once. A failed close after a
+        /// successful body is an I/O failure of its own, surfaced before any index write.
         /// Secure append/create; binary mode prevents Windows from translating LF to CRLF.
-        private static func open(_ url: URL, access: Int32 = O_WRONLY, create: Bool = true) throws -> OpenFile {
+        private static func withOpen<Value>(
+            _ url: URL, access: Int32 = O_WRONLY, create: Bool = true,
+            _ body: (Int32) throws -> Value
+        ) throws -> Value {
             let flags = access | O_APPEND | (create ? O_CREAT : 0)
             #if os(Windows)
             let descriptor = Foundation.open(url.path, flags | O_BINARY, 0o600)
@@ -183,17 +181,55 @@ public struct ACPEventLogWriter: Sendable {
             let descriptor = Foundation.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC, 0o600)
             #endif
             guard descriptor >= 0 else { throw ioFailure("open") }
-            return OpenFile(
-                handle: FileHandle(fileDescriptor: descriptor, closeOnDealloc: true),
-                descriptor: descriptor)
+            let value: Value
+            do {
+                value = try body(descriptor)
+            } catch {
+                _ = close(descriptor)
+                throw error
+            }
+            guard close(descriptor) == 0 else { throw ioFailure("close") }
+            return value
         }
 
-        private func appendAll(_ data: Data, to file: OpenFile) throws {
+        private static func seekToEnd(_ descriptor: Int32) throws -> UInt64 {
+            try seek(descriptor, to: 0, from: SEEK_END)
+        }
+
+        /// 64-bit positions everywhere: `_lseeki64` on Windows, where `lseek` is 32-bit.
+        private static func seek(_ descriptor: Int32, to offset: Int64, from whence: Int32) throws -> UInt64 {
+            #if os(Windows)
+            let position = _lseeki64(descriptor, offset, whence)
+            #else
+            let position = lseek(descriptor, off_t(offset), whence)
+            #endif
+            guard position >= 0 else { throw ioFailure("lseek") }
+            return UInt64(position)
+        }
+
+        private static func endsWithLF(_ descriptor: Int32, at end: UInt64) throws -> Bool {
+            guard end > 0 else { return true }
+            _ = try seek(descriptor, to: Int64(end - 1), from: SEEK_SET)
+            var byte: UInt8 = 0
+            while true {
+                let count = withUnsafeMutableBytes(of: &byte) { buffer in
+                    #if os(Windows)
+                    Int(_read(descriptor, buffer.baseAddress, 1))
+                    #else
+                    read(descriptor, buffer.baseAddress, 1)
+                    #endif
+                }
+                if count >= 0 { return count == 1 && byte == 0x0A }
+                if errno != EINTR { throw ioFailure("read") }
+            }
+        }
+
+        private func appendAll(_ data: Data, to descriptor: Int32) throws {
             try data.withUnsafeBytes { buffer in
                 var offset = 0
                 while offset < buffer.count {
                     let remaining = UnsafeRawBufferPointer(rebasing: buffer[offset...])
-                    let count = try write(file.descriptor, remaining)
+                    let count = try write(descriptor, remaining)
                     guard count > 0, count <= remaining.count else {
                         throw Failure(message: "write made no progress", code: EIO)
                     }
