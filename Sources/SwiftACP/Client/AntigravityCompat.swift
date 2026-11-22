@@ -12,7 +12,24 @@ import Foundation
 /// No automatic answer is safe, so the client cancels these requests outright, ahead of
 /// any policy or handler, and says why: as a ``ClientOperation`` on the event
 /// subscriptions and as `_meta.acpx.permissionNotice` on the response. This takes
-/// precedence over every permission mode, including a host's own resolver.
+/// precedence over every permission mode, including a host's own resolver, and applies
+/// regardless of adapter-provided `name` or `args` on `toolCall`.
+///
+/// ### Thought-only `end_turn` completions
+///
+/// In the observed background reproduction (run `93DBBF66-36BA-4AF3-8273-A3BA1F2E59F9`,
+/// issue #343 / #346), the external Antigravity ACP adapter (`agy_acp_server`) emitted
+/// `agent_thought_chunk` updates and tool events with zero `agent_message_chunk` updates
+/// before returning `{"stopReason":"end_turn"}`. Because the adapter emitted no
+/// final-message chunk in that reproduction, SwiftACP cannot obtain a final report from
+/// the trace: ``ACPSession/run(_:meta:onUpdate:)`` preserves thoughts as
+/// ``SessionUpdate/agentThoughtChunk(_:)`` callbacks, returns ``PromptOutcome/text`` as
+/// `""` with ``StopReason/endTurn`` and ``PromptOutcome/sessionFailure`` as `nil`, and
+/// forwards only genuinely supplied terminal `usage` and `_meta` without inferring a
+/// synthetic report, cancellation reason, failure classification, or adapter-specific
+/// completion flag. The internal cause inside the external adapter is not established
+/// from SDK-side observation, and full native role proof or downstream host role
+/// enablement are separate gates outside SDK replay tests.
 public enum AntigravityCompat {
     /// The `agentInfo.name` Antigravity's ACP server reports in `initialize`. The rule
     /// keys on what the adapter reports rather than on the registry name, so a custom
