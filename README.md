@@ -101,6 +101,26 @@ response. The `acpx` CLI shows the notice as `[permission] …` (text), as
 `[acpx] permission: …` on stderr (quiet), or as a JSON line. No operation is ever
 approved to keep a turn running.
 
+#### MCP server/tool identity (unavailable)
+
+A tool call's adapter-provided `name` and `args` are preserved verbatim, but they are opaque
+and unauthenticated. Antigravity's adapter (the external `agy_acp_server`, which SwiftACP
+launches but does not vendor) sends an MCP call as a flattened `name` such as
+`mcp_missioncontrol_view_issue` plus a display `title` — no server/tool pair. So
+`AntigravityCompat.mcpToolIdentity(of:agentName:)` always answers `.unavailable` with
+`AntigravityCompat.mcpIdentityBlocker`, and a host that scopes approval to one server's tool
+must fail closed: refuse or ask a person, never infer.
+
+What would change this is a versioned upstream contract in which the trusted adapter sends a
+unique identifier of an MCP server configured for the session plus that server's exact
+original tool name, bound to that configured server/catalog and to the specific call. A
+`title`, `kind`, arguments, the `initialize` agent name, or a split of the flattened name
+(`missioncontrol` + `view_issue`, or `missioncontrol_view` + `issue`?) never establishes it,
+and even an explicit pair is only the adapter's assertion until the host can check its
+provenance and mapping. SwiftACP adds typed access only once that wire shape is documented
+and captured. Shell calls keep `rawInput` (its `CommandLine`) unchanged for the host's command
+allowlist.
+
 ### Record optional observation times
 
 Both `ACPAgent.launch` overloads accept `eventLog: URL? = nil` and

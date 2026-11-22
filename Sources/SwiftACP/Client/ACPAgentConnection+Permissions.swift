@@ -36,6 +36,12 @@ extension ACPAgentConnection {
     /// ``ClientOperation`` on the event subscriptions (ahead of anything the agent
     /// sends in reaction) and as `_meta.acpx.permissionNotice` on the response.
     /// Nothing here approves an operation to keep a turn running.
+    ///
+    /// The handler gets the request as sent: `toolCall.name`, `title`, `kind`, `args` and
+    /// `rawInput` (a shell call's `rawInput.CommandLine` included) are passed through
+    /// unchanged, and none is resolved into an MCP server/tool identity — there is none to
+    /// give (``AntigravityCompat/mcpIdentityBlocker``), so a host scoping approval to one
+    /// server's tool must refuse or ask.
     func resolvePermission(
         _ request: RequestPermissionRequest,
         with handler: @Sendable (RequestPermissionRequest) async throws -> RequestPermissionResponse

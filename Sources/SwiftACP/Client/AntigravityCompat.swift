@@ -15,6 +15,14 @@ import Foundation
 /// precedence over every permission mode, including a host's own resolver, and applies
 /// regardless of adapter-provided `name` or `args` on `toolCall`.
 ///
+/// ### MCP server/tool identity
+///
+/// Antigravity's flattened tool `name` (`mcp_missioncontrol_view_issue`) and display
+/// `title` name no configured MCP server and exact tool, so `mcpToolIdentity(of:agentName:)`
+/// always answers unavailable (``mcpIdentityBlocker``) and the host must refuse or ask.
+/// The versioned upstream contract that would change this is documented in
+/// `AntigravityCompat+MCPIdentity.swift`.
+///
 /// ### Thought-only `end_turn` completions
 ///
 /// In the observed background reproduction (run `93DBBF66-36BA-4AF3-8273-A3BA1F2E59F9`,
