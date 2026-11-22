@@ -265,7 +265,7 @@ extension ClientRequestSchema {
             "read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"
         ])),
         dropped("status", .literals(["pending", "in_progress", "completed", "failed"])),
-        dropped("title", .string), dropped("name", .string),
+        dropped("title", .string), dropped("name", .string), dropped("args", .unknown),
         Member(name: "content", schema: .array(toolCallContent), reading: .listOrDropped),
         Member(name: "locations", schema: .array(location), reading: .listOrDropped),
         dropped("rawInput", .unknown), dropped("rawOutput", .unknown), meta

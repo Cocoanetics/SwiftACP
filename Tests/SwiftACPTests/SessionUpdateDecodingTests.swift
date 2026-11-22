@@ -139,4 +139,99 @@ struct SessionUpdateDecodingTests {
             #expect(throws: DecodingError.self, "\(json)") { try decode(json) }
         }
     }
+
+    /// Adapter-provided `name` and `args` round-trip through `SessionUpdate` encode/decode
+    /// and stay separate from `title` and `rawInput`, even when `args` and `rawInput` differ.
+    @Test func toolCallAndUpdatePreserveAdapterNameAndArgsSeparatelyFromRawInput() throws {
+        let callJSON = #"""
+            {"sessionUpdate":"tool_call","toolCallId":"call-1","title":"Run mcp_missioncontrol_view_issue",
+            "kind":"other","name":"mcp_missioncontrol_view_issue",
+            "args":{"number":277,"repo":"Cocoanetics/SwiftPorts"},
+            "rawInput":{"CommandLine":"git status"}}
+            """#
+        let call = try toolCall(callJSON)
+        #expect(call.name == "mcp_missioncontrol_view_issue")
+        #expect(call.args == .object(["number": .integer(277), "repo": .string("Cocoanetics/SwiftPorts")]))
+        #expect(call.rawInput == .object(["CommandLine": .string("git status")]))
+        #expect(call.nullMembers.isEmpty)
+
+        let relayedCall = try JSONDecoder().decode(
+            SessionUpdate.self, from: try JSONEncoder().encode(SessionUpdate.toolCall(call)))
+        guard case .toolCall(let decodedCall) = relayedCall else { throw POSIXError(.EINVAL) }
+        #expect(decodedCall.name == call.name)
+        #expect(decodedCall.args == call.args)
+        #expect(decodedCall.rawInput == call.rawInput)
+        #expect(decodedCall.title == call.title)
+        #expect(decodedCall.nullMembers.isEmpty)
+
+        let updateJSON = #"""
+            {"sessionUpdate":"tool_call_update","toolCallId":"call-1","title":"Updated title",
+            "name":"mcp_server_tool_name","args":{"a":1},"rawInput":{"a":2}}
+            """#
+        guard case .toolCallUpdate(let update) = try decode(updateJSON) else { throw POSIXError(.EINVAL) }
+        #expect(update.name == "mcp_server_tool_name")
+        #expect(update.args == .object(["a": .integer(1)]))
+        #expect(update.rawInput == .object(["a": .integer(2)]))
+
+        let relayedUpdate = try JSONDecoder().decode(
+            SessionUpdate.self, from: try JSONEncoder().encode(SessionUpdate.toolCallUpdate(update)))
+        guard case .toolCallUpdate(let decodedUpdate) = relayedUpdate else { throw POSIXError(.EINVAL) }
+        #expect(decodedUpdate.name == "mcp_server_tool_name")
+        #expect(decodedUpdate.args == .object(["a": .integer(1)]))
+        #expect(decodedUpdate.rawInput == .object(["a": .integer(2)]))
+    }
+
+    /// Omitted, explicitly `null`, and malformed `name`/`args` follow the existing incremental-update
+    /// and lenient-decoding rules without altering standard ACP messages.
+    @Test func toolCallAndUpdateHandleOmittedNullAndMalformedNameAndArgs() throws {
+        // Omitted: not synthesized from `title`, not nulled, not emitted on encode.
+        let standardCall = try toolCall(#"{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Read a.txt"}"#)
+        #expect(standardCall.name == nil && standardCall.args == nil && standardCall.nullMembers.isEmpty)
+        let standardObject = try JSONDecoder().decode(
+            JSONValue.self, from: try JSONEncoder().encode(SessionUpdate.toolCall(standardCall)))
+        #expect(standardObject["name"] == nil && standardObject["args"] == nil)
+
+        // Explicitly null: recorded in `nullMembers`, re-encoded as `null`, and overwritten if set later.
+        let nulledCall = try toolCall(
+            #"{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Run","name":null,"args":null}"#)
+        #expect(nulledCall.name == nil && nulledCall.args == nil)
+        #expect(nulledCall.nullMembers == ["name", "args"])
+        let relayedNullCall = try JSONDecoder().decode(
+            SessionUpdate.self, from: try JSONEncoder().encode(SessionUpdate.toolCall(nulledCall)))
+        guard case .toolCall(var mutatedCall) = relayedNullCall else { throw POSIXError(.EINVAL) }
+        #expect(mutatedCall.nullMembers == ["name", "args"])
+        mutatedCall.name = "opaque_tool"
+        mutatedCall.args = .object(["x": .bool(true)])
+        let overwritten = try JSONDecoder().decode(
+            SessionUpdate.self, from: try JSONEncoder().encode(SessionUpdate.toolCall(mutatedCall)))
+        guard case .toolCall(let overwrittenCall) = overwritten else { throw POSIXError(.EINVAL) }
+        #expect(overwrittenCall.name == "opaque_tool")
+        #expect(overwrittenCall.args == .object(["x": .bool(true)]))
+        #expect(overwrittenCall.nullMembers.isEmpty)
+
+        // Explicitly null on `tool_call_update`.
+        guard case .toolCallUpdate(let nulledUpdate) = try decode(
+            #"{"sessionUpdate":"tool_call_update","toolCallId":"t2","name":null,"args":null}"#)
+        else { throw POSIXError(.EINVAL) }
+        #expect(nulledUpdate.name == nil && nulledUpdate.args == nil)
+        #expect(nulledUpdate.nullMembers == ["name", "args"])
+        let relayedNullUpdate = try JSONDecoder().decode(
+            SessionUpdate.self, from: try JSONEncoder().encode(SessionUpdate.toolCallUpdate(nulledUpdate)))
+        guard case .toolCallUpdate(let decodedNullUpdate) = relayedNullUpdate else { throw POSIXError(.EINVAL) }
+        #expect(decodedNullUpdate.nullMembers == ["name", "args"])
+
+        // Malformed optional `name` on both `tool_call` and `tool_call_update`: ignored, not nulled.
+        for badName in ["42", "true", #"{"nested":"x"}"#, #"["a"]"#] {
+            let call = try toolCall(
+                #"{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Run","name":\#(badName),"args":{"k":1}}"#)
+            #expect(call.name == nil && !call.nullMembers.contains("name"), "\(badName)")
+            #expect(call.args == .object(["k": .integer(1)]), "\(badName)")
+
+            guard case .toolCallUpdate(let update) = try decode(
+                #"{"sessionUpdate":"tool_call_update","toolCallId":"t1","name":\#(badName),"args":{"k":2}}"#)
+            else { throw POSIXError(.EINVAL) }
+            #expect(update.name == nil && !update.nullMembers.contains("name"), "\(badName)")
+            #expect(update.args == .object(["k": .integer(2)]), "\(badName)")
+        }
+    }
 }
