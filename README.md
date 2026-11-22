@@ -101,6 +101,31 @@ response. The `acpx` CLI shows the notice as `[permission] …` (text), as
 `[acpx] permission: …` on stderr (quiet), or as a JSON line. No operation is ever
 approved to keep a turn running.
 
+#### MCP server/tool identity (unavailable)
+
+SwiftACP gives no MCP server/tool identity for a tool call, and its permission policies never
+derive one. A tool call's adapter-provided `name` and `args` are kept exactly as sent, but they
+are opaque and unauthenticated.
+
+- **Captured.** SwiftACP launches Antigravity's external `agy_acp_server` but doesn't vendor
+  it. That adapter's sanitized native permission request (#343) carries only a flattened
+  `name` (`mcp_missioncontrol_view_issue`), a display `title`
+  (`Run mcp_missioncontrol_view_issue`), `kind`, `args` and `rawInput`. It has no
+  server/tool pair, and no identity extension has been captured or documented.
+- **Required upstream, not implemented.** Identity needs a versioned adapter contract in which
+  the trusted adapter sends two things: a unique identifier of an MCP server configured for
+  the session, and that server's exact original tool name. The adapter must bind both to that
+  configured server/catalog and to the specific call. SwiftACP adds typed access only once
+  that wire shape and binding are documented and captured.
+- **Never an identity.** None of these establishes the binding: a `title`, `kind`,
+  arguments, the `initialize` agent name, or a split of the flattened name.
+  `missioncontrol` + `view_issue` and `missioncontrol_view` + `issue` are both readings.
+  Even an explicit pair is only the adapter's assertion until the host can check its
+  provenance and mapping.
+- **Host expectation.** Treat identity as unavailable and fail closed: refuse or ask a person,
+  never infer. A shell call's `rawInput` (its `CommandLine`) reaches the handler unchanged for
+  the host's command allowlist.
+
 ### Record optional observation times
 
 Both `ACPAgent.launch` overloads accept `eventLog: URL? = nil` and

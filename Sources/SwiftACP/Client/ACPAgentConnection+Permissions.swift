@@ -36,6 +36,14 @@ extension ACPAgentConnection {
     /// ``ClientOperation`` on the event subscriptions (ahead of anything the agent
     /// sends in reaction) and as `_meta.acpx.permissionNotice` on the response.
     /// Nothing here approves an operation to keep a turn running.
+    ///
+    /// Not every request reaches the handler, and not always in wire order. An Antigravity
+    /// interaction question is cancelled before the handler runs, and for Codex the
+    /// handler gets `options` reordered (``CodexCompat/preferPermissionRefusal(_:agentName:)``).
+    /// When the handler does run, `toolCall.name`, `title`, `kind`, `args` and `rawInput`
+    /// (a shell call's `rawInput.CommandLine` included) reach it unchanged. None is resolved
+    /// into an MCP server/tool identity, because there is none to give (see
+    /// ``AntigravityCompat``). A host scoping approval to one server's tool must refuse or ask.
     func resolvePermission(
         _ request: RequestPermissionRequest,
         with handler: @Sendable (RequestPermissionRequest) async throws -> RequestPermissionResponse
