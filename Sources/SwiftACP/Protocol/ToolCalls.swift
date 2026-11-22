@@ -15,6 +15,13 @@ public struct ToolCall: Codable, Sendable {
     public var locations: [ToolCallLocation]?
     public var rawInput: JSONValue?
     public var rawOutput: JSONValue?
+    /// Adapter-provided tool name as sent on the wire, when present. Opaque and
+    /// unauthenticated: preserved verbatim without reconstructing it from `title` or
+    /// claiming verified MCP server/tool identity.
+    public var name: String?
+    /// Adapter-provided tool arguments as sent on the wire, when present. Kept
+    /// independent from ``rawInput`` even when both are supplied or differ.
+    public var args: JSONValue?
     /// The members the call sent as JSON `null` (`kind`, `status`, …). Each clears what an earlier
     /// update of the same tool set, as acpx's formatter merges them (`mergeToolPayloadState`), where
     /// a member left out leaves it as it was (#270 review). Sent back as `null`.
@@ -24,7 +31,7 @@ public struct ToolCall: Codable, Sendable {
         toolCallId: String, title: String, kind: ToolKind? = nil,
         status: ToolCallStatus? = nil, content: [ToolCallContent]? = nil,
         locations: [ToolCallLocation]? = nil, rawInput: JSONValue? = nil,
-        rawOutput: JSONValue? = nil
+        rawOutput: JSONValue? = nil, name: String? = nil, args: JSONValue? = nil
     ) {
         self.toolCallId = toolCallId
         self.title = title
@@ -34,16 +41,18 @@ public struct ToolCall: Codable, Sendable {
         self.locations = locations
         self.rawInput = rawInput
         self.rawOutput = rawOutput
+        self.name = name
+        self.args = args
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput, name, args
     }
 
     /// Read as the ACP SDK reads a `tool_call` (`zToolCall`): the id and title are
-    /// required, the rest is read leniently. A `kind` or `status` that doesn't fit is left
-    /// out, and so are the `content` and `locations` entries that don't; either list is
-    /// empty when it is no list.
+    /// required, the rest is read leniently. A `kind`, `status` or optional `name` that
+    /// doesn't fit is left out, and so are the `content` and `locations` entries that
+    /// don't; either list is empty when it is no list.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         toolCallId = try container.decode(String.self, forKey: .toolCallId)
@@ -54,6 +63,8 @@ public struct ToolCall: Codable, Sendable {
         locations = container.lenientList(ToolCallLocation.self, forKey: .locations, fallback: [])
         rawInput = try container.decodeIfPresent(JSONValue.self, forKey: .rawInput)
         rawOutput = try container.decodeIfPresent(JSONValue.self, forKey: .rawOutput)
+        name = container.lenient(String.self, forKey: .name)
+        args = try container.decodeIfPresent(JSONValue.self, forKey: .args)
         var nulled: Set<String> = []
         for key in CodingKeys.allCases where key != .toolCallId && key != .title && container.contains(key) {
             if try container.decodeNil(forKey: key) { nulled.insert(key.stringValue) }
@@ -71,6 +82,8 @@ public struct ToolCall: Codable, Sendable {
         try container.encodeIfPresent(locations, forKey: .locations)
         try container.encodeIfPresent(rawInput, forKey: .rawInput)
         try container.encodeIfPresent(rawOutput, forKey: .rawOutput)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(args, forKey: .args)
         // A member given a value since wins over the `null` it came as.
         for key in CodingKeys.allCases where nullMembers.contains(key.stringValue) && !hasValue(key) {
             try container.encodeNil(forKey: key)
@@ -86,6 +99,8 @@ public struct ToolCall: Codable, Sendable {
         case .locations: return locations != nil
         case .rawInput: return rawInput != nil
         case .rawOutput: return rawOutput != nil
+        case .name: return name != nil
+        case .args: return args != nil
         }
     }
 }
@@ -101,6 +116,13 @@ public struct ToolCallUpdate: Codable, Sendable {
     public var locations: [ToolCallLocation]?
     public var rawInput: JSONValue?
     public var rawOutput: JSONValue?
+    /// Adapter-provided tool name as sent on the wire, when present. Opaque and
+    /// unauthenticated: preserved verbatim without reconstructing it from `title` or
+    /// claiming verified MCP server/tool identity.
+    public var name: String?
+    /// Adapter-provided tool arguments as sent on the wire, when present. Kept
+    /// independent from ``rawInput`` even when both are supplied or differ.
+    public var args: JSONValue?
     /// The members the update sent as JSON `null` (`kind`, `status`, …). Each clears
     /// what an earlier update set, where a member left out leaves it as it was — acpx's
     /// `mergeToolPayloadState`. Sent back as `null`.
@@ -110,7 +132,7 @@ public struct ToolCallUpdate: Codable, Sendable {
         toolCallId: String, title: String? = nil, kind: ToolKind? = nil,
         status: ToolCallStatus? = nil, content: [ToolCallContent]? = nil,
         locations: [ToolCallLocation]? = nil, rawInput: JSONValue? = nil,
-        rawOutput: JSONValue? = nil
+        rawOutput: JSONValue? = nil, name: String? = nil, args: JSONValue? = nil
     ) {
         self.toolCallId = toolCallId
         self.title = title
@@ -120,10 +142,12 @@ public struct ToolCallUpdate: Codable, Sendable {
         self.locations = locations
         self.rawInput = rawInput
         self.rawOutput = rawOutput
+        self.name = name
+        self.args = args
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput, name, args
     }
 
     /// Read as the ACP SDK reads a `tool_call_update` (`zToolCallUpdate`): only the id is
@@ -139,6 +163,8 @@ public struct ToolCallUpdate: Codable, Sendable {
         locations = container.lenientList(ToolCallLocation.self, forKey: .locations, fallback: nil)
         rawInput = try container.decodeIfPresent(JSONValue.self, forKey: .rawInput)
         rawOutput = try container.decodeIfPresent(JSONValue.self, forKey: .rawOutput)
+        name = container.lenient(String.self, forKey: .name)
+        args = try container.decodeIfPresent(JSONValue.self, forKey: .args)
         var nulled: Set<String> = []
         for key in CodingKeys.allCases where key != .toolCallId && container.contains(key) {
             if try container.decodeNil(forKey: key) { nulled.insert(key.stringValue) }
@@ -156,6 +182,8 @@ public struct ToolCallUpdate: Codable, Sendable {
         try container.encodeIfPresent(locations, forKey: .locations)
         try container.encodeIfPresent(rawInput, forKey: .rawInput)
         try container.encodeIfPresent(rawOutput, forKey: .rawOutput)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(args, forKey: .args)
         // A member given a value since wins over the `null` it came as.
         for key in CodingKeys.allCases where nullMembers.contains(key.stringValue) && !hasValue(key) {
             try container.encodeNil(forKey: key)
@@ -172,6 +200,8 @@ public struct ToolCallUpdate: Codable, Sendable {
         case .locations: return locations != nil
         case .rawInput: return rawInput != nil
         case .rawOutput: return rawOutput != nil
+        case .name: return name != nil
+        case .args: return args != nil
         }
     }
 }

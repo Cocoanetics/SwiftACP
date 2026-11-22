@@ -126,15 +126,64 @@ struct ClientRequestParamsTests {
         #expect(created.map(\.outputByteLimit) == [nil, nil])
 
         let permission = #"{"sessionId":"s","toolCall":{"toolCallId":"t","kind":"nope","status":3,"title":4,"#
-            + #""content":5,"locations":[{"line":1}]},"options":[{"optionId":"o","name":"n","kind":"allow_once","#
-            + #""_meta":3}]}"#
+            + #""name":99,"content":5,"locations":[{"line":1}]},"options":[{"optionId":"o","name":"n","#
+            + #""kind":"allow_once","_meta":3}]}"#
         let result = await client.handleIncomingRequest(
             method: "session/request_permission", params: try Self.json(permission))
         #expect(try result.get() == Self.json(#"{"outcome":{"outcome":"selected","optionId":"o"}}"#))
         let toolCall = try #require(await received.permissions.first?.toolCall)
         #expect(toolCall.kind == nil && toolCall.status == nil && toolCall.title == nil && toolCall.content == nil)
+        #expect(toolCall.name == nil && toolCall.args == nil)
         #expect(toolCall.locations?.isEmpty == true)
         // Dropped, not made null: a null member of an update clears what it names.
         #expect(toolCall.nullMembers.isEmpty)
+    }
+
+    /// `session/request_permission` carries adapter-provided `name` and `args` (including
+    /// explicit `null` and values conflicting with `rawInput`) through `ClientRequestSchema`
+    /// unchanged to custom host handlers.
+    @Test func permissionRequestPreservesAdapterNameArgsAndNullMembers() async throws {
+        let received = Received()
+        let terminals = TerminalRoutingTests.RecordingTerminals()
+        let client = await Self.client(received, terminals)
+
+        let valued = #"""
+            {"sessionId":"s","toolCall":{"toolCallId":"call-example",
+            "name":"mcp_missioncontrol_view_issue",
+            "args":{"number":277,"repo":"Cocoanetics/SwiftPorts"},
+            "title":"Run mcp_missioncontrol_view_issue","kind":"other",
+            "rawInput":{"number":278,"repo":"Cocoanetics/SwiftACP"}},
+            "options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},
+            {"optionId":"deny","name":"Deny","kind":"reject_once"}]}
+            """#
+        let valuedResult = await client.handleIncomingRequest(
+            method: "session/request_permission", params: try Self.json(valued))
+        #expect(try valuedResult.get() == Self.json(#"{"outcome":{"outcome":"selected","optionId":"allow"}}"#))
+
+        let nulled = #"""
+            {"sessionId":"s","toolCall":{"toolCallId":"call-null","name":null,"args":null,
+            "rawInput":{"CommandLine":"git status"}},
+            "options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}
+            """#
+        let nulledResult = await client.handleIncomingRequest(
+            method: "session/request_permission", params: try Self.json(nulled))
+        #expect(try nulledResult.get() == Self.json(#"{"outcome":{"outcome":"selected","optionId":"allow"}}"#))
+
+        let permissions = await received.permissions
+        #expect(permissions.count == 2)
+        let first = permissions[0].toolCall
+        #expect(first.toolCallId == "call-example")
+        #expect(first.name == "mcp_missioncontrol_view_issue")
+        #expect(first.args == .object(["number": .integer(277), "repo": .string("Cocoanetics/SwiftPorts")]))
+        #expect(first.rawInput == .object(["number": .integer(278), "repo": .string("Cocoanetics/SwiftACP")]))
+        #expect(first.title == "Run mcp_missioncontrol_view_issue")
+        #expect(first.kind == .other)
+        #expect(first.nullMembers.isEmpty)
+
+        let second = permissions[1].toolCall
+        #expect(second.toolCallId == "call-null")
+        #expect(second.name == nil && second.args == nil)
+        #expect(second.nullMembers == ["name", "args"])
+        #expect(second.rawInput == .object(["CommandLine": .string("git status")]))
     }
 }
