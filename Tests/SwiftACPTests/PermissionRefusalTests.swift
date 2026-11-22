@@ -122,6 +122,9 @@ struct PermissionRefusalTests {
         /// Antigravity marks an interaction question by prefixing this — see
         /// ``AntigravityCompat`` and `AntigravityQuestionTests`.
         var toolCallId: String = "synthetic-call"
+        /// Optional adapter-provided `name` and `args` carried on `toolCall`.
+        var toolName: String?
+        var toolArgs: JSONValue?
 
         func initialize(_ request: InitializeRequest) async -> InitializeResponse {
             InitializeResponse(agentInfo: Implementation(name: agentName, version: "1.12.0"))
@@ -135,7 +138,9 @@ struct PermissionRefusalTests {
             let options = [PermissionOption(optionId: "allow", name: "Allow", kind: .allowOnce)]
                 + refusalIds.map { PermissionOption(optionId: $0, name: $0, kind: .rejectOnce) }
             let response = try await session.requestPermission(
-                toolCall: ToolCallUpdate(toolCallId: toolCallId, title: "synthetic operation", kind: toolKind),
+                toolCall: ToolCallUpdate(
+                    toolCallId: toolCallId, title: "synthetic operation", kind: toolKind,
+                    name: toolName, args: toolArgs),
                 options: options)
             switch response.outcome {
             case .selected(let optionId): await session.sendText("selected:\(optionId)")
@@ -147,12 +152,14 @@ struct PermissionRefusalTests {
     }
 
     /// What one probe turn produced: the agent's report of the answer it received,
-    /// the notice it saw on the wire (if any), and the client operations the
-    /// connection reported to its subscribers.
+    /// the notice it saw on the wire (if any), the client operations the connection
+    /// reported to its subscribers, and the wire-ordered event labels (`"operation"`,
+    /// `"text"`, `"answered"`).
     struct Probe {
         var answer: String
         var echoedNotice: String?
         var operations: [ClientOperation]
+        var eventOrder: [String] = []
     }
 
     static func runProbe(_ agent: ProbeAgent, policy: PermissionPolicy) async throws -> Probe {
@@ -167,32 +174,44 @@ struct PermissionRefusalTests {
 
         // The event subscription carries updates and client operations in wire order;
         // the operation is reported before the agent can react to the answer.
-        let (subscriptionId, stream) = await client.makeEventSubscription()
-        let consumer = Task { () -> (String, [ClientOperation]) in
+        struct Collected {
             var text = ""
             var operations: [ClientOperation] = []
+            var order: [String] = []
+        }
+        let (subscriptionId, stream) = await client.makeEventSubscription()
+        let consumer = Task { () -> Collected in
+            var collected = Collected()
             for await event in stream {
                 switch event {
                 case .update(let note):
-                    if case .agentMessageChunk(let block) = note.update, let chunk = block.text { text += chunk }
+                    if case .agentMessageChunk(let block) = note.update, let chunk = block.text {
+                        collected.text += chunk
+                        collected.order.append("text")
+                    }
                 case .clientOperation(let operation):
-                    operations.append(operation)
-                case .inboundRequest, .promptAnswered, .promptFailed:
+                    collected.operations.append(operation)
+                    collected.order.append("operation")
+                case .promptAnswered:
+                    collected.order.append("answered")
+                case .inboundRequest, .promptFailed:
                     break
                 }
             }
-            return (text, operations)
+            return collected
         }
         let response = try await client.prompt(
             PromptRequest(sessionId: session.sessionId, prompt: [.text("go")]))
         #expect(response.stopReason == .endTurn)
         await client.endSubscription(subscriptionId)
-        let (text, operations) = await consumer.value
+        let collected = await consumer.value
         await client.close()
         serverTask.cancel()
 
-        let parts = text.components(separatedBy: "|notice:")
-        return Probe(answer: parts[0], echoedNotice: parts.count > 1 ? parts[1] : nil, operations: operations)
+        let parts = collected.text.components(separatedBy: "|notice:")
+        return Probe(
+            answer: parts[0], echoedNotice: parts.count > 1 ? parts[1] : nil,
+            operations: collected.operations, eventOrder: collected.order)
     }
 
     /// How the client answers: a built-in mode, or a host resolver (acpx's

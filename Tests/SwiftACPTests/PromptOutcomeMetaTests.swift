@@ -62,5 +62,40 @@ struct PromptOutcomeMetaTests {
         let outcome = try await session.run("hi")
 
         #expect(outcome.meta == nil)
+        #expect(outcome.usage == nil)
+        #expect(outcome.sessionFailure == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func runPreservesExplicitCancelledAndUnknownStopReasonsWithUsageAndMeta() async throws {
+        let cancelledJSON =
+            #"{"stopReason":"cancelled","usage":{"input_tokens":12,"output_tokens":0,"#
+            + #""thought_tokens":8,"total_tokens":20},"_meta":{"source":"synthetic-cancel"}}"#
+        let (cancelledAgent, cancelledTask) = try await Self.connectedAgent(playing: cancelledJSON)
+        defer { cancelledTask.cancel() }
+        let cancelledSession = try await cancelledAgent.newSession()
+
+        let cancelledOutcome = try await cancelledSession.run("hi")
+        #expect(cancelledOutcome.stopReason == .cancelled)
+        #expect(cancelledOutcome.text.isEmpty)
+        #expect(cancelledOutcome.usage?.thoughtTokens == 8)
+        #expect(cancelledOutcome.usage?.totalTokens == 20)
+        #expect(cancelledOutcome.meta == .object(["source": .string("synthetic-cancel")]))
+        #expect(cancelledOutcome.sessionFailure == nil)
+        #expect(cancelledOutcome.clientOperations.isEmpty)
+
+        let unknownJSON =
+            #"{"stopReason":"adapter_custom_stop","_meta":{"detail":"preserved"}}"#
+        let (unknownAgent, unknownTask) = try await Self.connectedAgent(playing: unknownJSON)
+        defer { unknownTask.cancel() }
+        let unknownSession = try await unknownAgent.newSession()
+
+        let unknownOutcome = try await unknownSession.run("hi")
+        #expect(unknownOutcome.stopReason == StopReason(rawValue: "adapter_custom_stop"))
+        #expect(unknownOutcome.text.isEmpty)
+        #expect(unknownOutcome.usage == nil)
+        #expect(unknownOutcome.meta == .object(["detail": .string("preserved")]))
+        #expect(unknownOutcome.sessionFailure == nil)
+        #expect(unknownOutcome.clientOperations.isEmpty)
     }
 }
