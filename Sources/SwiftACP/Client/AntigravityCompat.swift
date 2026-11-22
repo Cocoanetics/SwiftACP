@@ -17,11 +17,37 @@ import Foundation
 ///
 /// ### MCP server/tool identity
 ///
-/// Antigravity's flattened tool `name` (`mcp_missioncontrol_view_issue`) and display
-/// `title` name no configured MCP server and exact tool, so `mcpToolIdentity(of:agentName:)`
-/// always answers unavailable (``mcpIdentityBlocker``) and the host must refuse or ask.
-/// The versioned upstream contract that would change this is documented in
-/// `AntigravityCompat+MCPIdentity.swift`.
+/// SwiftACP provides **no** MCP server/tool identity for Antigravity tool calls, and
+/// none of its policies or handlers derives one.
+///
+/// *Captured today.* SwiftACP launches the external `agy_acp_server` runtime and does
+/// not vendor it. The sanitized native `session/request_permission` captured in #343
+/// carries only an opaque flattened `name` (`mcp_missioncontrol_view_issue`), a display
+/// `title` ("Run mcp_missioncontrol_view_issue"), `kind`, `args` and `rawInput`. It has
+/// no server/tool pair, and no identity extension has been captured or documented
+/// upstream, so SwiftACP decodes none and offers no typed access to one.
+///
+/// *Required upstream, not implemented.* Under a versioned adapter contract, the trusted
+/// adapter would send a unique identifier of one MCP server configured for the session
+/// (`session/new` / `session/load` `mcpServers`) plus the exact original tool name from
+/// that server's catalog. The adapter would bind both to that configured server/catalog
+/// and to this specific call (`toolCallId`). Typed access is added only once that wire
+/// shape and its binding are documented and captured.
+///
+/// *Never an identity.* None of these establishes the binding:
+/// - `title`, `kind`, `args` or `rawInput`;
+/// - the `initialize` `agentInfo.name`;
+/// - a split of the flattened name. `mcp_missioncontrol_view_issue` reads as server
+///   `missioncontrol` with tool `view_issue`, or `missioncontrol_view` with `issue`,
+///   and server names may themselves contain `_`.
+///
+/// Even an explicit server/tool pair is only the adapter's assertion until the host can
+/// validate its provenance and its mapping to the configured server.
+///
+/// *Host expectation.* Treat identity as unavailable and fail closed: a host that scopes
+/// approval to one server's tool refuses the call or asks a person, and never infers.
+/// A shell call's `rawInput` (its `CommandLine`) reaches the handler unchanged for the
+/// host's own command allowlist.
 ///
 /// ### Thought-only `end_turn` completions
 ///

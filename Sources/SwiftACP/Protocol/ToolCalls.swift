@@ -22,7 +22,7 @@ public struct ToolCall: Codable, Sendable {
     /// A flattened name such as `mcp_missioncontrol_view_issue` is not an MCP
     /// server/tool pair, and splitting it is ambiguous: identity needs a versioned
     /// adapter contract binding a configured server and its exact tool to this call,
-    /// which no adapter supplies yet — see ``AntigravityCompat/mcpIdentityBlocker``.
+    /// which no adapter supplies yet — see ``AntigravityCompat``.
     public var name: String?
     /// Adapter-provided tool arguments as sent on the wire, when present. Kept
     /// independent from ``rawInput`` even when both are supplied or differ.
@@ -128,7 +128,7 @@ public struct ToolCallUpdate: Codable, Sendable {
     /// A flattened name such as `mcp_missioncontrol_view_issue` is not an MCP
     /// server/tool pair, and splitting it is ambiguous: identity needs a versioned
     /// adapter contract binding a configured server and its exact tool to this call,
-    /// which no adapter supplies yet — see ``AntigravityCompat/mcpIdentityBlocker``.
+    /// which no adapter supplies yet — see ``AntigravityCompat``.
     public var name: String?
     /// Adapter-provided tool arguments as sent on the wire, when present. Kept
     /// independent from ``rawInput`` even when both are supplied or differ.
