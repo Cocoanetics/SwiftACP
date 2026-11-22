@@ -207,15 +207,24 @@ public struct ACPSession: Sendable {
 public struct PromptOutcome: Sendable {
     public var stopReason: StopReason
     /// Concatenation of all `agent_message_chunk` text for the turn.
+    ///
+    /// `agent_thought_chunk` reasoning is delivered to `onUpdate` callbacks and is never
+    /// folded into `text`. A turn that streams only thoughts and tool calls before ending
+    /// with ``StopReason/endTurn`` therefore returns `text == ""` and
+    /// ``sessionFailure`` == `nil` — no synthetic final message, cancellation, or failure
+    /// is inferred.
     public var text: String
     /// The session's cumulative token counters from the prompt response, when
     /// the agent reports them (Claude Code's adapter does; Codex sends none).
     public var usage: PromptUsage?
     /// The client operations the connection reported during the turn, in order —
-    /// a permission refusal that may end the turn (see ``CodexCompat``); usually empty.
+    /// a permission refusal that may end the turn (see ``CodexCompat``) or a cancelled
+    /// Antigravity interaction question (see ``AntigravityCompat``); usually empty.
+    /// Reported independently of the agent's terminal ``meta`` and ``usage``.
     public var clientOperations: [ClientOperation]
     /// The prompt response's `_meta` (``PromptResponse/meta``) — Claude Code attaches
-    /// per-model quota under `meta["quota"]`, including `model_usage`.
+    /// per-model quota under `meta["quota"]`, including `model_usage`. Kept distinct from
+    /// client-generated permission notices in ``clientOperations``.
     public var meta: JSONValue?
     /// The terminal ``SessionFailure`` the agent reported on the response (codex-acp's AIR
     /// `sessionFailure`), when the client declared it takes them; `nil` for any other turn.
